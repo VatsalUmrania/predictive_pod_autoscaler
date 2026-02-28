@@ -1,0 +1,93 @@
+NAMESPACE       NAME                                                         READY   STATUS      RESTARTS       AGE
+default         pod/test-app-5869c58d54-hl2n7                                2/2     Running     0              34m
+default         pod/test-app-5869c58d54-znjpc                                2/2     Running     0              34m
+default         pod/traffic-gen-5b4c657547-q6krq                             2/2     Running     0              18m
+ingress-nginx   pod/ingress-nginx-admission-create-bcg4d                     0/1     Completed   0              164m
+ingress-nginx   pod/ingress-nginx-admission-patch-jqk9r                      0/1     Completed   2              164m
+ingress-nginx   pod/ingress-nginx-controller-9cc49f96f-k7t8t                 1/1     Running     0              164m
+istio-system    pod/istio-egressgateway-784df7d79d-6vcb6                     1/1     Running     0              145m
+istio-system    pod/istio-ingressgateway-76957c9484-brw5s                    1/1     Running     0              145m
+istio-system    pod/istiod-86764ff6df-bwdmn                                  1/1     Running     0              146m
+kube-system     pod/coredns-66bc5c9577-g47qc                                 1/1     Running     0              164m
+kube-system     pod/etcd-minikube                                            1/1     Running     0              164m
+kube-system     pod/kube-apiserver-minikube                                  1/1     Running     0              164m
+kube-system     pod/kube-controller-manager-minikube                         1/1     Running     0              164m
+kube-system     pod/kube-proxy-tmwkk                                         1/1     Running     0              164m
+kube-system     pod/kube-scheduler-minikube                                  1/1     Running     0              164m
+kube-system     pod/metrics-server-85b7d694d7-wzbp7                          1/1     Running     0              164m
+kube-system     pod/storage-provisioner                                      1/1     Running     1 (164m ago)   164m
+monitoring      pod/alertmanager-prometheus-kube-prometheus-alertmanager-0   2/2     Running     0              161m
+monitoring      pod/nginx-exporter-897b66578-8rvbq                           1/1     Running     0              151m
+monitoring      pod/prometheus-grafana-598d7c9dff-xtd9n                      3/3     Running     0              161m
+monitoring      pod/prometheus-kube-prometheus-operator-8465b57d95-8xsnq     1/1     Running     0              161m
+monitoring      pod/prometheus-kube-state-metrics-cc8c6b4df-bzhmv            1/1     Running     0              161m
+monitoring      pod/prometheus-prometheus-kube-prometheus-prometheus-0       2/2     Running     0              8m13s
+monitoring      pod/prometheus-prometheus-node-exporter-8k24g                1/1     Running     0              161m
+
+NAMESPACE       NAME                                                         TYPE           CLUSTER-IP       EXTERNAL-IP   PORT(S)                                                                      AGE
+default         service/kubernetes                                           ClusterIP      10.96.0.1        <none>        443/TCP                                                                      164m
+default         service/test-app                                             ClusterIP      10.96.168.147    <none>        80/TCP                                                                       44m
+ingress-nginx   service/ingress-nginx-controller                             NodePort       10.103.0.67      <none>        80:31712/TCP,443:31162/TCP                                                   164m
+ingress-nginx   service/ingress-nginx-controller-admission                   ClusterIP      10.99.67.148     <none>        443/TCP                                                                      164m
+istio-system    service/istio-egressgateway                                  ClusterIP      10.102.227.132   <none>        80/TCP,443/TCP                                                               145m
+istio-system    service/istio-ingressgateway                                 LoadBalancer   10.106.124.10    <pending>     15021:32134/TCP,80:30595/TCP,443:32060/TCP,31400:31833/TCP,15443:32204/TCP   145m
+istio-system    service/istiod                                               ClusterIP      10.97.233.4      <none>        15010/TCP,15012/TCP,443/TCP,15014/TCP                                        146m
+istio-system    service/istiod-revision-tag-default                          ClusterIP      10.96.6.134      <none>        15010/TCP,15012/TCP,443/TCP,15014/TCP                                        145m
+kube-system     service/kube-dns                                             ClusterIP      10.96.0.10       <none>        53/UDP,53/TCP,9153/TCP                                                       164m
+kube-system     service/metrics-server                                       ClusterIP      10.105.154.70    <none>        443/TCP                                                                      164m
+kube-system     service/prometheus-kube-prometheus-coredns                   ClusterIP      None             <none>        9153/TCP                                                                     161m
+kube-system     service/prometheus-kube-prometheus-kube-controller-manager   ClusterIP      None             <none>        10257/TCP                                                                    161m
+kube-system     service/prometheus-kube-prometheus-kube-etcd                 ClusterIP      None             <none>        2381/TCP                                                                     161m
+kube-system     service/prometheus-kube-prometheus-kube-proxy                ClusterIP      None             <none>        10249/TCP                                                                    161m
+kube-system     service/prometheus-kube-prometheus-kube-scheduler            ClusterIP      None             <none>        10259/TCP                                                                    161m
+kube-system     service/prometheus-kube-prometheus-kubelet                   ClusterIP      None             <none>        10250/TCP,4194/TCP,10255/TCP                                                 161m
+monitoring      service/alertmanager-operated                                ClusterIP      None             <none>        9093/TCP,9094/TCP,9094/UDP                                                   161m
+monitoring      service/nginx-exporter                                       ClusterIP      10.102.176.4     <none>        9113/TCP                                                                     151m
+monitoring      service/prometheus-grafana                                   ClusterIP      10.101.175.125   <none>        80/TCP                                                                       161m
+monitoring      service/prometheus-kube-prometheus-alertmanager              ClusterIP      10.109.137.231   <none>        9093/TCP,8080/TCP                                                            161m
+monitoring      service/prometheus-kube-prometheus-operator                  ClusterIP      10.108.147.113   <none>        443/TCP                                                                      161m
+monitoring      service/prometheus-kube-prometheus-prometheus                ClusterIP      10.105.23.185    <none>        9090/TCP,8080/TCP                                                            161m
+monitoring      service/prometheus-kube-state-metrics                        ClusterIP      10.109.11.25     <none>        8080/TCP                                                                     161m
+monitoring      service/prometheus-operated                                  ClusterIP      None             <none>        9090/TCP                                                                     161m
+monitoring      service/prometheus-prometheus-node-exporter                  ClusterIP      10.107.10.91     <none>        9100/TCP                                                                     161m
+
+NAMESPACE     NAME                                                 DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR            AGE
+kube-system   daemonset.apps/kube-proxy                            1         1         1       1            1           kubernetes.io/os=linux   164m
+monitoring    daemonset.apps/prometheus-prometheus-node-exporter   1         1         1       1            1           kubernetes.io/os=linux   161m
+
+NAMESPACE       NAME                                                  READY   UP-TO-DATE   AVAILABLE   AGE
+default         deployment.apps/test-app                              2/2     2            2           44m
+default         deployment.apps/traffic-gen                           1/1     1            1           18m
+ingress-nginx   deployment.apps/ingress-nginx-controller              1/1     1            1           164m
+istio-system    deployment.apps/istio-egressgateway                   1/1     1            1           145m
+istio-system    deployment.apps/istio-ingressgateway                  1/1     1            1           145m
+istio-system    deployment.apps/istiod                                1/1     1            1           146m
+kube-system     deployment.apps/coredns                               1/1     1            1           164m
+kube-system     deployment.apps/metrics-server                        1/1     1            1           164m
+monitoring      deployment.apps/nginx-exporter                        1/1     1            1           151m
+monitoring      deployment.apps/prometheus-grafana                    1/1     1            1           161m
+monitoring      deployment.apps/prometheus-kube-prometheus-operator   1/1     1            1           161m
+monitoring      deployment.apps/prometheus-kube-state-metrics         1/1     1            1           161m
+
+NAMESPACE       NAME                                                             DESIRED   CURRENT   READY   AGE
+default         replicaset.apps/test-app-5869c58d54                              2         2         2       34m
+default         replicaset.apps/test-app-654b6c984d                              0         0         0       44m
+default         replicaset.apps/traffic-gen-5b4c657547                           1         1         1       18m
+ingress-nginx   replicaset.apps/ingress-nginx-controller-9cc49f96f               1         1         1       164m
+istio-system    replicaset.apps/istio-egressgateway-784df7d79d                   1         1         1       145m
+istio-system    replicaset.apps/istio-ingressgateway-76957c9484                  1         1         1       145m
+istio-system    replicaset.apps/istiod-86764ff6df                                1         1         1       146m
+kube-system     replicaset.apps/coredns-66bc5c9577                               1         1         1       164m
+kube-system     replicaset.apps/metrics-server-85b7d694d7                        1         1         1       164m
+monitoring      replicaset.apps/nginx-exporter-897b66578                         1         1         1       151m
+monitoring      replicaset.apps/prometheus-grafana-598d7c9dff                    1         1         1       161m
+monitoring      replicaset.apps/prometheus-kube-prometheus-operator-8465b57d95   1         1         1       161m
+monitoring      replicaset.apps/prometheus-kube-state-metrics-cc8c6b4df          1         1         1       161m
+
+NAMESPACE    NAME                                                                    READY   AGE
+monitoring   statefulset.apps/alertmanager-prometheus-kube-prometheus-alertmanager   1/1     161m
+monitoring   statefulset.apps/prometheus-prometheus-kube-prometheus-prometheus       1/1     161m
+
+NAMESPACE       NAME                                       STATUS     COMPLETIONS   DURATION   AGE
+ingress-nginx   job.batch/ingress-nginx-admission-create   Complete   1/1           32s        164m
+ingress-nginx   job.batch/ingress-nginx-admission-patch    Complete   1/1           34s        164m
