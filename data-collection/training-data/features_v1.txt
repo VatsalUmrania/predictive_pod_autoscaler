@@ -1,0 +1,23 @@
+FEATURE_COLUMNS = [
+    "requests_per_second",   # core load
+    "cpu_usage_percent",     # core resource
+    "memory_usage_bytes",    # core resource
+    "latency_p95_ms",        # quality signal
+    "active_connections",    # connection state
+    "error_rate",            # health signal
+    "cpu_acceleration",      # momentum
+    "rps_acceleration",      # momentum
+    "current_replicas",      # current state
+    "hour_sin",              # time cyclical
+    "hour_cos",              # time cyclical
+    "dow_sin",               # time cyclical
+    "dow_cos",               # time cyclical
+    "is_weekend",            # time binary
+    "segment_id",            # contiguous timeframe boundary
+]
+
+TARGET_COLUMNS = [
+    "rps_t5",
+    "rps_t10",
+    "rps_t15",
+]

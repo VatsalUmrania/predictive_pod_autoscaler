@@ -1,5 +1,5 @@
 # PPA — Command Reference Sheet
-**Predictive Pod Autoscaler | Semester 6 | February 2026**
+**Predictive Pod Autoscaler | Semester 6 | March 2026**
 
 ---
 
@@ -101,74 +101,34 @@ helm uninstall prometheus -n monitoring
 
 ---
 
-### Step 5 — Istio
+### Step 5 — Build & Deploy Instrumented Test App
 ```bash
-# Install Istio
-curl -L https://istio.io/downloadIstio | sh -
-cd istio-1.*
-export PATH=$PWD/bin:$PATH
-istioctl install --set profile=demo -y
+# Build image inside minikube's Docker daemon
+eval $(minikube docker-env)
+docker build -t test-app:latest data-collection/test-app/
 
-# Check Istio pods
-kubectl get pods -n istio-system
+# Deploy (Deployment + Service + PodMonitor)
+kubectl apply -f data-collection/test-app-deployment.yaml
 
-# Label namespace for auto-injection
-kubectl label namespace default istio-injection=enabled --overwrite
-
-# Verify label
-kubectl get namespace default --show-labels
-
-# Apply telemetry config for Prometheus metrics
-kubectl apply -f - <<EOF
-apiVersion: telemetry.istio.io/v1alpha1
-kind: Telemetry
-metadata:
-  name: mesh-default
-  namespace: istio-system
-spec:
-  metrics:
-  - providers:
-    - name: prometheus
-    overrides:
-    - match:
-        metric: ALL_METRICS
-      disabled: false
-EOF
-
-# Check telemetry resource
-kubectl get telemetry -n istio-system
-```
-
----
-
-### Step 6 — Test App
-```bash
-# Deploy
-kubectl create deployment test-app --image=nginx --replicas=2
-kubectl expose deployment test-app --port=80 --type=ClusterIP
-
-# Verify Istio sidecar injected (MUST show 2/2)
+# Verify pod is running (should show 1/1 — single container, no sidecars)
 kubectl get pods -l app=test-app
 
-# Restart to force sidecar injection
+# Restart with new image
 kubectl rollout restart deployment/test-app
 
-# Delete and redeploy
-kubectl delete deployment test-app
-kubectl delete service test-app
-kubectl create deployment test-app --image=nginx --replicas=2
-kubectl expose deployment test-app --port=80 --type=ClusterIP
-
 # Check logs
-kubectl logs -l app=test-app -c nginx
-kubectl logs -l app=test-app -c istio-proxy
+kubectl logs -l app=test-app
+
+# Delete and redeploy
+kubectl delete -f data-collection/test-app-deployment.yaml
+kubectl apply -f data-collection/test-app-deployment.yaml
 ```
 
 ---
 
-### Step 7 — In-Cluster Traffic Generator
+### Step 6 — In-Cluster Traffic Generator
 ```bash
-# Deploy (sends traffic through Istio mesh — required for HTTP metrics)
+# Deploy (sends traffic to test-app service — generates HTTP metrics)
 kubectl apply -f data-collection/traffic-gen-deployment.yaml
 
 # Check it's running
@@ -184,52 +144,35 @@ kubectl delete deployment traffic-gen
 
 ---
 
-### Step 8 — Prometheus Scrape Config for Istio
+### Step 6b — Variable Traffic Generator (Locust)
+For training the LSTM model, flat traffic isn't enough. We use Locust locally to generate a phased traffic pattern that mimics realistic human daily cycles.
+
 ```bash
-# Create scrape config file
-cat > /tmp/istio-scrape.yaml << 'SCRAPEEOF'
-- job_name: istio-envoy
-  kubernetes_sd_configs:
-  - role: pod
-  relabel_configs:
-  - source_labels: [__meta_kubernetes_pod_label_security_istio_io_tlsMode]
-    action: keep
-    regex: istio
-  - source_labels: [__meta_kubernetes_pod_name]
-    target_label: pod
-  - source_labels: [__meta_kubernetes_pod_namespace]
-    target_label: namespace
-  - source_labels: [__meta_kubernetes_pod_ip]
-    replacement: $1:15020
-    target_label: __address__
-  metrics_path: /stats/prometheus
-  scheme: http
-SCRAPEEOF
+# Start Locust in headless mode (background traffic generation)
+# Target is localhost:8080 (assumes Step 7 port-forward is running)
 
-# Apply as secret
-kubectl delete secret additional-scrape-configs -n monitoring 2>/dev/null || true
-kubectl create secret generic additional-scrape-configs \
-  --from-file=prometheus-additional.yaml=/tmp/istio-scrape.yaml \
-  -n monitoring
+# Normal mode (24h cycles)
+locust -f tests/locustfile.py --host=http://localhost:8080 --headless
 
-# Patch Prometheus to use it
-kubectl patch prometheus prometheus-kube-prometheus-prometheus \
-  -n monitoring \
-  --type merge \
-  -p '{"spec":{"additionalScrapeConfigs":{"name":"additional-scrape-configs","key":"prometheus-additional.yaml"}}}'
+# Fast mode (1 minute = 1 hour, full day cycle in 24 minutes)
+FAST_MODE=true locust -f tests/locustfile.py --host=http://localhost:8080 --headless
 
-# Verify config loaded
-curl -s http://localhost:9090/api/v1/status/config | python3 -c "
-import json, sys
-config = json.load(sys.stdin)['data']['yaml']
-print('istio-envoy in config:', 'istio-envoy' in config)
-print('15020 in config:', '15020' in config)
-"
+# OR start the Locust Web UI to control the swarm manually
+locust -f tests/locustfile.py --host=http://localhost:8080
+# Open http://localhost:8089 in your browser
 ```
 
 ---
 
-### Step 9 — Port Forwards
+### Step 6c — Validate Training Data Quality
+After extracting the CSV from Prometheus, pass it through the ML quality gates to ensure model readiness:
+```bash
+python3 data-collection/validate_training_data.py data-collection/training-data/training_data.csv
+```
+
+---
+
+### Step 7 — Port Forwards
 ```bash
 # Start all port-forwards
 kubectl port-forward svc/prometheus-kube-prometheus-prometheus 9090:9090 -n monitoring &
@@ -239,7 +182,7 @@ kubectl port-forward svc/test-app 8080:80 -n default &
 # Test they work
 curl -s http://localhost:9090/-/ready    # → Prometheus Server is Ready.
 curl -s http://localhost:3000/api/health # → {"commit":"...","database":"ok",...}
-curl -s http://localhost:8080            # → nginx HTML
+curl -s http://localhost:8080            # → OK
 
 # Kill all port-forwards
 pkill -f "port-forward.*9090"
@@ -264,9 +207,17 @@ python3 data-collection/verify_features.py
 ```
 
 ### Export Training Data CSV
+The data collection python script pulls natively from Prometheus.
+
 ```bash
+# Standard export (1 row = 1 minute, 7 Days Default)
 python3 data-collection/export_training_data.py
-# Output → data-collection/training-data/features_YYYYMMDD_YYYYMMDD.csv
+
+# High-Density export (1 row = 15 seconds, 1 Day)
+python3 data-collection/export_training_data.py --hours 24 --step 15s
+
+# High-Density collected, but resampled back to 1m averages
+python3 data-collection/export_training_data.py --step 15s --resample 1m
 ```
 
 ### Check Data Volume in Prometheus
@@ -279,42 +230,48 @@ kubectl exec -n monitoring \
 ### Check All Pods Healthy
 ```bash
 kubectl get pods --all-namespaces
-kubectl get pods -n default        # test-app (2/2), traffic-gen (2/2)
+kubectl get pods -n default        # test-app (1/1), traffic-gen (1/1)
 kubectl get pods -n monitoring     # prometheus, grafana, alertmanager
-kubectl get pods -n istio-system   # istiod, ingressgateway, egressgateway
 ```
 
 ---
 
-## Prometheus Queries — All 8 LSTM Features
+## Prometheus Queries — 12 Features
 
-| Feature | Query |
+## Prometheus Queries — 14 Input Features + Targets
+
+| Feature | Source / Details |
 |---|---|
-| requests_per_second | `rate(istio_requests_total{destination_service=~"test-app.*"}[1m])` |
-| cpu_usage_percent | `sum(rate(container_cpu_usage_seconds_total{pod=~"test-app.*"}[1m]))*100` |
-| memory_usage_bytes | `sum(container_memory_working_set_bytes{pod=~"test-app.*"})` |
-| latency_p95_ms | `histogram_quantile(0.95, rate(istio_request_duration_milliseconds_bucket{destination_service=~"test-app.*"}[5m]))` |
-| active_connections | `envoy_server_total_connections{pod=~"test-app.*"}` |
-| error_rate | `sum(istio_requests_total{destination_service=~"test-app.*"})` |
-| hour_of_day | Generated in Python from timestamp |
-| day_of_week | Generated in Python from timestamp |
+| requests_per_second | App RPM |
+| cpu_usage_percent | cAdvisor raw CPU |
+| memory_usage_bytes | cAdvisor memory set |
+| latency_p95_ms | App P95 latency |
+| current_replicas | kube-state-metrics readiness |
+| active_connections | Istio / App Connections |
+| error_rate | HTTP 4xx/5xx total errors |
+| cpu_acceleration | Rate of change over 5m |
+| rps_acceleration | Request rate change over 5m |
+| hour_sin | Generated cyclical time |
+| hour_cos | Generated cyclical time |
+| dow_sin | Generated cyclical time |
+| dow_cos | Generated cyclical time |
+| is_weekend | Generated binary feature |
+| **Targets (y)** | |
+| rps_t5 / t10 / t15 | App feature shifted by minutes |
+| replicas_t5 / t10 / t15 | Target load capacity ceiling |
 
 ---
 
 ## Debugging Commands
 
 ```bash
-# Check what Istio metrics exist in Prometheus
+# Check what app metrics exist in Prometheus
 curl -s "http://localhost:9090/api/v1/label/__name__/values" | python3 -c "
 import json, sys
 names = json.load(sys.stdin)['data']
-istio = [n for n in names if 'istio' in n]
-for n in istio: print(n)
+app = [n for n in names if 'http_' in n]
+for n in app: print(n)
 "
-
-# Check metrics directly on pod (bypasses Prometheus)
-POD=$(kubectl get pod -l app=test-app -o jsonpath='{.items[0].metadata.name}')
-kubectl exec $POD -c istio-proxy -- curl -s localhost:15020/metrics | grep istio_requests_total | head -5
 
 # Check Prometheus scrape targets
 curl -s "http://localhost:9090/api/v1/targets" | python3 -c "
@@ -325,16 +282,16 @@ for t in active:
     print(t['labels'].get('job','?'), '→', t['health'])
 "
 
-# Check Prometheus can reach pod
-POD_IP=$(kubectl get pod -l app=test-app -o jsonpath='{.items[0].status.podIP}')
-kubectl exec -n monitoring prometheus-prometheus-kube-prometheus-prometheus-0 \
-  -c prometheus -- wget -qO- http://$POD_IP:15020/metrics | grep istio_requests_total | head -3
+# Check PodMonitor is discovered
+kubectl get podmonitor -n monitoring
+
+# Verify metrics endpoint directly on pod
+POD=$(kubectl get pod -l app=test-app -o jsonpath='{.items[0].metadata.name}')
+kubectl port-forward $POD 9091:9091 &
+curl -s http://localhost:9091/metrics | head -20
 
 # Restart Prometheus
 kubectl rollout restart statefulset prometheus-prometheus-kube-prometheus-prometheus -n monitoring
-
-# Check Locust traffic logs
-tail -f /tmp/locust.log
 
 # Check watchdog logs
 tail -f /tmp/ppa_watchdog.log
@@ -354,10 +311,10 @@ tail -f /tmp/ppa_watchdog.log
 
 ## Key Lessons Learned
 
-- `kubectl port-forward` traffic **bypasses Istio** — always use in-cluster traffic-gen for metrics
-- PodMonitor relabeling silently drops targets — use `additionalScrapeConfigs` secret instead
+- Use `prometheus_client` library for direct app instrumentation — zero sidecar dependencies
+- PodMonitor needs `release: prometheus` label to match kube-prometheus-stack selector
+- Build images inside `eval $(minikube docker-env)` with `imagePullPolicy: Never`
 - cAdvisor scrapes without container labels in this setup — use `sum()` without container filter
-- Istio 1.29 requires explicit `Telemetry` resource to enable prometheus metrics
 - Port-forwards die when Prometheus restarts — always run the watchdog
 - `[0]` in zsh helm commands needs quoting: `"accessModes[0]=ReadWriteOnce"`
 - Multi-line commands in zsh use `\` — if you see `dquote>` press Ctrl+C and run as single line

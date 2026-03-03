@@ -53,15 +53,12 @@ list_steps() {
     echo "  2  — Start Minikube (KVM2 driver)"
     echo "  3  — Enable Minikube addons (metrics-server, ingress)"
     echo "  4  — Install Prometheus stack"
-    echo "  5  — Install Istio service mesh"
-    echo "  6  — Deploy test-app (nginx with Istio sidecar)"
-    echo "  7  — Deploy in-cluster traffic generator"
-    echo "  8  — Configure Istio Telemetry for Prometheus"
-    echo "  9  — Configure additional scrape config (port 15020)"
-    echo "  10 — Start port-forwards (Prometheus + Grafana)"
-    echo "  11 — Start port-forward watchdog"
-    echo "  12 — Verify all 8 ML features"
-    echo "  13 — Export training data to CSV"
+    echo "  5  — Build & deploy instrumented test-app"
+    echo "  6  — Deploy in-cluster traffic generator"
+    echo "  7  — Start port-forwards (Prometheus + Grafana)"
+    echo "  8  — Start port-forward watchdog"
+    echo "  9  — Verify all 8 ML features"
+    echo "  10 — Deploy Data Collection CronJob"
     echo ""
 }
 
@@ -176,121 +173,43 @@ fi
 fi
 
 # ═══════════════════════════════════════════════════════════════
-#  STEP 5 — Install Istio
+#  STEP 5 — Build & Deploy Instrumented Test App
 # ═══════════════════════════════════════════════════════════════
 if ! run_step 5; then
-heading "STEP 5 — Installing Istio 1.29"
+heading "STEP 5 — Building & Deploying Instrumented Test App"
 
-if kubectl get namespace istio-system &>/dev/null; then
-    log "Istio already installed — skipping"
-else
-    info "Downloading and installing Istio..."
-    curl -L https://istio.io/downloadIstio | sh - 2>/dev/null
-    ISTIO_DIR=$(ls -d istio-* 2>/dev/null | head -1)
-    export PATH="$PWD/$ISTIO_DIR/bin:$PATH"
+# Build inside minikube's Docker daemon
+info "Building test-app image inside minikube..."
+eval $(minikube docker-env)
+docker build -t test-app:latest "$PROJECT_DIR/data-collection/test-app/"
+log "Docker image built: test-app:latest"
 
-    istioctl install --set profile=demo -y
-    wait_for_pods "app=istiod" "istio-system"
-fi
-
-# Label namespace for sidecar injection
-kubectl label namespace default istio-injection=enabled --overwrite
-log "Namespace labeled for Istio injection"
-
-# Apply Telemetry resource for Prometheus metrics
-kubectl apply -f - <<EOF
-apiVersion: telemetry.istio.io/v1alpha1
-kind: Telemetry
-metadata:
-  name: mesh-default
-  namespace: istio-system
-spec:
-  metrics:
-  - providers:
-    - name: prometheus
-    overrides:
-    - match:
-        metric: ALL_METRICS
-      disabled: false
-EOF
-log "Istio Telemetry configured"
-fi
-
-# ═══════════════════════════════════════════════════════════════
-#  STEP 6 — Deploy Test App
-# ═══════════════════════════════════════════════════════════════
-if ! run_step 6; then
-heading "STEP 6 — Deploying Test App (nginx + Istio sidecar)"
-
+# Deploy app + service + PodMonitor
 if kubectl get deployment test-app -n default &>/dev/null; then
-    log "test-app already deployed"
-    READY=$(kubectl get pods -l app=test-app -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
-    if [[ "$READY" != "true" ]]; then
-        info "Restarting test-app to ensure Istio sidecar is injected..."
-        kubectl rollout restart deployment/test-app
-    fi
+    log "test-app already deployed — rolling restart with new image..."
+    kubectl rollout restart deployment/test-app
 else
-    kubectl apply -f - <<EOF
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: test-app
-  namespace: default
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: test-app
-  template:
-    metadata:
-      labels:
-        app: test-app
-    spec:
-      containers:
-      - name: nginx
-        image: nginx:latest
-        ports:
-        - containerPort: 80
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "128Mi"
-          limits:
-            cpu: "500m"
-            memory: "256Mi"
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: test-app
-  namespace: default
-spec:
-  selector:
-    app: test-app
-  ports:
-  - port: 80
-    targetPort: 80
-  type: ClusterIP
-EOF
+    kubectl apply -f "$PROJECT_DIR/data-collection/test-app-deployment.yaml"
 fi
 
-info "Waiting for test-app pods (2/2 with Istio sidecar)..."
+info "Waiting for test-app pods..."
 sleep 10
 wait_for_pods "app=test-app" "default"
 
+# Verify single container (no sidecars)
 CONTAINERS=$(kubectl get pods -l app=test-app -o jsonpath='{.items[0].status.containerStatuses}' 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d))" 2>/dev/null || echo "?")
-if [[ "$CONTAINERS" == "2" ]]; then
-    log "Istio sidecar confirmed (2/2 containers)"
+if [[ "$CONTAINERS" == "1" ]]; then
+    log "Single container confirmed (1/1) — no sidecars"
 else
     warn "Unexpected container count: $CONTAINERS — check manually"
 fi
 fi
 
 # ═══════════════════════════════════════════════════════════════
-#  STEP 7 — Deploy In-Cluster Traffic Generator
+#  STEP 6 — Deploy In-Cluster Traffic Generator
 # ═══════════════════════════════════════════════════════════════
-if ! run_step 7; then
-heading "STEP 7 — Deploying In-Cluster Traffic Generator"
+if ! run_step 6; then
+heading "STEP 6 — Deploying In-Cluster Traffic Generator"
 
 if kubectl get deployment traffic-gen -n default &>/dev/null; then
     log "traffic-gen already deployed"
@@ -325,123 +244,96 @@ spec:
           done
 EOF
     wait_for_pods "app=traffic-gen" "default"
-    log "In-cluster traffic generator running (~2 req/s through Istio mesh)"
+    log "In-cluster traffic generator running (~2 req/s)"
 fi
 fi
 
 # ═══════════════════════════════════════════════════════════════
-#  STEP 8 — Configure Istio Telemetry
+#  STEP 7 — Start Port Forwards
 # ═══════════════════════════════════════════════════════════════
-if ! run_step 8; then
-heading "STEP 8 — Configuring Istio Telemetry"
-
-kubectl apply -f - <<EOF
-apiVersion: telemetry.istio.io/v1alpha1
-kind: Telemetry
-metadata:
-  name: mesh-default
-  namespace: istio-system
-spec:
-  metrics:
-  - providers:
-    - name: prometheus
-    overrides:
-    - match:
-        metric: ALL_METRICS
-      disabled: false
-EOF
-log "Istio Telemetry resource applied"
-fi
-
-# ═══════════════════════════════════════════════════════════════
-#  STEP 9 — Configure Prometheus Scrape for Istio Port 15020
-# ═══════════════════════════════════════════════════════════════
-if ! run_step 9; then
-heading "STEP 9 — Configuring Prometheus to Scrape Istio (port 15020)"
-
-cat > /tmp/istio-scrape.yaml << 'SCRAPEEOF'
-- job_name: istio-envoy
-  kubernetes_sd_configs:
-  - role: pod
-  relabel_configs:
-  - source_labels: [__meta_kubernetes_pod_label_security_istio_io_tlsMode]
-    action: keep
-    regex: istio
-  - source_labels: [__meta_kubernetes_pod_name]
-    target_label: pod
-  - source_labels: [__meta_kubernetes_pod_namespace]
-    target_label: namespace
-  - source_labels: [__meta_kubernetes_pod_ip]
-    replacement: $1:15020
-    target_label: __address__
-  metrics_path: /stats/prometheus
-  scheme: http
-SCRAPEEOF
-
-kubectl delete secret additional-scrape-configs -n monitoring 2>/dev/null || true
-kubectl create secret generic additional-scrape-configs \
-    --from-file=prometheus-additional.yaml=/tmp/istio-scrape.yaml \
-    -n monitoring
-
-kubectl patch prometheus prometheus-kube-prometheus-prometheus \
-    -n monitoring \
-    --type merge \
-    -p '{"spec":{"additionalScrapeConfigs":{"name":"additional-scrape-configs","key":"prometheus-additional.yaml"}}}'
-
-log "Scrape config applied — Prometheus will scrape Istio sidecars on port 15020"
-fi
-
-# ═══════════════════════════════════════════════════════════════
-#  STEP 10 — Start Port Forwards
-# ═══════════════════════════════════════════════════════════════
-if ! run_step 10; then
-heading "STEP 10 — Starting Port Forwards"
+if ! run_step 7; then
+heading "STEP 7 — Starting Port Forwards"
 
 # Kill existing port-forwards
 pkill -f "port-forward.*9090" 2>/dev/null || true
 pkill -f "port-forward.*3000" 2>/dev/null || true
 pkill -f "port-forward.*8080" 2>/dev/null || true
+pkill -f "port-forward.*9091" 2>/dev/null || true
 sleep 2
 
-# Start fresh
+# Wait for Prometheus pod FIRST — this is the bottleneck
+info "Waiting for Prometheus pod to be ready (may take 2-3 minutes)..."
+for i in $(seq 1 36); do
+    POD_STATUS=$(kubectl get pods -n monitoring -l app.kubernetes.io/name=prometheus --no-headers 2>/dev/null | awk '{print $2}')
+    if [[ "$POD_STATUS" == "2/2" ]]; then
+        log "Prometheus pod ready ($POD_STATUS)"
+        break
+    fi
+    echo -n "  [$i/36] Pod status: ${POD_STATUS:-not found}..."
+    echo ""
+    sleep 10
+done
+
+# Start fresh port-forwards
 kubectl port-forward svc/prometheus-kube-prometheus-prometheus 9090:9090 -n monitoring &>/dev/null &
-log "Prometheus port-forward started → http://localhost:9090"
-
 kubectl port-forward svc/prometheus-grafana 3000:80 -n monitoring &>/dev/null &
-log "Grafana port-forward started     → http://localhost:3000 (admin/admin123)"
-
 kubectl port-forward svc/test-app 8080:80 -n default &>/dev/null &
-log "test-app port-forward started    → http://localhost:8080"
+kubectl port-forward svc/test-app 9091:9091 -n default &>/dev/null &
+sleep 3
 
-sleep 5
-
-# Verify
-if curl -s http://localhost:9090/-/ready | grep -q "Ready"; then
-    log "Prometheus responding ✓"
-else
-    warn "Prometheus not ready yet — may need a moment"
-fi
+# Retry until Prometheus responds (port-forward may need a moment)
+for i in $(seq 1 10); do
+    if curl -s http://localhost:9090/-/ready 2>/dev/null | grep -q "Ready"; then
+        log "Prometheus responding  → http://localhost:9090"
+        log "Grafana port-forward   → http://localhost:3000 (admin/admin123)"
+        log "test-app port-forward  → http://localhost:8080"
+        log "test-app metrics       → http://localhost:9091/metrics"
+        break
+    fi
+    if [[ $i -eq 10 ]]; then
+        warn "Prometheus port-forward not responding after 30s — watchdog will retry"
+    fi
+    sleep 3
+done
 fi
 
 # ═══════════════════════════════════════════════════════════════
-#  STEP 11 — Port Forward Watchdog
+#  STEP 8 — Port Forward Watchdog
 # ═══════════════════════════════════════════════════════════════
-if ! run_step 11; then
-heading "STEP 11 — Starting Port Forward Watchdog"
+if ! run_step 8; then
+heading "STEP 8 — Starting Port Forward Watchdog"
 
 cat > /tmp/ppa_watchdog.sh << 'WATCHEOF'
 #!/bin/bash
 while true; do
+    # 1. Prometheus
     if ! curl -s http://localhost:9090/-/ready > /dev/null 2>&1; then
         echo "$(date) — Restarting Prometheus port-forward..."
         pkill -f "port-forward.*9090" 2>/dev/null
         kubectl port-forward svc/prometheus-kube-prometheus-prometheus 9090:9090 -n monitoring &>/dev/null &
     fi
+    
+    # 2. Grafana
     if ! curl -s http://localhost:3000/api/health > /dev/null 2>&1; then
         echo "$(date) — Restarting Grafana port-forward..."
         pkill -f "port-forward.*3000" 2>/dev/null
         kubectl port-forward svc/prometheus-grafana 3000:80 -n monitoring &>/dev/null &
     fi
+
+    # 3. Test App (App Endpoint)
+    if ! curl -s http://localhost:8080/ > /dev/null 2>&1; then
+        echo "$(date) — Restarting Test App (8080) port-forward..."
+        pkill -f "port-forward.*8080" 2>/dev/null
+        kubectl port-forward svc/test-app 8080:80 -n default &>/dev/null &
+    fi
+
+    # 4. Test App (Metrics)
+    if ! curl -s http://localhost:9091/metrics > /dev/null 2>&1; then
+        echo "$(date) — Restarting Test App Metrics (9091) port-forward..."
+        pkill -f "port-forward.*9091" 2>/dev/null
+        kubectl port-forward svc/test-app 9091:9091 -n default &>/dev/null &
+    fi
+
     sleep 30
 done
 WATCHEOF
@@ -452,25 +344,41 @@ log "Watchdog running (PID: $!) — auto-restarts dead port-forwards every 30s"
 fi
 
 # ═══════════════════════════════════════════════════════════════
-#  STEP 12 — Verify All 8 ML Features
+#  STEP 9 — Verify All 9 ML Features
 # ═══════════════════════════════════════════════════════════════
-if ! run_step 12; then
-heading "STEP 12 — Verifying All 8 ML Features"
+if ! run_step 9; then
+heading "STEP 9 — Verifying All 9 ML Features"
 
-info "Waiting 60s for metrics to populate..."
-sleep 60
-
-python3 "$PROJECT_DIR/data-collection/verify_features.py" || warn "Some features may still be warming up"
+# Smart wait: retry until Prometheus is reachable, then wait for metrics
+for i in $(seq 1 12); do
+    if curl -s http://localhost:9090/-/ready 2>/dev/null | grep -q "Ready"; then
+        info "Prometheus is ready — waiting 30s for metrics to populate..."
+        sleep 30
+        python3 "$PROJECT_DIR/data-collection/verify_features.py" || warn "Some features may still be warming up"
+        break
+    fi
+    if [[ $i -eq 12 ]]; then
+        warn "Prometheus not reachable after 2 minutes — run manually: python3 data-collection/verify_features.py"
+    else
+        echo "  [$i/12] Waiting for Prometheus..."
+        sleep 10
+    fi
+done
 fi
 
 # ═══════════════════════════════════════════════════════════════
-#  STEP 13 — Export Training Data
+#  STEP 10 — Export Training Data
 # ═══════════════════════════════════════════════════════════════
-if ! run_step 13; then
-heading "STEP 13 — Exporting Training Data to CSV"
+if ! run_step 10; then
+heading "STEP 10 — Deploying Data Collection CronJob"
 
 cd "$PROJECT_DIR"
-python3 data-collection/export_training_data.py
+if curl -s http://localhost:9090/-/ready 2>/dev/null | grep -q "Ready"; then
+    kubectl apply -f deploy/cronjob-data-collector.yaml
+    log "CronJob created for hourly data collection"
+else
+    warn "Prometheus not reachable — skipping CronJob deployment. Run manually: kubectl apply -f deploy/cronjob-data-collector.yaml"
+fi
 fi
 
 # ═══════════════════════════════════════════════════════════════
@@ -486,9 +394,9 @@ if [[ -z "$SINGLE_STEP" ]]; then
     echo -e "  ${CYAN}Grafana${NC}      → http://localhost:3000  (admin / admin123)"
     echo -e "  ${CYAN}Test App${NC}     → http://localhost:8080"
     echo ""
-    echo -e "  ${YELLOW}Daily tasks:${NC}"
+    echo "  ${YELLOW}Daily tasks:${NC}"
     echo -e "    Verify features : python3 data-collection/verify_features.py"
-    echo -e "    Export CSV data : python3 data-collection/export_training_data.py"
+    echo -e "    Check data jobs : kubectl get cronjobs,jobs"
     echo -e "    Check logs      : tail -f /tmp/ppa_watchdog.log"
     echo ""
 fi

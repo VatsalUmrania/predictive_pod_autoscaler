@@ -1,0 +1,11 @@
+# Example PredictiveAutoscaler CR for test-app
+apiVersion: ppa.example.com/v1
+kind: PredictiveAutoscaler
+metadata:
+  name: test-app-ppa
+  namespace: default
+spec:
+  targetDeployment: test-app
+  minReplicas: 2
+  maxReplicas: 20
+  capacityPerPod: 50

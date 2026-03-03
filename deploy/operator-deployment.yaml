@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ppa-operator
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ppa-operator
+  template:
+    metadata:
+      labels:
+        app: ppa-operator
+    spec:
+      serviceAccountName: ppa-operator
+      containers:
+      - name: operator
+        image: ppa-operator:latest
+        imagePullPolicy: Never    # built locally via minikube docker-env
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        env:
+        - name: PROMETHEUS_URL
+          value: "http://prometheus-kube-prometheus-prometheus.monitoring:9090"
