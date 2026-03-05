@@ -9,7 +9,19 @@ kind: ClusterRole
 metadata:
   name: ppa-operator-role
 rules:
-# Scale deployments
+# WARNING: ClusterRole grants cross-namespace scaling permissions.
+# For multi-tenant clusters, replace ClusterRole/ClusterRoleBinding with
+# per-namespace Role/RoleBinding to limit the operator to specific namespaces:
+#
+#   kind: Role                         (not ClusterRole)
+#   metadata:
+#     namespace: production             (scoped to one namespace)
+#   ---
+#   kind: RoleBinding                   (not ClusterRoleBinding)
+#   metadata:
+#     namespace: production
+#
+# Current ClusterRole is acceptable for single-tenant / dev clusters.
 - apiGroups: ["apps"]
   resources: ["deployments", "deployments/scale"]
   verbs: ["get", "list", "watch", "update", "patch"]

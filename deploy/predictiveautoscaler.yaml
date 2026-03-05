@@ -1,4 +1,4 @@
-# Example PredictiveAutoscaler CR for test-app
+# Example: PredictiveAutoscaler CR for test-app
 apiVersion: ppa.example.com/v1
 kind: PredictiveAutoscaler
 metadata:
@@ -6,6 +6,11 @@ metadata:
   namespace: default
 spec:
   targetDeployment: test-app
+  namespace: default
   minReplicas: 2
   maxReplicas: 20
   capacityPerPod: 50
+  # modelPath: ""       # empty = auto-resolves to /models/test-app/ppa_model.tflite
+  # scalerPath: ""       # empty = auto-resolves to /models/test-app/scaler.pkl
+  # scaleUpRate: 2.0
+  # scaleDownRate: 0.5

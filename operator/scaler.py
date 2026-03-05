@@ -1,66 +1,49 @@
-# operator/scaler.py — Replica calculation + Kubernetes scaling
-"""Calculate desired replicas and apply via kubernetes-client."""
+# operator/scaler.py — replica calculation + K8s scaling
+"""Calculates desired replicas and patches deployments."""
 
-import math
 import logging
+import math
 from kubernetes import client, config as k8s_config
-
-from config import (
-    NAMESPACE, CAPACITY_PER_POD,
-    MIN_REPLICAS, MAX_REPLICAS,
-    SCALE_UP_RATE_LIMIT, SCALE_DOWN_RATE,
-)
 
 logger = logging.getLogger("ppa.scaler")
 
+try:
+    k8s_config.load_incluster_config()
+except k8s_config.ConfigException:
+    k8s_config.load_kube_config()
 
-def calculate_replicas(predicted_load: float, current_replicas: int) -> int:
-    """Convert predicted load (req/s) to desired replica count with rate limiting.
-
-    Args:
-        predicted_load: Predicted requests per second.
-        current_replicas: Current number of running replicas.
-
-    Returns:
-        Desired replica count, clamped to [MIN, MAX] and rate-limited.
-    """
-    if predicted_load <= 0:
-        return MIN_REPLICAS
-
-    raw_desired = math.ceil(predicted_load / CAPACITY_PER_POD)
-
-    # Rate-limit scaling
-    max_up = math.ceil(current_replicas * SCALE_UP_RATE_LIMIT)
-    min_down = max(MIN_REPLICAS, math.floor(current_replicas * SCALE_DOWN_RATE))
-
-    if raw_desired > current_replicas:
-        desired = min(raw_desired, max_up)
-    elif raw_desired < current_replicas:
-        desired = max(raw_desired, min_down)
-    else:
-        desired = current_replicas
-
-    return max(MIN_REPLICAS, min(MAX_REPLICAS, desired))
+apps_v1 = client.AppsV1Api()
 
 
-def scale_deployment(deployment: str, replicas: int, namespace: str = NAMESPACE):
-    """Patch deployment replicas via Kubernetes API.
+def calculate_replicas(
+    predicted_load: float,
+    current: int,
+    min_replicas: int,
+    max_replicas: int,
+    capacity_per_pod: int,
+    scale_up_rate: float,
+    scale_down_rate: float,
+) -> int:
+    """Compute desired replica count from predicted load with rate limiting."""
+    raw = math.ceil(predicted_load / capacity_per_pod) if capacity_per_pod > 0 else current
 
-    Args:
-        deployment: Name of the Deployment to scale.
-        replicas: Desired replica count.
-        namespace: Kubernetes namespace.
-    """
+    # Rate limiting
+    max_up = max(1, math.ceil(current * scale_up_rate))
+    min_down = max(1, math.floor(current * scale_down_rate))
+    desired = max(min_down, min(max_up, raw))
+
+    # Enforce hard bounds
+    return max(min_replicas, min(max_replicas, desired))
+
+
+def scale_deployment(deployment: str, replicas: int, namespace: str = "default"):
+    """Patch the Deployment's replica count."""
     try:
-        k8s_config.load_incluster_config()
-    except k8s_config.ConfigException:
-        k8s_config.load_kube_config()  # local dev fallback
-
-    apps_v1 = client.AppsV1Api()
-    body = {"spec": {"replicas": replicas}}
-    apps_v1.patch_namespaced_deployment_scale(
-        name=deployment,
-        namespace=namespace,
-        body=body,
-    )
-    logger.info(f"Scaled {deployment} to {replicas} replicas")
+        apps_v1.patch_namespaced_deployment_scale(
+            name=deployment,
+            namespace=namespace,
+            body={"spec": {"replicas": replicas}},
+        )
+        logger.info(f"Patched {namespace}/{deployment} to {replicas} replicas")
+    except client.exceptions.ApiException as e:
+        logger.error(f"Failed to scale {namespace}/{deployment}: {e}")

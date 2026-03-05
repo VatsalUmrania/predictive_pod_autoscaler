@@ -19,6 +19,10 @@ spec:
               targetDeployment:
                 type: string
                 description: Name of the Deployment to autoscale
+              namespace:
+                type: string
+                default: "default"
+                description: Namespace of the target Deployment
               minReplicas:
                 type: integer
                 default: 2
@@ -31,6 +35,22 @@ spec:
                 type: integer
                 default: 50
                 description: Max requests/second each pod can handle
+              modelPath:
+                type: string
+                default: ""
+                description: "Path to TFLite model file (empty = auto /models/{target}/ppa_model.tflite)"
+              scalerPath:
+                type: string
+                default: ""
+                description: "Path to sklearn scaler file (empty = auto /models/{target}/scaler.pkl)"
+              scaleUpRate:
+                type: number
+                default: 2.0
+                description: Max scale-up multiplier per cycle
+              scaleDownRate:
+                type: number
+                default: 0.5
+                description: Max scale-down multiplier per cycle
           status:
             type: object
             properties:
@@ -48,6 +68,9 @@ spec:
     - name: Target
       type: string
       jsonPath: .spec.targetDeployment
+    - name: Namespace
+      type: string
+      jsonPath: .spec.namespace
     - name: Current
       type: integer
       jsonPath: .status.currentReplicas

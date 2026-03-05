@@ -106,24 +106,47 @@ def add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _detect_segments(df: pd.DataFrame, gap_minutes: int = 10) -> pd.Series:
+    """Return an integer Series labeling each row with its continuous segment ID."""
+    gaps = df.index.to_series().diff() > pd.Timedelta(minutes=gap_minutes)
+    return gaps.cumsum()
+
+
 def add_prediction_targets(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Build targets using exact timestamp lookups (t+5m, t+10m, t+15m).
-    If that future timestamp is missing (for example across overnight downtime),
-    target remains NaN and the row is dropped.
+    Build targets using exact timestamp lookups (t+5m, t+10m, t+15m),
+    computed WITHIN each continuous segment so overnight gaps never
+    produce NaN targets at segment boundaries.
+
+    Rows at the tail of each segment (last 15 min) will still be dropped
+    because there is genuinely no future data to predict. But rows from
+    earlier segments are preserved instead of being poisoned by cross-gap
+    reindex lookups.
     """
-    base = df["requests_per_second"]
-    df["rps_t5"] = base.reindex(df.index + pd.Timedelta(minutes=5)).to_numpy()
-    df["rps_t10"] = base.reindex(df.index + pd.Timedelta(minutes=10)).to_numpy()
-    df["rps_t15"] = base.reindex(df.index + pd.Timedelta(minutes=15)).to_numpy()
+    df = df.sort_index()
+    seg_ids = _detect_segments(df)
+    parts = []
 
-    capacity_per_pod = 10  # requests/sec per pod
-    df["replicas_t5"] = np.ceil(df["rps_t5"] / capacity_per_pod).clip(lower=2, upper=20)
-    df["replicas_t10"] = np.ceil(df["rps_t10"] / capacity_per_pod).clip(lower=2, upper=20)
-    df["replicas_t15"] = np.ceil(df["rps_t15"] / capacity_per_pod).clip(lower=2, upper=20)
+    for seg_id, seg in df.groupby(seg_ids):
+        base = seg["requests_per_second"]
+        seg = seg.copy()
+        seg["rps_t5"] = base.reindex(seg.index + pd.Timedelta(minutes=5)).to_numpy()
+        seg["rps_t10"] = base.reindex(seg.index + pd.Timedelta(minutes=10)).to_numpy()
+        seg["rps_t15"] = base.reindex(seg.index + pd.Timedelta(minutes=15)).to_numpy()
 
-    # Rows without valid future timestamps cannot be used for supervised learning.
-    return df.dropna(subset=["rps_t5", "rps_t10", "rps_t15"])
+        capacity_per_pod = 10
+        seg["replicas_t5"] = np.ceil(seg["rps_t5"] / capacity_per_pod).clip(lower=2, upper=20)
+        seg["replicas_t10"] = np.ceil(seg["rps_t10"] / capacity_per_pod).clip(lower=2, upper=20)
+        seg["replicas_t15"] = np.ceil(seg["rps_t15"] / capacity_per_pod).clip(lower=2, upper=20)
+
+        seg["segment_id"] = seg_id
+        valid = seg.dropna(subset=["rps_t5", "rps_t10", "rps_t15"])
+        if len(valid) > 0:
+            parts.append(valid)
+
+    if not parts:
+        return df.iloc[0:0]  # empty with same columns
+    return pd.concat(parts).sort_index()
 
 
 def prepare_dataset(df: pd.DataFrame) -> pd.DataFrame:
@@ -198,8 +221,11 @@ if __name__ == "__main__":
             df_combined.index = pd.to_datetime(df_combined.index).round(round_freq)
             df = df_combined[~df_combined.index.duplicated(keep="last")].sort_index()
 
-        # Recompute labels on the merged master dataset.
-        df = prepare_dataset(df)
+        # NOTE: Do NOT call prepare_dataset() again here.
+        # The new data already has valid targets from build_feature_dataframe().
+        # The existing CSV rows already have valid targets from their original export.
+        # Calling prepare_dataset() again would re-drop the last 15 min of the merged
+        # dataset, causing the CSV to shrink on every run.
         df.to_csv(output_path)
 
         print(f"\n{'=' * 50}")

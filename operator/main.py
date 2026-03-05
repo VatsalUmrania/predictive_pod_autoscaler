@@ -1,10 +1,24 @@
-# operator/main.py — kopf timer handler (thin orchestrator)
-"""PPA Operator: reads Prometheus, predicts with TFLite, scales deployment."""
+# operator/main.py — kopf timer handler (multi-CR orchestrator)
+"""PPA Operator: manages N PredictiveAutoscaler CRs independently."""
 
 import logging
+import os
+from dataclasses import dataclass, field
+
 import kopf
 
-from config import TARGET_APP, TIMER_INTERVAL, INITIAL_DELAY, STABILIZATION_STEPS
+from config import (
+    TIMER_INTERVAL,
+    INITIAL_DELAY,
+    STABILIZATION_STEPS,
+    DEFAULT_CAPACITY_PER_POD,
+    DEFAULT_MIN_REPLICAS,
+    DEFAULT_MAX_REPLICAS,
+    DEFAULT_SCALE_UP_RATE,
+    DEFAULT_SCALE_DOWN_RATE,
+    DEFAULT_MODEL_DIR,
+    NAMESPACE,
+)
 from features import build_feature_vector
 from predictor import Predictor
 from scaler import calculate_replicas, scale_deployment
@@ -12,9 +26,39 @@ from scaler import calculate_replicas, scale_deployment
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 logger = logging.getLogger("ppa.operator")
 
-predictor = Predictor()
-_stable_count = 0
-_last_prediction = 0.0
+
+@dataclass
+class CRState:
+    """Per-CR runtime state."""
+    predictor: Predictor
+    stable_count: int = 0
+    last_prediction: float = 0.0
+
+
+# Registry keyed by (cr_namespace, cr_name) to avoid cross-namespace collisions.
+_cr_state: dict[tuple[str, str], CRState] = {}
+
+
+def _resolve_paths(spec: dict, target: str) -> tuple[str, str]:
+    """Compute model + scaler paths from CRD spec, falling back to convention."""
+    model_dir = DEFAULT_MODEL_DIR
+    model_path = spec.get("modelPath") or os.path.join(model_dir, target, "ppa_model.tflite")
+    scaler_path = spec.get("scalerPath") or os.path.join(model_dir, target, "scaler.pkl")
+    return model_path, scaler_path
+
+
+def _get_or_create_state(key: tuple[str, str], model_path: str, scaler_path: str) -> CRState:
+    """Lazy-init or reload CRState if model paths changed."""
+    existing = _cr_state.get(key)
+    if existing and existing.predictor.paths_match(model_path, scaler_path):
+        return existing
+
+    if existing:
+        logger.info(f"Model paths changed for {key}, reloading predictor...")
+
+    state = CRState(predictor=Predictor(model_path, scaler_path))
+    _cr_state[key] = state
+    return state
 
 
 @kopf.timer(
@@ -22,60 +66,81 @@ _last_prediction = 0.0
     interval=TIMER_INTERVAL,
     initial_delay=INITIAL_DELAY,
 )
-def reconcile(spec, status, patch, **kwargs):
-    """Main control loop — runs every TIMER_INTERVAL seconds."""
-    global _stable_count, _last_prediction
+def reconcile(spec, status, meta, patch, **kwargs):
+    """Main control loop — runs every TIMER_INTERVAL seconds per CR."""
+    cr_ns = meta.get("namespace", NAMESPACE)
+    cr_name = meta.get("name", "unknown")
+    key = (cr_ns, cr_name)
 
-    target = spec.get("targetDeployment", TARGET_APP)
+    # Read CR spec with defaults
+    target = spec["targetDeployment"]
+    target_ns = spec.get("namespace", cr_ns)
+    min_r = spec.get("minReplicas", DEFAULT_MIN_REPLICAS)
+    max_r = spec.get("maxReplicas", DEFAULT_MAX_REPLICAS)
+    capacity = spec.get("capacityPerPod", DEFAULT_CAPACITY_PER_POD)
+    up_rate = spec.get("scaleUpRate", DEFAULT_SCALE_UP_RATE)
+    down_rate = spec.get("scaleDownRate", DEFAULT_SCALE_DOWN_RATE)
 
-    # 1. Fetch features from Prometheus
-    features = build_feature_vector()
+    model_path, scaler_path = _resolve_paths(spec, target)
+    state = _get_or_create_state(key, model_path, scaler_path)
+
+    # 1. Fetch features from Prometheus (namespace-scoped)
+    features = build_feature_vector(target, target_ns)
     logger.info(
-        f"RPS={features['requests_per_second']:.1f}  "
+        f"[{cr_name}] RPS={features['requests_per_second']:.1f}  "
         f"P95={features['latency_p95_ms']:.1f}ms  "
         f"CPU={features['cpu_usage_percent']:.1f}%  "
         f"Replicas={features['current_replicas']:.0f}"
     )
 
     # 2. Feed into predictor
-    predictor.update(features)
-    if not predictor.ready():
+    state.predictor.update(features)
+    if not state.predictor.ready():
         logger.info(
-            f"Warming up: {len(predictor.history)}/{predictor.history.__class__.__name__} "
+            f"[{cr_name}] Warming up: {len(state.predictor.history)}/{state.predictor.history.maxlen} "
             "steps collected"
         )
         return
 
     # 3. Predict future load
-    predicted_load = predictor.predict()
-    logger.info(f"Predicted load: {predicted_load:.1f} req/s")
+    predicted_load = state.predictor.predict()
+    logger.info(f"[{cr_name}] Predicted load: {predicted_load:.1f} req/s")
 
-    # 4. Stabilization — only scale if prediction is stable
-    if _last_prediction > 0:
-        change_pct = abs(predicted_load - _last_prediction) / _last_prediction
+    # 4. Stabilization
+    if state.last_prediction > 0:
+        change_pct = abs(predicted_load - state.last_prediction) / state.last_prediction
         if change_pct < 0.10:
-            _stable_count += 1
+            state.stable_count += 1
         else:
-            _stable_count = 0
+            state.stable_count = 0
 
-    _last_prediction = predicted_load
+    state.last_prediction = predicted_load
 
-    if _stable_count < STABILIZATION_STEPS:
-        logger.info(f"Stabilizing: {_stable_count}/{STABILIZATION_STEPS} stable reads")
+    if state.stable_count < STABILIZATION_STEPS:
+        logger.info(f"[{cr_name}] Stabilizing: {state.stable_count}/{STABILIZATION_STEPS} stable reads")
         return
 
     # 5. Calculate and apply desired replicas
     current = int(features["current_replicas"])
-    desired = calculate_replicas(predicted_load, current)
+    desired = calculate_replicas(predicted_load, current, min_r, max_r, capacity, up_rate, down_rate)
 
     if desired != current:
-        logger.info(f"Scaling {target}: {current} → {desired}")
-        scale_deployment(target, desired)
+        logger.info(f"[{cr_name}] Scaling {target_ns}/{target}: {current} → {desired}")
+        scale_deployment(target, desired, target_ns)
         patch.status["lastScaleTime"] = __import__("datetime").datetime.utcnow().isoformat()
-        _stable_count = 0  # reset after scaling
+        state.stable_count = 0
     else:
-        logger.info(f"No scaling needed: {current} replicas is correct")
+        logger.info(f"[{cr_name}] No scaling needed: {current} replicas is correct")
 
     patch.status["lastPredictedLoad"] = round(predicted_load, 2)
     patch.status["currentReplicas"] = current
     patch.status["desiredReplicas"] = desired
+
+
+@kopf.on.delete("ppa.example.com", "v1", "predictiveautoscalers")
+def on_delete(meta, **kwargs):
+    """Clean up per-CR state when a CR is deleted."""
+    key = (meta.get("namespace", NAMESPACE), meta.get("name", "unknown"))
+    removed = _cr_state.pop(key, None)
+    if removed:
+        logger.info(f"Cleaned up state for {key}")

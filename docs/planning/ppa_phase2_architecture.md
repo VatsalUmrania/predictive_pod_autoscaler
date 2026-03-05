@@ -1,5 +1,9 @@
 # PLAN — PPA Phase 2: LSTM Model + Embedded Operator
 
+> [!WARNING]
+> **SUPERSEDED** — This document reflects the original Phase 2 plan (9-feature, single-app).
+> The current architecture is documented in [architecture.md](../architecture/architecture.md) (14-feature, Multi-CR).
+
 **Predictive Pod Autoscaler | Semester 6 | March 2026**
 
 ---

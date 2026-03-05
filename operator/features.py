@@ -1,57 +1,71 @@
-# operator/features.py — Prometheus → DataFrame
-"""Fetch the 9-feature vector from Prometheus and build a pandas DataFrame."""
+# operator/features.py — fetch live metrics from Prometheus
+"""Build the 14-feature LSTM input vector from Prometheus instant queries."""
 
-import requests
 import numpy as np
-import pandas as pd
-from config import PROMETHEUS_URL, TARGET_APP, SCRAPE_WINDOW, LOOKBACK_STEPS
+import requests
+import logging
+
+from config import PROMETHEUS_URL, SCRAPE_WINDOW
+
+logger = logging.getLogger("ppa.features")
 
 
 def prom_query(query: str) -> float:
-    """Execute an instant PromQL query and return scalar result."""
-    r = requests.get(
-        f"{PROMETHEUS_URL}/api/v1/query",
-        params={"query": query},
-        timeout=5,
-    )
-    result = r.json().get("data", {}).get("result", [])
-    if not result:
+    try:
+        resp = requests.get(
+            f"{PROMETHEUS_URL}/api/v1/query",
+            params={"query": query},
+            timeout=5,
+        )
+        result = resp.json()["data"]["result"]
+        return float(result[0]["value"][1]) if result else 0.0
+    except Exception as e:
+        logger.warning(f"Prometheus query failed: {e}")
         return 0.0
-    return float(result[0]["value"][1])
 
 
-def prom_query_range(query: str, start: float, end: float, step: str = "60") -> pd.Series:
-    """Execute a range PromQL query and return a time-indexed Series."""
-    r = requests.get(
-        f"{PROMETHEUS_URL}/api/v1/query_range",
-        params={"query": query, "start": start, "end": end, "step": step},
-        timeout=10,
-    )
-    result = r.json().get("data", {}).get("result", [])
-    if not result:
-        return pd.Series(dtype=float)
-    values = result[0]["values"]
-    idx = pd.to_datetime([v[0] for v in values], unit="s")
-    return pd.Series([float(v[1]) for v in values], index=idx)
+def build_feature_vector(target_app: str, namespace: str) -> dict:
+    """Fetch current values for all 14 LSTM features.
 
+    Args:
+        target_app: Deployment name (e.g. "test-app").
+        namespace:  K8s namespace (e.g. "default").
 
-def build_feature_vector() -> dict:
-    """Fetch current values for all 9 LSTM features.
-
-    Returns dict with feature names as keys.
+    Returns dict with feature names as keys in EXACT order matching training CSV.
     """
-    app = TARGET_APP
+    app = target_app
+    ns = namespace
     window = SCRAPE_WINDOW
 
-    rps = prom_query(f'sum(rate(http_requests_total{{pod=~"{app}.*"}}[{window}]))')
+    # Core load signals (namespace-scoped)
+    rps = prom_query(f'sum(rate(http_requests_total{{pod=~"{app}.*",namespace="{ns}"}}[{window}]))')
+    cpu = prom_query(f'sum(rate(container_cpu_usage_seconds_total{{pod=~"{app}.*",namespace="{ns}"}}[{window}])) * 100')
+    mem = prom_query(f'sum(container_memory_usage_bytes{{pod=~"{app}.*",namespace="{ns}"}})')
     latency = prom_query(
         f'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket'
-        f'{{pod=~"{app}.*"}}[5m])) by (le)) * 1000'
+        f'{{pod=~"{app}.*",namespace="{ns}"}}[5m])) by (le)) * 1000'
     )
-    cpu = prom_query(f'sum(rate(container_cpu_usage_seconds_total{{pod=~"{app}.*"}}[{window}]))*100')
-    mem = prom_query(f'sum(container_memory_working_set_bytes{{pod=~"{app}.*"}})')
-    replicas = prom_query(f'kube_deployment_status_replicas{{deployment="{app}"}}')
 
+    # State awareness
+    replicas = prom_query(f'kube_deployment_status_replicas_ready{{deployment="{app}",namespace="{ns}"}}')
+
+    # Unique indicators
+    connections = prom_query(f'sum(http_connections_active{{pod=~"{app}.*",namespace="{ns}"}})')
+
+    # Error rate (safe division)
+    err_rate = 0.0
+    errors = prom_query(f'sum(rate(http_requests_total{{pod=~"{app}.*",namespace="{ns}",status=~"4.*|5.*"}}[{window}]))')
+    if rps > 0:
+        err_rate = errors / rps
+
+    # Momentum signals
+    cpu_5m = prom_query(f'sum(rate(container_cpu_usage_seconds_total{{pod=~"{app}.*",namespace="{ns}"}}[5m])) * 100')
+    cpu_accel = cpu - cpu_5m
+
+    rps_5m = prom_query(f'sum(rate(http_requests_total{{pod=~"{app}.*",namespace="{ns}"}}[5m]))')
+    rps_accel = rps - rps_5m
+
+    # Cyclical time
     from datetime import datetime
     now = datetime.now()
     hour = now.hour + now.minute / 60.0
@@ -59,12 +73,17 @@ def build_feature_vector() -> dict:
 
     return {
         "requests_per_second": rps,
-        "latency_p95_ms": latency,
         "cpu_usage_percent": cpu,
         "memory_usage_bytes": mem,
+        "latency_p95_ms": latency,
+        "active_connections": connections,
+        "error_rate": err_rate,
+        "cpu_acceleration": cpu_accel,
+        "rps_acceleration": rps_accel,
+        "current_replicas": replicas,
         "hour_sin": np.sin(2 * np.pi * hour / 24),
         "hour_cos": np.cos(2 * np.pi * hour / 24),
         "dow_sin": np.sin(2 * np.pi * dow / 7),
         "dow_cos": np.cos(2 * np.pi * dow / 7),
-        "current_replicas": replicas,
+        "is_weekend": float(dow >= 5),
     }

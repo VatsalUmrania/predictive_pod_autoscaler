@@ -1,59 +1,78 @@
 # operator/predictor.py — TFLite inference wrapper
-"""Load a TFLite model, preprocess input, and return predicted load."""
+"""Wraps the LSTM model for online prediction with rolling history."""
 
+import logging
 import numpy as np
 import joblib
 
-try:
-    import tflite_runtime.interpreter as tflite
-except ImportError:
-    import tensorflow.lite as tflite
+from collections import deque
+from config import LOOKBACK_STEPS
 
-from config import MODEL_PATH, SCALER_PATH, LOOKBACK_STEPS
+logger = logging.getLogger("ppa.predictor")
+
+NUM_FEATURES = 14
 
 
 class Predictor:
-    """Wraps a TFLite LSTM model for single-step inference."""
+    """Per-CR predictor: loads model + scaler from given paths."""
 
-    def __init__(self):
-        self.interpreter = tflite.Interpreter(model_path=MODEL_PATH)
-        self.interpreter.allocate_tensors()
-        self.input_details = self.interpreter.get_input_details()
-        self.output_details = self.interpreter.get_output_details()
-        self.scaler = joblib.load(SCALER_PATH)
-        self.history = []  # rolling window of feature vectors
+    def __init__(self, model_path: str, scaler_path: str):
+        self.model_path = model_path
+        self.scaler_path = scaler_path
+        self.history: deque = deque(maxlen=LOOKBACK_STEPS)
+
+        try:
+            import tflite_runtime.interpreter as tflite
+            self.interpreter = tflite.Interpreter(model_path=model_path)
+            self.interpreter.allocate_tensors()
+            self.input_details = self.interpreter.get_input_details()
+            self.output_details = self.interpreter.get_output_details()
+            self.scaler = joblib.load(scaler_path)
+            logger.info(f"Loaded model from {model_path}, scaler from {scaler_path}")
+        except Exception as e:
+            logger.error(f"Failed to load model/scaler: {e}")
+            self.interpreter = None
+            self.scaler = None
+
+    def paths_match(self, model_path: str, scaler_path: str) -> bool:
+        """Check if this predictor was loaded from the given paths."""
+        return self.model_path == model_path and self.scaler_path == scaler_path
 
     def update(self, features: dict):
         """Append a feature vector to the rolling window."""
         row = np.array([
             features["requests_per_second"],
-            features["latency_p95_ms"],
             features["cpu_usage_percent"],
             features["memory_usage_bytes"],
+            features["latency_p95_ms"],
+            features["active_connections"],
+            features["error_rate"],
+            features["cpu_acceleration"],
+            features["rps_acceleration"],
+            features["current_replicas"],
             features["hour_sin"],
             features["hour_cos"],
             features["dow_sin"],
             features["dow_cos"],
-            features["current_replicas"],
+            features["is_weekend"],
         ], dtype=np.float32)
         self.history.append(row)
 
-        # Keep only LOOKBACK_STEPS
-        if len(self.history) > LOOKBACK_STEPS:
-            self.history = self.history[-LOOKBACK_STEPS:]
-
     def ready(self) -> bool:
-        """True when enough history has accumulated for inference."""
-        return len(self.history) >= LOOKBACK_STEPS
+        return (
+            len(self.history) >= LOOKBACK_STEPS
+            and self.interpreter is not None
+            and self.scaler is not None
+        )
 
     def predict(self) -> float:
-        """Run inference and return predicted load (requests_per_second)."""
+        """Run TFLite inference on the rolling window, return predicted RPS."""
         if not self.ready():
             return 0.0
 
-        window = np.array(self.history[-LOOKBACK_STEPS:], dtype=np.float32)
-        scaled = self.scaler.transform(window)  # (LOOKBACK_STEPS, 9)
-        input_data = scaled.reshape(1, LOOKBACK_STEPS, 9).astype(np.float32)
+        window = np.array(self.history, dtype=np.float32)[-LOOKBACK_STEPS:]
+        scaled = self.scaler.transform(window)
+        input_data = scaled.reshape(1, LOOKBACK_STEPS, NUM_FEATURES).astype(np.float32)
 
         self.interpreter.set_tensor(self.input_details[0]["index"], input_data)
         self.interpreter.invoke()
@@ -61,8 +80,7 @@ class Predictor:
 
         # Inverse-transform the prediction (only the RPS column)
         predicted_scaled = output[0][0]
-        # Create a dummy row to inverse-transform just the first column
-        dummy = np.zeros((1, 9), dtype=np.float32)
+        dummy = np.zeros((1, NUM_FEATURES), dtype=np.float32)
         dummy[0, 0] = predicted_scaled
         predicted_rps = self.scaler.inverse_transform(dummy)[0, 0]
 
