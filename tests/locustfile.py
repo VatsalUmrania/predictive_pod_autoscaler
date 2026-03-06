@@ -10,7 +10,7 @@ class AppUser(HttpUser):
 
     @task(2)
     def get_slow(self):
-        self.client.get("/")
+        self.client.get("/slow")
 
     @task(1)
     def get_error(self):
@@ -28,11 +28,11 @@ class StagesShape(LoadTestShape):
 
     # Defaults: Low(1h) -> Med(2h) -> Spike(1h) -> Recovery(2h) -> Low(1h)
     stages = [
-        {"duration": int(os.getenv("STAGE_LOW_DUR", 60)) * time_multiplier, "users": int(os.getenv("STAGE_LOW_USERS", 5)), "rate": float(os.getenv("STAGE_LOW_RATE", 1.0))},
-        {"duration": int(os.getenv("STAGE_MED_DUR", 120)) * time_multiplier, "users": int(os.getenv("STAGE_MED_USERS", 30)), "rate": float(os.getenv("STAGE_MED_RATE", 5.0))},
-        {"duration": int(os.getenv("STAGE_SPIKE_DUR", 60)) * time_multiplier, "users": int(os.getenv("STAGE_SPIKE_USERS", 100)), "rate": float(os.getenv("STAGE_SPIKE_RATE", 20.0))},
-        {"duration": int(os.getenv("STAGE_RECOVERY_DUR", 120)) * time_multiplier, "users": int(os.getenv("STAGE_RECOVERY_USERS", 40)), "rate": float(os.getenv("STAGE_RECOVERY_RATE", 5.0))},
-        {"duration": int(os.getenv("STAGE_LOW_DUR_2", 60)) * time_multiplier, "users": int(os.getenv("STAGE_LOW_USERS_2", 2)), "rate": float(os.getenv("STAGE_LOW_RATE_2", 1.0))},
+        {"duration": int(os.getenv("STAGE_LOW_DUR", 60)) * time_multiplier, "users": int(os.getenv("STAGE_LOW_USERS", 50)), "rate": float(os.getenv("STAGE_LOW_RATE", 10.0))},
+        {"duration": int(os.getenv("STAGE_MED_DUR", 120)) * time_multiplier, "users": int(os.getenv("STAGE_MED_USERS", 250)), "rate": float(os.getenv("STAGE_MED_RATE", 50.0))},
+        {"duration": int(os.getenv("STAGE_SPIKE_DUR", 180)) * time_multiplier, "users": int(os.getenv("STAGE_SPIKE_USERS", 1000)), "rate": float(os.getenv("STAGE_SPIKE_RATE", 200.0))},
+        {"duration": int(os.getenv("STAGE_RECOVERY_DUR", 120)) * time_multiplier, "users": int(os.getenv("STAGE_RECOVERY_USERS", 250)), "rate": float(os.getenv("STAGE_RECOVERY_RATE", 50.0))},
+        {"duration": int(os.getenv("STAGE_LOW_DUR_2", 60)) * time_multiplier, "users": int(os.getenv("STAGE_LOW_USERS_2", 20)), "rate": float(os.getenv("STAGE_LOW_RATE_2", 10.0))},
     ]
 
     def tick(self):
@@ -48,4 +48,3 @@ class StagesShape(LoadTestShape):
             elapsed += stage["duration"]
             
         return (self.stages[-1]["users"], self.stages[-1]["rate"])
-

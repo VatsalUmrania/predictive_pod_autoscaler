@@ -126,17 +126,16 @@ kubectl apply -f data-collection/test-app-deployment.yaml
 
 ---
 
-### Step 6 — In-Cluster Traffic Generator
+### Step 6 — In-Cluster Variable Traffic Generator (Locust)
+The Locust traffic generator runs **inside the cluster** to constantly generate phased load for the HorizontalPodAutoscaler.
+
 ```bash
-# Deploy (sends traffic to test-app service — generates HTTP metrics)
-kubectl apply -f data-collection/traffic-gen-deployment.yaml
+# Deploy (sends aggressive scaling traffic to test-app service)
+kubectl apply -f deploy/traffic-gen-deployment.yaml
 
 # Check it's running
 kubectl get pods -l app=traffic-gen
 kubectl logs -l app=traffic-gen -c traffic-gen
-
-# Scale up for more traffic
-kubectl scale deployment traffic-gen --replicas=3
 
 # Delete if needed
 kubectl delete deployment traffic-gen
@@ -144,30 +143,18 @@ kubectl delete deployment traffic-gen
 
 ---
 
-### Step 6b — Variable Traffic Generator (Locust)
-For training the LSTM model, flat traffic isn't enough. We use Locust locally to generate a phased traffic pattern that mimics realistic human daily cycles.
-
-```bash
-# Start Locust in headless mode (background traffic generation)
-# Target is localhost:8080 (assumes Step 7 port-forward is running)
-
-# Normal mode (24h cycles)
-locust -f tests/locustfile.py --host=http://localhost:8080 --headless
-
-# Fast mode (1 minute = 1 hour, full day cycle in 24 minutes)
-FAST_MODE=true locust -f tests/locustfile.py --host=http://localhost:8080 --headless
-
-# OR start the Locust Web UI to control the swarm manually
-locust -f tests/locustfile.py --host=http://localhost:8080
-# Open http://localhost:8089 in your browser
-```
+### Step 8, 9, 10 — Automated by Script
+The `ppa_startup.sh` script handles:
+- **Step 8**: Port Forward Watchdog (auto-restarts dead port-forwards)
+- **Step 9**: Feature Verification (waits for metrics to populate)
+- **Step 10**: CronJob Deployment (hourly data collection)
 
 ---
 
-### Step 6c — Validate Training Data Quality
+### Manual Validation
 After extracting the CSV from Prometheus, pass it through the ML quality gates to ensure model readiness:
 ```bash
-python3 data-collection/validate_training_data.py data-collection/training-data/training_data.csv
+venv/bin/python data-collection/validate_training_data.py data-collection/training-data/training_data.csv
 ```
 
 ---
@@ -207,17 +194,14 @@ python3 data-collection/verify_features.py
 ```
 
 ### Export Training Data CSV
-The data collection python script pulls natively from Prometheus.
+The data collection python script pulls natively from Prometheus. We use the virtual environment to execute it.
 
 ```bash
-# Standard export (1 row = 1 minute, 7 Days Default)
-python3 data-collection/export_training_data.py
+# High-Density 7-Day export (1 row = 15 seconds) - RECOMMENDED
+venv/bin/python data-collection/export_training_data.py --hours 168 --step 15s
 
-# High-Density export (1 row = 15 seconds, 1 Day)
-python3 data-collection/export_training_data.py --hours 24 --step 15s
-
-# High-Density collected, but resampled back to 1m averages
-python3 data-collection/export_training_data.py --step 15s --resample 1m
+# Standard 1-Day export (1 row = 1 minute)
+venv/bin/python data-collection/export_training_data.py --hours 24
 ```
 
 ### Check Data Volume in Prometheus
