@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traffic-gen
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: traffic-gen
+  template:
+    metadata:
+      labels:
+        app: traffic-gen
+    spec:
+      containers:
+      - name: traffic-gen
+        image: locustio/locust:2.43.3
+        imagePullPolicy: IfNotPresent
+        command:
+        - locust
+        - -f
+        - /mnt/locust/locustfile.py
+        - --host=http://test-app.default.svc.cluster.local
+        - --headless
+        - --only-summary
+        env:
+        - name: FAST_MODE
+          value: "true"
+        - name: STAGE_LOW_USERS
+          value: "50"
+        - name: STAGE_MED_USERS
+          value: "250"
+        - name: STAGE_SPIKE_USERS
+          value: "1000"
+        - name: STAGE_RECOVERY_USERS
+          value: "250"
+        - name: STAGE_LOW_USERS_2
+          value: "20"
+        volumeMounts:
+        - name: locustfile
+          mountPath: /mnt/locust
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+      volumes:
+      - name: locustfile
+        configMap:
+          name: traffic-gen-locustfile

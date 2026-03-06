@@ -54,7 +54,7 @@ list_steps() {
     echo "  3  — Enable Minikube addons (metrics-server, ingress)"
     echo "  4  — Install Prometheus stack"
     echo "  5  — Build & deploy instrumented test-app"
-    echo "  6  — Deploy in-cluster traffic generator"
+    echo "  6  — Deploy staged Locust traffic generator"
     echo "  7  — Start port-forwards (Prometheus + Grafana)"
     echo "  8  — Start port-forward watchdog"
     echo "  9  — Verify all 8 ML features"
@@ -184,12 +184,11 @@ eval $(minikube docker-env)
 docker build -t test-app:latest "$PROJECT_DIR/data-collection/test-app/"
 log "Docker image built: test-app:latest"
 
-# Deploy app + service + PodMonitor
+# Deploy app + service + PodMonitor + HPA
+kubectl apply -f "$PROJECT_DIR/data-collection/test-app-deployment.yaml"
 if kubectl get deployment test-app -n default &>/dev/null; then
-    log "test-app already deployed — rolling restart with new image..."
+    log "test-app updated — rolling restart with new image..."
     kubectl rollout restart deployment/test-app
-else
-    kubectl apply -f "$PROJECT_DIR/data-collection/test-app-deployment.yaml"
 fi
 
 info "Waiting for test-app pods..."
@@ -211,41 +210,16 @@ fi
 if ! run_step 6; then
 heading "STEP 6 — Deploying In-Cluster Traffic Generator"
 
-if kubectl get deployment traffic-gen -n default &>/dev/null; then
-    log "traffic-gen already deployed"
-else
-    kubectl apply -f - <<EOF
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: traffic-gen
-  namespace: default
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: traffic-gen
-  template:
-    metadata:
-      labels:
-        app: traffic-gen
-    spec:
-      containers:
-      - name: traffic-gen
-        image: curlimages/curl:latest
-        command:
-        - /bin/sh
-        - -c
-        - |
-          echo "Traffic generator started..."
-          while true; do
-            curl -s http://test-app.default.svc.cluster.local/ > /dev/null
-            sleep 0.5
-          done
-EOF
-    wait_for_pods "app=traffic-gen" "default"
-    log "In-cluster traffic generator running (~2 req/s)"
-fi
+kubectl create configmap traffic-gen-locustfile \
+    --namespace default \
+    --from-file=locustfile.py="$PROJECT_DIR/tests/locustfile.py" \
+    --dry-run=client \
+    -o yaml | kubectl apply -f -
+
+kubectl apply -f "$PROJECT_DIR/deploy/traffic-gen-deployment.yaml"
+kubectl rollout restart deployment/traffic-gen -n default &>/dev/null || true
+wait_for_pods "app=traffic-gen" "default"
+log "Staged Locust traffic generator running in-cluster"
 fi
 
 # ═══════════════════════════════════════════════════════════════
@@ -374,6 +348,10 @@ heading "STEP 10 — Deploying Data Collection CronJob"
 
 cd "$PROJECT_DIR"
 if curl -s http://localhost:9090/-/ready 2>/dev/null | grep -q "Ready"; then
+    info "Building data collector image inside minikube..."
+    eval $(minikube docker-env)
+    docker build -f "$PROJECT_DIR/data-collection/Dockerfile" -t ppa-data-collector:latest "$PROJECT_DIR"
+    log "Collector image built: ppa-data-collector:latest"
     kubectl apply -f deploy/cronjob-data-collector.yaml
     log "CronJob created for hourly data collection"
 else

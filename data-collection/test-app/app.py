@@ -5,7 +5,7 @@ Single container, single /metrics endpoint, zero sidecars.
 
 import time
 import random
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 from prometheus_client import (
     Counter, Histogram, Gauge,
@@ -54,6 +54,10 @@ class AppHandler(BaseHTTPRequestHandler):
                 else:
                     status_code = 200
                     body = b"OK\n"
+            elif self.path == "/slow":
+                time.sleep(random.uniform(0.1, 0.4))
+                status_code = 200
+                body = b"SLOW OK\n"
             else:
                 status_code = 404
                 body = b"Not Found\n"
@@ -79,7 +83,7 @@ def main():
     start_http_server(9091)
     print("Metrics server started on :9091/metrics")
 
-    server = HTTPServer(("0.0.0.0", 8080), AppHandler)
+    server = ThreadingHTTPServer(("0.0.0.0", 8080), AppHandler)
     print("App server started on :8080")
     server.serve_forever()
 

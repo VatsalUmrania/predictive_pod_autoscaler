@@ -1,69 +1,90 @@
-import pandas as pd
-import sys
 import os
+import sys
+from pathlib import Path
 
-def validate(csv_path):
+import pandas as pd
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from common.constants import GAP_THRESHOLD_MINUTES
+from common.feature_spec import FEATURE_COLUMNS, TARGET_COLUMNS
+
+
+def validate(csv_path: str) -> bool:
     print(f"\nrunning validation on {csv_path}...\n")
     if not os.path.exists(csv_path):
         print(f"File not found: {csv_path}")
         return False
-        
-    df = pd.read_csv(csv_path, index_col=0)
+
+    df = pd.read_csv(csv_path, index_col=0, parse_dates=True)
     print(f"Loaded {len(df)} rows.")
-    
+
     errors = []
     warnings = []
-    
-    # Min rows threshold (Warning if small, error if extremely small)
+
     if len(df) < 50:
         errors.append(f"Insufficient rows: {len(df)}, need at least 50 for testing.")
     elif len(df) < 10000:
         warnings.append(f"Low row count: {len(df)}, target is 10,000 for training.")
-        
-    # NaN ratio per column
+
+    missing_columns = [col for col in FEATURE_COLUMNS + TARGET_COLUMNS[:3] if col not in df.columns]
+    if missing_columns:
+        errors.append("Missing required columns: " + ", ".join(missing_columns))
+
     nan_ratio = df.isna().sum() / len(df)
     for col, ratio in nan_ratio.items():
         if ratio > 0.05:
             errors.append(f"High NaN ratio in {col}: {ratio:.2%}")
-            
-    # Zero/near-zero variance columns
+
+    excluded_columns = {"segment_id"}
+
     for col in df.columns:
-        if df[col].std() < 1e-4:
+        if col in excluded_columns:
+            continue
+        if pd.api.types.is_numeric_dtype(df[col]) and df[col].std() < 1e-4:
             errors.append(f"Zero or near-zero variance in {col}.")
-            
-    # Duplicate/near-duplicate columns (correlation > 0.98)
-    corr = df.corr().abs()
+
+    corr = df.corr(numeric_only=True).abs()
     for i in range(len(corr.columns)):
-        for j in range(i+1, len(corr.columns)):
+        for j in range(i + 1, len(corr.columns)):
             col1, col2 = corr.columns[i], corr.columns[j]
-            # Ignore target vs replica relationships and predictable temporal correlations
+            if col1 in excluded_columns or col2 in excluded_columns:
+                continue
             if ("rps_t" in col1 and "replicas_t" in col2) or ("rps_t" in col2 and "replicas_t" in col1):
                 continue
             if "sin" in col1 or "cos" in col1 or "sin" in col2 or "cos" in col2:
                 continue
-            
+
             cor_val = getattr(corr.iloc[i, j], "item", lambda: corr.iloc[i, j])()
             if cor_val > 0.98:
                 errors.append(f"High correlation (>0.98) between {col1} and {col2}: {cor_val:.3f}")
-                
-    # Target availability and basic distribution
-    targets = ["rps_t5", "rps_t10", "rps_t15"]
-    for t in targets:
-        if t not in df.columns:
-            errors.append(f"Target column missing: {t}")
-            
+
+    for target_name in TARGET_COLUMNS[:3]:
+        if target_name not in df.columns:
+            errors.append(f"Target column missing: {target_name}")
+
+    if isinstance(df.index, pd.DatetimeIndex) and len(df.index) > 1:
+        max_gap = df.index.to_series().sort_values().diff().dropna().max()
+        if max_gap > pd.Timedelta(minutes=GAP_THRESHOLD_MINUTES):
+            warnings.append(
+                f"Largest timestamp gap is {max_gap}, exceeds {GAP_THRESHOLD_MINUTES} minutes."
+            )
+
     if warnings:
-        for w in warnings:
-            print(f"  ⚠️  {w}")
+        for warning in warnings:
+            print(f"  WARNING: {warning}")
 
     if errors:
-        print("\n❌ Validation failed:")
+        print("\nValidation failed:")
         for err in errors:
             print(f"  - {err}")
         return False
-        
-    print("\n✅ Validation passed!")
+
+    print("\nValidation passed!")
     return True
+
 
 if __name__ == "__main__":
     csv_path = sys.argv[1] if len(sys.argv) > 1 else "data-collection/training-data/training_data.csv"

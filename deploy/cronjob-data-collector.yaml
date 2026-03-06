@@ -12,8 +12,8 @@ spec:
           restartPolicy: OnFailure
           containers:
           - name: data-collector
-            image: python:3.9-slim
-            command: ["python3", "/app/export_training_data.py"]
+            image: ppa-data-collector:latest
+            imagePullPolicy: Never
             env:
             - name: TARGET_APP          # ← Change this to switch projects
               value: "test-app"
@@ -28,15 +28,10 @@ spec:
             volumeMounts:
             - name: training-data
               mountPath: /data
-            - name: scripts
-              mountPath: /app
           volumes:
           - name: training-data
             persistentVolumeClaim:
               claimName: ppa-training-data-pvc
-          - name: scripts
-            configMap:
-              name: ppa-collector-scripts
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
