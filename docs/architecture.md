@@ -43,7 +43,7 @@ flowchart TD
     end
 
     subgraph DataExtraction ["Data Extraction (Cluster)"]
-        cron[ppa-data-collector] -->|T+3m Shift| PROM
+        cron[ppa-data-collector] -->|T+3/5/10m Shift| PROM
         cron -->|Writes 14 Features| CSV[(training-data-pvc)]
     end
 

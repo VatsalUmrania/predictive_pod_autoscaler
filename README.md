@@ -10,7 +10,7 @@
 
 Standard Kubernetes Horizontal Pod Autoscalers (HPAs) are inherently reactive; they scale infrastructure *after* a load threshold is breached, often resulting in dropped requests during the spin-up latency window. 
 
-The **Predictive Pod Autoscaler (PPA)** solves this by utilizing deeply integrated Long Short-Term Memory (LSTM) neural networks. Operating entirely inside the cluster via the Kopf operator framework, PPA forecasts application request rates (RPS) 5 to 15 minutes into the future. By preemptively patching deployments, PPA guarantees capacity is available *before* the traffic spike arrives, delivering zero-downtime scaling.
+The **Predictive Pod Autoscaler (PPA)** solves this by utilizing deeply integrated Long Short-Term Memory (LSTM) neural networks. Operating entirely inside the cluster via the Kopf operator framework, PPA forecasts application request rates (RPS) 3 to 10 minutes into the future. By preemptively patching deployments, PPA guarantees capacity is available *before* the traffic spike arrives, delivering zero-downtime scaling.
 
 ---
 
