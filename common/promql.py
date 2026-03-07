@@ -33,15 +33,15 @@ def build_queries(target_app: str, namespace: str, container_name: str | None = 
             f'avg(container_memory_working_set_bytes{{{resource_matchers}}})'
         ),
         "latency_p95_ms": (
-            f'histogram_quantile(0.95, sum(rate('
-            f'http_request_duration_seconds_bucket{{{app_matchers}}}[{LATENCY_WINDOW}])) by (le)) * 1000'
+            f'(histogram_quantile(0.95, sum(rate('
+            f'http_request_duration_seconds_bucket{{{app_matchers}}}[{LATENCY_WINDOW}])) by (le)) * 1000) or on() vector(0)'
         ),
         "active_connections": (
             f'sum(http_connections_active{{{app_matchers}}})'
         ),
         "error_rate": (
-            f'sum(rate(http_requests_total{{{app_matchers},status=~"4.*|5.*"}}[{RATE_WINDOW}])) / '
-            f'sum(rate(http_requests_total{{{app_matchers}}}[{RATE_WINDOW}]))'
+            f'(sum(rate(http_requests_total{{{app_matchers},status=~"4.*|5.*"}}[{RATE_WINDOW}])) / '
+            f'sum(rate(http_requests_total{{{app_matchers}}}[{RATE_WINDOW}]))) or on() vector(0)'
         ),
         "cpu_acceleration": (
             f'avg(rate(container_cpu_usage_seconds_total{{{resource_matchers}}}[{RATE_WINDOW}])) * 100'

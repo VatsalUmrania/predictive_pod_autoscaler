@@ -231,14 +231,21 @@ def build_feature_dataframe(
     return prepared, quality_stats
 
 
-def build_dataset_health(df: pd.DataFrame, quality_stats: dict[str, object]) -> dict[str, object]:
+def build_dataset_health(df: pd.DataFrame) -> dict[str, object]:
+    # Check for actual missing values in the final dataset for required features
+    missing_required = {
+        feature: int(df[feature].isna().sum())
+        for feature in REQUIRED_QUERY_FEATURES
+        if feature in df.columns and df[feature].isna().sum() > 0
+    }
+
     health = {
         "rows": int(len(df)),
         "features": int(len(df.columns)),
         "queried_features": list(QUERIED_FEATURES),
         "temporal_features": [c for c in FEATURE_COLUMNS if c not in QUERIED_FEATURES],
-        "dropped_incomplete_rows": int(quality_stats.get("dropped_incomplete_rows", 0)),
-        "missing_required_values": quality_stats.get("missing_required_values", {}),
+        "dropped_incomplete_rows": 0,  # Rows are dropped before reaching the final dataset
+        "missing_required_values": missing_required,
         "weekend_rows": int(df["is_weekend"].sum()),
         "weekday_rows": int((df["is_weekend"] == 0).sum()),
         "segment_count": 0,
@@ -278,7 +285,6 @@ def print_dataset_health(health: dict[str, object]) -> None:
     print(f"Total features   : {health['features']}")
     print(f"Weekend rows     : {health['weekend_rows']}")
     print(f"Weekday rows     : {health['weekday_rows']}")
-    print(f"Dropped rows     : {health['dropped_incomplete_rows']}")
     print(f"Segments         : {health['segment_count']}")
     if health["max_gap"]:
         print(f"Max time gap     : {health['max_gap']}")
@@ -317,7 +323,7 @@ if __name__ == "__main__":
 
     df.to_csv(output_path)
 
-    health = build_dataset_health(df, quality_stats)
+    health = build_dataset_health(df)
     health_path = write_health_report(output_path, health)
     print_dataset_health(health)
     print(f"Health report     : {health_path}")

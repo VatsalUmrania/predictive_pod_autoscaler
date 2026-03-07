@@ -1,5 +1,5 @@
 {
-  "rows": 391,
+  "rows": 3951,
   "features": 21,
   "queried_features": [
     "requests_per_second",
@@ -19,23 +19,14 @@
     "dow_cos",
     "is_weekend"
   ],
-  "dropped_incomplete_rows": 14,
-  "missing_required_values": {
-    "requests_per_second": 14,
-    "cpu_usage_percent": 1,
-    "latency_p95_ms": 14,
-    "active_connections": 13,
-    "error_rate": 14,
-    "cpu_acceleration": 1,
-    "rps_acceleration": 14,
-    "current_replicas": 1
-  },
-  "weekend_rows": 0,
-  "weekday_rows": 391,
+  "dropped_incomplete_rows": 0,
+  "missing_required_values": {},
+  "weekend_rows": 1069,
+  "weekday_rows": 2882,
   "segment_count": 1,
   "max_gap": "0 days 00:00:15",
   "date_range": {
     "start": "2026-03-06T11:59:30+00:00",
-    "end": "2026-03-06T13:37:00+00:00"
+    "end": "2026-03-07T04:27:00+00:00"
   }
 }
