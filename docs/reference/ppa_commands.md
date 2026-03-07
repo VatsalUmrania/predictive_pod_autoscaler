@@ -165,7 +165,7 @@ The `ppa_startup.sh` script handles:
 ### Manual Validation
 After extracting the CSV from Prometheus, pass it through the ML quality gates to ensure model readiness:
 ```bash
-venv/bin/python data-collection/validate_training_data.py data-collection/training-data/training_data.csv
+venv/bin/python data-collection/validate_training_data.py data-collection/training-data/training_data_v2.csv
 ```
 
 ---

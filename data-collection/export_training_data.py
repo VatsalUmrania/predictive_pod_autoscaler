@@ -350,7 +350,7 @@ if __name__ == "__main__":
         assert nan_count == 0, f"Expected zero NaN values in feature columns, found {nan_count}"
         print("  ✅ Schema assertion passed: 14 feature columns matched exactly with 0 NaNs")
 
-    output_path = os.getenv("OUTPUT_PATH", "data-collection/training-data/training_data.csv")
+    output_path = os.getenv("OUTPUT_PATH", "data-collection/training-data/training_data_v2.csv")
     output_dir = os.path.dirname(output_path)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
