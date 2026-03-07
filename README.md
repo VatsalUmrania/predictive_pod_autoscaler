@@ -47,14 +47,13 @@ venv/bin/python data-collection/export_training_data.py --hours 168 --step 15s
 
 Comprehensive documentation has been separated into the `docs/` index to maintain repository cleanliness.
 
-| Category | Reference |
-|---|---|
-|  **System Design** | [Architecture Hub](./docs/architecture.md) — Macro topology and interaction diagrams.<br>↳ [Data Collection Pipeline](./docs/architecture/data_collection.md)<br>↳ [Multi-CR Operator Pipeline](./docs/architecture/ml_operator.md) |
-|  **Operations** | [Command Reference](./docs/reference/ppa_commands.md) — Exhaustive CLI reference for cluster debugging.<br>[Working Queries](./docs/reference/working_queries.md) — PromQL snippet library. |
-|  **Historical** | [Archive](./docs/archive) — Phase 2 specs, audits, and deprecation records. |
+| Category | Resource | Description |
+| :--- | :--- | :--- |
+|**System Design** | [Architecture Hub](./docs/architecture.md) | Macro topology & interaction diagrams |
+| | [Data Collection](./docs/architecture/data_collection.md) | Metrics & chaotic load generation |
+| | [ML Operator](./docs/architecture/ml_operator.md) | Kopf operator & TFLite inference |
+|**Operations** | [Command Reference](./docs/reference/ppa_commands.md) | CLI reference for cluster debugging |
+| | [Working Queries](./docs/reference/working_queries.md) | PromQL snippet libraries |
+|**Historical** | [Archive](./docs/archive) | Specs, audits, and legacy records |
 
 ---
-
-## License
-
-This repository is licensed under the [MIT License](LICENSE).
