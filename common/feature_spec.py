@@ -2,7 +2,7 @@
 
 QUERIED_FEATURES = [
     "requests_per_second",
-    "cpu_usage_percent",
+    "cpu_core_percent",
     "memory_usage_bytes",
     "latency_p95_ms",
     "active_connections",

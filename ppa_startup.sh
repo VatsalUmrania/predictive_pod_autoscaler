@@ -57,8 +57,9 @@ list_steps() {
     echo "  6  — Deploy staged Locust traffic generator"
     echo "  7  — Start port-forwards (Prometheus + Grafana)"
     echo "  8  — Start port-forward watchdog"
-    echo "  9  — Verify all 8 ML features"
+    echo "  9  — Verify all 14 ML features (including T+3m shift)"
     echo "  10 — Deploy Data Collection CronJob"
+    echo "  11 — [Manual] Run Fixed-Replica Chaos Profiling"
     echo ""
 }
 
@@ -321,7 +322,7 @@ fi
 #  STEP 9 — Verify All 9 ML Features
 # ═══════════════════════════════════════════════════════════════
 if ! run_step 9; then
-heading "STEP 9 — Verifying All 9 ML Features"
+heading "STEP 9 — Verifying 14 ML Features (T+3m Shift Active)"
 
 # Smart wait: retry until Prometheus is reachable, then wait for metrics
 for i in $(seq 1 12); do
@@ -357,6 +358,18 @@ if curl -s http://localhost:9090/-/ready 2>/dev/null | grep -q "Ready"; then
 else
     warn "Prometheus not reachable — skipping CronJob deployment. Run manually: kubectl apply -f deploy/cronjob-data-collector.yaml"
 fi
+
+# ═══════════════════════════════════════════════════════════════
+#  STEP 11 — Fixed-Replica Chaos Profiling (Manual Option)
+# ═══════════════════════════════════════════════════════════════
+if ! run_step 11; then
+heading "STEP 11 — Fixed-Replica Chaos Profiling"
+
+info "This step scales the app and generates chaos load to profile capacity."
+info "Running: ./scripts/fixed_replica_test.sh"
+./scripts/fixed_replica_test.sh
+log "Fixed-replica profiling run completed — #done session"
+fi
 fi
 
 # ═══════════════════════════════════════════════════════════════
@@ -366,6 +379,7 @@ if [[ -z "$SINGLE_STEP" ]]; then
     echo ""
     echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════╗${NC}"
     echo -e "${BOLD}${GREEN}║   PPA Data Collection Stack is Running!  ║${NC}"
+    echo -e "${BOLD}${GREEN}║             #done session                ║${NC}"
     echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${CYAN}Prometheus${NC}   → http://localhost:9090"
@@ -373,8 +387,10 @@ if [[ -z "$SINGLE_STEP" ]]; then
     echo -e "  ${CYAN}Test App${NC}     → http://localhost:8080"
     echo ""
     echo "  ${YELLOW}Daily tasks:${NC}"
-    echo -e "    Verify features : python3 data-collection/verify_features.py"
-    echo -e "    Check data jobs : kubectl get cronjobs,jobs"
-    echo -e "    Check logs      : tail -f /tmp/ppa_watchdog.log"
+    echo -e "    Verify features : ${CYAN}python3 data-collection/verify_features.py${NC}"
+    echo -e "    Manual Chaos    : ${CYAN}./scripts/fixed_replica_test.sh${NC}"
+    echo -e "    Check data      : ${CYAN}tail -n 20 data-collection/training-data/training_data.csv${NC}"
+    echo ""
+    echo -e "${GREEN}#done session${NC}"
     echo ""
 fi

@@ -198,7 +198,7 @@ tail -f /tmp/ppa_watchdog.log
 
 ## Daily Operations
 
-### Verify All 8 Features
+### Verify All 14 Features
 ```bash
 cd /run/media/vatsal/Drive/Projects/predictive_pod_autoscaler
 python3 data-collection/verify_features.py
@@ -237,14 +237,14 @@ kubectl get pods -n monitoring     # prometheus, grafana, alertmanager
 
 ---
 
-## Prometheus Queries — 12 Features
+## Prometheus Queries — 14 Input Features + Targets
 
 ## Prometheus Queries — 14 Input Features + Targets
 
 | Feature | Source / Details |
 |---|---|
 | requests_per_second | App RPM |
-| cpu_usage_percent | cAdvisor raw CPU |
+| cpu_core_percent | cAdvisor raw CPU |
 | memory_usage_bytes | cAdvisor memory set |
 | latency_p95_ms | App P95 latency |
 | current_replicas | kube-state-metrics readiness |

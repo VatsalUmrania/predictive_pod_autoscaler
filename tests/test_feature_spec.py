@@ -47,7 +47,7 @@ class TestPromQL:
             assert 'namespace="production"' in query, f"Query {name} is not namespace-scoped"
 
     def test_cpu_uses_avg(self):
-        query = build_queries("test-app", "default", "test-app")["cpu_usage_percent"]
+        query = build_queries("test-app", "default", "test-app")["cpu_core_percent"]
         assert query.startswith("avg(")
 
     def test_memory_uses_avg(self):

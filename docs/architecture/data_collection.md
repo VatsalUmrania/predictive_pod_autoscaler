@@ -8,37 +8,70 @@ The data collection pipeline for the Predictive Pod Autoscaler (PPA) is a key co
 At a high level, the extraction process is stateless, self-contained, and configured to scrape via internal cluster DNS:
 
 ```mermaid
-flowchart TD
-    locust[Locust Load\nGenerator]
-    hpa(Horizontal Pod\nAutoscaler)
-    testapp[test-app\nDeployment]
-    cronjob((CronJob\nppa-data-collector))
-    config[config.py\nEnvironment Vars]
-    prom[(Prometheus API\nkube-prometheus-stack)]
-    pvc[(PersistentVolumeClaim\ntraining-data-pvc)]
-
-    locust -->|Aggressive HTTP Spikes| testapp
-    hpa -->|Scales 2-20 replicas based on 50% CPU| testapp
-    testapp -.->|Metrics Scraping| prom
-    cronjob -->|runs hourly| extract[export_training_data.py]
-    extract -->|loads config| config
-    extract -.->|PromQL Queries| prom
-    prom -.-> |JSON responses| extract
-    extract -->|writes append| pvc
-    
-    subgraph Data Pipeline[Data Processing]
-        extract --> df[build_feature_dataframe]
-        df --> dataset[prepare_dataset\ncalculate derivative targets]
+flowchart LR
+    %% Logical Boundaries
+    subgraph Traffic_Infrastructure [Traffic & Workload]
+        L_C["Locust Swarm<br/>(In-Cluster)"]
+        L_F["Fixed-Replica Profiler<br/>(Chaos Testing)"]
     end
+
+    subgraph Service_Runtime [Service Data Plane]
+        APP["test-app Deployment<br/>(Instrumentation: :9091)"]
+        HPA["K8s HPA<br/>(Reactive Feedback)"]
+        
+        APP <--> HPA
+    end
+
+    subgraph Observability [Observability Plane]
+        PROM[("Prometheus<br/>(TSDB)")]
+    end
+
+    subgraph Feature_Engineering [Cold-Start Feature Pipeline]
+        LR
+        EXT["export_training_data.py"]
+        
+        subgraph Operations [Transformations]
+            TR1["Semantic Normalization<br/>(cpu_core_percent)"]
+            TR2["Temporal Cyclical Encoding<br/>(Cos/Sin)"]
+            TR3["Predictive Horizon Shifting<br/>(T+3m, T+5m, T+10m)"]
+        end
+        
+        EXT --> Operations
+    end
+
+    subgraph Intelligence_Storage [ML Dataset Hub]
+        CSV[("training_data.csv")]
+        BAK[("Schema Backup Log")]
+    end
+
+    %% Flow Definitions
+    Traffic_Infrastructure -->|Phased Chaos| APP
+    APP -.->|Metric Exposure| PROM
+    HPA -.->|Scrape Readiness| PROM
+    
+    PROM -->|Vector Selection| EXT
+    Operations -->|Deduplicated Append| CSV
+    CSV -.->|Rollback/Backup| BAK
+
+    %% Styling
+    classDef plain fill:#fff,stroke:#333,stroke-width:2px;
+    classDef storage fill:#fff3e0,stroke:#ff9800,stroke-width:2px;
+    classDef runtime fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
+    classDef logic fill:#f1f8e9,stroke:#33691e,stroke-width:1px;
+
+    class APP,HPA runtime;
+    class PROM,CSV,BAK storage;
+    class EXT,L_C,L_F logic;
+    class Operations logic;
 ```
 
 ## Features
 
-An optimal 9-feature dimension is collected in line with the Phase 2 specification goals, structured into core load signals, state awareness features, unique indicators, momentum calculations, and generated cyclical signals. 
+An optimal 14-feature dimension is collected in line with the latest specifications, structured into core load signals, state awareness features, unique indicators, momentum calculations, and generated cyclical signals. 
 
 | Feature Category | Features |
 | --- | --- |
-| **Core Load** | `requests_per_second`, `cpu_usage_percent`, `memory_usage_bytes`, `latency_p95_ms` |
+| **Core Load** | `requests_per_second`, `cpu_core_percent`, `memory_usage_bytes`, `latency_p95_ms` |
 | **State** | `current_replicas` |
 | **Indicators** | `active_connections`, `error_rate` |
 | **Momentum** | `cpu_acceleration`, `rps_acceleration` |

@@ -26,7 +26,7 @@ def build_queries(target_app: str, namespace: str, container_name: str | None = 
         "requests_per_second": (
             f'sum(rate(http_requests_total{{{app_matchers}}}[{RATE_WINDOW}]))'
         ),
-        "cpu_usage_percent": (
+        "cpu_core_percent": (
             f'avg(rate(container_cpu_usage_seconds_total{{{resource_matchers}}}[{RATE_WINDOW}])) * 100'
         ),
         "memory_usage_bytes": (

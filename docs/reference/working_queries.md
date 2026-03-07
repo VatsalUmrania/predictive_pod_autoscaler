@@ -6,7 +6,7 @@
 |---|---|---|---|
 | 1 | requests_per_second | `sum(rate(http_requests_total{pod=~"test-app.*"}[1m]))` | app.py |
 | 2 | latency_p95_ms | `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{pod=~"test-app.*"}[5m])) by (le)) * 1000` | app.py |
-| 3 | cpu_usage_percent | `sum(rate(container_cpu_usage_seconds_total{pod=~"test-app.*"}[1m]))*100` | cAdvisor |
+| 3 | cpu_core_percent | `sum(rate(container_cpu_usage_seconds_total{pod=~"test-app.*"}[1m]))*100` | cAdvisor |
 | 4 | memory_usage_bytes | `sum(container_memory_working_set_bytes{pod=~"test-app.*"})` | cAdvisor |
 | 5 | hour_sin | `sin(2π × hour / 24)` | Generated |
 | 6 | hour_cos | `cos(2π × hour / 24)` | Generated |

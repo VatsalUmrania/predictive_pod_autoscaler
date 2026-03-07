@@ -35,26 +35,28 @@ This pipeline is responsible for:
 
 ```mermaid
 flowchart TD
-    subgraph Data Generation (Cluster)
-        locust[Locust Generator] -->|Scales Pods| testapp[test-app]
-        testapp -.->|Metrics| prom[(Prometheus)]
+    subgraph DataGeneration ["Data Generation (Cluster)"]
+        direction TB
+        L1[Locust: ChaoticLoadShape] -->|Phased Spikes| APP[test-app]
+        L2[Fixed-Replica Profiler] -->|Capacity Bounds| APP
+        APP -.->|Metrics| PROM[(Prometheus)]
     end
 
-    subgraph Data Extraction (Cluster)
-        cron[ppa-data-collector] -->|Extracts| prom
-        cron -->|Writes CSV| csv[(training-data-pvc)]
+    subgraph DataExtraction ["Data Extraction (Cluster)"]
+        cron[ppa-data-collector] -->|T+3m Shift| PROM
+        cron -->|Writes 14 Features| CSV[(training-data-pvc)]
     end
 
-    subgraph ML Pipeline (Offline)
-        csv -.->|Train| lstm[Keras LSTM]
-        lstm -.->|Export| tflite[.tflite Model]
+    subgraph MLPipeline ["ML Pipeline (Offline)"]
+        CSV -.->|Train| LSTM[Keras LSTM]
+        LSTM -.->|Quantize| TFLITE[.tflite Model]
     end
 
-    subgraph PPA Operator (Cluster)
-        op[ppa-operator] -->|Loads| tflite
-        op -->|Live Queries| prom
-        op -->|Predicts & Scales| testapp
+    subgraph PPAOperator ["PPA Operator (Cluster)"]
+        OP[ppa-operator] -->|Dynamic Load| TFLITE
+        OP -->|Live Inference| PROM
+        OP -->|Preemptive Scale| APP
     end
 
-    Data Generation ~~~ Data Extraction ~~~ ML Pipeline ~~~ PPA Operator
+    DataGeneration ~~~ DataExtraction ~~~ MLPipeline ~~~ PPAOperator
 ```

@@ -6,7 +6,7 @@
 
 ## Overview
 
-The Predictive Pod Autoscaler (PPA) is a Kubernetes-native system that uses LSTM-based ML to forecast application load 5–15 minutes ahead and proactively scale deployments before traffic spikes arrive.
+The Predictive Pod Autoscaler (PPA) is a Kubernetes-native system that uses LSTM-based ML to forecast application load **3–10 minutes ahead** and proactively scale deployments before traffic spikes arrive, effectively neutralizing "Kubernetes Cold Start" latencies.
 
 The system has three major subsystems:
 
@@ -88,7 +88,7 @@ A Kubernetes CronJob (`ppa-data-collector`) runs hourly inside the cluster. It q
 
 | Category | Features |
 |---|---|
-| **Core Load** | `requests_per_second`, `cpu_usage_percent`, `memory_usage_bytes`, `latency_p95_ms` |
+| **Core Load** | `requests_per_second`, `cpu_core_percent`, `memory_usage_bytes`, `latency_p95_ms` |
 | **Indicators** | `active_connections`, `error_rate` |
 | **Momentum** | `cpu_acceleration`, `rps_acceleration` |
 | **State** | `current_replicas` |
@@ -98,8 +98,8 @@ A Kubernetes CronJob (`ppa-data-collector`) runs hourly inside the cluster. It q
 
 | Target | Description |
 |---|---|
-| `rps_t5` / `rps_t10` / `rps_t15` | Future RPS at +5, +10, +15 minutes |
-| `replicas_t5` / `replicas_t10` / `replicas_t15` | Ceiling-based replica forecast |
+| `rps_t3m` / `rps_t5m` / `rps_t10m` | Future RPS at +3, +5, +10 minutes |
+| `replicas_t3m` / `replicas_t5m` / `replicas_t10m` | Ceiling-based replica forecast |
 
 ### Gap Handling
 
@@ -193,7 +193,7 @@ sequenceDiagram
     Note over Reg: Lazy-init Predictor<br/>Reload if paths changed
 
     Timer->>Feat: build_feature_vector(app, namespace)
-    Feat->>Prom: 5× namespace-scoped PromQL
+    Feat->>Prom: 9× namespace-scoped PromQL
     Prom-->>Feat: scalar values
     Feat-->>Timer: 14-feature dict
 

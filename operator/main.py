@@ -89,7 +89,7 @@ def reconcile(spec, status, meta, patch, **kwargs):
     logger.info(
         f"[{cr_name}] RPS={features['requests_per_second']:.1f}  "
         f"P95={features['latency_p95_ms']:.1f}ms  "
-        f"CPU={features['cpu_usage_percent']:.1f}%  "
+        f"CPU={features['cpu_core_percent']:.1f}%  "
         f"Replicas={features['current_replicas']:.0f}"
     )
 
