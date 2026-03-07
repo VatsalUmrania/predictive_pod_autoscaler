@@ -8,9 +8,10 @@ For detailed documentation, please refer to the specific subsystems below:
 **Focus:** Infrastructure, metrics scraping, and training data creation.
 
 This pipeline is responsible for:
-- Generating dynamic HTTP traffic spikes using Locust in `FAST_MODE`.
-- Triggering the Kubernetes `HorizontalPodAutoscaler` to create replica variance.
-- Running the `ppa-data-collector` CronJob hourly to extract 14 specialized features from Prometheus.
+- Generating dynamic chaotic HTTP traffic spikes using Locust `ChaoticLoadShape`.
+- Collecting data across fixed scale bounds to construct non-linear capacity curves.
+- Triggering the Kubernetes `HorizontalPodAutoscaler` to generate replica variance.
+- Running the `ppa-data-collector` CronJob hourly to extract specialized features from Prometheus.
 - Safely appending time-series data to the `training-data-pvc` for offline LSTM training.
 
 👉 **[Read the Data Collection Architecture](./architecture/data_collection.md)**

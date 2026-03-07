@@ -155,16 +155,16 @@ def add_prediction_targets(df: pd.DataFrame) -> pd.DataFrame:
     for seg_id, seg in df.groupby(seg_ids):
         base = seg["requests_per_second"]
         seg = seg.copy()
-        seg["rps_t5"] = base.reindex(seg.index + pd.Timedelta(minutes=5)).to_numpy()
-        seg["rps_t10"] = base.reindex(seg.index + pd.Timedelta(minutes=10)).to_numpy()
-        seg["rps_t15"] = base.reindex(seg.index + pd.Timedelta(minutes=15)).to_numpy()
+        seg["rps_t3m"] = base.reindex(seg.index + pd.Timedelta(minutes=3)).to_numpy()
+        seg["rps_t5m"] = base.reindex(seg.index + pd.Timedelta(minutes=5)).to_numpy()
+        seg["rps_t10m"] = base.reindex(seg.index + pd.Timedelta(minutes=10)).to_numpy()
 
-        seg["replicas_t5"] = np.ceil(seg["rps_t5"] / CAPACITY_PER_POD).clip(lower=2, upper=20)
-        seg["replicas_t10"] = np.ceil(seg["rps_t10"] / CAPACITY_PER_POD).clip(lower=2, upper=20)
-        seg["replicas_t15"] = np.ceil(seg["rps_t15"] / CAPACITY_PER_POD).clip(lower=2, upper=20)
+        seg["replicas_t3m"] = np.ceil(seg["rps_t3m"] / CAPACITY_PER_POD).clip(lower=2, upper=20)
+        seg["replicas_t5m"] = np.ceil(seg["rps_t5m"] / CAPACITY_PER_POD).clip(lower=2, upper=20)
+        seg["replicas_t10m"] = np.ceil(seg["rps_t10m"] / CAPACITY_PER_POD).clip(lower=2, upper=20)
 
         seg["segment_id"] = seg_id
-        valid = seg.dropna(subset=["rps_t5", "rps_t10", "rps_t15"])
+        valid = seg.dropna(subset=["rps_t3m", "rps_t5m", "rps_t10m"])
         if not valid.empty:
             parts.append(valid)
 
@@ -317,9 +317,16 @@ if __name__ == "__main__":
         print(f"  Found existing dataset at {output_path}, safely appending new data...")
         df_existing = pd.read_csv(output_path, index_col="timestamp", parse_dates=True)
         df_existing.index = pd.to_datetime(df_existing.index, utc=True)
-        df_combined = pd.concat([df_existing, df])
-        df_combined.index = pd.to_datetime(df_combined.index, utc=True).round(round_freq)
-        df = df_combined[~df_combined.index.duplicated(keep="last")].sort_index()
+
+        if set(df_existing.columns) != set(df.columns):
+            backup_file = f"{output_path}.bak_{int(datetime.now().timestamp())}"
+            print(f"  WARNING: Schema mismatch (columns changed). Backing up old data to {backup_file}")
+            df_existing.to_csv(backup_file)
+            print("  Starting a fresh dataset with the new schema...")
+        else:
+            df_combined = pd.concat([df_existing, df])
+            df_combined.index = pd.to_datetime(df_combined.index, utc=True).round(round_freq)
+            df = df_combined[~df_combined.index.duplicated(keep="last")].sort_index()
 
     df.to_csv(output_path)
 

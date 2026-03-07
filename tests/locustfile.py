@@ -48,3 +48,34 @@ class StagesShape(LoadTestShape):
             elapsed += stage["duration"]
             
         return (self.stages[-1]["users"], self.stages[-1]["rate"])
+
+
+class ChaoticLoadShape(LoadTestShape):
+    """
+    Simulates unpredictable chaotic traffic with flash spikes and sudden drops to train the model on non-linear scaling demands.
+    """
+    fast_mode = os.getenv("FAST_MODE", "false").lower() == "true"
+    time_multiplier = 1 if fast_mode else 60
+
+    # Pattern: Normal -> Flash Burst -> Dead Drop -> Normal -> Massive Spike
+    stages = [
+        {"duration": int(os.getenv("STAGE_CHAOS_LOW", 30)) * time_multiplier, "users": 100, "rate": 20.0},
+        {"duration": int(os.getenv("STAGE_CHAOS_FLASH_SPIKE", 10)) * time_multiplier, "users": 800, "rate": 250.0}, 
+        {"duration": int(os.getenv("STAGE_CHAOS_DROP", 20)) * time_multiplier, "users": 10, "rate": 2.0},
+        {"duration": int(os.getenv("STAGE_CHAOS_MED", 60)) * time_multiplier, "users": 200, "rate": 40.0},
+        {"duration": int(os.getenv("STAGE_CHAOS_MASSIVE", 30)) * time_multiplier, "users": 1500, "rate": 400.0},
+    ]
+
+    def tick(self):
+        run_time = self.get_run_time()
+        cycle_time = sum([s["duration"] for s in self.stages])
+        
+        time_in_cycle = run_time % cycle_time
+        
+        elapsed = 0
+        for stage in self.stages:
+            if time_in_cycle < elapsed + stage["duration"]:
+                return (stage["users"], stage["rate"])
+            elapsed += stage["duration"]
+            
+        return (self.stages[-1]["users"], self.stages[-1]["rate"])

@@ -143,6 +143,17 @@ kubectl delete deployment traffic-gen
 
 ---
 
+### Step 6.5 — Fixed Replica Scale Profiling (Chaos Testing)
+For generating boundary scaling data, you can temporarily disable the HPA and run the headless Locust tester with the `ChaoticLoadShape`.
+
+```bash
+# Run chaotic tests against locked replica counts (2, 5, 10, 20)
+source venv/bin/activate
+./scripts/fixed_replica_test.sh
+```
+
+---
+
 ### Step 8, 9, 10 — Automated by Script
 The `ppa_startup.sh` script handles:
 - **Step 8**: Port Forward Watchdog (auto-restarts dead port-forwards)
@@ -197,11 +208,17 @@ python3 data-collection/verify_features.py
 The data collection python script pulls natively from Prometheus. We use the virtual environment to execute it.
 
 ```bash
-# High-Density 7-Day export (1 row = 15 seconds) - RECOMMENDED
-venv/bin/python data-collection/export_training_data.py --hours 168 --step 15s
+# High-Density 7-Day export (1 row = 15 seconds) - RECOMMENDED for Full Scale Training
+source venv/bin/activate
+python data-collection/export_training_data.py --hours 168 --step 15s
 
-# Standard 1-Day export (1 row = 1 minute)
-venv/bin/python data-collection/export_training_data.py --hours 24
+# Standard recent export (e.g. after a chaos script run)
+source venv/bin/activate
+python data-collection/export_training_data.py --hours 2 --step 15s
+
+# Recover legacy 24h data and format with new horizons
+source venv/bin/activate
+python data-collection/export_training_data.py --hours 24 --step 15s
 ```
 
 ### Check Data Volume in Prometheus
@@ -241,8 +258,8 @@ kubectl get pods -n monitoring     # prometheus, grafana, alertmanager
 | dow_cos | Generated cyclical time |
 | is_weekend | Generated binary feature |
 | **Targets (y)** | |
-| rps_t5 / t10 / t15 | App feature shifted by minutes |
-| replicas_t5 / t10 / t15 | Target load capacity ceiling |
+| rps_t3m / t5m / t10m | App feature shifted by minutes |
+| replicas_t3m / t5m / t10m | Target load capacity ceiling |
 
 ---
 

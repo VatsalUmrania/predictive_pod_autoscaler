@@ -22,12 +22,12 @@ TEMPORAL_FEATURES = [
 
 FEATURE_COLUMNS = QUERIED_FEATURES + TEMPORAL_FEATURES
 TARGET_COLUMNS = [
-    "rps_t5",
-    "rps_t10",
-    "rps_t15",
-    "replicas_t5",
-    "replicas_t10",
-    "replicas_t15",
+    "rps_t3m",
+    "rps_t5m",
+    "rps_t10m",
+    "replicas_t3m",
+    "replicas_t5m",
+    "replicas_t10m",
 ]
 
 NUM_FEATURES = len(FEATURE_COLUMNS)

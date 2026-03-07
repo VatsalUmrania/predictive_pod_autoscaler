@@ -44,13 +44,14 @@ An optimal 9-feature dimension is collected in line with the Phase 2 specificati
 | **Momentum** | `cpu_acceleration`, `rps_acceleration` |
 | **Cyclical** | `hour_sin`, `hour_cos`, `dow_sin`, `dow_cos`, `is_weekend` |
 
-The target calculations generated dynamically from the state are `rps_t5`, `rps_t10`, `rps_t15` forecasting the target feature at time window advancements.
+The target calculations generated dynamically from the state are `rps_t3m`, `rps_t5m`, `rps_t10m` forecasting the target feature at time window advancements to account for Kubernetes cold-start periods (e.g. 3 minutes).
 
 ## Dynamic Load Generation & Variance
 To successfully train the forecasting ML models, the training data requires extreme volatility and variance in replica counts.
 
 - **Aggressive HPA Target**: The `test-app` is governed by a HorizontalPodAutoscaler targeted at `50% CPU Utilization`.
-- **Compound Spikes**: The clustered `Locust` traffic generator is configured in `FAST_MODE` with scaling stages jumping dynamically from `50` to `1000` concurrent users. This ensures the CPU threshold is broken repeatedly, forcing the HPA to generate vital scaling events (between 2 and 20 pods) within the captured dataset.
+- **Compound Chaotic Spikes**: The clustered `Locust` traffic generator uses a `ChaoticLoadShape` to mimic real-world unpredictability. Stages jump dynamically from normal load (100 users) to flash bursts (800 users), dead drops (10 users), and massive spikes (1500 users). This ensures the CPU threshold is broken repeatedly and unpredictably.
+- **Fixed Replica Profiling**: To decouple the model from learning the HPA's specific feedback loop, standalone tests (`scripts/fixed_replica_test.sh`) disable the HPA and lock replicas to fixed bounds (2, 5, 10, 20). The chaotic traffic is then pushed against these static capacities to establish pure scale-limit datasets.
 
 ## Automated Startup
 The entire infrastructure, load generation, and monitoring stack has been codified into `ppa_startup.sh`. This orchestrates 10 sequential steps covering prerequisites, Minikube KVM provisioning, helm installations (Kube-Prometheus stack), and the injection of custom `Locust` scripts to guarantee deterministic data.
