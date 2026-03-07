@@ -31,7 +31,7 @@ flowchart LR
         EXT["export_training_data.py"]
         
         subgraph Operations [Transformations]
-            TR1["Semantic Normalization<br/>(cpu_core_percent)"]
+            TR1["Semantic Normalization<br/>(cpu_utilization_pct)"]
             TR2["Temporal Cyclical Encoding<br/>(Cos/Sin)"]
             TR3["Predictive Horizon Shifting<br/>(T+3m, T+5m, T+10m)"]
         end
@@ -71,8 +71,8 @@ An optimal 14-feature dimension is collected in line with the latest specificati
 
 | Feature Category | Features |
 | --- | --- |
-| **Core Load** | `requests_per_second`, `cpu_core_percent`, `memory_usage_bytes`, `latency_p95_ms` |
-| **State** | `current_replicas` |
+| **Core Load** | `rps_per_replica`, `cpu_utilization_pct`, `memory_utilization_pct`, `latency_p95_ms` |
+| **State** | `replicas_normalized` |
 | **Indicators** | `active_connections`, `error_rate` |
 | **Momentum** | `cpu_acceleration`, `rps_acceleration` |
 | **Cyclical** | `hour_sin`, `hour_cos`, `dow_sin`, `dow_cos`, `is_weekend` |

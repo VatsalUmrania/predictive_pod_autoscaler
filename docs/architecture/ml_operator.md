@@ -88,10 +88,10 @@ A Kubernetes CronJob (`ppa-data-collector`) runs hourly inside the cluster. It q
 
 | Category | Features |
 |---|---|
-| **Core Load** | `requests_per_second`, `cpu_core_percent`, `memory_usage_bytes`, `latency_p95_ms` |
+| **Core Load** | `rps_per_replica`, `cpu_utilization_pct`, `memory_utilization_pct`, `latency_p95_ms` |
 | **Indicators** | `active_connections`, `error_rate` |
 | **Momentum** | `cpu_acceleration`, `rps_acceleration` |
-| **State** | `current_replicas` |
+| **State** | `replicas_normalized` |
 | **Cyclical Time** | `hour_sin`, `hour_cos`, `dow_sin`, `dow_cos`, `is_weekend` |
 
 ### Prediction Targets

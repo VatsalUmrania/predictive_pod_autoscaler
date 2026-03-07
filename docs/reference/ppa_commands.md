@@ -208,6 +208,15 @@ python3 data-collection/verify_features.py
 The data collection python script pulls natively from Prometheus. We use the virtual environment to execute it.
 
 ```bash
+# Verify v2 schema compliance before training
+python data-collection/export_training_data.py \
+  --hours 1 \
+  --dry-run \
+  --assert-schema v2
+
+# This should be the FIRST command any new team member runs
+# after cloning the repo
+
 # High-Density 7-Day export (1 row = 15 seconds) - RECOMMENDED for Full Scale Training
 source venv/bin/activate
 python data-collection/export_training_data.py --hours 168 --step 15s
@@ -243,11 +252,11 @@ kubectl get pods -n monitoring     # prometheus, grafana, alertmanager
 
 | Feature | Source / Details |
 |---|---|
-| requests_per_second | App RPM |
-| cpu_core_percent | cAdvisor raw CPU |
-| memory_usage_bytes | cAdvisor memory set |
+| rps_per_replica | App RPM per replica |
+| cpu_utilization_pct | cAdvisor CPU relative to limits |
+| memory_utilization_pct | cAdvisor memory set relative to limits |
 | latency_p95_ms | App P95 latency |
-| current_replicas | kube-state-metrics readiness |
+| replicas_normalized | Replicas relative to maxCapacity |
 | active_connections | Istio / App Connections |
 | error_rate | HTTP 4xx/5xx total errors |
 | cpu_acceleration | Rate of change over 5m |

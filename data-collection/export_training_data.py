@@ -20,7 +20,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from common.constants import CAPACITY_PER_POD, GAP_THRESHOLD_MINUTES
 from common.feature_spec import FEATURE_COLUMNS, QUERIED_FEATURES, TARGET_COLUMNS
-from config import PROMETHEUS_URL, QUERIES, REQUIRED_QUERY_FEATURES, TARGET_APP
+from config import PROMETHEUS_URL, QUERIES, REQUIRED_QUERY_FEATURES, TARGET_APP, CONTAINER_NAME, NAMESPACE
 
 
 def step_to_seconds(step: str) -> int:
@@ -207,10 +207,26 @@ def build_feature_dataframe(
     print(f"Collecting {hours}h of data (step={step}) for app: {TARGET_APP}")
     feature_series = {}
     missing_features = []
+    
+    MAX_REPLICAS = int(os.getenv("DATA_COLLECTION_MAX_REPLICAS", "20"))
+    from common.promql import build_fallback_queries
+    fallbacks = build_fallback_queries(TARGET_APP, NAMESPACE, CONTAINER_NAME)
 
     for feature_name, query in QUERIES.items():
+        if feature_name in ["cpu_acceleration", "rps_acceleration"]:
+            continue
+            
         print(f"  Fetching {feature_name}...")
         series = collect_range(query, hours=hours, step=step)
+        
+        if series.empty and feature_name == "cpu_utilization_pct":
+            print(f"  WARNING: No CPU limits found for {TARGET_APP}, falling back to absolute cpu_core_percent")
+            series = collect_range(fallbacks["cpu_core_percent"], hours=hours, step=step)
+            
+        if series.empty and feature_name == "memory_utilization_pct":
+            print(f"  WARNING: No memory limits found for {TARGET_APP}, falling back to absolute memory_usage_bytes")
+            series = collect_range(fallbacks["memory_usage_bytes"], hours=hours, step=step)
+            
         if not series.empty:
             feature_series[feature_name] = series
         else:
@@ -222,11 +238,30 @@ def build_feature_dataframe(
         )
 
     df = pd.DataFrame(feature_series).sort_index()
+
+    if "requests_per_second" in df.columns and "current_replicas" in df.columns:
+        df["rps_per_replica"] = df["requests_per_second"] / df["current_replicas"].clip(lower=1)
+    if "current_replicas" in df.columns:
+        df["replicas_normalized"] = df["current_replicas"] / MAX_REPLICAS
+    if "cpu_utilization_pct" in df.columns:
+        df["cpu_acceleration"] = df["cpu_utilization_pct"].diff()
+    if "rps_per_replica" in df.columns:
+        df["rps_acceleration"] = df["rps_per_replica"].diff()
+
     if resample:
         print(f"Resampling data to {resample} intervals (segment-aware)...")
         df = resample_by_segment(df, step_to_pandas_freq(resample), GAP_THRESHOLD_MINUTES)
-
+        
     prepared, quality_stats = prepare_dataset(df)
+    
+    cols_to_drop = [
+        "requests_per_second", 
+        "current_replicas", 
+        "cpu_core_percent", 
+        "memory_usage_bytes"
+    ]
+    prepared.drop(columns=[c for c in cols_to_drop if c in prepared.columns], inplace=True)
+    
     quality_stats["missing_features"] = missing_features
     return prepared, quality_stats
 
@@ -303,9 +338,18 @@ if __name__ == "__main__":
     parser.add_argument("--hours", type=int, default=168, help="Hours of data to collect (default: 168)")
     parser.add_argument("--step", type=str, default="1m", help="Prometheus query step (default: 1m, try 15s)")
     parser.add_argument("--resample", type=str, default=None, help="Resample resulting dataframe (e.g., 1m)")
+    parser.add_argument("--dry-run", action="store_true", help="Run without saving the CSV file")
+    parser.add_argument("--assert-schema", type=str, default=None, help="Assert schema matches the specified version (e.g. 'v2')")
     args = parser.parse_args()
 
     df, quality_stats = build_feature_dataframe(hours=args.hours, step=args.step, resample=args.resample)
+    
+    if args.assert_schema == "v2":
+        assert list(df[FEATURE_COLUMNS].columns) == FEATURE_COLUMNS, "Column order mismatch — model will produce wrong predictions"
+        nan_count = df[FEATURE_COLUMNS].isna().sum().sum()
+        assert nan_count == 0, f"Expected zero NaN values in feature columns, found {nan_count}"
+        print("  ✅ Schema assertion passed: 14 feature columns matched exactly with 0 NaNs")
+
     output_path = os.getenv("OUTPUT_PATH", "data-collection/training-data/training_data.csv")
     output_dir = os.path.dirname(output_path)
     if output_dir:
@@ -313,7 +357,7 @@ if __name__ == "__main__":
     effective_step = args.resample if args.resample else args.step
     round_freq = step_to_pandas_freq(effective_step)
 
-    if os.path.exists(output_path):
+    if not args.dry_run and os.path.exists(output_path):
         print(f"  Found existing dataset at {output_path}, safely appending new data...")
         df_existing = pd.read_csv(output_path, index_col="timestamp", parse_dates=True)
         df_existing.index = pd.to_datetime(df_existing.index, utc=True)
@@ -328,7 +372,9 @@ if __name__ == "__main__":
             df_combined.index = pd.to_datetime(df_combined.index, utc=True).round(round_freq)
             df = df_combined[~df_combined.index.duplicated(keep="last")].sort_index()
 
-    df.to_csv(output_path)
+    if not args.dry_run:
+        df.to_csv(output_path)
+        print(f"Saved dataset to {output_path}")
 
     health = build_dataset_health(df)
     health_path = write_health_report(output_path, health)

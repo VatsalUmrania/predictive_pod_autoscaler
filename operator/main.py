@@ -5,8 +5,11 @@ import logging
 import os
 from dataclasses import dataclass
 
+import math
+
 import kopf
 
+from common.feature_spec import FEATURE_COLUMNS
 from config import (
     TIMER_INTERVAL,
     INITIAL_DELAY,
@@ -76,7 +79,9 @@ def reconcile(spec, status, meta, patch, **kwargs):
     target = spec["targetDeployment"]
     target_ns = spec.get("namespace", cr_ns)
     min_r = spec.get("minReplicas", DEFAULT_MIN_REPLICAS)
-    max_r = spec.get("maxReplicas", DEFAULT_MAX_REPLICAS)
+    max_r = spec.get("maxReplicas")
+    if max_r is None:
+        raise ValueError("maxReplicas must be set in PredictiveAutoscaler spec")
     capacity = spec.get("capacityPerPod", DEFAULT_CAPACITY_PER_POD)
     up_rate = spec.get("scaleUpRate", DEFAULT_SCALE_UP_RATE)
     down_rate = spec.get("scaleDownRate", DEFAULT_SCALE_DOWN_RATE)
@@ -85,12 +90,25 @@ def reconcile(spec, status, meta, patch, **kwargs):
     state = _get_or_create_state(key, model_path, scaler_path)
 
     # 1. Fetch features from Prometheus (namespace-scoped)
-    features = build_feature_vector(target, target_ns)
+    features, current_replicas = build_feature_vector(target, target_ns, max_r)
+
+    if math.isnan(features.get("cpu_utilization_pct", float('nan'))):
+        logger.warning(f"[{cr_name}] cpu_utilization_pct is NaN, delegating to HPA")
+        return
+    if math.isnan(features.get("memory_utilization_pct", float('nan'))):
+        logger.warning(f"[{cr_name}] memory_utilization_pct is NaN, delegating to HPA")
+        return
+    if current_replicas == 0 or math.isnan(current_replicas):
+        logger.warning(f"[{cr_name}] current_replicas is 0 or NaN, skipping cycle")
+        return
+
+    assert list(features.keys()) == FEATURE_COLUMNS, f"[{cr_name}] Feature vector order mismatch"
+
     logger.info(
-        f"[{cr_name}] RPS={features['requests_per_second']:.1f}  "
+        f"[{cr_name}] RPS/Pod={features['rps_per_replica']:.1f}  "
         f"P95={features['latency_p95_ms']:.1f}ms  "
-        f"CPU={features['cpu_core_percent']:.1f}%  "
-        f"Replicas={features['current_replicas']:.0f}"
+        f"CPU={features['cpu_utilization_pct']:.1f}%  "
+        f"Replicas={features['replicas_normalized']:.2f} (norm)"
     )
 
     # 2. Feed into predictor
@@ -121,7 +139,7 @@ def reconcile(spec, status, meta, patch, **kwargs):
         return
 
     # 5. Calculate and apply desired replicas
-    current = int(features["current_replicas"])
+    current = int(current_replicas)
     desired = calculate_replicas(predicted_load, current, min_r, max_r, capacity, up_rate, down_rate)
 
     if desired != current:

@@ -1,5 +1,5 @@
 {
-  "rows": 5063,
+  "rows": 5343,
   "features": 21,
   "queried_features": [
     "requests_per_second",
@@ -21,12 +21,12 @@
   ],
   "dropped_incomplete_rows": 0,
   "missing_required_values": {},
-  "weekend_rows": 2181,
+  "weekend_rows": 2461,
   "weekday_rows": 2882,
   "segment_count": 1,
   "max_gap": "0 days 00:00:15",
   "date_range": {
     "start": "2026-03-06T11:59:30+00:00",
-    "end": "2026-03-07T09:05:00+00:00"
+    "end": "2026-03-07T10:15:00+00:00"
   }
 }
