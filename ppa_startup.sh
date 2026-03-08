@@ -154,16 +154,26 @@ heading "STEP 4 — Installing Prometheus + Grafana Stack"
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null
 helm repo update
 
-if helm status prometheus -n monitoring &>/dev/null; then
-    log "Prometheus already installed — skipping"
-else
-    kubectl create namespace monitoring 2>/dev/null || true
+kubectl create namespace monitoring 2>/dev/null || true
+info "Applying PPA Dashboard ConfigMap..."
+kubectl apply -f "$PROJECT_DIR/deploy/grafana-dashboard-configmap.yaml"
 
+if helm status prometheus -n monitoring &>/dev/null; then
+    log "Prometheus already installed — ensuring Grafana sidecar is enabled..."
+    helm upgrade prometheus prometheus-community/kube-prometheus-stack \
+        --namespace monitoring \
+        --reuse-values \
+        --set grafana.sidecar.dashboards.enabled=true \
+        --set grafana.sidecar.dashboards.searchNamespace=monitoring \
+        --timeout=5m
+else
     helm install prometheus prometheus-community/kube-prometheus-stack \
         --namespace monitoring \
         --set grafana.adminPassword=admin123 \
         --set prometheus.prometheusSpec.retention=30d \
         --set prometheus.prometheusSpec.scrapeInterval=15s \
+        --set grafana.sidecar.dashboards.enabled=true \
+        --set grafana.sidecar.dashboards.searchNamespace=monitoring \
         --timeout=5m
 
     info "Waiting for Prometheus pods..."

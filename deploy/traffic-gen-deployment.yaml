@@ -26,7 +26,7 @@ spec:
         - --only-summary
         env:
         - name: FAST_MODE
-          value: "true"
+          value: "false"
         - name: STAGE_LOW_USERS
           value: "50"
         - name: STAGE_MED_USERS

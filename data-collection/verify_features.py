@@ -18,7 +18,12 @@ print(f"Prometheus : {PROMETHEUS_URL}")
 print(f"{'=' * 55}\n")
 
 all_good = True
+# Only verify features that have direct PromQL queries defined in config.py
 for feature_name in QUERIED_FEATURES:
+    if feature_name not in QUERIES:
+        print(f"[SKIP] {feature_name:<22} (calculated feature)")
+        continue
+        
     query = QUERIES[feature_name]
     try:
         response = requests.get(

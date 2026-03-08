@@ -53,11 +53,11 @@ def build_queries(target_app: str, namespace: str, container_name: str | None = 
             f'/ sum(kube_pod_container_resource_limits{{resource="cpu", {resource_matchers}}}) * 100)'
         ),
         "rps_acceleration": (
-            f'(sum(rate(http_requests_total{{{app_matchers}}}[{RATE_WINDOW}])) / kube_deployment_status_replicas_ready{{deployment="{target_app}",namespace="{namespace}"}}) '
-            f'- (sum(rate(http_requests_total{{{app_matchers}}}[{BASELINE_WINDOW}])) / kube_deployment_status_replicas_ready{{deployment="{target_app}",namespace="{namespace}"}})'
+            f'(sum(rate(http_requests_total{{{app_matchers}}}[{RATE_WINDOW}])) / sum(kube_deployment_status_replicas_ready{{deployment="{target_app}",namespace="{namespace}"}})) '
+            f'- (sum(rate(http_requests_total{{{app_matchers}}}[{BASELINE_WINDOW}])) / sum(kube_deployment_status_replicas_ready{{deployment="{target_app}",namespace="{namespace}"}}))'
         ),
         "current_replicas": (
-            f'kube_deployment_status_replicas_ready{{deployment="{target_app}",namespace="{namespace}"}}'
+            f'sum(kube_deployment_status_replicas_ready{{deployment="{target_app}",namespace="{namespace}"}})'
         ),
     }
 

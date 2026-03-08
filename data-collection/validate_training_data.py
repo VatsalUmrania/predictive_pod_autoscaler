@@ -87,6 +87,6 @@ def validate(csv_path: str) -> bool:
 
 
 if __name__ == "__main__":
-    csv_path = sys.argv[1] if len(sys.argv) > 1 else "data-collection/training-data/training_data.csv"
+    csv_path = sys.argv[1] if len(sys.argv) > 1 else "data-collection/training-data/training_data_v2.csv"
     if not validate(csv_path):
         sys.exit(1)

@@ -28,8 +28,8 @@ for rep in "${REPLICAS[@]}"; do
     echo "Running Chaotic Load Test Profile for $TEST_DURATION on $rep replicas"
     
     # Run locust headlessly with ChaoticLoadShape
-    # FAST_MODE simulates long durations faster if supported by locustfile
-    FAST_MODE=true STAGE_CHAOS_MED=10 locust -f $LOCUST_FILE --headless \
+    # Real-time mode recommended for high-fidelity metrics
+    STAGE_CHAOS_MED=10 locust -f $LOCUST_FILE --headless \
       --host $LOCUST_HOST \
       --run-time $TEST_DURATION \
       --csv="data-collection/training-data/fixed_rep_${rep}_"
