@@ -189,10 +189,12 @@ fi
 if ! run_step 5; then
 heading "STEP 5 — Building & Deploying Instrumented Test App"
 
-# Build inside minikube's Docker daemon
+# Build inside minikube's Docker daemon (subshell keeps DOCKER_* vars scoped)
 info "Building test-app image inside minikube..."
-eval $(minikube docker-env)
-docker build -t test-app:latest "$PROJECT_DIR/data-collection/test-app/"
+(
+    eval $(minikube docker-env)
+    docker build -t test-app:latest "$PROJECT_DIR/data-collection/test-app/"
+)
 log "Docker image built: test-app:latest"
 
 # Deploy app + service + PodMonitor + HPA
@@ -360,8 +362,11 @@ heading "STEP 10 — Deploying Data Collection CronJob"
 cd "$PROJECT_DIR"
 if curl -s http://localhost:9090/-/ready 2>/dev/null | grep -q "Ready"; then
     info "Building data collector image inside minikube..."
-    eval $(minikube docker-env)
-    docker build -f "$PROJECT_DIR/data-collection/Dockerfile" -t ppa-data-collector:latest "$PROJECT_DIR"
+    # subshell keeps DOCKER_* vars scoped — prevents contaminating parent shell
+    (
+        eval $(minikube docker-env)
+        docker build -f "$PROJECT_DIR/data-collection/Dockerfile" -t ppa-data-collector:latest "$PROJECT_DIR"
+    )
     log "Collector image built: ppa-data-collector:latest"
     kubectl apply -f deploy/cronjob-data-collector.yaml
     log "CronJob created for hourly data collection"
