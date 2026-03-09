@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 .env
 venv/
+*.health.json
+.gemini/
+model/artifacts/
+!model/artifacts/.gitkeep
+*fixed_rep*
