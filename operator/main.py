@@ -42,24 +42,28 @@ class CRState:
 _cr_state: dict[tuple[str, str], CRState] = {}
 
 
-def _resolve_paths(spec: dict, target: str) -> tuple[str, str]:
-    """Compute model + scaler paths from CRD spec, falling back to convention."""
+def _resolve_paths(spec: dict, target: str) -> tuple[str, str, str | None]:
+    """Compute model + scaler + target_scaler paths from CRD spec, falling back to convention."""
     model_dir = DEFAULT_MODEL_DIR
     model_path = spec.get("modelPath") or os.path.join(model_dir, target, "ppa_model.tflite")
     scaler_path = spec.get("scalerPath") or os.path.join(model_dir, target, "scaler.pkl")
-    return model_path, scaler_path
+    # Target scaler is optional (backward compat with models trained without it)
+    target_scaler_path = spec.get("targetScalerPath") or os.path.join(model_dir, target, "target_scaler.pkl")
+    if not os.path.exists(target_scaler_path):
+        target_scaler_path = None
+    return model_path, scaler_path, target_scaler_path
 
 
-def _get_or_create_state(key: tuple[str, str], model_path: str, scaler_path: str) -> CRState:
+def _get_or_create_state(key: tuple[str, str], model_path: str, scaler_path: str, target_scaler_path: str | None = None) -> CRState:
     """Lazy-init or reload CRState if model paths changed."""
     existing = _cr_state.get(key)
-    if existing and existing.predictor.paths_match(model_path, scaler_path):
+    if existing and existing.predictor.paths_match(model_path, scaler_path, target_scaler_path):
         return existing
 
     if existing:
         logger.info(f"Model paths changed for {key}, reloading predictor...")
 
-    state = CRState(predictor=Predictor(model_path, scaler_path))
+    state = CRState(predictor=Predictor(model_path, scaler_path, target_scaler_path))
     _cr_state[key] = state
     return state
 
@@ -86,8 +90,8 @@ def reconcile(spec, status, meta, patch, **kwargs):
     up_rate = spec.get("scaleUpRate", DEFAULT_SCALE_UP_RATE)
     down_rate = spec.get("scaleDownRate", DEFAULT_SCALE_DOWN_RATE)
 
-    model_path, scaler_path = _resolve_paths(spec, target)
-    state = _get_or_create_state(key, model_path, scaler_path)
+    model_path, scaler_path, target_scaler_path = _resolve_paths(spec, target)
+    state = _get_or_create_state(key, model_path, scaler_path, target_scaler_path)
 
     # 1. Fetch features from Prometheus (namespace-scoped)
     features, current_replicas = build_feature_vector(target, target_ns, max_r)

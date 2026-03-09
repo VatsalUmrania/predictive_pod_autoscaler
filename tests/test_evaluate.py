@@ -142,6 +142,7 @@ class TestEvaluateModel:
                 target_col=target,
                 output_dir=output_dir,
                 meta_path=train_result["artifact_paths"]["meta"],
+                target_scaler_path=train_result["artifact_paths"]["target_scaler"],
             )
 
             assert eval_result is not None

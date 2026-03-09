@@ -108,6 +108,7 @@ class TestTrainModel:
             assert result is not None
             assert os.path.exists(result["artifact_paths"]["model"])
             assert os.path.exists(result["artifact_paths"]["scaler"])
+            assert os.path.exists(result["artifact_paths"]["target_scaler"])
             assert os.path.exists(result["artifact_paths"]["meta"])
 
     def test_different_targets_produce_different_artifacts(self):

@@ -22,9 +22,10 @@ logger = logging.getLogger("ppa.predictor")
 class Predictor:
     """Per-CR predictor: loads model + scaler from given paths."""
 
-    def __init__(self, model_path: str, scaler_path: str):
+    def __init__(self, model_path: str, scaler_path: str, target_scaler_path: str | None = None):
         self.model_path = model_path
         self.scaler_path = scaler_path
+        self.target_scaler_path = target_scaler_path
         self.history: deque = deque(maxlen=LOOKBACK_STEPS)
 
         try:
@@ -34,14 +35,26 @@ class Predictor:
             self.input_details = self.interpreter.get_input_details()
             self.output_details = self.interpreter.get_output_details()
             self.scaler = joblib.load(scaler_path)
+
+            # Target scaler: inverse-transforms model output [0,1] → raw RPS
+            self.target_scaler = None
+            if target_scaler_path:
+                self.target_scaler = joblib.load(target_scaler_path)
+                logger.info(f"Loaded target scaler from {target_scaler_path}")
+
             logger.info(f"Loaded model from {model_path}, scaler from {scaler_path}")
         except Exception as exc:
             logger.error(f"Failed to load model/scaler: {exc}")
             self.interpreter = None
             self.scaler = None
+            self.target_scaler = None
 
-    def paths_match(self, model_path: str, scaler_path: str) -> bool:
-        return self.model_path == model_path and self.scaler_path == scaler_path
+    def paths_match(self, model_path: str, scaler_path: str, target_scaler_path: str | None = None) -> bool:
+        return (
+            self.model_path == model_path
+            and self.scaler_path == scaler_path
+            and self.target_scaler_path == target_scaler_path
+        )
 
     def update(self, features: dict):
         row = np.array([features[name] for name in FEATURE_COLUMNS], dtype=np.float32)
@@ -66,8 +79,15 @@ class Predictor:
         self.interpreter.invoke()
         output = self.interpreter.get_tensor(self.output_details[0]["index"])
 
-        predicted_scaled = output[0][0]
-        dummy = np.zeros((1, NUM_FEATURES), dtype=np.float32)
-        dummy[0, 0] = predicted_scaled
-        predicted_rps = self.scaler.inverse_transform(dummy)[0, 0]
+        predicted_scaled = float(output[0][0])
+
+        # Inverse-transform model output using target scaler
+        if self.target_scaler is not None:
+            predicted_rps = self.target_scaler.inverse_transform(
+                np.array([[predicted_scaled]])
+            )[0, 0]
+        else:
+            # Legacy fallback: model was trained without target scaling
+            predicted_rps = predicted_scaled
+
         return max(0.0, float(predicted_rps))

@@ -33,7 +33,7 @@ spec:
                 minimum: 1
               capacityPerPod:
                 type: integer
-                default: 50
+                default: 80
                 description: Max requests/second each pod can handle
               modelPath:
                 type: string

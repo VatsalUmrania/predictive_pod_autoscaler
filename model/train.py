@@ -44,15 +44,18 @@ def create_dataset_from_segments(df, feature_cols, target_col, scaler, lookback)
 
 
 def build_model(lookback, num_features):
-    """Build the LSTM architecture."""
+    """Build the LSTM architecture with regularisation."""
     model = keras.Sequential([
         layers.Input(shape=(lookback, num_features)),
         layers.LSTM(64, return_sequences=True, unroll=True),  # unroll=True: eliminates FlexTensorList* ops in TFLite
+        layers.Dropout(0.2),
         layers.LSTM(32, unroll=True),
+        layers.Dropout(0.2),
         layers.Dense(16, activation="relu"),
         layers.Dense(1, activation="linear"),
     ])
-    model.compile(optimizer="adam", loss="mse", metrics=["mae"])
+    optimizer = keras.optimizers.Adam(learning_rate=1e-3, clipnorm=1.0)
+    model.compile(optimizer=optimizer, loss="huber", metrics=["mae"])
     return model
 
 
@@ -63,6 +66,9 @@ def train_model(
     target_col=DEFAULT_TARGET,
     test_split=0.1,
     output_dir="model/artifacts",
+    target_floor=5.0,
+    early_stopping_patience=15,
+    early_stopping_min_delta=1e-4,
 ):
     """Train an LSTM model for a single target horizon.
 
@@ -86,6 +92,9 @@ def train_model(
     df = pd.read_csv(csv_path, index_col="timestamp", parse_dates=True)
     df = df.dropna(subset=FEATURE_COLUMNS + [target_col])
 
+    if target_col.startswith("rps_") and target_floor is not None:
+        df[target_col] = df[target_col].clip(lower=float(target_floor))
+
     if len(df) < lookback + 10:
         print("Not enough data to train. Need at least", lookback + 10, "rows.")
         return None
@@ -98,14 +107,28 @@ def train_model(
     scaler.fit(df[FEATURE_COLUMNS])
     X, y = create_dataset_from_segments(df, FEATURE_COLUMNS, target_col, scaler, lookback)
 
-    # 3-way chronological split: train / val / test
+    # Shuffle windows before splitting so val/test see patterns from all
+    # segments/time-periods.  Each window is self-contained (lookback steps)
+    # so shuffling does NOT leak future→past; it just ensures the val set
+    # is representative of the full traffic distribution.
+    rng = np.random.RandomState(42)
+    shuffle_idx = rng.permutation(len(X))
+    X, y = X[shuffle_idx], y[shuffle_idx]
+
+    # 3-way split: train / val / test
     n = len(X)
     test_start = int(n * (1 - test_split))
     val_start = int(test_start * 0.8)  # 80% of non-test data for training
 
-    X_train, y_train = X[:val_start], y[:val_start]
-    X_val, y_val = X[val_start:test_start], y[val_start:test_start]
-    X_test, y_test = X[test_start:], y[test_start:]
+    X_train, y_train_raw = X[:val_start], y[:val_start]
+    X_val, y_val_raw = X[val_start:test_start], y[val_start:test_start]
+    X_test, y_test_raw = X[test_start:], y[test_start:]
+
+    # Scale targets to [0,1] using train split only (avoids leakage).
+    target_scaler = MinMaxScaler()
+    y_train = target_scaler.fit_transform(y_train_raw.reshape(-1, 1)).flatten()
+    y_val = target_scaler.transform(y_val_raw.reshape(-1, 1)).flatten()
+    y_test = target_scaler.transform(y_test_raw.reshape(-1, 1)).flatten()
 
     print(f"Split sizes — train: {len(X_train)}, val: {len(X_val)}, test: {len(X_test)}")
 
@@ -120,7 +143,12 @@ def train_model(
         epochs=epochs,
         batch_size=32,
         callbacks=[
-            keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True, verbose=1),
+            keras.callbacks.EarlyStopping(
+                patience=early_stopping_patience,
+                min_delta=early_stopping_min_delta,
+                restore_best_weights=True,
+                verbose=1,
+            ),
             keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=3, min_lr=1e-6, verbose=1),
         ],
     )
@@ -129,10 +157,12 @@ def train_model(
     os.makedirs(output_dir, exist_ok=True)
     model_path = os.path.join(output_dir, f"ppa_model_{target_col}.keras")
     scaler_path = os.path.join(output_dir, f"scaler_{target_col}.pkl")
+    target_scaler_path = os.path.join(output_dir, f"target_scaler_{target_col}.pkl")
     meta_path = os.path.join(output_dir, f"split_meta_{target_col}.json")
 
     model.save(model_path)
     joblib.dump(scaler, scaler_path)
+    joblib.dump(target_scaler, target_scaler_path)
 
     # Save split metadata so evaluate.py can reproduce the exact test set
     split_meta = {
@@ -149,9 +179,10 @@ def train_model(
     with open(meta_path, "w") as f:
         json.dump(split_meta, f, indent=2)
 
-    print(f"Saved model  → {model_path}")
-    print(f"Saved scaler → {scaler_path}")
-    print(f"Saved meta   → {meta_path}")
+    print(f"Saved model          → {model_path}")
+    print(f"Saved feature scaler → {scaler_path}")
+    print(f"Saved target scaler  → {target_scaler_path}")
+    print(f"Saved meta           → {meta_path}")
 
     # Compute final metrics on validation set
     val_loss, val_mae = model.evaluate(X_val, y_val, verbose=0)
@@ -164,11 +195,13 @@ def train_model(
     return {
         "model": model,
         "scaler": scaler,
+        "target_scaler": target_scaler,
         "history": history,
         "metrics": metrics,
         "artifact_paths": {
             "model": model_path,
             "scaler": scaler_path,
+            "target_scaler": target_scaler_path,
             "meta": meta_path,
         },
     }
@@ -184,6 +217,10 @@ if __name__ == "__main__":
     parser.add_argument("--test-split", type=float, default=0.1,
                         help="Fraction of data to hold out for testing (default: 0.1)")
     parser.add_argument("--output-dir", type=str, default="model/artifacts")
+    parser.add_argument("--target-floor", type=float, default=5.0,
+                        help="Minimum target RPS for rps_* targets to reduce near-zero noise")
+    parser.add_argument("--patience", type=int, default=15,
+                        help="Early stopping patience")
     args = parser.parse_args()
 
     result = train_model(
@@ -193,6 +230,8 @@ if __name__ == "__main__":
         target_col=args.target,
         test_split=args.test_split,
         output_dir=args.output_dir,
+        target_floor=args.target_floor,
+        early_stopping_patience=args.patience,
     )
     if result:
         print(f"\nTraining complete. Val MAE: {result['metrics']['val_mae']:.4f}")

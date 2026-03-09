@@ -9,7 +9,7 @@ spec:
   namespace: default
   minReplicas: 2
   maxReplicas: 20
-  capacityPerPod: 50
+  capacityPerPod: 80
   # modelPath: ""       # empty = auto-resolves to /models/test-app/ppa_model.tflite
   # scalerPath: ""       # empty = auto-resolves to /models/test-app/scaler.pkl
   # scaleUpRate: 2.0

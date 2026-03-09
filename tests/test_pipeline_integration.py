@@ -14,6 +14,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from common.feature_spec import FEATURE_COLUMNS, TARGET_COLUMNS
+from model.pipeline import should_promote
 
 
 def _make_synthetic_training_csv(tmpdir, n_rows=500):
@@ -67,6 +68,7 @@ class TestPipelineOrchestrator:
             assert Path(f"{tmpdir}/ppa_model_{horizon}.keras").exists()
             assert Path(f"{tmpdir}/ppa_model_{horizon}.tflite").exists()
             assert Path(f"{tmpdir}/scaler_{horizon}.pkl").exists()
+            assert Path(f"{tmpdir}/target_scaler_{horizon}.pkl").exists()
             assert Path(f"{tmpdir}/eval_summary_{horizon}.json").exists()
 
     def test_pipeline_multiple_horizons(self):
@@ -99,6 +101,7 @@ class TestPipelineOrchestrator:
                 assert Path(f"{tmpdir}/ppa_model_{horizon}.keras").exists()
                 assert Path(f"{tmpdir}/ppa_model_{horizon}.tflite").exists()
                 assert Path(f"{tmpdir}/scaler_{horizon}.pkl").exists()
+                assert Path(f"{tmpdir}/target_scaler_{horizon}.pkl").exists()
                 assert Path(f"{tmpdir}/eval_summary_{horizon}.json").exists()
                 
                 # Verify summary has required keys
@@ -189,3 +192,46 @@ class TestPipelineOrchestrator:
             # Verify artifacts exist
             assert Path(f"{tmpdir}/ppa_model_rps_t3m.keras").exists()
             assert Path(f"{tmpdir}/eval_summary_rps_t3m.json").exists()
+
+
+class TestChampionChallengerPolicy:
+    def test_promote_when_no_champion(self):
+        challenger = {"smape": 22.0, "ppa_under_prov_pct": 20.0}
+        promote, reason = should_promote(
+            champion_metrics=None,
+            challenger_metrics=challenger,
+            metric="smape",
+            gate_threshold=35.0,
+            min_relative_improvement=0.02,
+            max_underprov_regression=1.0,
+        )
+        assert promote is True
+        assert "no champion" in reason
+
+    def test_hold_when_improvement_too_small(self):
+        champion = {"smape": 25.0, "ppa_under_prov_pct": 20.0}
+        challenger = {"smape": 24.8, "ppa_under_prov_pct": 20.1}
+        promote, reason = should_promote(
+            champion_metrics=champion,
+            challenger_metrics=challenger,
+            metric="smape",
+            gate_threshold=35.0,
+            min_relative_improvement=0.02,
+            max_underprov_regression=1.0,
+        )
+        assert promote is False
+        assert "insufficient improvement" in reason
+
+    def test_hold_when_underprovision_regresses(self):
+        champion = {"smape": 30.0, "ppa_under_prov_pct": 20.0}
+        challenger = {"smape": 20.0, "ppa_under_prov_pct": 22.5}
+        promote, reason = should_promote(
+            champion_metrics=champion,
+            challenger_metrics=challenger,
+            metric="smape",
+            gate_threshold=35.0,
+            min_relative_improvement=0.02,
+            max_underprov_regression=1.0,
+        )
+        assert promote is False
+        assert "under-provisioning regression" in reason

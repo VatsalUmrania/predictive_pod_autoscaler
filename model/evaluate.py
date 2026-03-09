@@ -38,6 +38,21 @@ def compute_mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100)
 
 
+def compute_smape(y_true: np.ndarray, y_pred: np.ndarray, min_denominator: float = 1.0) -> float:
+    """Symmetric MAPE (%), robust when actual values are near zero."""
+    denominator = (np.abs(y_true) + np.abs(y_pred)) / 2.0
+    denominator = np.maximum(denominator, min_denominator)
+    return float(np.mean(np.abs(y_true - y_pred) / denominator) * 100)
+
+
+def compute_mape_filtered(y_true: np.ndarray, y_pred: np.ndarray, min_actual_rps: float = 10.0) -> float:
+    """MAPE (%) computed only for rows where actual load exceeds min_actual_rps."""
+    mask = y_true > min_actual_rps
+    if mask.sum() == 0:
+        return 0.0
+    return float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100)
+
+
 def compute_mae(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.mean(np.abs(y_true - y_pred)))
 
@@ -143,11 +158,16 @@ def evaluate_model(
     max_replicas: int = 20,
     capacity: float = CAPACITY_PER_POD,
     meta_path: str | None = None,
+    target_scaler_path: str | None = None,
+    low_traffic_threshold: float = 10.0,
 ) -> dict | None:
     """Run full evaluation and return metrics dict.
 
     If *meta_path* is given, test-set boundaries are taken from split metadata
     produced by train.py.  Otherwise, *test_split* fraction is used.
+
+    If *target_scaler_path* is given, model predictions (scaled [0,1]) are
+    inverse-transformed back to raw RPS before computing metrics.
     """
     if not os.path.exists(model_path):
         print(f"Model not found: {model_path}")
@@ -166,6 +186,11 @@ def evaluate_model(
     # Load model + scaler
     model = keras.models.load_model(model_path)
     scaler = joblib.load(scaler_path)
+
+    # Load target scaler if available (model outputs scaled [0,1] targets)
+    target_scaler = None
+    if target_scaler_path and os.path.exists(target_scaler_path):
+        target_scaler = joblib.load(target_scaler_path)
 
     # Rebuild test set
     df = pd.read_csv(csv_path, index_col="timestamp", parse_dates=True)
@@ -192,12 +217,22 @@ def evaluate_model(
     # Predict
     y_pred = model.predict(X_test, verbose=0).flatten()
 
+    # Inverse-transform predictions only.  y_test is already raw RPS
+    # (create_dataset_from_segments returns unscaled targets), but y_pred
+    # comes from a model trained on MinMaxScaled targets [0,1].
+    if target_scaler is not None:
+        y_pred = target_scaler.inverse_transform(y_pred.reshape(-1, 1)).flatten()
+
     # Metrics
     mape = compute_mape(y_test, y_pred)
+    smape = compute_smape(y_test, y_pred)
+    mape_filtered = compute_mape_filtered(y_test, y_pred, min_actual_rps=low_traffic_threshold)
     mae = compute_mae(y_test, y_pred)
     rmse = compute_rmse(y_test, y_pred)
 
     print(f"  MAPE : {mape:.2f}%")
+    print(f"  sMAPE: {smape:.2f}%")
+    print(f"  fMAPE(>{low_traffic_threshold:.1f} RPS): {mape_filtered:.2f}%")
     print(f"  MAE  : {mae:.4f}")
     print(f"  RMSE : {rmse:.4f}")
 
@@ -223,6 +258,9 @@ def evaluate_model(
         "target": target_col,
         "test_samples": len(X_test),
         "mape": round(mape, 4),
+        "smape": round(smape, 4),
+        "mape_filtered": round(mape_filtered, 4),
+        "low_traffic_threshold": float(low_traffic_threshold),
         "mae": round(mae, 4),
         "rmse": round(rmse, 4),
         **ppa_stats,
@@ -257,7 +295,10 @@ if __name__ == "__main__":
     parser.add_argument("--target", type=str, default=TARGET_COLUMNS[0], choices=TARGET_COLUMNS)
     parser.add_argument("--output-dir", type=str, default="model/artifacts")
     parser.add_argument("--meta", type=str, default=None, help="Path to split_meta JSON from train.py")
+    parser.add_argument("--target-scaler", type=str, default=None, help="Path to target_scaler .pkl")
     parser.add_argument("--test-split", type=float, default=0.1)
+    parser.add_argument("--low-traffic-threshold", type=float, default=10.0,
+                        help="Rows with actual RPS <= this are excluded from filtered MAPE")
     args = parser.parse_args()
 
     result = evaluate_model(
@@ -268,6 +309,8 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         meta_path=args.meta,
         test_split=args.test_split,
+        target_scaler_path=args.target_scaler,
+        low_traffic_threshold=args.low_traffic_threshold,
     )
     if result:
         print(f"\nEvaluation complete. MAPE: {result['mape']:.2f}%")

@@ -65,6 +65,7 @@ class TestTrainPipeline:
         # Check all artifacts exist
         assert Path(result["artifact_paths"]["model"]).exists()
         assert Path(result["artifact_paths"]["scaler"]).exists()
+        assert Path(result["artifact_paths"]["target_scaler"]).exists()
         assert Path(result["artifact_paths"]["meta"]).exists()
         
         # Verify split metadata
@@ -124,6 +125,7 @@ class TestEvaluatePipeline:
             target_col=target,
             output_dir=tmpdir,
             meta_path=train_result["artifact_paths"]["meta"],
+            target_scaler_path=train_result["artifact_paths"]["target_scaler"],
         )
         
         assert eval_result is not None
@@ -162,6 +164,7 @@ class TestEvaluatePipeline:
             target_col=target,
             output_dir=tmpdir,
             meta_path=train_result["artifact_paths"]["meta"],
+            target_scaler_path=train_result["artifact_paths"]["target_scaler"],
         )
         
         # Check HPA/PPA stats exist
