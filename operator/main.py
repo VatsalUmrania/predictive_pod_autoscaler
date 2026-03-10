@@ -153,18 +153,32 @@ def reconcile(spec, status, meta, patch, **kwargs):
         f"Replicas={features['replicas_normalized']:.2f} (norm)"
     )
 
+    # Always publish current replicas so kubectl get ppa shows something
+    current = int(current_replicas)
+    patch.status["currentReplicas"] = current
+
     # 2. Feed into predictor
     state.predictor.update(features)
     if not state.predictor.ready():
-        logger.info(
-            f"[{cr_name}] Warming up: {len(state.predictor.history)}/{state.predictor.history.maxlen} "
-            "steps collected"
-        )
+        history_len = len(state.predictor.history)
+        maxlen = state.predictor.history.maxlen
+        if state.predictor._load_failed:
+            logger.warning(
+                f"[{cr_name}] Model not loaded (will retry next cycle). "
+                f"History: {history_len}/{maxlen}"
+            )
+        else:
+            logger.info(
+                f"[{cr_name}] Warming up: {history_len}/{maxlen} steps collected"
+            )
         return
 
     # 3. Predict future load
     predicted_load = state.predictor.predict()
     logger.info(f"[{cr_name}] Predicted load: {predicted_load:.1f} req/s")
+
+    # Always publish predicted load so status is visible
+    patch.status["lastPredictedLoad"] = round(predicted_load, 2)
 
     # 4. Stabilization
     if state.last_prediction > 0:
@@ -178,10 +192,12 @@ def reconcile(spec, status, meta, patch, **kwargs):
 
     if state.stable_count < STABILIZATION_STEPS:
         logger.info(f"[{cr_name}] Stabilizing: {state.stable_count}/{STABILIZATION_STEPS} stable reads")
+        # Still publish desired even during stabilization
+        desired = calculate_replicas(predicted_load, current, min_r, max_r, capacity, up_rate, down_rate)
+        patch.status["desiredReplicas"] = desired
         return
 
     # 5. Calculate and apply desired replicas
-    current = int(current_replicas)
     desired = calculate_replicas(predicted_load, current, min_r, max_r, capacity, up_rate, down_rate)
 
     if desired != current:
@@ -192,8 +208,6 @@ def reconcile(spec, status, meta, patch, **kwargs):
     else:
         logger.info(f"[{cr_name}] No scaling needed: {current} replicas is correct")
 
-    patch.status["lastPredictedLoad"] = round(predicted_load, 2)
-    patch.status["currentReplicas"] = current
     patch.status["desiredReplicas"] = desired
 
 

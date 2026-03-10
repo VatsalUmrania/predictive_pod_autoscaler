@@ -27,37 +27,59 @@ class Predictor:
         self.scaler_path = scaler_path
         self.target_scaler_path = target_scaler_path
         self.history: deque = deque(maxlen=LOOKBACK_STEPS)
+        self.interpreter = None
+        self.scaler = None
+        self.target_scaler = None
+        self.input_details = None
+        self.output_details = None
+        self._load_failed = False
 
+        self._try_load()
+
+    def _try_load(self):
+        """Attempt to load model, scaler, and target scaler. Idempotent."""
+        if self.interpreter is not None and self.scaler is not None:
+            return  # already loaded
         try:
-            # Prefer tensorflow.lite (matches the TF version used to export the .tflite)
-            try:
-                import tensorflow as tf
-                logger.info(f"Using tensorflow.lite (TF {tf.__version__})")
-                self.interpreter = tf.lite.Interpreter(model_path=model_path)
-                self.interpreter.allocate_tensors()
-            except Exception as tf_exc:
-                # Fallback to tflite_runtime if tensorflow.lite fails
-                logger.warning(f"tensorflow.lite failed: {tf_exc}. Trying tflite_runtime...")
-                import tflite_runtime.interpreter as tflite
-                self.interpreter = tflite.Interpreter(model_path=model_path)
-                self.interpreter.allocate_tensors()
-            
+            # Try lightweight ai-edge-litert first, then tensorflow.lite, then tflite_runtime
+            interpreter_loaded = False
+            for loader_name, loader_fn in [
+                ("ai_edge_litert", lambda: __import__("ai_edge_litert.interpreter", fromlist=["Interpreter"]).Interpreter),
+                ("tensorflow.lite", lambda: __import__("tensorflow").lite.Interpreter),
+                ("tflite_runtime", lambda: __import__("tflite_runtime.interpreter", fromlist=["Interpreter"]).Interpreter),
+            ]:
+                try:
+                    InterpreterClass = loader_fn()
+                    self.interpreter = InterpreterClass(model_path=self.model_path)
+                    self.interpreter.allocate_tensors()
+                    logger.info(f"Model loaded via {loader_name}")
+                    interpreter_loaded = True
+                    break
+                except Exception as exc:
+                    logger.debug(f"{loader_name} failed: {exc}")
+                    continue
+
+            if not interpreter_loaded:
+                raise RuntimeError("No TFLite runtime found (tried ai_edge_litert, tensorflow.lite, tflite_runtime)")
+
             self.input_details = self.interpreter.get_input_details()
             self.output_details = self.interpreter.get_output_details()
-            self.scaler = joblib.load(scaler_path)
+            self.scaler = joblib.load(self.scaler_path)
 
             # Target scaler: inverse-transforms model output [0,1] → raw RPS
             self.target_scaler = None
-            if target_scaler_path:
-                self.target_scaler = joblib.load(target_scaler_path)
-                logger.info(f"Loaded target scaler from {target_scaler_path}")
+            if self.target_scaler_path:
+                self.target_scaler = joblib.load(self.target_scaler_path)
+                logger.info(f"Loaded target scaler from {self.target_scaler_path}")
 
-            logger.info(f"Loaded model from {model_path}, scaler from {scaler_path}")
+            logger.info(f"Loaded model from {self.model_path}, scaler from {self.scaler_path}")
+            self._load_failed = False
         except Exception as exc:
             logger.error(f"Failed to load model/scaler: {exc}")
             self.interpreter = None
             self.scaler = None
             self.target_scaler = None
+            self._load_failed = True
 
     def paths_match(self, model_path: str, scaler_path: str, target_scaler_path: str | None = None) -> bool:
         return (
@@ -71,6 +93,9 @@ class Predictor:
         self.history.append(row)
 
     def ready(self) -> bool:
+        # Retry loading if previous attempt failed (e.g. missing dependency installed later)
+        if self._load_failed:
+            self._try_load()
         return (
             len(self.history) >= LOOKBACK_STEPS
             and self.interpreter is not None
