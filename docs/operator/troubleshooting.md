@@ -23,7 +23,8 @@ kubectl logs deployment/ppa-operator --previous
 
 | Error Message | Cause | Fix |
 |---|---|---|
-| `ModuleNotFoundError: tensorflow` | Operator image built without TensorFlow | Rebuild Docker image: `docker build -t ppa-operator:latest -f operator/Dockerfile .` |
+| `ModuleNotFoundError: sklearn` | scikit-learn missing from requirements.txt | Use `ppa_redeploy.sh` or rebuild with updated requirements.txt |
+| `_pickle.UnpicklingError: STACK_GLOBAL` | Scalers saved with Python 3.13+numpy 2.x, pod has Python 3.11+numpy 1.x | Use `ppa_redeploy.sh` which regenerates scalers in pod |
 | `bind: Permission denied` | Trying to bind to port < 1024 | Remove any port binds from dockerfile, use only pod-to-pod communication |
 | `RBAC: ..ppa/predictiveautoscalers is forbidden` | ServiceAccount missing roles | Reapply RBAC: `kubectl apply -f deploy/rbac.yaml` |
 
@@ -31,9 +32,9 @@ kubectl logs deployment/ppa-operator --previous
 
 ## Prometheus Connectivity
 
-### CR stuck "Warming up" after 30 minutes
+### CR stuck "Warming up" after 25 minutes
 
-**Symptom:** Logs show `Warming up: N/12 steps collected` but counter doesn't advance
+**Symptom:** Logs show `Warming up: N/24 steps collected` but counter doesn't advance (should be 24 steps = ~12 min)
 
 **Diagnosis:**
 ```bash
@@ -71,7 +72,12 @@ curl http://localhost:9090/api/v1/targets
 
 **Symptom:** Operator can't load model, CR skipped
 
-**Diagnosis:**
+**Solution:** Use `ppa_redeploy.sh` to handle model loading properly
+```bash
+./scripts/ppa_redeploy.sh  # Automatically copies models to PVC
+```
+
+**Manual diagnosis (if troubleshooting):**
 ```bash
 # Check if file exists
 kubectl exec deployment/ppa-operator -- \
@@ -85,9 +91,9 @@ kubectl exec deployment/ppa-operator -- \
   stat /models/test-app/ppa_model.tflite
 ```
 
-**Solutions:**
+**Manual solutions:**
 
-1. **Copy model to PVC:**
+1. **Copy model to PVC (recommended: use ppa_redeploy.sh):**
    ```bash
    # Create temporary pod with PVC access
    kubectl run -it --rm --image=busybox --restart=Never \

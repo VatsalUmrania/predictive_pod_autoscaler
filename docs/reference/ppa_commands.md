@@ -10,7 +10,7 @@
 
 | Task | Command | Reference |
 |------|---------|-----------|
-| **Deploy operator to Minikube** | `./scripts/deploy_operator.sh --horizon rps_t10m` | [Operator Commands](./operator_commands.md) |
+| **Deploy operator to Minikube** | `./scripts/ppa_redeploy.sh --retrain --epochs 100` | [Deployment Guide](../operator/deployment.md) |
 | **Train ML models** | `python model/pipeline.py --csv data-collection/training-data/training_data_v2.csv --epochs 50` | [ML Commands](./ml_commands.md) |
 | **Check operator health** | `kubectl get ppa` | [Operator Commands](./operator_commands.md) |
 | **Watch operator scaling** | `kubectl logs -l app=ppa-operator -f` | [Operator Commands](./operator_commands.md) |
@@ -30,7 +30,7 @@
 - Data validation
 
 👉 **[Operator Commands](./operator_commands.md)**
-- One-command deployment: `./scripts/deploy_operator.sh`
+- One-command deployment: `./scripts/ppa_redeploy.sh` (retrain + convert + deploy)
 - Configuration via environment variables
 - Monitoring & status checks
 - Troubleshooting Prometheus, models, scaling
@@ -39,20 +39,23 @@
 
 ---
 
-## How to Use the Startup Script
+## How to Use the Redeploy Script
 
 ```bash
-# Make executable (first time only)
-chmod +x ppa_startup.sh
+# Retrain + convert + deploy (full pipeline after data collection)
+./scripts/ppa_redeploy.sh --retrain --epochs 100
 
-# Run everything from scratch
-./ppa_startup.sh
+# Deploy existing champion (no retraining)
+./scripts/ppa_redeploy.sh
 
-# Run a single step only
-./ppa_startup.sh --step 5
+# Fast iteration (skip Docker rebuild)
+./scripts/ppa_redeploy.sh --retrain --skip-build
 
-# List all steps
-./ppa_startup.sh --list
+# Non-interactive (don't ask about HPA)
+./scripts/ppa_redeploy.sh --delete-hpa
+
+# Help
+./scripts/ppa_redeploy.sh --help
 ```
 
 ---

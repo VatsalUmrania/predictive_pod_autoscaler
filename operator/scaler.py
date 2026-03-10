@@ -43,9 +43,18 @@ def calculate_replicas(
     capacity_per_pod: int,
     scale_up_rate: float,
     scale_down_rate: float,
+    safety_factor: float = 1.10,
 ) -> int:
-    """Compute desired replica count from predicted load with rate limiting."""
-    raw = math.ceil(predicted_load / capacity_per_pod) if capacity_per_pod > 0 else current
+    """Compute desired replica count from predicted load with rate limiting.
+
+    Args:
+        safety_factor: Multiplicative headroom applied to predicted_load before
+            replica conversion (e.g. 1.10 = +10%).  This is better than a fixed
+            +N pod buffer because headroom scales with actual traffic.  Exposed
+            via the ``safetyFactor`` field in the PredictiveAutoscaler CRD spec.
+    """
+    inflated = predicted_load * safety_factor
+    raw = math.ceil(inflated / capacity_per_pod) if capacity_per_pod > 0 else current
 
     # Rate limiting
     max_up = max(1, math.ceil(current * scale_up_rate))

@@ -9,7 +9,6 @@ import joblib
 import keras
 import numpy as np
 import pandas as pd
-import tensorflow as tf
 from keras import layers
 from sklearn.preprocessing import MinMaxScaler
 
@@ -22,23 +21,10 @@ from common.feature_spec import FEATURE_COLUMNS, TARGET_COLUMNS
 LOOKBACK_STEPS = 12
 
 
-@keras.saving.register_keras_serializable(package="ppa")
-def asymmetric_huber(y_true, y_pred):
-    """Huber loss with 3× penalty for under-prediction.
-
-    Under-prediction in an autoscaler means pods lack capacity → user-facing
-    errors.  Over-prediction wastes a pod but is recoverable.  Weighting
-    by 3:1 shifts the model's bias from neutral to slightly over-provisioned.
-    """
-    error = y_true - y_pred          # positive = predicted too low
-    weight = tf.where(error > 0, 3.0, 1.0)
-    # Huber: quadratic for |e| < delta, linear beyond (more robust to spikes)
-    delta = 1.0
-    abs_err = tf.abs(error)
-    huber = tf.where(abs_err <= delta,
-                     0.5 * tf.square(error),
-                     delta * (abs_err - 0.5 * delta))
-    return tf.reduce_mean(weight * huber)
+# Asymmetric loss removed: the model now trains with symmetric MSE.
+# Safety margin is applied explicitly in scaler.py via the `safetyBuffer`
+# CRD parameter, which keeps the model unbiased and the safety headroom
+# configurable per deployment without retraining.
 
 
 DEFAULT_TARGET = TARGET_COLUMNS[0]  # rps_t3m
@@ -77,7 +63,7 @@ def build_model(lookback, num_features):
         layers.Dense(1, activation="linear"),
     ])
     optimizer = keras.optimizers.Adam(learning_rate=1e-3, clipnorm=1.0)
-    model.compile(optimizer=optimizer, loss=asymmetric_huber, metrics=["mae"])
+    model.compile(optimizer=optimizer, loss="mse", metrics=["mae"])
     return model
 
 

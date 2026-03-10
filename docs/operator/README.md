@@ -16,17 +16,17 @@ The Operator is the live inference component of PPA. It watches Kubernetes Custo
 ### 2. Deploy Operator
 
 ```bash
-# 1. Copy trained models to PVC
-kubectl cp model/champions/rps_t5m/ppa_model.tflite \
-  deployment/ppa-operator:/models/test-app/ --container=operator
+# Automated deployment (recommended — includes retraining, conversion, PVC setup, all in one)
+./scripts/ppa_redeploy.sh --retrain --epochs 100
 
-# 2. Download operator deployment manifests
+# Or deploy existing champion without retraining
+./scripts/ppa_redeploy.sh
+
+# Manual alternative (see Deployment Guide for details)
 kubectl apply -f deploy/crd.yaml              # Defines PredictiveAutoscaler CR
 kubectl apply -f deploy/rbac.yaml             # Service account & roles
 kubectl apply -f deploy/operator-deployment.yaml    # Operator pod
-
-# 3. Create Custom Resource for your app
-kubectl apply -f deploy/predictiveautoscaler.yaml
+kubectl apply -f deploy/predictiveautoscaler.yaml   # Custom Resource
 ```
 
 ### 3. Monitor
@@ -89,9 +89,9 @@ spec:
 ### Reconciliation Cycle (30 seconds)
 Every 30 seconds, the operator:
 
-1. **Fetches Metrics** — Query Prometheus for last 6 minutes of metrics (12 × 30s)
+1. **Fetches Metrics** — Query Prometheus for last 12 minutes of metrics (24 × 30s)
 2. **Builds Feature Window** — Normalize and prepare for model input
-3. **Runs Inference** — TFLite model predicts RPS at +5 minutes (or +3m / +10m)
+3. **Runs Inference** — TFLite model predicts RPS at +10 minutes (rps_t10m horizon)
 4. **Calculates Replicas** — `desired_replicas = predicted_rps / capacity_per_pod`
 5. **Applies Rate Limits** — Ensure replicas don't jump too fast
 6. **Stabilization** — Require 2 consecutive cycles of agreement before scaling

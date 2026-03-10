@@ -26,7 +26,23 @@ if str(ROOT_DIR) not in sys.path:
 
 from common.constants import CAPACITY_PER_POD
 from common.feature_spec import FEATURE_COLUMNS, TARGET_COLUMNS
-from model.train import LOOKBACK_STEPS, asymmetric_huber, create_dataset_from_segments  # noqa: F401 — import registers the custom loss
+from model.train import LOOKBACK_STEPS, create_dataset_from_segments
+
+# Backward-compat shim: models trained before the MSE migration used
+# asymmetric_huber as their loss.  Registering it here allows Keras to
+# deserialise those .keras files without error.  New models compiled with
+# loss="mse" don't need this, but it is harmless to keep registered.
+import tensorflow as tf
+import keras as _keras
+
+@_keras.saving.register_keras_serializable(package="ppa")
+def asymmetric_huber(y_true, y_pred):  # noqa: F811
+    error = y_true - y_pred
+    weight = tf.where(error > 0, 3.0, 1.0)
+    delta = 1.0
+    abs_err = tf.abs(error)
+    huber = tf.where(abs_err <= delta, 0.5 * tf.square(error), delta * (abs_err - 0.5 * delta))
+    return tf.reduce_mean(weight * huber)
 
 # ── Metric helpers ──────────────────────────────────────────────────────────
 

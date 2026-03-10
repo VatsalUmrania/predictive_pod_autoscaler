@@ -160,7 +160,7 @@ def reconcile_autoscaler(spec, name, namespace, **kwargs):
 graph LR
     A["fetch_prometheus_metrics()"] --> B["Query: rps_per_replica<br/>cpu_utilization<br/>memory_utilization<br/>latency_p95"]
     B --> C["Transform:<br/>log scale RPS<br/>normalize CPU/mem<br/>exponential decay<br/>temporal features"]
-    C --> D["build_feature_window()<br/>12 timesteps @ 30s ea<br/>= 6-minute window"]
+    C --> D["build_feature_window()<br/>24 timesteps @ 30s ea<br/>= 12-minute window"]
     D --> E["Normalize with scaler.pkl<br/>mean, std per feature<br/>per CR"]
     E --> F["Ready for inference<br/>shape: 1 × 12 × 14<br/>14 = num_features"]
     
@@ -172,7 +172,7 @@ graph LR
 
 **14 Features:**
 ```
-Input Window (12 × 30s = 6 min lookback):
+Input Window (24 × 30s = 12 min lookback):
 ├─ Load Indicators (4): rps_per_replica, cpu_pct, mem_pct, p95_latency_ms
 ├─ System (2): active_connections, error_rate
 ├─ Momentum (2): cpu_accel, rps_accel
@@ -310,7 +310,7 @@ stateDiagram-v2
     
     Warmup --> Warmup: < 12 steps<br/>collected
     note right of Warmup
-        Collecting 12 × 30s = 6 min
+        Collecting 24 × 30s = 12 min
         minimum history window
         Metrics: N/12 steps collected
     end note
@@ -434,7 +434,7 @@ flowchart TD
 | Metric | Value | Notes |
 |---|---|---|
 | **Reconciliation Interval** | 30s | Configurable via `PPA_TIMER_INTERVAL` |
-| **Feature Window** | 6 min (12 × 30s) | Configurable via `PPA_LOOKBACK_STEPS` |
+| **Feature Window** | 12 min (24 × 30s) | Configurable via `PPA_LOOKBACK_STEPS` |
 | **Stabilization Window** | 2 cycles (60s) | Configurable via `PPA_STABILIZATION_STEPS` |
 | **Prometheus Query Latency** | ~500ms | Per CR, per cycle |
 | **Model Inference Latency** | ~20ms | TFLite CPU inference |

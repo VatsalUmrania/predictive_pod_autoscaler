@@ -43,9 +43,12 @@ Your entry point to the operator docs. Contains:
 - Support references
 
 ```bash
-# Quick deploy
-./scripts/deploy_operator.sh --horizon rps_t5m
+# Quick deploy (recommended: retrain + convert + deploy all in one)
+./scripts/ppa_redeploy.sh --retrain --epochs 100
 kubectl get ppa -w
+
+# Or deploy existing champion
+./scripts/ppa_redeploy.sh
 ```
 
 ---
@@ -84,18 +87,42 @@ kubectl get ppa -w
 
 ---
 
-### 3. **[deployment.md](./deployment.md)** — Step-by-Step Deployment
-**📊 Size:** 10 KB | **⏱️ Read time:** 15 min
+### 3. **[deployment.md](./deployment.md)** — Comprehensive Deployment Guide
+**📊 Size:** 15 KB | **⏱️ Read time:** 20 min
 
-Complete deployment guide:
-- **Step 1:** Create PVC (storage)
-- **Step 2:** Create CRD (defines PredictiveAutoscaler)
-- **Step 3:** Setup RBAC (permissions)
-- **Step 4:** Copy models to PVC
-- **Step 5:** Deploy operator pod
-- **Step 6:** Create Custom Resource
-- **Step 7:** Monitor operator
-- **Step 8:** Build Docker image (if needed)
+**[NEW v2.2]** Complete end-to-end guide:
+
+#### Quick Scenarios (Use These!)
+1. **Deploy existing champion (no retraining):**
+   ```bash
+   ./scripts/ppa_redeploy.sh
+   ```
+
+2. **Retrain after data collection + deploy:**
+   ```bash
+   ./scripts/ppa_redeploy.sh --retrain --epochs 150 --delete-hpa
+   ```
+
+#### Manual Steps (If Troubleshooting)
+- Data preparation
+- Model retraining (train.py)
+- Conversion to TFLite (convert.py)
+- Champion promotion
+- PVC setup with scaler regeneration (critical!)
+- Docker image build
+- Kubernetes manifests (CRD, RBAC)
+- Model artifact loading (handles Python pickle compatibility)
+- Operator deployment
+- Custom Resource (CR) creation
+- Warmup monitoring
+
+**Key Features:**
+- Automated pipeline: `./scripts/ppa_redeploy.sh`
+- Handles Python 3.13 (host) → Python 3.11 (pod) pickle compatibility
+- Scaler regeneration inside pod to fix `_pickle.UnpicklingError`
+- Comprehensive troubleshooting section
+- Verification checklist
+- Production considerations
 
 Includes:
 - Verification steps after each stage
@@ -114,8 +141,8 @@ Reference for fine-tuning operator behavior:
 | Variable | Default | Purpose |
 |---|---|---|
 | `PPA_TIMER_INTERVAL` | 30s | Reconciliation frequency |
-| `PPA_LOOKBACK_STEPS` | 12 | Feature window (6 min) |
-| `PPA_STABILIZATION_STEPS` | 2 | Cycles required before scaling |
+| `PPA_LOOKBACK_STEPS` | 24 | Feature window (12 min of historical data) |
+| `PPA_STABILIZATION_STEPS` | 2 | Cycles required before scaling change |
 | `PROMETHEUS_URL` | `http://prometheus:9090` | Prometheus location |
 
 #### CR Specification:

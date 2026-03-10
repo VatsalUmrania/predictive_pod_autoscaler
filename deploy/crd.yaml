@@ -49,8 +49,16 @@ spec:
                 description: Max scale-up multiplier per cycle
               scaleDownRate:
                 type: number
-                default: 0.5
-                description: Max scale-down multiplier per cycle
+                default: 0.7
+                description: Max scale-down multiplier per cycle (0.7 = allow shedding 30% of pods per cycle)
+              safetyFactor:
+                type: number
+                default: 1.10
+                minimum: 1.0
+                description: >-
+                  Multiplicative headroom applied to the predicted RPS before
+                  replica conversion (e.g. 1.10 = +10%). Scales with traffic
+                  unlike a fixed pod buffer, keeping the model unbiased.
               targetScalerPath:
                 type: string
                 default: ""

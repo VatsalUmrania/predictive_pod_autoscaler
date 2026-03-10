@@ -1,421 +1,570 @@
 # Operator Deployment Guide
 
-**Step-by-step guide to deploy the PPA operator to your Kubernetes cluster**
+**Comprehensive guide to deploying the PPA operator from data collection to live predictions**
+
+---
+
+## Overview
+
+This guide covers the complete lifecycle from collected training data → retrained model → live operator:
+
+```
+data collected         train model        convert & promote    deploy live   predictions active
+      ↓                    ↓                     ↓                  ↓              ↓
+  CSV ready         Keras .keras        TFLite + scalers      Pod warming up   scaling decisions
+      │                 │                     │                  │              │
+      └─────────────────┴─────────────────────┴──────────────────┴──────────────┘
+                    scripts/ppa_redeploy.sh (one command)
+```
 
 ---
 
 ## Prerequisites
 
-**Kubernetes:**
-- Kubernetes 1.24+ with CRD support
-- `kubectl` CLI configured to access your cluster
-- RBAC enabled (standard on most clusters)
-
-**Storage:**
-- PersistentVolumeClaim (PVC) for models at `/models`
-- Recommended: 10 GB capacity
-
-**Monitoring:**
-- Prometheus 2.30+ running (separate stack or in-cluster)
-- 15-second scrape interval for target applications
-- Prometheus reachable via DNS (e.g., `prometheus.monitoring:9090`)
-
-**ML Models:**
-- Trained `.tflite` models for your target apps
-- Per-app scaler files: `scaler.pkl` and `target_scaler.pkl`
-- Models stored locally (will copy to PVC in step 3)
-
----
-
-## Step 1: Create PersistentVolume & PersistentVolumeClaim
-
-**Purpose:** Storage backend for ML models and scalers, shared between data collection and operator.
+✅ **Before starting, verify:**
+- Kubernetes cluster running (Minikube or production)
+- Prometheus deployed with 15s scrape interval
+- Target deployment (`test-app` or your app) is deployed and running
+- Training data collected in `data-collection/training-data/training_data_v2.csv`
+- Python venv activated with `model/requirements.txt` packages installed
+- Minikube Docker environment configured (`eval $(minikube docker-env)`)
 
 ```bash
-# 1. Create storage directory (if using local storage)
-mkdir -p /mnt/models
+# Quick verification
+kubectl get nodes
+kubectl get deployment test-app
+kubectl get pods -n monitoring
+python3 -c "import keras; print('Keras OK')"
+```
 
-# 2. Apply PVC manifest
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: models-pv
-spec:
-  capacity:
-    storage: 10Gi
-  accessModes:
-    - ReadWriteOnce
-  hostPath:
-    path: /mnt/models
 ---
+
+## Quick Start (5 minutes)
+
+### Scenario A: Deploy existing champion (no retraining)
+
+If you already have a trained model in `model/champions/rps_t10m/`, deploy directly:
+
+```bash
+# Non-interactive deployment (doesn't ask about HPA)
+./scripts/ppa_redeploy.sh --keep-hpa
+
+# Or interactive (will ask if HPA is running)
+./scripts/ppa_redeploy.sh
+```
+
+**Expected output:**
+```
+>>> Deploying PPA operator
+>>> Applying CRD and RBAC
+>>> Loading champion artifacts onto PVC
+>>> Deploying PPA operator
+Waiting for deployment rollout...
+Pod warming up: 1/24, 2/24, ... 24/24 steps
+Predicted load: 412.3 req/s → desired=5 replicas
+```
+
+**Time:** ~2 minutes
+
+---
+
+### Scenario B: Retrain after collecting data (10 minutes)
+
+After HPA collected load data:
+
+```bash
+# Full pipeline: retrain + convert + deploy
+./scripts/ppa_redeploy.sh --retrain --epochs 150 --delete-hpa
+
+# Or with custom CSV path
+./scripts/ppa_redeploy.sh --retrain --csv /path/to/new_data.csv
+
+# Or skip Docker rebuild (faster iteration)
+./scripts/ppa_redeploy.sh --retrain --skip-build
+```
+
+**Expected output:**
+```
+>>> Retraining LSTM (target=rps_t10m, lookback=24, epochs=150)
+Training data: 15,600 rows
+Epoch 1/150: loss=0.0234, val_loss=0.0189
+...
+Val MAE: 0.0156 ✓
+>>> Converting Keras → TFLite
+>>> Promoting to champions/rps_t10m/
+>>> Building ppa-operator:latest inside Minikube
+>>> Deploying operator
+Predicted load: 402.1 req/s → desired=5 replicas
+Scaling decisions: 8 → 5 replicas
+```
+
+**Time:** ~10 minutes (training varies by epochs)
+
+---
+
+## Step-by-Step Manual Deployment
+
+If you prefer to understand each step or troubleshoot, follow this:
+
+### Step 1: Prepare Training Data
+
+```bash
+# Training CSV should exist at:
+ls -lh data-collection/training-data/training_data_v2.csv
+
+# Verify data quality
+wc -l data-collection/training-data/training_data_v2.csv  # Should be > 1000
+```
+
+**If starting fresh data collection:**
+```bash
+# Delete HPA first (if running)
+kubectl delete hpa test-app
+
+# Scale operator to 0 (pause PPA)
+kubectl scale deployment ppa-operator --replicas=0
+
+# Let HPA collect data ~30 minutes-2 hours of load patterns
+kubectl get hpa test-app -w
+```
+
+---
+
+### Step 2: Activate Python Environment
+
+```bash
+# Desktop/development machine
+cd /run/media/vatsal/Drive/Projects/predictive_pod_autoscaler
+source venv/bin/activate
+
+# Verify packages
+python3 -c "import keras, tensorflow, sklearn; print('All OK')"
+```
+
+---
+
+### Step 3: Retrain Model
+
+```bash
+# Full retraining
+python model/train.py \
+  --csv data-collection/training-data/training_data_v2.csv \
+  --target rps_t10m \
+  --lookback 24 \
+  --epochs 100 \
+  --patience 20 \
+  --output-dir model/artifacts
+
+# Expected: ~5-10 min depending on CPU
+# Output:
+#   model/artifacts/ppa_model_rps_t10m.keras
+#   model/artifacts/scaler_rps_t10m.pkl
+#   model/artifacts/target_scaler_rps_t10m.pkl
+#   model/artifacts/split_meta_rps_t10m.json
+```
+
+**Verify:**
+```bash
+ls -lh model/artifacts/ppa_model_rps_t10m.keras
+```
+
+---
+
+### Step 4: Convert to TFLite
+
+```bash
+python model/convert.py \
+  --model model/artifacts/ppa_model_rps_t10m.keras \
+  --output model/artifacts/ppa_model.tflite
+
+# Expected:
+# Successfully saved TFLite model to model/artifacts/ppa_model.tflite
+# Size: 278.64 KB
+```
+
+**Verify:**
+```bash
+file model/artifacts/ppa_model.tflite
+```
+
+---
+
+### Step 5: Promote to Champions
+
+```bash
+mkdir -p model/champions/rps_t10m
+
+# Copy artifacts
+cp model/artifacts/ppa_model.tflite \
+   model/champions/rps_t10m/ppa_model.tflite
+
+cp model/artifacts/scaler_rps_t10m.pkl \
+   model/champions/rps_t10m/scaler.pkl
+
+cp model/artifacts/target_scaler_rps_t10m.pkl \
+   model/champions/rps_t10m/target_scaler.pkl
+
+# Verify
+ls -lh model/champions/rps_t10m/
+```
+
+---
+
+### Step 6: Scale Down Existing Operator
+
+```bash
+# If operator is already running, scale to 0
+kubectl scale deployment ppa-operator --replicas=0
+kubectl rollout status deployment/ppa-operator --timeout=60s
+
+# Verify
+kubectl get pods -l app=ppa-operator
+```
+
+---
+
+### Step 7: Delete HPA (if running)
+
+```bash
+# Check if HPA exists
+kubectl get hpa test-app
+
+# Delete if present (optional, but recommended to avoid conflicts)
+kubectl delete hpa test-app
+```
+
+---
+
+### Step 8: Build Docker Image
+
+```bash
+# Must be in Minikube's Docker environment
+eval $(minikube docker-env)
+
+# Build inside Minikube (creates ppa-operator:latest)
+docker build \
+  -t ppa-operator:latest \
+  -f operator/Dockerfile \
+  . \
+  --no-cache
+
+# Verify (should be ~513MB with ai-edge-litert)
+docker images ppa-operator
+```
+
+---
+
+### Step 9: Apply CRD & RBAC
+
+```bash
+# CRD defines the PredictiveAutoscaler resource
+kubectl apply -f deploy/crd.yaml
+
+# RBAC: service account, roles, role bindings
+kubectl apply -f deploy/rbac.yaml
+
+# Verify
+kubectl get crd predictiveautoscalers.ppa.example.com
+kubectl get sa -l app=ppa-operator
+```
+
+---
+
+### Step 10: Push Models to PVC
+
+This step is **critical** — it uses the operator's own Python environment to regenerate scalers, solving pickle incompatibility when host Python ≠ pod Python.
+
+```bash
+# Create PVC if not exists
+kubectl apply -f - <<EOF
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: models-pvc
-  namespace: default
+  name: ppa-models
 spec:
-  accessModes:
-    - ReadWriteOnce
+  accessModes: [ReadWriteOnce]
   resources:
     requests:
-      storage: 10Gi
-  volumeName: models-pv
+      storage: 1Gi
 EOF
 
-# 3. Verify
-kubectl get pvc models-pvc
-```
+# Copy TFLite model
+kubectl cp model/champions/rps_t10m/ppa_model.tflite \
+  default/ppa-model-loader:/models/test-app/
 
----
+# Copy training CSV to pod
+kubectl cp data-collection/training-data/training_data_v2.csv \
+  default/ppa-model-loader:/tmp/training_data.csv
 
-## Step 2: Create Custom Resource Definition (CRD)
+# Regenerate scalers inside pod (Python 3.11 environment)
+kubectl exec ppa-model-loader -- python3 << 'PYEOF'
+import sys, os, pickle
+sys.path.insert(0, "/app")
+import numpy as np
+import pandas as pd
+import joblib
+from sklearn.preprocessing import MinMaxScaler
+from common.feature_spec import FEATURE_COLUMNS, TARGET_COLUMNS
 
-**Purpose:** Defines the `PredictiveAutoscaler` Kubernetes object.
+CSV_PATH = "/tmp/training_data.csv"
+MODEL_DIR = "/models/test-app"
+HORIZON = "rps_t10m"
 
-```bash
-kubectl apply -f deploy/crd.yaml
+df = pd.read_csv(CSV_PATH)
+df = df.dropna(subset=FEATURE_COLUMNS + [HORIZON])
+
+scaler = MinMaxScaler()
+target_scaler = MinMaxScaler()
+scaler.fit(df[FEATURE_COLUMNS].values)
+target_scaler.fit(df[[HORIZON]].values)
+
+# protocol=2 for broad Python 3.x compatibility
+joblib.dump(scaler, f"{MODEL_DIR}/scaler.pkl", protocol=2)
+joblib.dump(target_scaler, f"{MODEL_DIR}/target_scaler.pkl", protocol=2)
+print("Scalers regenerated in pod environment")
+PYEOF
 ```
 
 **Verify:**
 ```bash
-kubectl get crd predictiveautoscalers.ppa.example.com
-```
-
-**Expected output:**
-```
-NAME                                    CREATED AT
-predictiveautoscalers.ppa.example.com   2026-03-10T10:00:00Z
+kubectl exec ppa-model-loader -- ls -lh /models/test-app/
 ```
 
 ---
 
-## Step 3: Setup RBAC (Service Account & Roles)
-
-**Purpose:** Grant operator pod permission to read CRs, patch deployments, and update status.
+### Step 11: Deploy Operator
 
 ```bash
-kubectl apply -f deploy/rbac.yaml
-```
-
-**Manifest creates:**
-- `ServiceAccount` named `ppa-operator`
-- `ClusterRole` with permissions to:
-  - `get, list, watch, patch` on `PredictiveAutoscalers`
-  - `patch` on `Deployments`
-  - `get, list` on `Pods`
-- `ClusterRoleBinding` connects them
-
-**Verify:**
-```bash
-kubectl get sa ppa-operator
-kubectl get clusterrole ppa-operator
-kubectl get clusterrolebinding ppa-operator
-```
-
----
-
-## Step 4: Copy Trained Models to PVC
-
-**Purpose:** Load pre-trained `.tflite` models and scaler files into the persistent storage.
-
-### 4.1 Create directory structure
-
-```bash
-# First, ensure PVC is mounted and directories exist
-kubectl run -it --rm --image=busybox --restart=Never -- \
-  mkdir -p /mnt/models/test-app /mnt/models/other-app
-```
-
-### 4.2 Copy models from local filesystem
-
-```bash
-# Copy trained model files to PVC
-# Format: kubectl cp <local_path> <pod>:<container_path>
-
-# For test-app (5-minute horizon)
-kubectl cp model/champions/rps_t5m/ppa_model.tflite \
-  $(kubectl get pod -l volume=models-pvc -o jsonpath='{.items[0].metadata.name}'):/mnt/models/test-app/
-
-kubectl cp model/champions/rps_t5m/scaler.pkl \
-  $(kubectl get pod -l volume=models-pvc -o jsonpath='{.items[0].metadata.name}'):/mnt/models/test-app/
-
-kubectl cp model/champions/rps_t5m/target_scaler.pkl \
-  $(kubectl get pod -l volume=models-pvc -o jsonpath='{.items[0].metadata.name}'):/mnt/models/test-app/
-```
-
-### 4.3 Verify file transfer
-
-```bash
-kubectl run -it --rm --image=busybox --restart=Never -- \
-  ls -lh /mnt/models/test-app/
-```
-
-**Expected output:**
-```
-total 5K
--rw-r--r-- 1 root root 114K Mar 10 10:00 ppa_model.tflite
--rw-r--r-- 1 root root 1.7K Mar 10 10:00 scaler.pkl
--rw-r--r-- 1 root root  719 Mar 10 10:00 target_scaler.pkl
-```
-
----
-
-## Step 5: Deploy Operator Pod
-
-**Purpose:** Start the Kopf controller that watches CRs and reconciles autoscaling.
-
-```bash
+# Apply Deployment (creates ppa-operator pod)
 kubectl apply -f deploy/operator-deployment.yaml
-```
 
-**Manifest creates:**
-- `Deployment` named `ppa-operator` with 1 replica
-- Container image: `ppa-operator:latest` (must be built from `operator/Dockerfile`)
-- Mounts PVC at `/models`
-- Environment variables for Prometheus URL, reconciliation timer, etc.
+# Wait for rollout
+kubectl rollout status deployment/ppa-operator --timeout=120s
 
-**Verify pod is running:**
-```bash
-kubectl get pods -l app=ppa-operator -w
-
-# Wait for READY 1/1, STATUS Running
-```
-
-**Check operator logs:**
-```bash
-kubectl logs -f deployment/ppa-operator
-```
-
-**Expected log output:**
-```
-[2026-03-10 10:00:00] kopf.reactor [INFO] Starting Kopf controller
-[2026-03-10 10:00:01] ppa.operator [INFO] Initializing operator...
-[2026-03-10 10:00:02] kopf.root [INFO] Operator started successfully
+# Verify pod is running
+kubectl get pods -l app=ppa-operator
 ```
 
 ---
 
-## Step 6: Create PredictiveAutoscaler Custom Resource
-
-**Purpose:** Tell the operator which deployment to autoscale and with which model.
+### Step 12: Apply Custom Resource (CR)
 
 ```bash
-# Using example manifest
+# CR tells operator which deployment to scale & how
 kubectl apply -f deploy/predictiveautoscaler.yaml
-```
 
-**Or create custom CR:**
-```bash
-cat <<EOF | kubectl apply -f -
-apiVersion: ppa.example.com/v1
-kind: PredictiveAutoscaler
-metadata:
-  name: test-app-ppa
-  namespace: default
-spec:
-  targetDeployment: test-app              # Name of Deployment to autoscale
-  namespace: default                       # Namespace containing the deployment
-  modelPath: /models/test-app/ppa_model.tflite
-  scalerPath: /models/test-app/scaler.pkl
-  targetScalerPath: /models/test-app/target_scaler.pkl
-  capacityPerPod: 80                      # RPS/pod at full capacity
-  minReplicas: 2
-  maxReplicas: 20
-  scaleUpRate: 2.0                        # Max 2× per cycle up
-  scaleDownRate: 0.5                      # Max 50% per cycle down
-EOF
-```
-
-**Verify CR created:**
-```bash
+# Verify CR created
 kubectl get ppa
-kubectl describe ppa test-app-ppa
+
+# Watch CR status as operator warms up
+kubectl get ppa test-app-ppa -w
 ```
 
 ---
 
-## Step 7: Monitor Operator
-
-### 7.1 Watch CR status
+### Step 13: Monitor Warmup
 
 ```bash
-kubectl get ppa -w
-
-# Or more detailed:
-kubectl get ppa test-app-ppa -o yaml | head -50
-```
-
-### 7.2 Follow operator logs
-
-```bash
+# Tail operator logs (shows warmup progress + predictions)
 kubectl logs -f deployment/ppa-operator
 
-# Or specific to your app:
-kubectl logs -f deployment/ppa-operator | grep test-app-ppa
-```
-
-**Expected logs after ~2 minutes of warmup:**
-```
-[test-app-ppa] Warming up: 1/12 steps collected
-[test-app-ppa] Warming up: 2/12 steps collected
-...
-[test-app-ppa] Warming up: 12/12 steps collected ✓
-[test-app-ppa] RPS/Pod=15.2  P95=2340ms  CPU=5.1%  Replicas=2.5 (norm)
-[test-app-ppa] Prediction: 1200 RPS -> 15 replicas (rate-limited: 2->5)
-```
-
-### 7.3 Check deployment replicas changing
-
-```bash
-kubectl get deployment test-app -w
-
-# Or:
-kubectl get deployment test-app -o jsonpath='{.status.replicas}' && echo " replicas"
-```
-
----
-
-## Step 8: Build Operator Docker Image
-
-If the pre-built image isn't available, build it locally:
-
-### 8.1 Build locally (host with Docker)
-
-```bash
-docker build -t ppa-operator:latest -f operator/Dockerfile .
-```
-
-### 8.2 Load into Minikube
-
-```bash
-# If using Minikube:
-eval $(minikube docker-env)
-docker build -t ppa-operator:latest -f operator/Dockerfile .
-
-# Verify:
-docker images | grep ppa-operator
-```
-
-### 8.3 For remote Kubernetes (EKS, GKE, etc.)
-
-```bash
-# Build and push to registry
-docker build -t <registry>/ppa-operator:latest -f operator/Dockerfile .
-docker push <registry>/ppa-operator:latest
-
-# Update deploy/operator-deployment.yaml:
-#   image: <registry>/ppa-operator:latest
-
-kubectl apply -f deploy/operator-deployment.yaml
+# Expected output:
+# Warming up: 1/24, 2/24, ... 24/24 steps (12 minutes)
+# Then: "Predicted load: 402.3 req/s → desired=5 replicas"
 ```
 
 ---
 
 ## Troubleshooting Deployment
 
-### Pod not starting: CrashLoopBackOff
+### Model fails to load: "No module named 'sklearn'"
+
+**Cause:** `scikit-learn` missing from `operator/requirements.txt`
 
 ```bash
-# Check logs:
-kubectl logs deployment/ppa-operator
+# Fix: Update operator/requirements.txt
+echo "scikit-learn>=1.3.0" >> operator/requirements.txt
 
-# Common issues:
-# - Prometheus not reachable (check PROMETHEUS_URL env var)
-# - Model files not found in PVC
-# - RBAC permissions missing
-```
-
-### CR status stuck "Warming up"
-
-```bash
-# Check if metrics are being collected:
-kubectl logs deployment/ppa-operator | grep -E "Warming|metrics|error"
-
-# Verify Prometheus is reachable:
-kubectl run -it --rm --image=curlimages/curl --restart=Never -- \
-  curl http://prometheus:9090/-/ready
-```
-
-### Models not accessible
-
-```bash
-# Verify PVC mounted:
-kubectl describe pod $(kubectl get pod -l app=ppa-operator -o jsonpath='{.items[0].metadata.name}') | grep Mounts
-
-# Check file permissions:
-kubectl exec deployment/ppa-operator -- ls -la /models/test-app/
-```
-
-See **[Troubleshooting Guide](./troubleshooting.md)** for more solutions.
-
----
-
-## Multi-App Setup
-
-Deploy multiple PAs for different applications:
-
-```bash
-# App 1: test-app (5-min horizon)
-kubectl apply -f - <<EOF
-apiVersion: ppa.example.com/v1
-kind: PredictiveAutoscaler
-metadata:
-  name: test-app-ppa
-spec:
-  targetDeployment: test-app
-  modelPath: /models/test-app/ppa_model.tflite
-  ... (other fields)
-EOF
-
-# App 2: api-server (3-min horizon, more aggressive scaling)
-kubectl apply -f - <<EOF
-apiVersion: ppa.example.com/v1
-kind: PredictiveAutoscaler
-metadata:
-  name: api-server-ppa
-spec:
-  targetDeployment: api-server
-  modelPath: /models/api-server/ppa_model.tflite
-  scaleUpRate: 3.0
-  ... (other fields)
-EOF
-
-# Verify both running:
-kubectl get ppa
+# Rebuild Docker image
+eval $(minikube docker-env)
+docker build -t ppa-operator:latest -f operator/Dockerfile . --no-cache
 ```
 
 ---
 
-## Undeployment
+### Scaler pickle error: "_pickle.UnpicklingError: STACK_GLOBAL requires str"
 
-To cleanly remove the operator:
+**Cause:** Scalers saved with Python 3.13 + numpy 2.x, but pod runs Python 3.11 + numpy 1.26.4
+
+**Fix:** Regenerate scalers inside pod using step 10 above
 
 ```bash
-# 1. Delete CRs (stops autoscaling)
-kubectl delete ppa --all
+# Verify pod's Python version
+kubectl exec ppa-model-loader -- python3 --version  # Should be 3.11
 
-# 2. Delete operator deployment
-kubectl delete deployment ppa-operator
-
-# 3. Delete RBAC
-kubectl delete clusterrole ppa-operator
-kubectl delete clusterrolebinding ppa-operator
-kubectl delete sa ppa-operator
-
-# 4. Optional: Delete CRD (removes PPA API entirely)
-kubectl delete crd predictiveautoscalers.ppa.example.com
-
-# 5. Optional: Delete PVC
-kubectl delete pvc models-pvc
+# Verify numpy version
+kubectl exec ppa-model-loader -- python3 -c "import numpy; print(numpy.__version__)"
 ```
 
 ---
 
-## Next Steps
+### TFLite model incompatible: "FULLY_CONNECTED op v12 not supported"
 
-- **[Configuration Reference](./configuration.md)** — Customize operator behavior
-- **[API Reference](./api.md)** — Full CR specification
-- **[Monitoring](./commands.md)** — Useful kubectl commands
-- **[Troubleshooting](./troubleshooting.md)** — Debug common issues
+**Cause:** Using older `tflite_runtime` package that doesn't support new TF ops
 
+**Fix:** Operator uses `ai-edge-litert` which supports modern TF ops
+
+```bash
+# Verify operator/requirements.txt has:
+grep "ai-edge-litert" operator/requirements.txt
+```
+
+---
+
+### Pod stuck on "Warming up: 12/24" forever
+
+**Cause:** `LOOKBACK_STEPS=12` in config but models trained with `lookback=24`
+
+**Fix:** Set environment variable correctly
+
+```bash
+# Check current value
+kubectl exec deployment/ppa-operator -- env | grep LOOKBACK
+
+# Should show: PPA_LOOKBACK_STEPS=24
+
+# If not, update operator-deployment.yaml and redeploy
+```
+
+---
+
+### Operator's current replicas never written to CR
+
+**Cause:** `currentReplicas` only written after stabilization (old bug)
+
+**Fix:** Current code (main.py) writes `currentReplicas` before warmup check
+
+```bash
+# Verify CR status has currentReplicas field
+kubectl get ppa test-app-ppa -o jsonpath='{.status.currentReplicas}'
+```
+
+---
+
+### HPA and PPA fight over replicas
+
+**Cause:** Both controllers trying to scale the same deployment
+
+**Options:**
+- Delete HPA: `kubectl delete hpa test-app` (use PPA only)
+- Delete PPA: `kubectl scale deployment ppa-operator --replicas=0` (use HPA only)
+- Run in parallel: not recommended (causes oscillation)
+
+---
+
+## Configuration After Deployment
+
+### Change scaling parameters
+
+```bash
+# Edit CR
+kubectl edit ppa test-app-ppa
+
+# Change in spec section:
+# spec:
+#   minReplicas: 3         ← new minimum
+#   maxReplicas: 30        ← new maximum
+#   scaleUpRate: 3.0       ← faster scale-up
+#   scaleDownRate: 0.3     ← slower scale-down
+
+# Changes take effect immediately (next 30s cycle)
+```
+
+### Adjust reconciliation interval
+
+```bash
+# Change operator reconciliation timing
+kubectl set env deployment/ppa-operator \
+  PPA_TIMER_INTERVAL=15 \
+  PPA_LOOKBACK_STEPS=8 \
+  PPA_STABILIZATION_STEPS=1
+```
+
+---
+
+## Verification Checklist
+
+After deployment, verify each step:
+
+- [ ] CRD registered: `kubectl get crd | grep predictive`
+- [ ] RBAC configured: `kubectl get sa -l app=ppa-operator`
+- [ ] Operator pod running: `kubectl get pods -l app=ppa-operator`
+- [ ] Pod logs no errors: `kubectl logs deployment/ppa-operator | tail -20`
+- [ ] Model files in PVC: `kubectl exec ppa-model-loader -- ls /models/test-app/`
+- [ ] CR created: `kubectl get ppa`
+- [ ] CR warmed up: `kubectl get ppa test-app-ppa`
+- [ ] Predictions active: `kubectl logs deployment/ppa-operator | grep "Predicted"`
+- [ ] Scaling decisions: `kubectl logs deployment/ppa-operator | grep "Scaling"` or `kubectl logs deployment/ppa-operator | grep "Patched"`
+
+---
+
+## Automated Deployment (Recommended)
+
+For most deployments, use the automated script:
+
+```bash
+# Deploy existing champion (fastest)
+./scripts/ppa_redeploy.sh
+
+# Retrain + deploy
+./scripts/ppa_redeploy.sh --retrain
+
+# Full control
+./scripts/ppa_redeploy.sh --retrain --epochs 150 --delete-hpa --skip-build
+
+# Help
+./scripts/ppa_redeploy.sh --help
+```
+
+See [scripts/ppa_redeploy.sh](../../scripts/ppa_redeploy.sh) for source.
+
+---
+
+## Production Considerations
+
+### Resource Limits
+The operator pod requires:
+- **CPU:** 500m (typical: 100-200m)
+- **Memory:** 512Mi (typical: 200-300Mi)
+
+Monitor in production:
+```bash
+kubectl top pods -l app=ppa-operator
+```
+
+### Model Updates
+To deploy a new model without restarting:
+```bash
+# Copy new model to PVC
+kubectl cp model/champions/rps_t10m/ppa_model.tflite \
+  default/ppa-model-loader:/models/test-app/
+
+# Operator reloads on next cycle (~30s)
+kubectl logs -f deployment/ppa-operator
+```
+
+### High Availability (HA)
+For production, consider:
+- PVC with replicated storage (e.g., Ceph RBD, AWS EBS)
+- Multiple operator replicas with leader election (requires etcd coordination)
+- Backup of champion models: `git add model/champions/` → automatic backup
+
+---
+
+## See Also
+
+- [Configuration Reference](./configuration.md) — Environment variables and CR tuning
+- [Architecture](./architecture.md) — Detailed internals and reconciliation flow
+- [Commands](./commands.md) — Useful kubectl commands for operations
+- [Troubleshooting](./troubleshooting.md) — Common issues and solutions
+- [ML Pipeline Guide](../architecture/ml_pipeline.md) — Training and model evaluation

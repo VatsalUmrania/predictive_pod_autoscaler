@@ -16,7 +16,7 @@
 **Comprehensive guides for deploying and managing the PPA operator:**
 - [operator/README.md](./operator/README.md): Operator overview and quick start
 - [operator/architecture.md](./operator/architecture.md): **Detailed system topology, reconciliation cycle with Mermaid diagrams, component architecture, decision flows, and state machines**
-- [operator/deployment.md](./operator/deployment.md): Step-by-step deployment guide with all prerequisites and troubleshooting
+- [operator/deployment.md](./operator/deployment.md): **[NEW]** Comprehensive deployment guide from data collection through live scaling—use this after training data available
 - [operator/configuration.md](./operator/configuration.md): Environment variables, CR specification, scaling tuning guide with examples
 - [operator/api.md](./operator/api.md): Custom Resource (CR) schema, validation rules, examples, and RBAC requirements
 - [operator/commands.md](./operator/commands.md): Useful kubectl commands for monitoring, debugging, and operations
@@ -52,13 +52,15 @@ Old planning, sprint tracking, and architectural decision files have been moved 
 ## Quick Start
 
 ### 🚀 Deploy Operator (Fastest Path)
+
+After collecting training data:
 ```bash
-./scripts/deploy_operator.sh --horizon rps_t10m
-kubectl get ppa -w          # Watch status
+./scripts/ppa_redeploy.sh --retrain
+kubectl get ppa -w          # Watch status & predictions
 kubectl logs -l app=ppa-operator -f  # Watch logs
 ```
 
-See **[Operator Commands](./reference/operator_commands.md)** for details.
+See **[Deployment Guide](./operator/deployment.md)** for step-by-step instructions and troubleshooting.
 
 ### 🧠 Train & Promote Models
 ```bash

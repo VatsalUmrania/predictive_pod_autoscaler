@@ -120,6 +120,7 @@ def reconcile(spec, status, meta, patch, **kwargs):
     capacity = spec.get("capacityPerPod", DEFAULT_CAPACITY_PER_POD)
     up_rate = spec.get("scaleUpRate", DEFAULT_SCALE_UP_RATE)
     down_rate = spec.get("scaleDownRate", DEFAULT_SCALE_DOWN_RATE)
+    safety_factor = float(spec.get("safetyFactor", 1.10))
     container_name = spec.get("containerName") or None
 
     model_path, scaler_path, target_scaler_path = _resolve_paths(spec, target)
@@ -193,12 +194,12 @@ def reconcile(spec, status, meta, patch, **kwargs):
     if state.stable_count < STABILIZATION_STEPS:
         logger.info(f"[{cr_name}] Stabilizing: {state.stable_count}/{STABILIZATION_STEPS} stable reads")
         # Still publish desired even during stabilization
-        desired = calculate_replicas(predicted_load, current, min_r, max_r, capacity, up_rate, down_rate)
+        desired = calculate_replicas(predicted_load, current, min_r, max_r, capacity, up_rate, down_rate, safety_factor)
         patch.status["desiredReplicas"] = desired
         return
 
     # 5. Calculate and apply desired replicas
-    desired = calculate_replicas(predicted_load, current, min_r, max_r, capacity, up_rate, down_rate)
+    desired = calculate_replicas(predicted_load, current, min_r, max_r, capacity, up_rate, down_rate, safety_factor)
 
     if desired != current:
         logger.info(f"[{cr_name}] Scaling {target_ns}/{target}: {current} → {desired}")

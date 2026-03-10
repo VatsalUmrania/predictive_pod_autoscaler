@@ -112,7 +112,7 @@ docker build -t ppa-data-collector:latest -f data-collection/Dockerfile .
 The operator deployment uses the optimized image:
 
 ```bash
-./scripts/deploy_operator.sh --horizon rps_t10m
+./scripts/ppa_redeploy.sh --retrain --epochs 100
 ```
 
 This will:

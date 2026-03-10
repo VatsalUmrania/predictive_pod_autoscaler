@@ -13,7 +13,7 @@ The operator reads these environment variables to configure behavior:
 | Variable | Default | Range | Description |
 |---|---|---|---|
 | `PPA_TIMER_INTERVAL` | `30` | 10–300 | Reconciliation cycle interval (seconds) |
-| `PPA_LOOKBACK_STEPS` | `12` | 3–60 | Number of 30s steps to collect (window = steps × 30s) |
+| `PPA_LOOKBACK_STEPS` | `24` | 3–60 | Number of 30s steps to collect (24 × 30s = 12min; must match model training) |
 | `PPA_STABILIZATION_STEPS` | `2` | 1–10 | Consecutive cycles required before scaling change |
 
 ### Prometheus
@@ -33,15 +33,18 @@ The operator reads these environment variables to configure behavior:
 ### Example: Aggressive Tuning
 
 ```bash
-# Faster response time, more aggressive scaling
-PPA_TIMER_INTERVAL=15         # Reconcile every 15s instead of 30s
-PPA_LOOKBACK_STEPS=8          # Use 4-min window instead of 6-min
-PPA_STABILIZATION_STEPS=1     # Scale immediately (no stabilization)
+# Faster response time, more aggressive scaling (less stable, higher variance)
+PPA_TIMER_INTERVAL=15         # Reconcile every 15s instead of 30s (default)
+PPA_LOOKBACK_STEPS=12         # Use 6-min window instead of 12-min (default)
+PPA_STABILIZATION_STEPS=1     # Scale immediately instead of waiting 2 cycles (default)
+
+# WARNING: Shorter windows = noisier predictions, more frequent scaling, more thrashing
+# Use only for very low-latency applications where rapid response is critical
 
 # Set in deployment:
 kubectl set env deployment/ppa-operator \
   PPA_TIMER_INTERVAL=15 \
-  PPA_LOOKBACK_STEPS=8 \
+  PPA_LOOKBACK_STEPS=12 \
   PPA_STABILIZATION_STEPS=1
 ```
 

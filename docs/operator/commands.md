@@ -4,6 +4,28 @@
 
 ---
 
+## Quick Deployment (Recommended)
+
+For most deployments, use the automated script instead of manual steps:
+
+```bash
+# Full pipeline: retrain + convert + deploy + warmup
+./scripts/ppa_redeploy.sh --retrain --epochs 100
+
+# Deploy existing champion
+./scripts/ppa_redeploy.sh
+
+# Fast iteration (skip Docker rebuild)
+./scripts/ppa_redeploy.sh --skip-build
+
+# See what it does
+./scripts/ppa_redeploy.sh --help
+```
+
+For step-by-step manual deployment, see [Deployment Guide](./deployment.md).
+
+---
+
 ## Operator Pod Management
 
 ### Check operator status

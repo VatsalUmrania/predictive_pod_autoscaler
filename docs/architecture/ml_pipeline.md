@@ -101,7 +101,7 @@ sequenceDiagram
 
 | Decision | Rationale |
 |---|---|
-| **12-step rolling windows** | 12 × 30s operator samples = 6 min history. Matches operator's `LOOKBACK_STEPS`. |
+| **24-step rolling windows** | 24 × 30s operator samples = 12 min history. Matches operator's `LOOKBACK_STEPS`. |
 | **Window shuffling before split** | Chronological split puts different segments (with different distributions) in val/test. Shuffling fixes distribution mismatch while preserving segment integrity within each window. |
 | **Separate target scaler** | Target is fit on train split only to prevent leakage. Inverse-transforms model output [0,1] → raw RPS. |
 | **Huber loss** | MSE is too sensitive to RPS outliers in traffic spikes. Huber is robust. |

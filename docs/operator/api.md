@@ -293,7 +293,7 @@ status:
 | Reason | Meaning | Action |
 |---|---|---|
 | `Stable: steady state` | Predictions stable, no scaling needed | Normal operation ✓ |
-| `Warming up: N/12 steps` | Still collecting initial data | Wait (usually 6 min) |
+| `Warming up: N/24 steps` | Still collecting initial data | Wait (usually 12 min) |
 | `Rate limited: 5→10` | Would scale 5, but limiter allows 10 | Normal (safety mechanism) |
 | `Error: Prometheus unreachable` | Can't fetch metrics | Check Prometheus URL |
 | `Error: Model not found` | `.tflite` file missing in PVC | Check modelPath |

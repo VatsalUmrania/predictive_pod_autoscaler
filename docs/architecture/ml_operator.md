@@ -279,7 +279,7 @@ flowchart TD
 | `deploy/operator-deployment.yaml` | Operator Deployment + health probes + env vars + PVC for models |
 | `deploy/predictiveautoscaler.yaml` | Example CR with rps_t10m champion model paths |
 | `deploy/cronjob-data-collector.yaml` | Data collection CronJob |
-| `scripts/deploy_operator.sh` | One-command operator deployment for Minikube |
+| `scripts/ppa_redeploy.sh` | Full pipeline: retrain + convert + deploy for Minikube |
 
 ---
 
@@ -367,7 +367,7 @@ flowchart TD
 | `deploy/operator-deployment.yaml` | Operator Deployment + health probes + env vars + PVC for models |
 | `deploy/predictiveautoscaler.yaml` | Example CR with rps_t10m champion model paths |
 | `deploy/cronjob-data-collector.yaml` | Data collection CronJob |
-| `scripts/deploy_operator.sh` | One-command operator deployment for Minikube |
+| `scripts/ppa_redeploy.sh` | Full pipeline: retrain + convert + deploy for Minikube |
 
 ---
 
