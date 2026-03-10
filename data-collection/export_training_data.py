@@ -112,6 +112,16 @@ def _detect_segments(df: pd.DataFrame, gap_minutes: int = GAP_THRESHOLD_MINUTES)
     return gaps.cumsum()
 
 
+def add_segment_ids(df: pd.DataFrame) -> pd.DataFrame:
+    """Assign segment_id based on timestamp gaps after all data is combined."""
+    if df.empty:
+        return df
+    df = df.sort_index().copy()
+    segment_ids = _detect_segments(df)
+    df["segment_id"] = segment_ids
+    return df
+
+
 def drop_rows_missing_required_features(
     df: pd.DataFrame,
     required_features: list[str],
@@ -163,7 +173,6 @@ def add_prediction_targets(df: pd.DataFrame) -> pd.DataFrame:
         seg["replicas_t5m"] = np.ceil(seg["rps_t5m"] / CAPACITY_PER_POD).clip(lower=2, upper=20)
         seg["replicas_t10m"] = np.ceil(seg["rps_t10m"] / CAPACITY_PER_POD).clip(lower=2, upper=20)
 
-        seg["segment_id"] = seg_id
         valid = seg.dropna(subset=["rps_t3m", "rps_t5m", "rps_t10m"])
         if not valid.empty:
             parts.append(valid)
@@ -350,6 +359,9 @@ if __name__ == "__main__":
         assert nan_count == 0, f"Expected zero NaN values in feature columns, found {nan_count}"
         print("  ✅ Schema assertion passed: 14 feature columns matched exactly with 0 NaNs")
 
+    # Add a placeholder segment_id column so schema matches existing CSV during comparison
+    df["segment_id"] = 0
+
     output_path = os.getenv("OUTPUT_PATH", "data-collection/training-data/training_data_v2.csv")
     output_dir = os.path.dirname(output_path)
     if output_dir:
@@ -371,6 +383,9 @@ if __name__ == "__main__":
             df_combined = pd.concat([df_existing, df])
             df_combined.index = pd.to_datetime(df_combined.index, utc=True).round(round_freq)
             df = df_combined[~df_combined.index.duplicated(keep="last")].sort_index()
+
+    # Recalculate segment_id on the full combined dataset so it matches the health report
+    df = add_segment_ids(df)
 
     if not args.dry_run:
         df.to_csv(output_path)

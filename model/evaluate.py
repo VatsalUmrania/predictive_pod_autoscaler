@@ -26,7 +26,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from common.constants import CAPACITY_PER_POD
 from common.feature_spec import FEATURE_COLUMNS, TARGET_COLUMNS
-from model.train import LOOKBACK_STEPS, create_dataset_from_segments
+from model.train import LOOKBACK_STEPS, asymmetric_huber, create_dataset_from_segments  # noqa: F401 — import registers the custom loss
 
 # ── Metric helpers ──────────────────────────────────────────────────────────
 

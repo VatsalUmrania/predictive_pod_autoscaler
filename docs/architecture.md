@@ -18,16 +18,39 @@ This pipeline is responsible for:
 
 ---
 
-## 2. [Operator & ML Pipeline](./architecture/ml_operator.md)
-**Focus:** Keras training, TFLite inference, and active custom resource reconciliation.
+## 2. [ML Pipeline Architecture](./architecture/ml_pipeline.md)
+**Focus:** Keras LSTM training, multi-horizon forecasting, TFLite conversion, and champion-challenger promotion.
 
 This pipeline is responsible for:
-- Formatting the raw CSVs into sliding windows and training the Keras LSTM model.
-- Loading the resulting `.tflite` model into the online `ppa-operator`.
-- Reconciling `PredictiveAutoscaler` Custom Resources (CRs) independently in real-time.
-- Fetching live 15s PromQL metrics, generating a 12-step rolling window, inferencing the future RPS, and preemptively patching the deployment replicas.
+- Training independent LSTM models for 3 prediction horizons (3m, 5m, 10m ahead).
+- Building resilient models with target scaling, Huber loss, dropout, and gradient clipping.
+- Evaluating models with robust metrics (sMAPE, filtered MAPE) and HPA comparison.
+- Converting to optimized TFLite (~113KB) for edge deployment.
+- Promoting winning models via a champion-challenger policy with configurable gates.
 
-👉 **[Read the Operator & ML Architecture](./architecture/ml_operator.md)**
+👉 **[Read the ML Pipeline Architecture](./architecture/ml_pipeline.md)**
+
+---
+
+## 3. [Operator & Live Inference](./operator/README.md)
+**Focus:** Kubernetes-native operator, TFLite inference, and active scaling decisions.
+
+This pipeline is responsible for:
+- Managing N independent `PredictiveAutoscaler` Custom Resources (CRs) in a single pod.
+- Fetching live 15s Prometheus metrics and building rolling 12-step feature windows.
+- Running TFLite inference to predict RPS 3–10 minutes ahead.
+- Making intelligent scaling decisions with rate limiting and stabilization filters.
+- Providing health endpoints, environment-configurable behavior, and Prometheus error resilience.
+
+👉 **[Read the Operator Documentation](./operator/README.md)**
+
+**Operator Documentation Folder Contents:**
+- **[Architecture & System Design](./operator/architecture.md)** — Detailed system topology, reconciliation cycle, component interactions
+- **[Deployment Guide](./operator/deployment.md)** — Step-by-step deployment instructions
+- **[Configuration Reference](./operator/configuration.md)** — Environment variables, CR specification, tuning guide
+- **[API Reference](./operator/api.md)** — Custom Resource schema with examples
+- **[Commands Reference](./operator/commands.md)** — Useful kubectl commands for monitoring
+- **[Troubleshooting Guide](./operator/troubleshooting.md)** — Common issues and solutions
 
 ---
 

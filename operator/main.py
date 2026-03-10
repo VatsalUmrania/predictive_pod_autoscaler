@@ -3,7 +3,10 @@
 
 import logging
 import os
+import threading
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import math
 
@@ -28,6 +31,34 @@ from scaler import calculate_replicas, scale_deployment
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 logger = logging.getLogger("ppa.operator")
+
+
+# ---------------------------------------------------------------------------
+# Health endpoint — lightweight HTTP server for liveness / readiness probes
+# ---------------------------------------------------------------------------
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/healthz":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"ok")
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):  # noqa: A002 — suppress per-request logs
+        pass
+
+
+def _start_health_server(port: int = 8080):
+    server = HTTPServer(("", port), _HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    logger.info(f"Health endpoint listening on :{port}/healthz")
+
+
+_start_health_server()
 
 
 @dataclass
@@ -89,22 +120,29 @@ def reconcile(spec, status, meta, patch, **kwargs):
     capacity = spec.get("capacityPerPod", DEFAULT_CAPACITY_PER_POD)
     up_rate = spec.get("scaleUpRate", DEFAULT_SCALE_UP_RATE)
     down_rate = spec.get("scaleDownRate", DEFAULT_SCALE_DOWN_RATE)
+    container_name = spec.get("containerName") or None
 
     model_path, scaler_path, target_scaler_path = _resolve_paths(spec, target)
     state = _get_or_create_state(key, model_path, scaler_path, target_scaler_path)
 
     # 1. Fetch features from Prometheus (namespace-scoped)
-    features, current_replicas = build_feature_vector(target, target_ns, max_r)
+    features, current_replicas = build_feature_vector(target, target_ns, max_r, container_name)
 
     if math.isnan(features.get("cpu_utilization_pct", float('nan'))):
-        logger.warning(f"[{cr_name}] cpu_utilization_pct is NaN, delegating to HPA")
+        logger.warning(f"[{cr_name}] cpu_utilization_pct is NaN, skipping cycle")
+        patch.status["consecutiveSkips"] = status.get("consecutiveSkips", 0) + 1
         return
     if math.isnan(features.get("memory_utilization_pct", float('nan'))):
-        logger.warning(f"[{cr_name}] memory_utilization_pct is NaN, delegating to HPA")
+        logger.warning(f"[{cr_name}] memory_utilization_pct is NaN, skipping cycle")
+        patch.status["consecutiveSkips"] = status.get("consecutiveSkips", 0) + 1
         return
     if current_replicas == 0 or math.isnan(current_replicas):
         logger.warning(f"[{cr_name}] current_replicas is 0 or NaN, skipping cycle")
+        patch.status["consecutiveSkips"] = status.get("consecutiveSkips", 0) + 1
         return
+
+    # Reset consecutive skips on successful feature fetch
+    patch.status["consecutiveSkips"] = 0
 
     assert list(features.keys()) == FEATURE_COLUMNS, f"[{cr_name}] Feature vector order mismatch"
 
@@ -149,7 +187,7 @@ def reconcile(spec, status, meta, patch, **kwargs):
     if desired != current:
         logger.info(f"[{cr_name}] Scaling {target_ns}/{target}: {current} → {desired}")
         scale_deployment(target, desired, target_ns)
-        patch.status["lastScaleTime"] = __import__("datetime").datetime.utcnow().isoformat()
+        patch.status["lastScaleTime"] = datetime.now(timezone.utc).isoformat()
         state.stable_count = 0
     else:
         logger.info(f"[{cr_name}] No scaling needed: {current} replicas is correct")

@@ -97,6 +97,16 @@ def promote_artifacts(
         shutil.copy2(challenger_paths["target_scaler"], dst_target_scaler)
     shutil.copy2(eval_summary_path, dst_summary)
 
+    # Copy evaluation plots produced by evaluate.py into the champion folder
+    artifacts_dir = os.path.dirname(eval_summary_path)
+    for plot_name in [
+        f"eval_pred_vs_actual_{target}.png",
+        f"eval_ppa_vs_hpa_{target}.png",
+    ]:
+        src_plot = os.path.join(artifacts_dir, plot_name)
+        if os.path.exists(src_plot):
+            shutil.copy2(src_plot, os.path.join(target_dir, plot_name))
+
     return {
         "model": dst_model,
         "scaler": dst_scaler,

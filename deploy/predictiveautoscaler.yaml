@@ -1,4 +1,4 @@
-# Example: PredictiveAutoscaler CR for test-app
+# PredictiveAutoscaler CR for test-app (rps_t10m champion, sMAPE 16.7%)
 apiVersion: ppa.example.com/v1
 kind: PredictiveAutoscaler
 metadata:
@@ -10,7 +10,8 @@ spec:
   minReplicas: 2
   maxReplicas: 20
   capacityPerPod: 80
-  # modelPath: ""       # empty = auto-resolves to /models/test-app/ppa_model.tflite
-  # scalerPath: ""       # empty = auto-resolves to /models/test-app/scaler.pkl
-  # scaleUpRate: 2.0
-  # scaleDownRate: 0.5
+  modelPath: /models/test-app/ppa_model.tflite
+  scalerPath: /models/test-app/scaler.pkl
+  targetScalerPath: /models/test-app/target_scaler.pkl
+  scaleUpRate: 2.0
+  scaleDownRate: 0.5

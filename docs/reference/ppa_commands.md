@@ -1,5 +1,41 @@
 # PPA — Command Reference Sheet
+
 **Predictive Pod Autoscaler | Semester 6 | March 2026**
+
+---
+
+## Quick Reference — By Task
+
+### 🚀 Get Started Quickly
+
+| Task | Command | Reference |
+|------|---------|-----------|
+| **Deploy operator to Minikube** | `./scripts/deploy_operator.sh --horizon rps_t10m` | [Operator Commands](./operator_commands.md) |
+| **Train ML models** | `python model/pipeline.py --csv data-collection/training-data/training_data_v2.csv --epochs 50` | [ML Commands](./ml_commands.md) |
+| **Check operator health** | `kubectl get ppa` | [Operator Commands](./operator_commands.md) |
+| **Watch operator scaling** | `kubectl logs -l app=ppa-operator -f` | [Operator Commands](./operator_commands.md) |
+| **See detailed ML guide** | Read [ML Commands](./ml_commands.md) | In-depth training & evaluation |
+| **See detailed operator guide** | Read [Operator Commands](./operator_commands.md) | In-depth deployment & debugging |
+
+---
+
+## Detailed Command References
+
+👉 **[ML Pipeline Commands](./ml_commands.md)**
+- Training with `model/train.py`
+- Evaluation with `model/evaluate.py`
+- Conversion to TFLite with `model/convert.py`
+- Full pipeline orchestration with `model/pipeline.py`
+- Champion-challenger promotion
+- Data validation
+
+👉 **[Operator Commands](./operator_commands.md)**
+- One-command deployment: `./scripts/deploy_operator.sh`
+- Configuration via environment variables
+- Monitoring & status checks
+- Troubleshooting Prometheus, models, scaling
+- Health probes & error handling
+- Multi-CR management
 
 ---
 

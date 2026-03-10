@@ -13,13 +13,13 @@ from common.constants import CAPACITY_PER_POD
 from common.promql import RATE_WINDOW
 
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus-kube-prometheus-prometheus.monitoring:9090")
-NAMESPACE = "default"
+NAMESPACE = os.getenv("PPA_NAMESPACE", "default")
 SCRAPE_WINDOW = RATE_WINDOW
-LOOKBACK_STEPS = 12          # 12 operator samples x 30s timer = 6 minutes of live history
-PREDICTION_HORIZON = 10      # predict 10 min ahead
-STABILIZATION_STEPS = 2      # consecutive stable reads before acting
-TIMER_INTERVAL = 30          # seconds
-INITIAL_DELAY = 60           # seconds — wait for metrics warmup
+LOOKBACK_STEPS = int(os.getenv("PPA_LOOKBACK_STEPS", "12"))  # 12 × 30s = 6 min history
+STABILIZATION_STEPS = int(os.getenv("PPA_STABILIZATION_STEPS", "2"))  # consecutive stable reads
+TIMER_INTERVAL = int(os.getenv("PPA_TIMER_INTERVAL", "30"))  # seconds
+INITIAL_DELAY = int(os.getenv("PPA_INITIAL_DELAY", "60"))  # seconds — metrics warmup
+PROM_FAILURE_THRESHOLD = int(os.getenv("PPA_PROM_FAILURE_THRESHOLD", "10"))  # escalate to ERROR
 
 DEFAULT_CAPACITY_PER_POD = CAPACITY_PER_POD
 DEFAULT_MIN_REPLICAS = 2

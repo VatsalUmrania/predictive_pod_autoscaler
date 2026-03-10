@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: model-upload
+  namespace: default
+spec:
+  restartPolicy: Never
+  containers:
+  - name: uploader
+    image: busybox
+    command: ["sh", "-c", "sleep 3600"]
+    volumeMounts:
+    - name: model-storage
+      mountPath: /models
+  volumes:
+  - name: model-storage
+    persistentVolumeClaim:
+      claimName: ppa-models

@@ -3,16 +3,36 @@
 
 import logging
 import math
+import time
 from kubernetes import client, config as k8s_config
 
 logger = logging.getLogger("ppa.scaler")
 
-try:
-    k8s_config.load_incluster_config()
-except k8s_config.ConfigException:
-    k8s_config.load_kube_config()
 
-apps_v1 = client.AppsV1Api()
+def _init_k8s_client(retries: int = 3, backoff: float = 5.0) -> client.AppsV1Api:
+    """Initialize K8s API client with retry on transient failures."""
+    for attempt in range(1, retries + 1):
+        try:
+            k8s_config.load_incluster_config()
+            return client.AppsV1Api()
+        except k8s_config.ConfigException:
+            try:
+                k8s_config.load_kube_config()
+                return client.AppsV1Api()
+            except Exception as exc:
+                if attempt < retries:
+                    logger.warning(
+                        f"K8s client init attempt {attempt}/{retries} failed: {exc}, "
+                        f"retrying in {backoff}s..."
+                    )
+                    time.sleep(backoff)
+                else:
+                    logger.error(f"K8s client init failed after {retries} attempts: {exc}")
+                    raise
+    raise RuntimeError("K8s client init exhausted retries")  # unreachable
+
+
+apps_v1 = _init_k8s_client()
 
 
 def calculate_replicas(

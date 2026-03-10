@@ -18,6 +18,23 @@ spec:
       - name: operator
         image: ppa-operator:latest
         imagePullPolicy: Never    # built locally via minikube docker-env
+        ports:
+        - name: health
+          containerPort: 8080
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 15
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 10
         resources:
           requests:
             cpu: "100m"
@@ -28,6 +45,16 @@ spec:
         env:
         - name: PROMETHEUS_URL
           value: "http://prometheus-kube-prometheus-prometheus.monitoring:9090"
+        - name: PPA_TIMER_INTERVAL
+          value: "30"
+        - name: PPA_INITIAL_DELAY
+          value: "60"
+        - name: PPA_LOOKBACK_STEPS
+          value: "12"
+        - name: PPA_STABILIZATION_STEPS
+          value: "2"
+        - name: PPA_PROM_FAILURE_THRESHOLD
+          value: "10"
         volumeMounts:
         - name: model-storage
           mountPath: /models

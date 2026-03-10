@@ -1,0 +1,8 @@
+# Core operator dependencies — kept minimal.
+# TF version must match the version used to export .tflite models.
+kopf>=1.43.0
+kubernetes>=35.0.0
+tensorflow==2.20.0
+numpy==1.26.4
+joblib>=1.4.0
+requests>=2.31.0
