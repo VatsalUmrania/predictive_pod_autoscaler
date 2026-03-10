@@ -51,6 +51,14 @@ spec:
                 type: number
                 default: 0.5
                 description: Max scale-down multiplier per cycle
+              targetScalerPath:
+                type: string
+                default: ""
+                description: "Path to target scaler file (empty = auto /models/{target}/target_scaler.pkl)"
+              containerName:
+                type: string
+                default: ""
+                description: "Container name for PromQL queries (empty = all containers)"
           status:
             type: object
             properties:
@@ -62,6 +70,8 @@ spec:
                 type: integer
               lastScaleTime:
                 type: string
+              consecutiveSkips:
+                type: integer
     subresources:
       status: {}
     additionalPrinterColumns:
@@ -80,6 +90,9 @@ spec:
     - name: Predicted Load
       type: number
       jsonPath: .status.lastPredictedLoad
+    - name: Skips
+      type: integer
+      jsonPath: .status.consecutiveSkips
   scope: Namespaced
   names:
     plural: predictiveautoscalers

@@ -274,11 +274,100 @@ flowchart TD
 
 | File | Purpose |
 |---|---|
-| `deploy/crd.yaml` | PredictiveAutoscaler CRD definition |
+| `deploy/crd.yaml` | PredictiveAutoscaler CRD definition (v2.1: added targetScalerPath, containerName, consecutiveSkips) |
 | `deploy/rbac.yaml` | ServiceAccount + ClusterRole + Binding |
-| `deploy/operator-deployment.yaml` | Operator Deployment + PVC for models |
-| `deploy/predictiveautoscaler.yaml` | Example CR |
+| `deploy/operator-deployment.yaml` | Operator Deployment + health probes + env vars + PVC for models |
+| `deploy/predictiveautoscaler.yaml` | Example CR with rps_t10m champion model paths |
 | `deploy/cronjob-data-collector.yaml` | Data collection CronJob |
+| `scripts/deploy_operator.sh` | One-command operator deployment for Minikube |
+
+---
+
+## Operator Hardening (v2.1)
+
+### Health Endpoint
+
+The operator exposes a lightweight HTTP health endpoint on port 8080 for Kubernetes liveness and readiness probes:
+
+```
+GET /healthz → 200 OK "ok"
+```
+
+Deployment includes:
+- **Liveness probe** (every 15s): Restarts pod if 3 consecutive failures
+- **Readiness probe** (every 10s): Removes pod from service if unhealthy
+
+### Environment-Configurable Constants
+
+All operator behavior can be tuned via environment variables:
+
+| Env Var | Default | Purpose |
+|---|---|---|
+| `PPA_TIMER_INTERVAL` | 30 | Reconciliation cycle (seconds) |
+| `PPA_INITIAL_DELAY` | 60 | Warmup delay before first cycle |
+| `PPA_LOOKBACK_STEPS` | 12 | Rolling window size (must match model) |
+| `PPA_STABILIZATION_STEPS` | 2 | Consecutive stable predictions before scaling |
+| `PPA_NAMESPACE` | default | Default K8s namespace |
+| `PPA_PROM_FAILURE_THRESHOLD` | 10 | Prometheus failures before ERROR escalation |
+
+### Prometheus Error Resilience
+
+On Prometheus unavailability:
+```
+Cycles 1-9: log WARNING
+Cycle 10+: log ERROR + CR status.consecutiveSkips visible in kubectl get ppa
+Success: counter resets
+```
+
+The operator continues running safely, skipping scaling decisions when metrics are unavailable.
+
+### CRD Enhancements (v2.1)
+
+New spec fields:
+```yaml
+targetScalerPath: ""   # Target scaler for inverse-transform (empty = convention)
+containerName: ""      # Container for PromQL filtering (optional)
+```
+
+---
+
+## Deployment Topology
+
+```mermaid
+flowchart TD
+    subgraph "Namespace: monitoring"
+        P["Prometheus<br/>(kube-prometheus-stack)"]
+        G["Grafana"]
+    end
+
+    subgraph "Namespace: default"
+        OP["ppa-operator Pod"]
+        PVC1["/models PVC"]
+        CRD1["PredictiveAutoscaler CRs"]
+        APP["test-app Deployment"]
+        TGEN["traffic-gen Deployment"]
+        CRON["ppa-data-collector CronJob"]
+        PVC2["training-data PVC"]
+    end
+
+    OP -->|reads| CRD1
+    OP -->|mounts| PVC1
+    OP -->|queries| P
+    OP -->|patches scale| APP
+    CRON -->|queries| P
+    CRON -->|writes CSV| PVC2
+```
+
+### Key Files
+
+| File | Purpose |
+|---|---|
+| `deploy/crd.yaml` | PredictiveAutoscaler CRD definition (v2.1: added targetScalerPath, containerName, consecutiveSkips) |
+| `deploy/rbac.yaml` | ServiceAccount + ClusterRole + Binding |
+| `deploy/operator-deployment.yaml` | Operator Deployment + health probes + env vars + PVC for models |
+| `deploy/predictiveautoscaler.yaml` | Example CR with rps_t10m champion model paths |
+| `deploy/cronjob-data-collector.yaml` | Data collection CronJob |
+| `scripts/deploy_operator.sh` | One-command operator deployment for Minikube |
 
 ---
 
@@ -306,3 +395,12 @@ flowchart TD
 | Visualization | Grafana | Bundled with kube-prometheus-stack |
 | Load Testing | Locust | Python-native, phased traffic simulation |
 | Local K8s | Minikube (KVM2) | Near-bare-metal on Linux |
+
+---
+
+## See Also
+
+- [ML Pipeline Architecture](./ml_pipeline.md) — Training and model promotion
+- [Operator Commands](../reference/operator_commands.md) — Deployment and debugging guide
+- [ML Commands](../reference/ml_commands.md) — Model training and evaluation guide
+- [Data Collection](./data_collection.md) — Training data generation

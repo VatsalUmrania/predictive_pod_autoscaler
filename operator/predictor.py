@@ -29,9 +29,19 @@ class Predictor:
         self.history: deque = deque(maxlen=LOOKBACK_STEPS)
 
         try:
-            import tflite_runtime.interpreter as tflite
-            self.interpreter = tflite.Interpreter(model_path=model_path)
-            self.interpreter.allocate_tensors()
+            # Prefer tensorflow.lite (matches the TF version used to export the .tflite)
+            try:
+                import tensorflow as tf
+                logger.info(f"Using tensorflow.lite (TF {tf.__version__})")
+                self.interpreter = tf.lite.Interpreter(model_path=model_path)
+                self.interpreter.allocate_tensors()
+            except Exception as tf_exc:
+                # Fallback to tflite_runtime if tensorflow.lite fails
+                logger.warning(f"tensorflow.lite failed: {tf_exc}. Trying tflite_runtime...")
+                import tflite_runtime.interpreter as tflite
+                self.interpreter = tflite.Interpreter(model_path=model_path)
+                self.interpreter.allocate_tensors()
+            
             self.input_details = self.interpreter.get_input_details()
             self.output_details = self.interpreter.get_output_details()
             self.scaler = joblib.load(scaler_path)

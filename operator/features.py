@@ -16,12 +16,16 @@ if str(ROOT_DIR) not in sys.path:
 
 from common.feature_spec import FEATURE_COLUMNS
 from common.promql import build_queries, build_fallback_queries
-from config import PROMETHEUS_URL
+from config import PROMETHEUS_URL, PROM_FAILURE_THRESHOLD
 
 logger = logging.getLogger("ppa.features")
 
+# Module-level counter: consecutive Prometheus failures across all queries
+_prom_consecutive_failures: int = 0
+
 
 def prom_query(query: str) -> float | None:
+    global _prom_consecutive_failures
     try:
         resp = requests.get(
             f"{PROMETHEUS_URL}/api/v1/query",
@@ -33,9 +37,16 @@ def prom_query(query: str) -> float | None:
         result = payload.get("data", {}).get("result", [])
         if not result:
             return None
+        _prom_consecutive_failures = 0  # reset on success
         return float(result[0]["value"][1])
     except Exception as exc:
-        logger.warning(f"Prometheus query failed: {exc}")
+        _prom_consecutive_failures += 1
+        if _prom_consecutive_failures >= PROM_FAILURE_THRESHOLD:
+            logger.error(
+                f"Prometheus query failed ({_prom_consecutive_failures} consecutive): {exc}"
+            )
+        else:
+            logger.warning(f"Prometheus query failed: {exc}")
         return None
 
 
