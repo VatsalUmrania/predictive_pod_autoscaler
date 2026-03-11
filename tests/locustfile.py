@@ -21,6 +21,7 @@ class StagesShape(LoadTestShape):
     """
     Simulates phased traffic with configurable durations and scales via env vars.
     Supports FAST_MODE where 1 second of simulation is treated as 1 minute of reality.
+    Floor kept at 150+ users minimum to match realistic production patterns.
     """
     fast_mode = os.getenv("FAST_MODE", "false").lower() == "true"
     # In fast mode, a phase specified as 60 units takes 60 seconds (1 minute). Otherwise 3600s (1 hour).
@@ -28,11 +29,11 @@ class StagesShape(LoadTestShape):
 
     # Defaults: Low(1h) -> Med(2h) -> Spike(1h) -> Recovery(2h) -> Low(1h)
     stages = [
-        {"duration": int(os.getenv("STAGE_LOW_DUR", 60)) * time_multiplier, "users": int(os.getenv("STAGE_LOW_USERS", 50)), "rate": float(os.getenv("STAGE_LOW_RATE", 10.0))},
-        {"duration": int(os.getenv("STAGE_MED_DUR", 120)) * time_multiplier, "users": int(os.getenv("STAGE_MED_USERS", 250)), "rate": float(os.getenv("STAGE_MED_RATE", 50.0))},
+        {"duration": int(os.getenv("STAGE_LOW_DUR", 60)) * time_multiplier, "users": int(os.getenv("STAGE_LOW_USERS", 150)), "rate": float(os.getenv("STAGE_LOW_RATE", 20.0))},
+        {"duration": int(os.getenv("STAGE_MED_DUR", 120)) * time_multiplier, "users": int(os.getenv("STAGE_MED_USERS", 300)), "rate": float(os.getenv("STAGE_MED_RATE", 50.0))},
         {"duration": int(os.getenv("STAGE_SPIKE_DUR", 180)) * time_multiplier, "users": int(os.getenv("STAGE_SPIKE_USERS", 1000)), "rate": float(os.getenv("STAGE_SPIKE_RATE", 200.0))},
-        {"duration": int(os.getenv("STAGE_RECOVERY_DUR", 120)) * time_multiplier, "users": int(os.getenv("STAGE_RECOVERY_USERS", 250)), "rate": float(os.getenv("STAGE_RECOVERY_RATE", 50.0))},
-        {"duration": int(os.getenv("STAGE_LOW_DUR_2", 60)) * time_multiplier, "users": int(os.getenv("STAGE_LOW_USERS_2", 50)), "rate": float(os.getenv("STAGE_LOW_RATE_2", 10.0))},
+        {"duration": int(os.getenv("STAGE_RECOVERY_DUR", 120)) * time_multiplier, "users": int(os.getenv("STAGE_RECOVERY_USERS", 300)), "rate": float(os.getenv("STAGE_RECOVERY_RATE", 50.0))},
+        {"duration": int(os.getenv("STAGE_LOW_DUR_2", 60)) * time_multiplier, "users": int(os.getenv("STAGE_LOW_USERS_2", 150)), "rate": float(os.getenv("STAGE_LOW_RATE_2", 20.0))},
     ]
 
     def tick(self):
@@ -52,19 +53,20 @@ class StagesShape(LoadTestShape):
 
 class ChaoticLoadShape(LoadTestShape):
     """
-    Simulates unpredictable chaotic traffic with flash spikes and sudden drops to train the model on non-linear scaling demands.
+    Simulates unpredictable chaotic traffic with flash spikes and drops to train the model on non-linear scaling demands.
+    Floor kept at 150+ users minimum to match realistic production patterns.
     """
     fast_mode = os.getenv("FAST_MODE", "false").lower() == "true"
     time_multiplier = 1 if fast_mode else 6
 
-    # Pattern: Normal -> Flash Burst -> Dead Drop -> Normal -> Massive Spike
+    # Pattern: Normal -> Flash Burst -> Drop (150 floor) -> Normal -> Massive Spike
     stages = [
-        {"duration": int(os.getenv("STAGE_CHAOS_LOW", 30)) * time_multiplier, "users": 100, "rate": 20.0},
-        {"duration": int(os.getenv("STAGE_CHAOS_FLASH_SPIKE", 10)) * time_multiplier, "users": 800, "rate": 250.0}, 
-        {"duration": int(os.getenv("STAGE_CHAOS_DROP", 20)) * time_multiplier, "users": 10, "rate": 2.0},
-        {"duration": int(os.getenv("STAGE_CHAOS_MED", 60)) * time_multiplier, "users": 200, "rate": 40.0},
-        {"duration": int(os.getenv("STAGE_CHAOS_MASSIVE", 30)) * time_multiplier, "users": 1500, "rate": 400.0},
-        {"duration": int(os.getenv("STAGE_CHAOS_RECOVERY", 30)) * time_multiplier, "users": 100, "rate": 20.0},
+        {"duration": int(os.getenv("STAGE_CHAOS_LOW", 30)) * time_multiplier, "users": 200, "rate": 30.0},
+        {"duration": int(os.getenv("STAGE_CHAOS_FLASH_SPIKE", 10)) * time_multiplier, "users": 800, "rate": 200.0}, 
+        {"duration": int(os.getenv("STAGE_CHAOS_DROP", 20)) * time_multiplier, "users": 150, "rate": 15.0},
+        {"duration": int(os.getenv("STAGE_CHAOS_MED", 60)) * time_multiplier, "users": 300, "rate": 50.0},
+        {"duration": int(os.getenv("STAGE_CHAOS_MASSIVE", 30)) * time_multiplier, "users": 1500, "rate": 300.0},
+        {"duration": int(os.getenv("STAGE_CHAOS_RECOVERY", 30)) * time_multiplier, "users": 200, "rate": 30.0},
     ]
 
     def tick(self):

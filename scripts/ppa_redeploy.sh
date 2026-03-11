@@ -266,97 +266,86 @@ echo "    Waiting for loader pod to be Ready..."
 kubectl wait --for=condition=Ready pod/ppa-model-loader \
   --namespace="${NAMESPACE}" --timeout=90s
 
-# Create target directory in PVC
-kubectl exec ppa-model-loader --namespace="${NAMESPACE}" \
-  -- mkdir -p "${MODEL_DIR}"
-
-# Copy TFLite model
-kubectl cp "${CHAMPION_DIR}/ppa_model.tflite" \
-  "${NAMESPACE}/ppa-model-loader:${MODEL_DIR}/ppa_model.tflite"
-ok "Copied ppa_model.tflite"
-
-# Copy training CSV into pod so we can regenerate scalers natively
-# (avoids Python 3.13 → 3.11 pickle incompatibility)
+# Copy training CSV to pod once (shared by all 3 horizon uploads)
 kubectl cp "${CSV_PATH}" \
   "${NAMESPACE}/ppa-model-loader:/tmp/training_data.csv"
 ok "Copied training CSV to pod"
 
-# Regenerate scalers inside the pod (Python 3.11 + numpy 1.26.4)
-# Uses the exact same feature columns as train.py
+# Inline Python scaler-regen script (runs inside pod per horizon)
 REGEN_SCRIPT=$(cat <<'PYEOF'
-import sys, os, pickle
+import sys, os
 sys.path.insert(0, "/app")
-import numpy as np
 import pandas as pd
 import joblib
 from sklearn.preprocessing import MinMaxScaler
-from common.feature_spec import FEATURE_COLUMNS, TARGET_COLUMNS
+from common.feature_spec import FEATURE_COLUMNS
 
 CSV_PATH   = "/tmp/training_data.csv"
 MODEL_DIR  = sys.argv[1]
 HORIZON    = sys.argv[2]
 
-print(f"Loading CSV: {CSV_PATH}")
+print(f"[{HORIZON}] Loading CSV ...")
 df = pd.read_csv(CSV_PATH)
-print(f"  Rows: {len(df)}, Cols: {list(df.columns[:5])} ...")
-
-# Keep only rows where all feature columns are present
-feature_cols  = FEATURE_COLUMNS
-target_col    = HORIZON
+feature_cols = FEATURE_COLUMNS
+target_col   = HORIZON
 
 missing = [c for c in feature_cols if c not in df.columns]
 if missing:
-    print(f"WARNING: missing feature columns: {missing}")
+    print(f"WARNING: missing columns: {missing}")
     feature_cols = [c for c in feature_cols if c in df.columns]
 
 if target_col not in df.columns:
-    print(f"ERROR: target column '{target_col}' not in CSV.")
-    print(f"Available columns: {list(df.columns)}")
+    print(f"ERROR: target '{target_col}' not in CSV. Cols: {list(df.columns)}")
     sys.exit(1)
 
 df = df.dropna(subset=feature_cols + [target_col])
-
-X = df[feature_cols].values
-y = df[[target_col]].values
-
 scaler        = MinMaxScaler()
 target_scaler = MinMaxScaler()
+scaler.fit(df[feature_cols].values)
+target_scaler.fit(df[[target_col]].values)
 
-scaler.fit(X)
-target_scaler.fit(y)
-
-scaler_path        = os.path.join(MODEL_DIR, "scaler.pkl")
-target_scaler_path = os.path.join(MODEL_DIR, "target_scaler.pkl")
-
-# protocol=2 ensures broadest compatibility across Python 3.x versions
-joblib.dump(scaler,        scaler_path,        protocol=2)
-joblib.dump(target_scaler, target_scaler_path, protocol=2)
-
-print(f"Saved scaler        → {scaler_path}")
-print(f"Saved target_scaler → {target_scaler_path}")
-print(f"Feature cols ({len(feature_cols)}): {feature_cols}")
-print(f"Target col: {target_col}")
-print(f"Scaler data_range: min={scaler.data_range_.min():.2f}, max={scaler.data_range_.max():.2f}")
-print("Scaler regeneration complete.")
+joblib.dump(scaler,        os.path.join(MODEL_DIR, "scaler.pkl"),        protocol=2)
+joblib.dump(target_scaler, os.path.join(MODEL_DIR, "target_scaler.pkl"), protocol=2)
+print(f"[{HORIZON}] Scaler regen complete -> {MODEL_DIR}")
 PYEOF
 )
 
-echo "    Regenerating scalers inside pod (Python 3.11)..."
-kubectl exec ppa-model-loader --namespace="${NAMESPACE}" \
-  -- python3 -c "${REGEN_SCRIPT}" "${MODEL_DIR}" "${HORIZON}"
-ok "Scalers regenerated natively in pod"
+# Upload all 3 champion horizons — each to /models/rps_<horizon>/
+for UPLOAD_HORIZON in rps_t3m rps_t5m rps_t10m; do
+  UPLOAD_MODEL_DIR="/models/${UPLOAD_HORIZON}"
+  UPLOAD_CHAMPION_DIR="${REPO_ROOT}/model/champions/${UPLOAD_HORIZON}"
 
-# Copy regenerated scalers back to host champion dir
-kubectl cp "${NAMESPACE}/ppa-model-loader:${MODEL_DIR}/scaler.pkl" \
-  "${CHAMPION_DIR}/scaler.pkl"
-kubectl cp "${NAMESPACE}/ppa-model-loader:${MODEL_DIR}/target_scaler.pkl" \
-  "${CHAMPION_DIR}/target_scaler.pkl"
-ok "Scalers copied back to host: ${CHAMPION_DIR}"
+  if [[ ! -f "${UPLOAD_CHAMPION_DIR}/ppa_model.tflite" ]]; then
+    warn "Skipping ${UPLOAD_HORIZON}: no ppa_model.tflite in ${UPLOAD_CHAMPION_DIR}"
+    continue
+  fi
 
-# Verify PVC contents
-echo "    PVC contents:"
+  echo ""
+  echo "    ── Uploading ${UPLOAD_HORIZON} → ${UPLOAD_MODEL_DIR} ──"
+
+  kubectl exec ppa-model-loader --namespace="${NAMESPACE}" \
+    -- mkdir -p "${UPLOAD_MODEL_DIR}"
+
+  kubectl cp "${UPLOAD_CHAMPION_DIR}/ppa_model.tflite" \
+    "${NAMESPACE}/ppa-model-loader:${UPLOAD_MODEL_DIR}/ppa_model.tflite"
+  ok "Copied ppa_model.tflite (${UPLOAD_HORIZON})"
+
+  kubectl exec ppa-model-loader --namespace="${NAMESPACE}" \
+    -- python3 -c "${REGEN_SCRIPT}" "${UPLOAD_MODEL_DIR}" "${UPLOAD_HORIZON}"
+  ok "Scalers regenerated (${UPLOAD_HORIZON})"
+
+  kubectl cp "${NAMESPACE}/ppa-model-loader:${UPLOAD_MODEL_DIR}/scaler.pkl" \
+    "${UPLOAD_CHAMPION_DIR}/scaler.pkl"
+  kubectl cp "${NAMESPACE}/ppa-model-loader:${UPLOAD_MODEL_DIR}/target_scaler.pkl" \
+    "${UPLOAD_CHAMPION_DIR}/target_scaler.pkl"
+  ok "Scalers synced back to host: ${UPLOAD_CHAMPION_DIR}"
+done
+
+# Show final PVC tree
+echo ""
+echo "    All models present in PVC:"
 kubectl exec ppa-model-loader --namespace="${NAMESPACE}" \
-  -- ls -lh "${MODEL_DIR}"
+  -- find /models -name '*.tflite' -o -name '*.pkl' | sort
 
 # Clean up loader pod
 kubectl delete pod ppa-model-loader --namespace="${NAMESPACE}" --wait=true

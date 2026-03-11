@@ -1348,6 +1348,248 @@
           "refId": "C"
         }
       ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 43},
+      "id": 15,
+      "title": "PPA vs HPA \u2014 Live Comparison",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "decimals": 1, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "#FF9830", "value": null}]}, "unit": "reqps"}, "overrides": []},
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 44},
+      "id": 16,
+      "options": {"colorMode": "none", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "title": "PPA Predicted Load (active t10m)",
+      "type": "stat",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"}", "legendFormat": "", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "decimals": 0, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "#1F60C4", "value": null}]}, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 44},
+      "id": 17,
+      "options": {"colorMode": "none", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "title": "PPA Desired Replicas (t10m active)",
+      "type": "stat",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "ppa_desired_replicas{cr_name=\"test-app-ppa-t10m\"}", "legendFormat": "", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "decimals": 0, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "#FADE2A", "value": null}]}, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 44},
+      "id": 18,
+      "options": {"colorMode": "none", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "title": "HPA Desired Replicas",
+      "type": "stat",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=\"test-app\",namespace=\"default\"}", "legendFormat": "", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "decimals": 0, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "#73BF69", "value": null}]}, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 44},
+      "id": 19,
+      "options": {"colorMode": "none", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "title": "PPA Scale Events (total)",
+      "type": "stat",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "ppa_scale_events_total{cr_name=\"test-app-ppa-t10m\"}", "legendFormat": "", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "HPA (yellow) reacts to current CPU. PPA t10m (blue) reacts to predicted RPS. Actual (green) shows who is winning.",
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "fixed", "fixedColor": "#cccccc"}, "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 0, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "stepAfter", "lineWidth": 2, "pointSize": 4, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": true, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "short", "min": 0, "max": 22, "decimals": 0},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "HPA Desired"}, "properties": [{"id": "color", "value": {"fixedColor": "#FADE2A", "mode": "fixed"}}, {"id": "custom.lineWidth", "value": 2}]},
+          {"matcher": {"id": "byName", "options": "PPA t10m Desired"}, "properties": [{"id": "color", "value": {"fixedColor": "#1F60C4", "mode": "fixed"}}, {"id": "custom.lineWidth", "value": 2}]},
+          {"matcher": {"id": "byName", "options": "Actual Ready"}, "properties": [{"id": "color", "value": {"fixedColor": "#73BF69", "mode": "fixed"}}, {"id": "custom.lineWidth", "value": 3}, {"id": "custom.fillOpacity", "value": 8}]}
+        ]
+      },
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 48},
+      "id": 20,
+      "options": {"legend": {"calcs": ["mean", "max", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "title": "HPA vs PPA (t10m) vs Actual Replicas",
+      "type": "timeseries",
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=\"test-app\",namespace=\"default\"}", "legendFormat": "HPA Desired", "refId": "A"},
+        {"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "ppa_desired_replicas{cr_name=\"test-app-ppa-t10m\"}", "legendFormat": "PPA t10m Desired", "refId": "B"},
+        {"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "kube_deployment_status_replicas_ready{deployment=\"test-app\"}", "legendFormat": "Actual Ready", "refId": "C"}
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "PPA t10m predicted (orange dashed) vs actual RPS (blue).",
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "fixed", "fixedColor": "#cccccc"}, "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "req/s", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 0, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 4, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": true, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "reqps"},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "Actual RPS"}, "properties": [{"id": "color", "value": {"fixedColor": "#5794F2", "mode": "fixed"}}, {"id": "custom.lineWidth", "value": 2}, {"id": "custom.fillOpacity", "value": 6}]},
+          {"matcher": {"id": "byName", "options": "PPA t10m Predicted"}, "properties": [{"id": "color", "value": {"fixedColor": "#FF9830", "mode": "fixed"}}, {"id": "custom.lineStyle", "value": {"dash": [8, 4], "fill": "dash"}}, {"id": "custom.lineWidth", "value": 2}]}
+        ]
+      },
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 58},
+      "id": 21,
+      "options": {"legend": {"calcs": ["mean", "max", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "title": "Predicted Load vs Actual RPS",
+      "type": "timeseries",
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))", "legendFormat": "Actual RPS", "refId": "A"},
+        {"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"}", "legendFormat": "PPA t10m Predicted", "refId": "B"}
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Positive = HPA wants more pods than PPA. Negative = PPA wants more. Zero = agreement.",
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "fixed", "fixedColor": "#FADE2A"}, "custom": {"axisCenteredZero": true, "axisColorMode": "text", "axisLabel": "pods", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 20, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "stepAfter", "lineWidth": 2, "pointSize": 4, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": true, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "line"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 3}, {"color": "red", "value": 6}]}, "unit": "short", "decimals": 0},
+        "overrides": []
+      },
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 58},
+      "id": 22,
+      "options": {"legend": {"calcs": ["mean", "min", "max", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "title": "Scaling Gap \u2014 HPA desired \u2212 PPA desired",
+      "type": "timeseries",
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=\"test-app\",namespace=\"default\"} - ppa_desired_replicas{cr_name=\"test-app-ppa-t10m\"}", "legendFormat": "Gap (HPA \u2212 PPA)", "refId": "A"}
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 67},
+      "id": 23,
+      "title": "Prediction Accuracy \u2014 t+10 Validation",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Orange dashed = what PPA predicted 10 minutes ago (offset 10m). Blue = what actually happened. Tight overlap = good LSTM.",
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "fixed", "fixedColor": "#cccccc"}, "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "req/s", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 0, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 4, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": true, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "reqps"},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "Actual RPS (now)"}, "properties": [{"id": "color", "value": {"fixedColor": "#5794F2", "mode": "fixed"}}, {"id": "custom.lineWidth", "value": 2}, {"id": "custom.fillOpacity", "value": 6}]},
+          {"matcher": {"id": "byName", "options": "PPA t10m (from 10m ago)"}, "properties": [{"id": "color", "value": {"fixedColor": "#FF9830", "mode": "fixed"}}, {"id": "custom.lineStyle", "value": {"dash": [8, 4], "fill": "dash"}}, {"id": "custom.lineWidth", "value": 2}]}
+        ]
+      },
+      "gridPos": {"h": 10, "w": 16, "x": 0, "y": 68},
+      "id": 24,
+      "options": {"legend": {"calcs": ["mean", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "title": "t+10 Accuracy \u2014 Prediction from 10 minutes ago vs Actual RPS now",
+      "type": "timeseries",
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))", "legendFormat": "Actual RPS (now)", "refId": "A"},
+        {"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"} offset 10m", "legendFormat": "PPA t10m (from 10m ago)", "refId": "B"}
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "thresholds"}, "mappings": [{"options": {"0": {"color": "green", "index": 0, "text": "OK"}, "1": {"color": "red", "index": 1, "text": "FAILED"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}, "unit": "short"},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "Warmup Progress"}, "properties": [{"id": "unit", "value": "percentunit"}, {"id": "mappings", "value": []}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 0.5}, {"color": "green", "value": 1}]}}]},
+          {"matcher": {"id": "byName", "options": "Consecutive Skips"}, "properties": [{"id": "unit", "value": "short"}, {"id": "mappings", "value": []}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 3}, {"color": "red", "value": 8}]}}]}
+        ]
+      },
+      "gridPos": {"h": 10, "w": 8, "x": 16, "y": 68},
+      "id": 25,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "vertical", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "title": "PPA Health (t10m)",
+      "type": "stat",
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "ppa_warmup_progress{cr_name=\"test-app-ppa-t10m\"}", "legendFormat": "Warmup Progress", "refId": "A"},
+        {"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "ppa_consecutive_skips{cr_name=\"test-app-ppa-t10m\"}", "legendFormat": "Consecutive Skips", "refId": "B"},
+        {"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "ppa_model_load_failed{cr_name=\"test-app-ppa-t10m\"}", "legendFormat": "Model Load Failed", "refId": "C"}
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Raw desired (grey dashed) = ceil(predicted * safety / capacity). Inflated (orange dashed) = predicted * safety. Final (blue) = after rate-limiting and min/max clamping.",
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "fixed", "fixedColor": "#cccccc"}, "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 0, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "stepAfter", "lineWidth": 2, "pointSize": 4, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": true, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "short", "min": 0, "decimals": 0},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "Raw Desired (unclamped)"}, "properties": [{"id": "color", "value": {"fixedColor": "#888888", "mode": "fixed"}}, {"id": "custom.lineStyle", "value": {"dash": [4, 6], "fill": "dash"}}]},
+          {"matcher": {"id": "byName", "options": "Inflated Load / capacity"}, "properties": [{"id": "color", "value": {"fixedColor": "#FF9830", "mode": "fixed"}}, {"id": "custom.lineStyle", "value": {"dash": [8, 4], "fill": "dash"}}]},
+          {"matcher": {"id": "byName", "options": "PPA Final Desired"}, "properties": [{"id": "color", "value": {"fixedColor": "#1F60C4", "mode": "fixed"}}, {"id": "custom.lineWidth", "value": 3}]}
+        ]
+      },
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 78},
+      "id": 26,
+      "options": {"legend": {"calcs": ["mean", "max", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "title": "PPA Internals \u2014 Safety Factor, Rate Limiting, Clamping",
+      "type": "timeseries",
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "ppa_raw_desired_replicas{cr_name=\"test-app-ppa-t10m\"}", "legendFormat": "Raw Desired (unclamped)", "refId": "A"},
+        {"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "ppa_inflated_load_rps{cr_name=\"test-app-ppa-t10m\"} / 80", "legendFormat": "Inflated Load / capacity", "refId": "B"},
+        {"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "ppa_desired_replicas{cr_name=\"test-app-ppa-t10m\"}", "legendFormat": "PPA Final Desired", "refId": "C"}
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 87},
+      "id": 27,
+      "title": "All-Model Prediction Comparison \u2014 t3m vs t5m vs t10m (shadow)",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "decimals": 1, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "#73BF69", "value": null}]}, "unit": "reqps"}, "overrides": []},
+      "gridPos": {"h": 4, "w": 8, "x": 0, "y": 88},
+      "id": 28,
+      "options": {"colorMode": "none", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "title": "t3m Predicted Load (observer \u2014 sMAPE 10.47)",
+      "type": "stat",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t3m\"}", "legendFormat": "", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "decimals": 1, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "#FADE2A", "value": null}]}, "unit": "reqps"}, "overrides": []},
+      "gridPos": {"h": 4, "w": 8, "x": 8, "y": 88},
+      "id": 29,
+      "options": {"colorMode": "none", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "title": "t5m Predicted Load (observer \u2014 sMAPE 7.33)",
+      "type": "stat",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t5m\"}", "legendFormat": "", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "decimals": 1, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "#FF9830", "value": null}]}, "unit": "reqps"}, "overrides": []},
+      "gridPos": {"h": 4, "w": 8, "x": 16, "y": 88},
+      "id": 30,
+      "options": {"colorMode": "none", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "title": "t10m Predicted Load (ACTIVE \u2014 sMAPE 6.72)",
+      "type": "stat",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"}", "legendFormat": "", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "t3m (green) predicts 3 minutes ahead, t5m (yellow) 5 minutes, t10m (orange) 10 minutes. All are compared against actual RPS (blue). Use this panel to decide which horizon is most useful for your traffic pattern.",
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "fixed", "fixedColor": "#cccccc"}, "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "req/s", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 0, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 4, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": true, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "reqps"},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "Actual RPS"}, "properties": [{"id": "color", "value": {"fixedColor": "#5794F2", "mode": "fixed"}}, {"id": "custom.lineWidth", "value": 3}, {"id": "custom.fillOpacity", "value": 6}]},
+          {"matcher": {"id": "byName", "options": "t3m Predicted"}, "properties": [{"id": "color", "value": {"fixedColor": "#73BF69", "mode": "fixed"}}, {"id": "custom.lineStyle", "value": {"dash": [4, 4], "fill": "dash"}}]},
+          {"matcher": {"id": "byName", "options": "t5m Predicted"}, "properties": [{"id": "color", "value": {"fixedColor": "#FADE2A", "mode": "fixed"}}, {"id": "custom.lineStyle", "value": {"dash": [6, 4], "fill": "dash"}}]},
+          {"matcher": {"id": "byName", "options": "t10m Predicted (active)"}, "properties": [{"id": "color", "value": {"fixedColor": "#FF9830", "mode": "fixed"}}, {"id": "custom.lineStyle", "value": {"dash": [8, 4], "fill": "dash"}}, {"id": "custom.lineWidth", "value": 2}]}
+        ]
+      },
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 92},
+      "id": 31,
+      "options": {"legend": {"calcs": ["mean", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "title": "All Models vs Actual RPS \u2014 t3m (green) / t5m (yellow) / t10m active (orange)",
+      "type": "timeseries",
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))", "legendFormat": "Actual RPS", "refId": "A"},
+        {"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t3m\"}", "legendFormat": "t3m Predicted", "refId": "B"},
+        {"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t5m\"}", "legendFormat": "t5m Predicted", "refId": "C"},
+        {"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"}", "legendFormat": "t10m Predicted (active)", "refId": "D"}
+      ]
+    },
+    {
+      "gridPos": {"h": 6, "w": 24, "x": 0, "y": 102},
+      "id": 32,
+      "options": {"content": "## Champion Model Quality Summary (eval on held-out test set)\n\n| Horizon | sMAPE | MAPE | MAE (req/s) | RMSE (req/s) | PPA Under-prov% | Replica Savings% |\n|---------|-------|------|-------------|--------------|-----------------|------------------|\n| **rps_t3m** (observer) | 10.47 | 12.94 | 21.18 | 36.80 | 15.79% | \u22120.86% |\n| **rps_t5m** (observer) | 7.33 | 8.00 | 14.49 | 22.29 | 15.42% | +0.81% |\n| **rps_t10m** \u2605 active | **6.72** | **6.84** | **12.29** | **18.97** | **10.30%** | **+0.44%** |\n\n> \u2605 t10m is the active scaler. t3m and t5m run in observer mode (predict only, do not scale).", "mode": "markdown"},
+      "title": "Champion Model Eval Summary (offline test set)",
+      "type": "text"
     }
   ],
   "refresh": "10s",

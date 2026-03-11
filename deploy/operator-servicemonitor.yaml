@@ -1,0 +1,40 @@
+# deploy/operator-servicemonitor.yaml
+# Exposes the ppa-operator Prometheus metrics endpoint (:9100/metrics)
+# and tells kube-prometheus-stack to scrape it every 15 seconds.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ppa-operator-metrics
+  namespace: default
+  labels:
+    app: ppa-operator
+    app.kubernetes.io/name: ppa-operator
+spec:
+  selector:
+    app: ppa-operator
+  ports:
+    - name: metrics
+      port: 9100
+      targetPort: 9100
+      protocol: TCP
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ppa-operator
+  namespace: monitoring
+  labels:
+    release: prometheus   # must match kube-prometheus-stack helmRelease label
+spec:
+  namespaceSelector:
+    matchNames:
+      - default
+  selector:
+    matchLabels:
+      app: ppa-operator
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s

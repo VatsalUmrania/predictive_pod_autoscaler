@@ -11,6 +11,22 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import math
 
 import kopf
+from prometheus_client import Gauge, Counter, start_http_server as _prom_start_http_server
+
+# ---------------------------------------------------------------------------
+# Prometheus metrics — labelled by cr_name + namespace for multi-CR support
+# ---------------------------------------------------------------------------
+_LABELS = ["cr_name", "namespace"]
+
+ppa_predicted_load_rps   = Gauge("ppa_predicted_load_rps",   "LSTM predicted load (req/s)",          _LABELS)
+ppa_inflated_load_rps    = Gauge("ppa_inflated_load_rps",    "predicted * safety_factor (req/s)",    _LABELS)
+ppa_raw_desired_replicas = Gauge("ppa_raw_desired_replicas", "Unclamped replica target",             _LABELS)
+ppa_desired_replicas     = Gauge("ppa_desired_replicas",     "Rate-limited, bounds-clamped replicas",_LABELS)
+ppa_current_replicas     = Gauge("ppa_current_replicas",     "Observed ready replicas",              _LABELS)
+ppa_consecutive_skips    = Gauge("ppa_consecutive_skips",    "Cycles skipped due to bad data",       _LABELS)
+ppa_warmup_progress      = Gauge("ppa_warmup_progress",      "History window fill ratio (0-1)",      _LABELS)
+ppa_model_load_failed    = Gauge("ppa_model_load_failed",    "1 if model failed to load, else 0",    _LABELS)
+ppa_scale_events_total   = Counter("ppa_scale_events_total", "Total scaling decisions applied",      _LABELS)
 
 from common.feature_spec import FEATURE_COLUMNS
 from config import (
@@ -60,6 +76,10 @@ def _start_health_server(port: int = 8080):
 
 _start_health_server()
 
+# Start Prometheus metrics endpoint on port 9100 (separate from healthz on 8080)
+_prom_start_http_server(9100)
+logging.getLogger("ppa.operator").info("Prometheus metrics endpoint listening on :9100/metrics")
+
 
 @dataclass
 class CRState:
@@ -67,6 +87,7 @@ class CRState:
     predictor: Predictor
     stable_count: int = 0
     last_prediction: float = 0.0
+    last_desired: int = -1  # replica target from previous cycle (stabilisation anchor)
 
 
 # Registry keyed by (cr_namespace, cr_name) to avoid cross-namespace collisions.
@@ -121,6 +142,7 @@ def reconcile(spec, status, meta, patch, **kwargs):
     up_rate = spec.get("scaleUpRate", DEFAULT_SCALE_UP_RATE)
     down_rate = spec.get("scaleDownRate", DEFAULT_SCALE_DOWN_RATE)
     safety_factor = float(spec.get("safetyFactor", 1.10))
+    observer_mode = bool(spec.get("observerMode", False))
     container_name = spec.get("containerName") or None
 
     model_path, scaler_path, target_scaler_path = _resolve_paths(spec, target)
@@ -131,19 +153,26 @@ def reconcile(spec, status, meta, patch, **kwargs):
 
     if math.isnan(features.get("cpu_utilization_pct", float('nan'))):
         logger.warning(f"[{cr_name}] cpu_utilization_pct is NaN, skipping cycle")
-        patch.status["consecutiveSkips"] = status.get("consecutiveSkips", 0) + 1
+        skips = status.get("consecutiveSkips", 0) + 1
+        patch.status["consecutiveSkips"] = skips
+        ppa_consecutive_skips.labels(cr_name=cr_name, namespace=cr_ns).set(skips)
         return
     if math.isnan(features.get("memory_utilization_pct", float('nan'))):
         logger.warning(f"[{cr_name}] memory_utilization_pct is NaN, skipping cycle")
-        patch.status["consecutiveSkips"] = status.get("consecutiveSkips", 0) + 1
+        skips = status.get("consecutiveSkips", 0) + 1
+        patch.status["consecutiveSkips"] = skips
+        ppa_consecutive_skips.labels(cr_name=cr_name, namespace=cr_ns).set(skips)
         return
     if current_replicas == 0 or math.isnan(current_replicas):
         logger.warning(f"[{cr_name}] current_replicas is 0 or NaN, skipping cycle")
-        patch.status["consecutiveSkips"] = status.get("consecutiveSkips", 0) + 1
+        skips = status.get("consecutiveSkips", 0) + 1
+        patch.status["consecutiveSkips"] = skips
+        ppa_consecutive_skips.labels(cr_name=cr_name, namespace=cr_ns).set(skips)
         return
 
     # Reset consecutive skips on successful feature fetch
     patch.status["consecutiveSkips"] = 0
+    ppa_consecutive_skips.labels(cr_name=cr_name, namespace=cr_ns).set(0)
 
     assert list(features.keys()) == FEATURE_COLUMNS, f"[{cr_name}] Feature vector order mismatch"
 
@@ -157,12 +186,15 @@ def reconcile(spec, status, meta, patch, **kwargs):
     # Always publish current replicas so kubectl get ppa shows something
     current = int(current_replicas)
     patch.status["currentReplicas"] = current
+    ppa_current_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(current)
 
     # 2. Feed into predictor
     state.predictor.update(features)
+    history_len = len(state.predictor.history)
+    maxlen = state.predictor.history.maxlen
+    ppa_warmup_progress.labels(cr_name=cr_name, namespace=cr_ns).set(history_len / maxlen if maxlen else 0)
+    ppa_model_load_failed.labels(cr_name=cr_name, namespace=cr_ns).set(1 if state.predictor._load_failed else 0)
     if not state.predictor.ready():
-        history_len = len(state.predictor.history)
-        maxlen = state.predictor.history.maxlen
         if state.predictor._load_failed:
             logger.warning(
                 f"[{cr_name}] Model not loaded (will retry next cycle). "
@@ -180,32 +212,46 @@ def reconcile(spec, status, meta, patch, **kwargs):
 
     # Always publish predicted load so status is visible
     patch.status["lastPredictedLoad"] = round(predicted_load, 2)
+    ppa_predicted_load_rps.labels(cr_name=cr_name, namespace=cr_ns).set(predicted_load)
 
-    # 4. Stabilization
-    if state.last_prediction > 0:
-        change_pct = abs(predicted_load - state.last_prediction) / state.last_prediction
-        if change_pct < 0.10:
-            state.stable_count += 1
-        else:
-            state.stable_count = 0
-
+    # 4. Stabilization — anchored on desired replica count, not raw prediction magnitude.
+    #    Raw RPS changes > 10% every cycle during ramps, causing the old magnitude-based
+    #    check to permanently block scaling. This version counts how many consecutive cycles
+    #    produce the same replica target, which naturally handles trending traffic.
     state.last_prediction = predicted_load
 
+    # Publish inflated load and raw desired before rate-limiting
+    inflated = predicted_load * safety_factor
+    raw_desired = math.ceil(inflated / capacity) if capacity else current
+    ppa_inflated_load_rps.labels(cr_name=cr_name, namespace=cr_ns).set(inflated)
+    ppa_raw_desired_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(raw_desired)
+
+    candidate = calculate_replicas(predicted_load, current, min_r, max_r, capacity, up_rate, down_rate, safety_factor)
+    if candidate == state.last_desired:
+        state.stable_count += 1
+    else:
+        state.stable_count = 1  # start counting from 1 (this cycle counts)
+    state.last_desired = candidate
+
     if state.stable_count < STABILIZATION_STEPS:
-        logger.info(f"[{cr_name}] Stabilizing: {state.stable_count}/{STABILIZATION_STEPS} stable reads")
-        # Still publish desired even during stabilization
-        desired = calculate_replicas(predicted_load, current, min_r, max_r, capacity, up_rate, down_rate, safety_factor)
-        patch.status["desiredReplicas"] = desired
+        logger.info(f"[{cr_name}] Stabilizing: {state.stable_count}/{STABILIZATION_STEPS} same target ({candidate} replicas)")
+        patch.status["desiredReplicas"] = candidate
+        ppa_desired_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(candidate)
         return
 
-    # 5. Calculate and apply desired replicas
-    desired = calculate_replicas(predicted_load, current, min_r, max_r, capacity, up_rate, down_rate, safety_factor)
+    # 5. Apply desired replicas (candidate already computed and stabilised)
+    desired = candidate
+    ppa_desired_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(desired)
 
     if desired != current:
-        logger.info(f"[{cr_name}] Scaling {target_ns}/{target}: {current} → {desired}")
-        scale_deployment(target, desired, target_ns)
-        patch.status["lastScaleTime"] = datetime.now(timezone.utc).isoformat()
-        state.stable_count = 0
+        if observer_mode:
+            logger.info(f"[{cr_name}] OBSERVER: would scale {target_ns}/{target}: {current} → {desired} (skipped — observerMode=true)")
+        else:
+            logger.info(f"[{cr_name}] Scaling {target_ns}/{target}: {current} → {desired}")
+            scale_deployment(target, desired, target_ns)
+            patch.status["lastScaleTime"] = datetime.now(timezone.utc).isoformat()
+            ppa_scale_events_total.labels(cr_name=cr_name, namespace=cr_ns).inc()
+            state.stable_count = 0
     else:
         logger.info(f"[{cr_name}] No scaling needed: {current} replicas is correct")
 

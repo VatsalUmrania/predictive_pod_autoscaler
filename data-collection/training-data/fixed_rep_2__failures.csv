@@ -1,12 +1,12 @@
 Method,Name,Error,Occurrences
-GET,/404-generator,RemoteDisconnected('Remote end closed connection without response'),5477
-GET,/,RemoteDisconnected('Remote end closed connection without response'),27596
-GET,/404-generator,"ConnectionResetError(104, 'Connection reset by peer')",341
-GET,/,"ConnectionRefusedError(111, 'Connection refused')",264580
-GET,/404-generator,"ConnectionRefusedError(111, 'Connection refused')",52668
-GET,/,"ConnectionResetError(104, 'Connection reset by peer')",1689
-GET,/,HTTPError('500 Server Error: Internal Server Error for url: /'),20125
-GET,/slow,"ConnectionResetError(104, 'Connection reset by peer')",682
-GET,/404-generator,HTTPError('404 Client Error: Not Found for url: /404-generator'),204346
-GET,/slow,RemoteDisconnected('Remote end closed connection without response'),11850
-GET,/slow,"ConnectionRefusedError(111, 'Connection refused')",105840
+GET,/404-generator,RemoteDisconnected('Remote end closed connection without response'),2029
+GET,/,RemoteDisconnected('Remote end closed connection without response'),10104
+GET,/404-generator,"ConnectionResetError(104, 'Connection reset by peer')",324
+GET,/,"ConnectionRefusedError(111, 'Connection refused')",97350
+GET,/404-generator,"ConnectionRefusedError(111, 'Connection refused')",19419
+GET,/,"ConnectionResetError(104, 'Connection reset by peer')",1576
+GET,/,HTTPError('500 Server Error: Internal Server Error for url: /'),22539
+GET,/slow,"ConnectionResetError(104, 'Connection reset by peer')",604
+GET,/404-generator,HTTPError('404 Client Error: Not Found for url: /404-generator'),224887
+GET,/slow,RemoteDisconnected('Remote end closed connection without response'),4288
+GET,/slow,"ConnectionRefusedError(111, 'Connection refused')",39182

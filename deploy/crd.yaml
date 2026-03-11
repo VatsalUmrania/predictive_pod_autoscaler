@@ -67,6 +67,13 @@ spec:
                 type: string
                 default: ""
                 description: "Container name for PromQL queries (empty = all containers)"
+              observerMode:
+                type: boolean
+                default: false
+                description: >-
+                  If true, the operator computes and publishes predicted replicas
+                  but never calls scale_deployment. Safe for shadow-running t3m/t5m
+                  alongside the active t10m scaler without replica conflicts.
           status:
             type: object
             properties:

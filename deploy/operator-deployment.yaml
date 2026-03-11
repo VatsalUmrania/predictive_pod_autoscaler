@@ -22,6 +22,9 @@ spec:
         - name: health
           containerPort: 8080
           protocol: TCP
+        - name: metrics
+          containerPort: 9100
+          protocol: TCP
         livenessProbe:
           httpGet:
             path: /healthz

@@ -1,8 +1,8 @@
-# PredictiveAutoscaler CR for test-app (rps_t10m champion, sMAPE 16.7%)
+# rps_t3m — OBSERVER only (sMAPE 10.47 — shadow, does not scale)
 apiVersion: ppa.example.com/v1
 kind: PredictiveAutoscaler
 metadata:
-  name: test-app-ppa
+  name: test-app-ppa-t3m
   namespace: default
 spec:
   targetDeployment: test-app
@@ -10,9 +10,50 @@ spec:
   minReplicas: 2
   maxReplicas: 20
   capacityPerPod: 80
-  modelPath: /models/test-app/ppa_model.tflite
-  scalerPath: /models/test-app/scaler.pkl
-  targetScalerPath: /models/test-app/target_scaler.pkl
+  modelPath: /models/rps_t3m/ppa_model.tflite
+  scalerPath: /models/rps_t3m/scaler.pkl
+  targetScalerPath: /models/rps_t3m/target_scaler.pkl
   scaleUpRate: 2.0
   scaleDownRate: 0.7
   safetyFactor: 1.10
+  observerMode: true
+---
+# rps_t5m — OBSERVER only (sMAPE 7.33 — shadow, does not scale)
+apiVersion: ppa.example.com/v1
+kind: PredictiveAutoscaler
+metadata:
+  name: test-app-ppa-t5m
+  namespace: default
+spec:
+  targetDeployment: test-app
+  namespace: default
+  minReplicas: 2
+  maxReplicas: 20
+  capacityPerPod: 80
+  modelPath: /models/rps_t5m/ppa_model.tflite
+  scalerPath: /models/rps_t5m/scaler.pkl
+  targetScalerPath: /models/rps_t5m/target_scaler.pkl
+  scaleUpRate: 2.0
+  scaleDownRate: 0.7
+  safetyFactor: 1.10
+  observerMode: true
+---
+# rps_t10m — ACTIVE scaler (sMAPE 6.72 — best model, actually scales)
+apiVersion: ppa.example.com/v1
+kind: PredictiveAutoscaler
+metadata:
+  name: test-app-ppa-t10m
+  namespace: default
+spec:
+  targetDeployment: test-app
+  namespace: default
+  minReplicas: 2
+  maxReplicas: 20
+  capacityPerPod: 80
+  modelPath: /models/rps_t10m/ppa_model.tflite
+  scalerPath: /models/rps_t10m/scaler.pkl
+  targetScalerPath: /models/rps_t10m/target_scaler.pkl
+  scaleUpRate: 2.0
+  scaleDownRate: 0.7
+  safetyFactor: 1.10
+  observerMode: false
