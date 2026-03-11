@@ -18,7 +18,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from common.feature_spec import FEATURE_COLUMNS, TARGET_COLUMNS
 
-LOOKBACK_STEPS = 12
+LOOKBACK_STEPS = 60  # 60 minutes of historical data to predict the next time step
 
 
 # Asymmetric loss removed: the model now trains with symmetric MSE.

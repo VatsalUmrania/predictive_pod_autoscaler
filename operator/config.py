@@ -15,7 +15,7 @@ from common.promql import RATE_WINDOW
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus-kube-prometheus-prometheus.monitoring:9090")
 NAMESPACE = os.getenv("PPA_NAMESPACE", "default")
 SCRAPE_WINDOW = RATE_WINDOW
-LOOKBACK_STEPS = int(os.getenv("PPA_LOOKBACK_STEPS", "24"))  # 24 × 30s = 12 min history (must match training)
+LOOKBACK_STEPS = int(os.getenv("PPA_LOOKBACK_STEPS", "60"))  # 60 × 30s = 30 min history (must match training)
 STABILIZATION_STEPS = int(os.getenv("PPA_STABILIZATION_STEPS", "2"))  # consecutive stable reads
 TIMER_INTERVAL = int(os.getenv("PPA_TIMER_INTERVAL", "30"))  # seconds
 INITIAL_DELAY = int(os.getenv("PPA_INITIAL_DELAY", "60"))  # seconds — metrics warmup

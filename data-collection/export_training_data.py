@@ -41,6 +41,32 @@ def step_to_pandas_freq(step: str) -> str:
     raise ValueError(f"Unsupported step format: {step}. Use values like '15s' or '1m'.")
 
 
+CHUNK_HOURS = 6        # Max hours per individual Prometheus request
+PROM_TIMEOUT = 120    # Seconds — histogram_quantile over large ranges needs more than 30s
+
+
+def _fetch_chunk(query: str, start: datetime, end: datetime, step: str) -> list:
+    """Fetch a single time range chunk from Prometheus. Returns raw values list."""
+    response = requests.get(
+        f"{PROMETHEUS_URL}/api/v1/query_range",
+        params={
+            "query": query,
+            "start": start.timestamp(),
+            "end": end.timestamp(),
+            "step": step,
+        },
+        timeout=PROM_TIMEOUT,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("status") != "success":
+        raise RuntimeError(f"Prometheus query failed: {payload}")
+    data = payload.get("data", {}).get("result", [])
+    if not data:
+        return []
+    return data[0]["values"]
+
+
 def collect_range(query: str, hours: int = 24, step: str = "1m") -> pd.Series:
     end = datetime.now(timezone.utc)
 
@@ -51,34 +77,32 @@ def collect_range(query: str, hours: int = 24, step: str = "1m") -> pd.Series:
         safe_hours = (10000 * step_seconds) / 3600
         print(f"  WARNING: Requested {int(requested_points)} points. Prometheus limits queries to 11,000.")
         print(f"  WARNING: Capping query window to {safe_hours:.1f} hours to prevent silent failure.")
-        start = end - timedelta(hours=safe_hours)
+        total_hours = safe_hours
     else:
-        start = end - timedelta(hours=hours)
+        total_hours = float(hours)
 
-    response = requests.get(
-        f"{PROMETHEUS_URL}/api/v1/query_range",
-        params={
-            "query": query,
-            "start": start.timestamp(),
-            "end": end.timestamp(),
-            "step": step,
-        },
-        timeout=30,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    if payload.get("status") != "success":
-        raise RuntimeError(f"Prometheus query failed: {payload}")
+    # Split into CHUNK_HOURS-sized windows to avoid Prometheus read timeouts on
+    # expensive queries (e.g. histogram_quantile over large ranges).
+    all_values: list = []
+    chunk_start = end - timedelta(hours=total_hours)
+    while chunk_start < end:
+        chunk_end = min(chunk_start + timedelta(hours=CHUNK_HOURS), end)
+        chunk_points = (chunk_end - chunk_start).total_seconds() / step_seconds
+        if chunk_points > 11000:
+            # Shouldn't happen given CHUNK_HOURS, but guard anyway
+            chunk_end = chunk_start + timedelta(seconds=11000 * step_seconds)
+        values = _fetch_chunk(query, chunk_start, chunk_end, step)
+        all_values.extend(values)
+        chunk_start = chunk_end
 
-    data = payload.get("data", {}).get("result", [])
-    if not data:
+    if not all_values:
         return pd.Series(dtype=float)
 
-    values = data[0]["values"]
     series = pd.Series(
-        {datetime.fromtimestamp(ts, timezone.utc): float(val) for ts, val in values},
+        {datetime.fromtimestamp(ts, timezone.utc): float(val) for ts, val in all_values},
         dtype=float,
     )
+    series = series[~series.index.duplicated(keep="last")]
     series.index = series.index.round(step_to_pandas_freq(step))
     return series
 

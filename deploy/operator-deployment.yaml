@@ -53,7 +53,7 @@ spec:
         - name: PPA_INITIAL_DELAY
           value: "60"
         - name: PPA_LOOKBACK_STEPS
-          value: "24"
+          value: "60"
         - name: PPA_STABILIZATION_STEPS
           value: "2"
         - name: PPA_PROM_FAILURE_THRESHOLD
