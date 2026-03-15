@@ -77,13 +77,14 @@ def should_promote(
 
 
 def promote_artifacts(
+    app_name: str,
     target: str,
     challenger_paths: dict,
     eval_summary_path: str,
     champion_dir: str,
 ) -> dict:
-    """Copy winning challenger artifacts into champion/<target>/ canonical names."""
-    target_dir = os.path.join(champion_dir, target)
+    """Copy winning challenger artifacts into champion/<app_name>/<target>/ canonical names."""
+    target_dir = os.path.join(champion_dir, app_name, target)
     os.makedirs(target_dir, exist_ok=True)
 
     dst_model = os.path.join(target_dir, "ppa_model.tflite")
@@ -156,6 +157,7 @@ def patch_predictiveautoscaler_paths(
 
 
 def run_pipeline(
+    app_name: str,
     csv_path: str,
     horizons: list[str],
     epochs: int = 50,
@@ -182,7 +184,7 @@ def run_pipeline(
 
     for target in horizons:
         print(f"\n{'='*60}")
-        print(f"  PIPELINE — {target}")
+        print(f"  PIPELINE — {target} ({app_name})")
         print(f"{'='*60}")
 
         # ── Stage 1: Train ──────────────────────────────────────────
@@ -255,7 +257,7 @@ def run_pipeline(
                 promotion_decision = "HOLD"
                 promotion_reason = "champion_dir not provided"
             else:
-                champion_summary_path = os.path.join(champion_dir, target, "eval_summary.json")
+                champion_summary_path = os.path.join(champion_dir, app_name, target, "eval_summary.json")
                 champion_metrics = _load_json(champion_summary_path)
                 promote, reason = should_promote(
                     champion_metrics=champion_metrics,
@@ -343,6 +345,7 @@ def run_pipeline(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run full ML pipeline (train → evaluate → convert)")
+    parser.add_argument("--app-name", type=str, default="test-app", help="Target application name (default: test-app)")
     parser.add_argument("--csv", type=str, default="data-collection/training-data/training_data_v2.csv",
                         help="Path to training CSV")
     parser.add_argument("--horizons", type=str, default="rps_t3m,rps_t5m,rps_t10m",
@@ -365,7 +368,7 @@ if __name__ == "__main__":
     parser.add_argument("--promote-if-better", action="store_true",
                         help="Promote challenger artifacts into champion_dir only if policy passes")
     parser.add_argument("--champion-dir", type=str, default=None,
-                        help="Directory storing active champion artifacts under <dir>/<target>/")
+                        help="Directory storing active champion artifacts under <dir>/<app_name>/<target>/")
     parser.add_argument("--promotion-metric", type=str, default="smape",
                         choices=["mape", "smape", "mape_filtered"],
                         help="Metric used for champion-challenger comparison")
@@ -388,6 +391,7 @@ if __name__ == "__main__":
             sys.exit(1)
 
     exit_code = run_pipeline(
+        app_name=args.app_name,
         csv_path=args.csv,
         horizons=horizons,
         epochs=args.epochs,

@@ -34,9 +34,11 @@ docs/
 ## 📖 What's Included
 
 ### 1. **[README.md](./operator/README.md)** — Overview & Quick Start
+
 **📊 Size:** 8 KB | **⏱️ Read time:** 5 min
 
 Your entry point to the operator docs. Contains:
+
 - Quick deployment steps
 - Key concepts (CR, reconciliation, components)
 - Navigation to detailed guides
@@ -54,11 +56,13 @@ kubectl get ppa -w
 ---
 
 ### 2. **[architecture.md](./operator/architecture.md)** — Detailed System Design ⭐
+
 **📊 Size:** 16 KB | **⏱️ Read time:** 20 min
 
 **The flagship document.** Contains:
 
 #### 🎨 Mermaid Diagrams:
+
 1. **System Topology** — How components interconnect
    - Operator pod, PVC, Prometheus, target deployments
    - Per-CR components: features, predictor, scaler
@@ -79,6 +83,7 @@ kubectl get ppa -w
 6. **Error Handling** — Graceful degradation strategy
 
 #### 📊 Tables & Analysis:
+
 - Feature engineering (14 features)
 - Component responsibilities
 - Performance characteristics
@@ -88,12 +93,15 @@ kubectl get ppa -w
 ---
 
 ### 3. **[deployment.md](./deployment.md)** — Comprehensive Deployment Guide
+
 **📊 Size:** 15 KB | **⏱️ Read time:** 20 min
 
 **[NEW v2.2]** Complete end-to-end guide:
 
 #### Quick Scenarios (Use These!)
+
 1. **Deploy existing champion (no retraining):**
+
    ```bash
    ./scripts/ppa_redeploy.sh
    ```
@@ -104,6 +112,7 @@ kubectl get ppa -w
    ```
 
 #### Manual Steps (If Troubleshooting)
+
 - Data preparation
 - Model retraining (train.py)
 - Conversion to TFLite (convert.py)
@@ -117,6 +126,7 @@ kubectl get ppa -w
 - Warmup monitoring
 
 **Key Features:**
+
 - Automated pipeline: `./scripts/ppa_redeploy.sh`
 - Handles Python 3.13 (host) → Python 3.11 (pod) pickle compatibility
 - Scaler regeneration inside pod to fix `_pickle.UnpicklingError`
@@ -125,6 +135,7 @@ kubectl get ppa -w
 - Production considerations
 
 Includes:
+
 - Verification steps after each stage
 - Troubleshooting for each step
 - Multi-app setup example
@@ -133,19 +144,22 @@ Includes:
 ---
 
 ### 4. **[configuration.md](./configuration.md)** — Tuning & Configuration
+
 **📊 Size:** 11 KB | **⏱️ Read time:** 15 min
 
 Reference for fine-tuning operator behavior:
 
 #### Environment Variables:
-| Variable | Default | Purpose |
-|---|---|---|
-| `PPA_TIMER_INTERVAL` | 30s | Reconciliation frequency |
-| `PPA_LOOKBACK_STEPS` | 24 | Feature window (12 min of historical data) |
-| `PPA_STABILIZATION_STEPS` | 2 | Cycles required before scaling change |
-| `PROMETHEUS_URL` | `http://prometheus:9090` | Prometheus location |
+
+| Variable                  | Default                  | Purpose                                    |
+| ------------------------- | ------------------------ | ------------------------------------------ |
+| `PPA_TIMER_INTERVAL`      | 30s                      | Reconciliation frequency                   |
+| `PPA_LOOKBACK_STEPS`      | 24                       | Feature window (12 min of historical data) |
+| `PPA_STABILIZATION_STEPS` | 2                        | Cycles required before scaling change      |
+| `PROMETHEUS_URL`          | `http://prometheus:9090` | Prometheus location                        |
 
 #### CR Specification:
+
 - Full YAML schema with field descriptions
 - Scaling bounds (minReplicas, maxReplicas)
 - Rate limits (scaleUpRate, scaleDownRate)
@@ -153,6 +167,7 @@ Reference for fine-tuning operator behavior:
 - Capacity estimation guide
 
 #### Tuning Presets:
+
 - **Conservative:** Stable, slow response time
 - **Balanced:** Recommended for production
 - **Aggressive:** Fast response, more churn
@@ -163,21 +178,25 @@ Includes scaling decision examples with tables showing replica changes over time
 ---
 
 ### 5. **[api.md](./api.md)** — Custom Resource API Reference
+
 **📊 Size:** 12 KB | **⏱️ Read time:** 20 min
 
 Complete API reference:
 
 #### OpenAPI v3 Schema:
+
 - Full CRD definition with validation rules
 - Field constraints and ranges
 - Required vs optional fields
 
 #### Example CRs:
+
 1. Minimal single-page app
 2. Production API server
 3. Multi-horizon model selection
 
 #### Creation & Management:
+
 ```bash
 # Create from file
 kubectl apply -f my-autoscaler.yaml
@@ -195,11 +214,13 @@ kubectl delete ppa my-app-ppa
 ```
 
 #### Status Interpretation:
+
 - Understanding `lastPrediction` status
 - Interpreting decision reasons
 - Confidence scores
 
 #### Validation Rules:
+
 - What makes a valid CR
 - Common validation errors and fixes
 - RBAC requirements
@@ -207,11 +228,13 @@ kubectl delete ppa my-app-ppa
 ---
 
 ### 6. **[commands.md](./commands.md)** — Useful kubectl Commands
+
 **📊 Size:** 9 KB | **⏱️ Read time:** 10 min
 
 Quick reference for common operations:
 
 #### Pod Management:
+
 ```bash
 kubectl get pods -l app=ppa-operator
 kubectl logs -f deployment/ppa-operator
@@ -219,6 +242,7 @@ kubectl describe pod -l app=ppa-operator
 ```
 
 #### CR Management:
+
 ```bash
 kubectl get ppa                    # List all CRs
 kubectl describe ppa test-app-ppa  # Inspect CR
@@ -227,6 +251,7 @@ kubectl patch ppa test-app-ppa ... # Update field
 ```
 
 #### Monitoring:
+
 ```bash
 kubectl logs deployment/ppa-operator -f --timestamps=true
 kubectl top pod -l app=ppa-operator  # Resource usage
@@ -234,6 +259,7 @@ kubectl get events --watch           # Watch events
 ```
 
 #### Testing & Validation:
+
 ```bash
 # Test model loads
 kubectl exec deployment/ppa-operator -- python3 -c "..."
@@ -243,6 +269,7 @@ kubectl exec deployment/ppa-operator -- curl http://prometheus:9090/-/ready
 ```
 
 #### One-Liners:
+
 ```bash
 # Check all CRs status
 kubectl get ppa -o jsonpath='{range .items[*]}{.metadata.name}...'
@@ -255,6 +282,7 @@ kubectl logs -f deployment/ppa-operator | grep -E "Scale|Replica"
 ```
 
 #### Useful Aliases:
+
 ```bash
 alias kppa='kubectl get ppa'
 alias kppaw='kubectl get ppa -w'
@@ -264,45 +292,54 @@ alias kppal='kubectl logs -f deployment/ppa-operator'
 ---
 
 ### 7. **[troubleshooting.md](./troubleshooting.md)** — Debugging Guide
+
 **📊 Size:** 11 KB | **⏱️ Read time:** 20 min
 
 Comprehensive troubleshooting for common issues:
 
 #### Pod Issues:
+
 - **CrashLoopBackOff** — Common causes (missing TensorFlow, RBAC, etc.)
 - Diagnosis steps and fixes
 
 #### Prometheus Connectivity:
+
 - CR stuck "Warming up"
 - Connection refused, DNS issues, timeouts
 - Verification steps
 
 #### Model & Scaler Files:
+
 - File not found errors
 - Copy procedures
 - Integrity checks
 
 #### TFLite Model Loading:
+
 - Numpy version mismatch (1.x vs 2.x)
 - Missing tflite_runtime
 - Model loading failures
 
 #### Scaling Issues:
+
 - Replicas not changing
 - Scaling too aggressive (flapping)
 - Scaling too conservative (late response)
 
 #### Performance Issues:
+
 - High memory usage
 - Slow reconciliation
 - Optimization tips
 
 #### Validation Errors:
+
 - minReplicas/maxReplicas constraints
 - File format validation
 - CR schema errors
 
 #### Debugging Checklist:
+
 ```bash
 # 1. Pod status
 # 2. CRs exist and valid
@@ -315,6 +352,7 @@ Comprehensive troubleshooting for common issues:
 ```
 
 #### Getting Help:
+
 - How to collect diagnostic bundles
 - What information to share
 - Support resources
@@ -339,37 +377,41 @@ The architecture.md contains **7 comprehensive Mermaid diagrams**:
 
 ## 📊 Documentation Statistics
 
-| Metric | Value |
-|---|---|
-| **Total Files** | 7 markdown files |
-| **Total Size** | ~87 KB |
-| **Estimated Read Time** | 90–125 minutes |
-| **Code Examples** | 40+ |
-| **Tables** | 20+ |
-| **Diagrams** | 7 Mermaid diagrams |
-| **Links** | Cross-referenced throughout |
+| Metric                  | Value                       |
+| ----------------------- | --------------------------- |
+| **Total Files**         | 7 markdown files            |
+| **Total Size**          | ~87 KB                      |
+| **Estimated Read Time** | 90–125 minutes              |
+| **Code Examples**       | 40+                         |
+| **Tables**              | 20+                         |
+| **Diagrams**            | 7 Mermaid diagrams          |
+| **Links**               | Cross-referenced throughout |
 
 ---
 
 ## 🚀 How to Use
 
 ### **For Quick Start:**
+
 1. Read [operator/README.md](./operator/README.md) — 5 minutes
 2. Run [deployment.md](./operator/deployment.md) steps — 15 minutes ✅ You're live!
 
 ### **For Understanding System:**
+
 1. Start with [operator/README.md](./operator/README.md) key concepts
 2. Read [architecture.md](./operator/architecture.md) section by section
 3. Study the Mermaid diagrams
 4. Review examples in [configuration.md](./operator/configuration.md)
 
 ### **For Troubleshooting:**
+
 1. Search [troubleshooting.md](./operator/troubleshooting.md) for your error
 2. Follow diagnosis steps
 3. Apply recommended fix
 4. Reference [commands.md](./operator/commands.md) for verification commands
 
 ### **For Reference:**
+
 - **What's this field?** → [api.md](./operator/api.md)
 - **How do I...?** → [commands.md](./operator/commands.md)
 - **What does this error mean?** → [troubleshooting.md](./operator/troubleshooting.md)
@@ -380,12 +422,14 @@ The architecture.md contains **7 comprehensive Mermaid diagrams**:
 ## 🔗 Document Cross-References
 
 All documents are internally linked:
+
 - README links to each detailed guide
 - Each guide links to related documents
 - Tables include references to other sections
 - Troubleshooting links to commands and configuration
 
 Example navigation:
+
 ```
 README.md (Overview)
   ↓
@@ -407,6 +451,7 @@ troubleshooting.md (When things go wrong)
 ## 📝 Main Index Updates
 
 The main documentation index [docs/index.md](../index.md) has been updated to:
+
 1. Link to [operator/README.md](./operator/README.md) as the primary operator entry point
 2. List all 7 operator documentation files with descriptions
 3. Highlight the new comprehensive operator folder
@@ -416,6 +461,7 @@ The main documentation index [docs/index.md](../index.md) has been updated to:
 ## ✅ File Checklist
 
 All files created successfully:
+
 - ✅ `operator/README.md` — Overview & quick start
 - ✅ `operator/architecture.md` — System design with 7 diagrams
 - ✅ `operator/deployment.md` — Step-by-step deployment
@@ -429,6 +475,7 @@ All files created successfully:
 ## 📚 Related Documentation
 
 These docs complement the operator documentation:
+
 - **[docs/architecture/ml_operator.md](../architecture/ml_operator.md)** — Original operator architecture (detailed Python internals)
 - **[docs/reference/operator_commands.md](../reference/operator_commands.md)** — Legacy operator commands
 - **[docs/architecture.md](../architecture.md)** — System overview (Hub document)
@@ -445,7 +492,6 @@ These docs complement the operator documentation:
 
 ---
 
-**📍 Location:** `/run/media/vatsal/Drive/Projects/predictive_pod_autoscaler/docs/operator/`
+**📍 Location:** `predictive_pod_autoscaler/docs/operator/`
 
 **🎉 Status:** Complete and ready for use!
-

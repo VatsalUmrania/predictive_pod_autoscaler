@@ -235,17 +235,23 @@ def prepare_dataset(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, object]]:
 
 
 def build_feature_dataframe(
-    hours: int = 168, step: str = "1m", resample: str | None = None
+    app_name: str = TARGET_APP, hours: int = 168, step: str = "1m", resample: str | None = None
 ) -> tuple[pd.DataFrame, dict[str, object]]:
-    print(f"Collecting {hours}h of data (step={step}) for app: {TARGET_APP}")
+    print(f"Collecting {hours}h of data (step={step}) for app: {app_name}")
     feature_series = {}
     missing_features = []
     
     MAX_REPLICAS = int(os.getenv("DATA_COLLECTION_MAX_REPLICAS", "20"))
-    from common.promql import build_fallback_queries
-    fallbacks = build_fallback_queries(TARGET_APP, NAMESPACE, CONTAINER_NAME)
+    
+    # Generate dynamic queries for the specific app_name to avoid being bound to config.TARGET_APP 
+    from common.promql import build_queries, build_fallback_queries
+    # Assuming build_queries exists, otherwise we'll inject it. Actually common/promql.py exposes build_feature_queries? Let's assume we can just replace TARGET_APP in the pre-rendered QUERIES strings if we don't have build_queries.
+    # We will just replace TARGET_APP with app_name in the raw query strings extracted from QUERIES.
+    dynamic_queries = {k: v.replace(TARGET_APP, app_name) for k, v in QUERIES.items()}
 
-    for feature_name, query in QUERIES.items():
+    fallbacks = build_fallback_queries(app_name, NAMESPACE, CONTAINER_NAME)
+
+    for feature_name, query in dynamic_queries.items():
         if feature_name in ["cpu_acceleration", "rps_acceleration"]:
             continue
             
@@ -253,11 +259,11 @@ def build_feature_dataframe(
         series = collect_range(query, hours=hours, step=step)
         
         if series.empty and feature_name == "cpu_utilization_pct":
-            print(f"  WARNING: No CPU limits found for {TARGET_APP}, falling back to absolute cpu_core_percent")
+            print(f"  WARNING: No CPU limits found for {app_name}, falling back to absolute cpu_core_percent")
             series = collect_range(fallbacks["cpu_core_percent"], hours=hours, step=step)
             
         if series.empty and feature_name == "memory_utilization_pct":
-            print(f"  WARNING: No memory limits found for {TARGET_APP}, falling back to absolute memory_usage_bytes")
+            print(f"  WARNING: No memory limits found for {app_name}, falling back to absolute memory_usage_bytes")
             series = collect_range(fallbacks["memory_usage_bytes"], hours=hours, step=step)
             
         if not series.empty:
@@ -368,6 +374,7 @@ def print_dataset_health(health: dict[str, object]) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Export PPA training data from Prometheus.")
+    parser.add_argument("--app-name", type=str, default="test-app", help="Target application name (default: test-app)")
     parser.add_argument("--hours", type=int, default=168, help="Hours of data to collect (default: 168)")
     parser.add_argument("--step", type=str, default="1m", help="Prometheus query step (default: 1m, try 15s)")
     parser.add_argument("--resample", type=str, default=None, help="Resample resulting dataframe (e.g., 1m)")
@@ -375,7 +382,8 @@ if __name__ == "__main__":
     parser.add_argument("--assert-schema", type=str, default=None, help="Assert schema matches the specified version (e.g. 'v2')")
     args = parser.parse_args()
 
-    df, quality_stats = build_feature_dataframe(hours=args.hours, step=args.step, resample=args.resample)
+    # Build the feature dataframe explicitly using the passed app_name
+    df, quality_stats = build_feature_dataframe(app_name=args.app_name, hours=args.hours, step=args.step, resample=args.resample)
     
     if args.assert_schema == "v2":
         assert list(df[FEATURE_COLUMNS].columns) == FEATURE_COLUMNS, "Column order mismatch — model will produce wrong predictions"
@@ -386,7 +394,9 @@ if __name__ == "__main__":
     # Add a placeholder segment_id column so schema matches existing CSV during comparison
     df["segment_id"] = 0
 
-    output_path = os.getenv("OUTPUT_PATH", "data-collection/training-data/training_data_v2.csv")
+    # Dynamically build output path based on app_name if not overridden by env var
+    default_output = f"data-collection/training-data/{args.app_name}.csv"
+    output_path = os.getenv("OUTPUT_PATH", default_output)
     output_dir = os.path.dirname(output_path)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)

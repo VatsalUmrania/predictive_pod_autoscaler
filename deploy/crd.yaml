@@ -35,14 +35,20 @@ spec:
                 type: integer
                 default: 80
                 description: Max requests/second each pod can handle
+              appName:
+                type: string
+                description: "Name of the logical application (used for model namespaces)"
+              horizon:
+                type: string
+                description: "Prediction horizon identifier (e.g. rps_t3m)"
               modelPath:
                 type: string
                 default: ""
-                description: "Path to TFLite model file (empty = auto /models/{target}/ppa_model.tflite)"
+                description: "Path to TFLite model file (empty = auto /models/{appName}/{horizon}/ppa_model.tflite)"
               scalerPath:
                 type: string
                 default: ""
-                description: "Path to sklearn scaler file (empty = auto /models/{target}/scaler.pkl)"
+                description: "Path to sklearn scaler file (empty = auto /models/{appName}/{horizon}/scaler.pkl)"
               scaleUpRate:
                 type: number
                 default: 2.0
@@ -62,7 +68,7 @@ spec:
               targetScalerPath:
                 type: string
                 default: ""
-                description: "Path to target scaler file (empty = auto /models/{target}/target_scaler.pkl)"
+                description: "Path to target scaler file (empty = auto /models/{appName}/{horizon}/target_scaler.pkl)"
               containerName:
                 type: string
                 default: ""

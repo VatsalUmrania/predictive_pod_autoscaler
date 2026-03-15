@@ -53,6 +53,7 @@ VENV_PATH="${REPO_ROOT}/venv"
 # ── Arg parsing ───────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --app-name)       TARGET_APP="$2"; shift 2 ;;
     --retrain)        DO_RETRAIN=true; shift ;;
     --horizon)        HORIZON="$2"; shift 2 ;;
     --csv)            CSV_PATH="$2"; shift 2 ;;
@@ -72,12 +73,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 ARTIFACTS_DIR="${REPO_ROOT}/model/artifacts"
-CHAMPION_DIR="${REPO_ROOT}/model/champions/${HORIZON}"
+CHAMPION_DIR="${REPO_ROOT}/model/champions/${TARGET_APP}/${HORIZON}"
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo -e "\n${BOLD}╔══════════════════════════════════════════════════╗"
 echo -e "║      PPA Redeploy — $(date '+%Y-%m-%d %H:%M')           ║"
 echo -e "╚══════════════════════════════════════════════════╝${NC}"
+echo "  App      : ${TARGET_APP}"
 echo "  Horizon  : ${HORIZON}"
 echo "  Retrain  : ${DO_RETRAIN}"
 echo "  Skip bld : ${SKIP_BUILD}"
@@ -87,7 +89,7 @@ echo "  CSV      : ${CSV_PATH}"
 # STEP 1 — Retrain + convert
 # ─────────────────────────────────────────────────────────────────────────────
 if [[ "$DO_RETRAIN" == "true" ]]; then
-  step "Retraining LSTM (target=${HORIZON}, lookback=${LOOKBACK}, epochs=${EPOCHS})"
+  step "Retraining LSTM for ${TARGET_APP} (target=${HORIZON}, lookback=${LOOKBACK}, epochs=${EPOCHS})"
 
   [[ -f "$CSV_PATH" ]] || die "Training CSV not found: $CSV_PATH"
   echo "    Rows in CSV: $(wc -l < "$CSV_PATH")"
@@ -310,10 +312,10 @@ print(f"[{HORIZON}] Scaler regen complete -> {MODEL_DIR}")
 PYEOF
 )
 
-# Upload all 3 champion horizons — each to /models/rps_<horizon>/
+# Upload all 3 champion horizons — each to /models/<app_name>/<horizon>/
 for UPLOAD_HORIZON in rps_t3m rps_t5m rps_t10m; do
-  UPLOAD_MODEL_DIR="/models/${UPLOAD_HORIZON}"
-  UPLOAD_CHAMPION_DIR="${REPO_ROOT}/model/champions/${UPLOAD_HORIZON}"
+  UPLOAD_MODEL_DIR="/models/${TARGET_APP}/${UPLOAD_HORIZON}"
+  UPLOAD_CHAMPION_DIR="${REPO_ROOT}/model/champions/${TARGET_APP}/${UPLOAD_HORIZON}"
 
   if [[ ! -f "${UPLOAD_CHAMPION_DIR}/ppa_model.tflite" ]]; then
     warn "Skipping ${UPLOAD_HORIZON}: no ppa_model.tflite in ${UPLOAD_CHAMPION_DIR}"
@@ -321,7 +323,7 @@ for UPLOAD_HORIZON in rps_t3m rps_t5m rps_t10m; do
   fi
 
   echo ""
-  echo "    ── Uploading ${UPLOAD_HORIZON} → ${UPLOAD_MODEL_DIR} ──"
+  echo "    ── Uploading ${TARGET_APP}/${UPLOAD_HORIZON} → ${UPLOAD_MODEL_DIR} ──"
 
   kubectl exec ppa-model-loader --namespace="${NAMESPACE}" \
     -- mkdir -p "${UPLOAD_MODEL_DIR}"
@@ -343,9 +345,11 @@ done
 
 # Show final PVC tree
 echo ""
-echo "    All models present in PVC:"
+echo "    All models present in PVC for ${TARGET_APP}:"
 kubectl exec ppa-model-loader --namespace="${NAMESPACE}" \
-  -- find /models -name '*.tflite' -o -name '*.pkl' | sort
+  -- ls -lah /models/${TARGET_APP} 2>/dev/null || true
+kubectl exec ppa-model-loader --namespace="${NAMESPACE}" \
+  -- find /models/${TARGET_APP} -name '*.tflite' -o -name '*.pkl' | sort || true
 
 # Clean up loader pod
 kubectl delete pod ppa-model-loader --namespace="${NAMESPACE}" --wait=true

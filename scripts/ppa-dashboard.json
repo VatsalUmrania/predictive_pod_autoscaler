@@ -6,13 +6,13 @@
         "datasource": "-- Graphic --",
         "enable": true,
         "hide": true,
-        "iconColor": "rgba(0, 211, 255, 1)",
+        "iconColor": "rgba(0,211,255,1)",
         "name": "Annotations and Alerts",
         "type": "dashboard"
       }
     ]
   },
-  "description": "Predictive Pod Autoscaler \u2014 Production SRE Dashboard",
+  "description": "Predictive Pod Autoscaler \u2014 SRE Comparison Dashboard (v3: multi-horizon, colour-coded, side-by-side accuracy)",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -33,17 +33,53 @@
       "type": "row"
     },
     {
+      "type": "stat",
+      "id": 2,
+      "title": "Total RPS",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
       },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))",
+          "refId": "A",
+          "legendFormat": ""
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "fixed",
+            "fixedColor": "#5794F2"
           },
           "decimals": 1,
           "mappings": [],
+          "unit": "reqps",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -52,20 +88,38 @@
                 "value": null
               }
             ]
-          },
-          "unit": "reqps"
+          }
         },
         "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 3,
+      "title": "Ready Replicas",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 4,
         "w": 6,
-        "x": 0,
+        "x": 6,
         "y": 1
       },
-      "id": 2,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "kube_deployment_status_replicas_ready{deployment=\"test-app\"}",
+          "refId": "A",
+          "legendFormat": ""
+        }
+      ],
       "options": {
-        "colorMode": "none",
+        "colorMode": "background",
         "graphMode": "area",
         "justifyMode": "center",
         "orientation": "auto",
@@ -78,32 +132,15 @@
         },
         "textMode": "auto"
       },
-      "title": "Total RPS",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))",
-          "legendFormat": "",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
           },
-          "decimals": 0,
+          "decimals": 1,
           "mappings": [],
+          "unit": "short",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -112,20 +149,38 @@
                 "value": null
               }
             ]
-          },
-          "unit": "short"
+          }
         },
         "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 4,
+      "title": "P95 Latency (ms)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 4,
         "w": 6,
-        "x": 6,
+        "x": 12,
         "y": 1
       },
-      "id": 3,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{pod=~\"test-app.*\"}[5m])) by (le)) * 1000",
+          "refId": "A",
+          "legendFormat": ""
+        }
+      ],
       "options": {
-        "colorMode": "none",
+        "colorMode": "background",
         "graphMode": "area",
         "justifyMode": "center",
         "orientation": "auto",
@@ -138,120 +193,35 @@
         },
         "textMode": "auto"
       },
-      "title": "Ready Replicas",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "kube_deployment_status_replicas_ready{deployment=\"test-app\"}",
-          "legendFormat": "",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "fixed",
+            "fixedColor": "#FF9830"
           },
-          "decimals": 0,
+          "decimals": 1,
           "mappings": [],
+          "unit": "ms",
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "#1a3a2a",
+                "color": "#FF9830",
                 "value": null
-              },
-              {
-                "color": "#3d2b00",
-                "value": 200
-              },
-              {
-                "color": "#3d0000",
-                "value": 500
               }
             ]
-          },
-          "unit": "ms"
+          }
         },
         "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 12,
-        "y": 1
-      },
-      "id": 4,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "title": "P95 Latency",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{pod=~\"test-app.*\"}[5m])) by (le)) * 1000",
-          "legendFormat": "",
-          "refId": "A"
-        }
-      ]
+      }
     },
     {
+      "type": "stat",
+      "id": 5,
+      "title": "Error Rate",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 2,
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#1a3a2a",
-                "value": null
-              },
-              {
-                "color": "#3d2b00",
-                "value": 1
-              },
-              {
-                "color": "#3d0000",
-                "value": 3
-              }
-            ]
-          },
-          "unit": "percent"
-        },
-        "overrides": []
       },
       "gridPos": {
         "h": 4,
@@ -259,10 +229,20 @@
         "x": 18,
         "y": 1
       },
-      "id": 5,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\",status=~\"[45].*\"}[1m])) / sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])) * 100",
+          "refId": "A",
+          "legendFormat": ""
+        }
+      ],
       "options": {
         "colorMode": "background",
-        "graphMode": "none",
+        "graphMode": "area",
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
@@ -274,19 +254,27 @@
         },
         "textMode": "auto"
       },
-      "title": "Error Rate",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#F2495C"
           },
-          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\",status=~\"[45].*\"}[1m])) / sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])) * 100",
-          "legendFormat": "",
-          "refId": "A"
-        }
-      ]
+          "decimals": 1,
+          "mappings": [],
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#F2495C",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
     },
     {
       "collapsed": false,
@@ -296,43 +284,1494 @@
         "x": 0,
         "y": 5
       },
-      "id": 6,
-      "title": "Traffic and Scaling Behavior",
+      "id": 10,
+      "title": "Live Model Comparison \u2014 All 3 Horizons",
       "type": "row"
     },
     {
+      "type": "stat",
+      "id": 11,
+      "title": "t3m Predicted Load",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 6
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t3m\"}",
+          "refId": "A",
+          "legendFormat": ""
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "fixed",
-            "fixedColor": "#cccccc"
+            "fixedColor": "#FF9830"
+          },
+          "decimals": 1,
+          "mappings": [],
+          "unit": "reqps",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#FF9830",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 12,
+      "title": "t5m Predicted Load",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 6
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t5m\"}",
+          "refId": "A",
+          "legendFormat": ""
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#5794F2"
+          },
+          "decimals": 1,
+          "mappings": [],
+          "unit": "reqps",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#5794F2",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 13,
+      "title": "t10m Predicted Load",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 6
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"}",
+          "refId": "A",
+          "legendFormat": ""
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
+          },
+          "decimals": 1,
+          "mappings": [],
+          "unit": "reqps",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#73BF69",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 14,
+      "title": "HPA Desired Replicas",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 6
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=\"test-app\",namespace=\"default\"}",
+          "refId": "A",
+          "legendFormat": ""
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#F2495C"
+          },
+          "decimals": 1,
+          "mappings": [],
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#F2495C",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 20,
+      "title": "All Models vs Actual RPS \u2014 predictions shifted forward to align with actual",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "legendFormat": "Actual RPS",
+          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "B",
+          "legendFormat": "t3m  (shifted +3m)",
+          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t3m\"} offset -3m"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "C",
+          "legendFormat": "t5m  (shifted +5m)",
+          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t5m\"} offset -5m"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "D",
+          "legendFormat": "t10m (shifted +10m)",
+          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"} offset -10m"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
           },
           "custom": {
-            "axisCenteredZero": false,
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "spanNulls": true
+          },
+          "unit": "reqps"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Actual RPS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#CCCCDC"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "t3m  (shifted +3m)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#FF9830"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "t5m  (shifted +5m)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#5794F2"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "t10m (shifted +10m)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#73BF69"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 21,
+      "title": "All Models Desired Replicas vs Actual \u2014 HPA + t3m + t5m + t10m PPA",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "legendFormat": "Actual Ready",
+          "expr": "kube_deployment_status_replicas_ready{deployment=\"test-app\"}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "B",
+          "legendFormat": "HPA Desired",
+          "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=\"test-app\",namespace=\"default\"}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "C",
+          "legendFormat": "PPA t3m Desired",
+          "expr": "ppa_desired_replicas{cr_name=\"test-app-ppa-t3m\"}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "D",
+          "legendFormat": "PPA t5m Desired",
+          "expr": "ppa_desired_replicas{cr_name=\"test-app-ppa-t5m\"}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "E",
+          "legendFormat": "PPA t10m Desired",
+          "expr": "ppa_desired_replicas{cr_name=\"test-app-ppa-t10m\"}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "spanNulls": true
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Actual Ready"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#CCCCDC"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "HPA Desired"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#F2495C"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "PPA t3m Desired"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#FF9830"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "PPA t5m Desired"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#5794F2"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "PPA t10m Desired"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#73BF69"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "id": 30,
+      "title": "Per-Model Accuracy \u2014 Prediction vs Actual (time-aligned)",
+      "type": "row"
+    },
+    {
+      "type": "timeseries",
+      "id": 31,
+      "title": "t3m  \u2014 predict +3m ahead  |  Prediction (shifted) vs Actual RPS",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 0,
+        "y": 30
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "legendFormat": "Actual RPS",
+          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "B",
+          "legendFormat": "t3m Prediction",
+          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t3m\"} offset -3m"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "spanNulls": true
+          },
+          "unit": "reqps"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Actual RPS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#CCCCDC"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "t3m Prediction"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#FF9830"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 4
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 32,
+      "title": "t5m  \u2014 predict +5m ahead  |  Prediction (shifted) vs Actual RPS",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 8,
+        "y": 30
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "legendFormat": "Actual RPS",
+          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "B",
+          "legendFormat": "t5m Prediction",
+          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t5m\"} offset -5m"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "spanNulls": true
+          },
+          "unit": "reqps"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Actual RPS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#CCCCDC"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "t5m Prediction"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#5794F2"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 4
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 33,
+      "title": "t10m \u2014 predict +10m ahead  |  Prediction (shifted) vs Actual RPS",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 30
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "legendFormat": "Actual RPS",
+          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "B",
+          "legendFormat": "t10m Prediction",
+          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"} offset -10m"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "spanNulls": true
+          },
+          "unit": "reqps"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Actual RPS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#CCCCDC"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "t10m Prediction"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#73BF69"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 4
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 34,
+      "title": "Scaling Gap \u2014 HPA desired \u2212 PPA desired (all models)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 39
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "legendFormat": "Gap vs t3m",
+          "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=\"test-app\",namespace=\"default\"} - ppa_desired_replicas{cr_name=\"test-app-ppa-t3m\"}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "B",
+          "legendFormat": "Gap vs t5m",
+          "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=\"test-app\",namespace=\"default\"} - ppa_desired_replicas{cr_name=\"test-app-ppa-t5m\"}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "C",
+          "legendFormat": "Gap vs t10m",
+          "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=\"test-app\",namespace=\"default\"} - ppa_desired_replicas{cr_name=\"test-app-ppa-t10m\"}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "spanNulls": true
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Gap vs t3m"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#FF9830"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Gap vs t5m"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#5794F2"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Gap vs t10m"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#73BF69"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 46
+      },
+      "id": 70,
+      "title": "Live Model Error Analysis",
+      "type": "row"
+    },
+    {
+      "type": "stat",
+      "id": 71,
+      "title": "t3m MAPE % (threshold: green <10%, orange <20%, red \u226520%)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 47
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "abs(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t3m\"} - sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))) / clamp_min(sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])), 1) * 100",
+          "refId": "A",
+          "legendFormat": "t3m MAPE"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1,
+          "mappings": [],
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#73BF69",
+                "value": null
+              },
+              {
+                "color": "#73BF69",
+                "value": 0
+              },
+              {
+                "color": "#73BF69",
+                "value": 10
+              },
+              {
+                "color": "#FADE2A",
+                "value": 20
+              },
+              {
+                "color": "#F2495C",
+                "value": 30
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 72,
+      "title": "t5m MAPE % (threshold: green <10%, orange <20%, red \u226520%)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 47
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "abs(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t5m\"} - sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))) / clamp_min(sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])), 1) * 100",
+          "refId": "A",
+          "legendFormat": "t5m MAPE"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1,
+          "mappings": [],
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#73BF69",
+                "value": null
+              },
+              {
+                "color": "#73BF69",
+                "value": 0
+              },
+              {
+                "color": "#73BF69",
+                "value": 10
+              },
+              {
+                "color": "#FADE2A",
+                "value": 20
+              },
+              {
+                "color": "#F2495C",
+                "value": 30
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 73,
+      "title": "t10m MAPE % (threshold: green <10%, orange <20%, red \u226520%)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 47
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "abs(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"} - sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))) / clamp_min(sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])), 1) * 100",
+          "refId": "A",
+          "legendFormat": "t10m MAPE"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1,
+          "mappings": [],
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#73BF69",
+                "value": null
+              },
+              {
+                "color": "#73BF69",
+                "value": 0
+              },
+              {
+                "color": "#73BF69",
+                "value": 10
+              },
+              {
+                "color": "#FADE2A",
+                "value": 20
+              },
+              {
+                "color": "#F2495C",
+                "value": 30
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 74,
+      "title": "Provisioning Gap (Positive=Over-provisioned, Negative=Under-provisioned)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 55
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "ppa_desired_replicas{cr_name=\"test-app-ppa-t3m\"} - kube_deployment_status_replicas_ready{deployment=\"test-app\"}",
+          "refId": "A",
+          "legendFormat": "t3m Gap (desired - actual)"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "ppa_desired_replicas{cr_name=\"test-app-ppa-t5m\"} - kube_deployment_status_replicas_ready{deployment=\"test-app\"}",
+          "refId": "B",
+          "legendFormat": "t5m Gap (desired - actual)"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "ppa_desired_replicas{cr_name=\"test-app-ppa-t10m\"} - kube_deployment_status_replicas_ready{deployment=\"test-app\"}",
+          "refId": "C",
+          "legendFormat": "t10m Gap (desired - actual)"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": true,
             "axisColorMode": "text",
-            "axisLabel": "",
+            "axisLabel": "Gap (replicas)",
             "axisPlacement": "auto",
             "barAlignment": 0,
             "drawStyle": "line",
-            "fillOpacity": 0,
+            "fillOpacity": 10,
             "gradientMode": "none",
             "hideFrom": {
-              "legend": false,
               "tooltip": false,
-              "viz": false
+              "viz": false,
+              "legend": false
             },
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 4,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
             "scaleDistribution": {
               "type": "linear"
             },
-            "showPoints": "never",
+            "showPoints": "auto",
             "spanNulls": true,
             "stacking": {
               "group": "A",
@@ -352,6 +1791,255 @@
               }
             ]
           },
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "table",
+      "id": 75,
+      "title": "Model Comparison (Predicted vs Desired vs Actual)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 63
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "ppa_predicted_load_rps",
+          "refId": "A",
+          "legendFormat": "{{cr_name}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "ppa_desired_replicas",
+          "refId": "B",
+          "legendFormat": "{{cr_name}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "kube_deployment_status_replicas_ready{deployment=\"test-app\"}",
+          "refId": "C",
+          "legendFormat": "actual"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "sortBy": []
+      },
+      "pluginVersion": "9.0.0",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1,
+          "mappings": [],
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto",
+            "inspect": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 76,
+      "title": "Model SLA Breach Rate (% of time >15% error)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 71
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum_over_time((abs(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t3m\"} - sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))) / clamp_min(sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])), 1) > 0.15)[5m:30s]) / 10",
+          "refId": "A",
+          "legendFormat": "t3m SLA Breach %"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum_over_time((abs(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t5m\"} - sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))) / clamp_min(sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])), 1) > 0.15)[5m:30s]) / 10",
+          "refId": "B",
+          "legendFormat": "t5m SLA Breach %"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum_over_time((abs(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"} - sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))) / clamp_min(sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])), 1) > 0.15)[5m:30s]) / 10",
+          "refId": "C",
+          "legendFormat": "t10m SLA Breach %"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1,
+          "mappings": [],
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#73BF69",
+                "value": null
+              },
+              {
+                "color": "#73BF69",
+                "value": 0
+              },
+              {
+                "color": "#FADE2A",
+                "value": 5
+              },
+              {
+                "color": "#F2495C",
+                "value": 10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 79
+      },
+      "id": 40,
+      "title": "Traffic, Latency and Errors",
+      "type": "row"
+    },
+    {
+      "type": "timeseries",
+      "id": 41,
+      "title": "Traffic vs Scaling Reaction  \u2014  RPS (left)  /  Replicas (right)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 80
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "legendFormat": "RPS",
+          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "B",
+          "legendFormat": "Ready Replicas",
+          "expr": "kube_deployment_status_replicas_ready{deployment=\"test-app\"}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "C",
+          "legendFormat": "HPA Desired",
+          "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=\"test-app\",namespace=\"default\"}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "spanNulls": true
+          },
           "unit": "reqps"
         },
         "overrides": [
@@ -364,25 +2052,9 @@
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "#5794F2",
-                  "mode": "fixed"
+                  "mode": "fixed",
+                  "fixedColor": "#CCCCDC"
                 }
-              },
-              {
-                "id": "unit",
-                "value": "reqps"
-              },
-              {
-                "id": "custom.axisLabel",
-                "value": "Requests / sec"
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 6
-              },
-              {
-                "id": "custom.lineWidth",
-                "value": 2
               }
             ]
           },
@@ -395,45 +2067,17 @@
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "#73BF69",
-                  "mode": "fixed"
+                  "mode": "fixed",
+                  "fixedColor": "#73BF69"
                 }
-              },
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "custom.axisLabel",
-                "value": "Pod Count"
               },
               {
                 "id": "custom.lineWidth",
                 "value": 2
               },
               {
-                "id": "custom.lineInterpolation",
-                "value": "stepAfter"
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 0
-              },
-              {
-                "id": "unit",
-                "value": "short"
-              },
-              {
-                "id": "decimals",
-                "value": 0
-              },
-              {
-                "id": "min",
-                "value": 0
-              },
-              {
-                "id": "max",
-                "value": 20
+                "id": "custom.axisPlacement",
+                "value": "right"
               }
             ]
           },
@@ -446,8 +2090,8 @@
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "#FADE2A",
-                  "mode": "fixed"
+                  "mode": "fixed",
+                  "fixedColor": "#F2495C"
                 }
               },
               {
@@ -455,151 +2099,78 @@
                 "value": "right"
               },
               {
-                "id": "custom.lineWidth",
-                "value": 1
-              },
-              {
-                "id": "custom.lineInterpolation",
-                "value": "stepAfter"
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 0
-              },
-              {
-                "id": "unit",
-                "value": "short"
-              },
-              {
-                "id": "decimals",
-                "value": 0
-              },
-              {
-                "id": "min",
-                "value": 0
-              },
-              {
-                "id": "max",
-                "value": 20
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
               }
             ]
           }
         ]
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 42,
+      "title": "Request Latency  \u2014  P50 and P95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
       },
       "gridPos": {
-        "h": 10,
-        "w": 24,
+        "h": 8,
+        "w": 12,
         "x": 0,
-        "y": 6
+        "y": 89
       },
-      "id": 7,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max",
-            "last"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "title": "Traffic vs Scaling Reaction  \u2014  RPS (left)  /  Replicas (right)",
-      "type": "timeseries",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))",
-          "legendFormat": "RPS",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "P95 Latency",
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{pod=~\"test-app.*\"}[5m])) by (le)) * 1000"
         },
         {
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "kube_deployment_status_replicas_ready{deployment=\"test-app\"}",
-          "legendFormat": "Ready Replicas",
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=\"test-app\",namespace=\"default\"}",
-          "legendFormat": "HPA Desired",
-          "refId": "C"
+          "refId": "B",
+          "legendFormat": "P50 Latency",
+          "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{pod=~\"test-app.*\"}[5m])) by (le)) * 1000"
         }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min",
+            "max"
+          ]
+        }
       },
-      "description": "",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "fixed",
-            "fixedColor": "#cccccc"
+            "mode": "palette-classic"
           },
           "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "smooth",
             "lineWidth": 2,
-            "pointSize": 4,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "line"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#73BF69",
-                "value": null
-              },
-              {
-                "color": "#FA6400",
-                "value": 200
-              },
-              {
-                "color": "#F2495C",
-                "value": 500
-              }
-            ]
+            "fillOpacity": 10,
+            "spanNulls": true
           },
           "unit": "ms"
         },
@@ -613,8 +2184,8 @@
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "#F2495C",
-                  "mode": "fixed"
+                  "mode": "fixed",
+                  "fixedColor": "#FF780A"
                 }
               },
               {
@@ -632,123 +2203,86 @@
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "#FF9830",
-                  "mode": "fixed"
+                  "mode": "fixed",
+                  "fixedColor": "#FADE2A"
                 }
               },
               {
                 "id": "custom.lineWidth",
-                "value": 1
+                "value": 2
               }
             ]
           }
         ]
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 43,
+      "title": "Error Rate %  \u2014  SLA thresholds at 1% and 3%",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
-        "y": 16
+        "x": 12,
+        "y": 89
       },
-      "id": 8,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max",
-            "last"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "title": "Request Latency  \u2014  P50 and P95",
-      "type": "timeseries",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{pod=~\"test-app.*\"}[5m])) by (le)) * 1000",
-          "legendFormat": "P95 Latency",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "Error Rate %",
+          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\",status=~\"[45].*\"}[1m])) / sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])) * 100"
         },
         {
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{pod=~\"test-app.*\"}[5m])) by (le)) * 1000",
-          "legendFormat": "P50 Latency",
-          "refId": "B"
+          "refId": "B",
+          "legendFormat": "1% SLA",
+          "expr": "1"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "C",
+          "legendFormat": "3% SLA",
+          "expr": "3"
         }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min",
+            "max"
+          ]
+        }
       },
-      "description": "",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "fixed",
-            "fixedColor": "#cccccc"
+            "mode": "palette-classic"
           },
           "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "smooth",
             "lineWidth": 2,
-            "pointSize": 4,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "line"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#73BF69",
-                "value": null
-              },
-              {
-                "color": "#FA6400",
-                "value": 1
-              },
-              {
-                "color": "#F2495C",
-                "value": 3
-              }
-            ]
+            "fillOpacity": 10,
+            "spanNulls": true
           },
           "unit": "percent"
         },
@@ -762,50 +2296,76 @@
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "#F2495C",
-                  "mode": "fixed"
+                  "mode": "fixed",
+                  "fixedColor": "#F2495C"
                 }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "1% SLA"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#FADE2A"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "3% SLA"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#E02F44"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
               }
             ]
           }
         ]
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 16
-      },
-      "id": 9,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max",
-            "last"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "title": "Error Rate %  \u2014  SLA thresholds at 1% and 3%",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\",status=~\"[45].*\"}[1m])) / sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])) * 100",
-          "legendFormat": "Error Rate %",
-          "refId": "A"
-        }
-      ]
+      }
     },
     {
       "collapsed": false,
@@ -813,67 +2373,72 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 24
+        "y": 97
       },
-      "id": 10,
+      "id": 50,
       "title": "Infrastructure Resource Usage",
       "type": "row"
     },
     {
+      "type": "timeseries",
+      "id": 51,
+      "title": "CPU Utilization  \u2014  % of Declared Limit",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 98
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "legendFormat": "CPU Utilization %",
+          "expr": "sum(rate(container_cpu_usage_seconds_total{pod=~\"test-app.*\",namespace=\"default\"}[1m])) / sum(kube_pod_container_resource_limits{resource=\"cpu\",pod=~\"test-app.*\",namespace=\"default\"}) * 100"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "B",
+          "legendFormat": "Limit 100%",
+          "expr": "100"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min",
+            "max"
+          ]
+        }
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "fixed",
-            "fixedColor": "#cccccc"
+            "mode": "palette-classic"
           },
           "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 5,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "smooth",
             "lineWidth": 2,
-            "pointSize": 4,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
+            "fillOpacity": 10,
+            "spanNulls": true
           },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "percent",
-          "min": 0,
-          "max": 110
+          "unit": "percent"
         },
         "overrides": [
           {
@@ -885,152 +2450,108 @@
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "#FF9830",
-                  "mode": "fixed"
+                  "mode": "fixed",
+                  "fixedColor": "#FF9830"
                 }
               },
               {
-                "id": "custom.fillOpacity",
-                "value": 5
+                "id": "custom.lineWidth",
+                "value": 2
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "Limit  100%"
+              "options": "Limit 100%"
             },
             "properties": [
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "#F2495C",
-                  "mode": "fixed"
+                  "mode": "fixed",
+                  "fixedColor": "#E02F44"
                 }
-              },
-              {
-                "id": "custom.lineWidth",
-                "value": 1
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 0
               },
               {
                 "id": "custom.lineStyle",
                 "value": {
+                  "fill": "dash",
                   "dash": [
                     8,
-                    6
-                  ],
-                  "fill": "dash"
+                    4
+                  ]
                 }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
               }
             ]
           }
         ]
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 52,
+      "title": "Memory Utilization  \u2014  % of Declared Limit",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
-        "y": 25
+        "x": 12,
+        "y": 106
       },
-      "id": 11,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max",
-            "last"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "title": "CPU Utilization  \u2014  % of Declared Limit",
-      "type": "timeseries",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(container_cpu_usage_seconds_total{pod=~\"test-app.*\",namespace=\"default\"}[1m])) / sum(kube_pod_container_resource_limits{resource=\"cpu\",pod=~\"test-app.*\",namespace=\"default\"}) * 100",
-          "legendFormat": "CPU Utilization %",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "Memory Utilization %",
+          "expr": "sum(container_memory_working_set_bytes{pod=~\"test-app.*\",namespace=\"default\"}) / sum(kube_pod_container_resource_limits{resource=\"memory\",pod=~\"test-app.*\",namespace=\"default\"}) * 100"
         },
         {
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "100",
-          "legendFormat": "Limit  100%",
-          "refId": "B"
+          "refId": "B",
+          "legendFormat": "Limit 100%",
+          "expr": "100"
         }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min",
+            "max"
+          ]
+        }
       },
-      "description": "",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "fixed",
-            "fixedColor": "#cccccc"
+            "mode": "palette-classic"
           },
           "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 5,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "smooth",
             "lineWidth": 2,
-            "pointSize": 4,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
+            "fillOpacity": 10,
+            "spanNulls": true
           },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "percent",
-          "min": 0,
-          "max": 110
+          "unit": "percent"
         },
         "overrides": [
           {
@@ -1042,96 +2563,47 @@
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "#B877D9",
-                  "mode": "fixed"
+                  "mode": "fixed",
+                  "fixedColor": "#5794F2"
                 }
               },
               {
-                "id": "custom.fillOpacity",
-                "value": 5
+                "id": "custom.lineWidth",
+                "value": 2
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "Limit  100%"
+              "options": "Limit 100%"
             },
             "properties": [
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "#F2495C",
-                  "mode": "fixed"
+                  "mode": "fixed",
+                  "fixedColor": "#E02F44"
                 }
-              },
-              {
-                "id": "custom.lineWidth",
-                "value": 1
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 0
               },
               {
                 "id": "custom.lineStyle",
                 "value": {
+                  "fill": "dash",
                   "dash": [
                     8,
-                    6
-                  ],
-                  "fill": "dash"
+                    4
+                  ]
                 }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
               }
             ]
           }
         ]
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 25
-      },
-      "id": 12,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max",
-            "last"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "title": "Memory Utilization  \u2014  % of Declared Limit",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "sum(container_memory_working_set_bytes{pod=~\"test-app.*\",namespace=\"default\"}) / sum(kube_pod_container_resource_limits{resource=\"memory\",pod=~\"test-app.*\",namespace=\"default\"}) * 100",
-          "legendFormat": "Memory Utilization %",
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "100",
-          "legendFormat": "Limit  100%",
-          "refId": "B"
-        }
-      ]
+      }
     },
     {
       "collapsed": false,
@@ -1139,66 +2611,81 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 33
+        "y": 106
       },
-      "id": 13,
-      "title": "Autoscaler and HPA Behavior",
+      "id": 60,
+      "title": "Autoscaler Behavior and PPA Internals",
       "type": "row"
     },
     {
+      "type": "timeseries",
+      "id": 61,
+      "title": "HPA Scaling Behavior  \u2014  Desired vs Ready  (gap = cold-start lag PPA eliminates)",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "When PPA is working correctly, the gap between Desired (yellow) and Ready (green) approaches zero because pods are pre-scaled before demand arrives.",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 107
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "legendFormat": "HPA Desired",
+          "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=\"test-app\",namespace=\"default\"}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "B",
+          "legendFormat": "Ready Replicas",
+          "expr": "kube_deployment_status_replicas_ready{deployment=\"test-app\"}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "C",
+          "legendFormat": "Min Replicas",
+          "expr": "kube_horizontalpodautoscaler_spec_min_replicas{horizontalpodautoscaler=\"test-app\",namespace=\"default\"}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min",
+            "max"
+          ]
+        }
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "fixed",
-            "fixedColor": "#cccccc"
+            "mode": "palette-classic"
           },
           "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "stepAfter",
             "lineWidth": 2,
-            "pointSize": 4,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
+            "fillOpacity": 10,
+            "spanNulls": true
           },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short",
-          "min": 0
+          "unit": "short"
         },
         "overrides": [
           {
@@ -1210,21 +2697,23 @@
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "#FADE2A",
-                  "mode": "fixed"
+                  "mode": "fixed",
+                  "fixedColor": "#F2495C"
                 }
               },
               {
                 "id": "custom.lineWidth",
-                "value": 1
+                "value": 2
               },
               {
-                "id": "custom.fillOpacity",
-                "value": 0
-              },
-              {
-                "id": "decimals",
-                "value": 0
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
               }
             ]
           },
@@ -1237,21 +2726,13 @@
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "#73BF69",
-                  "mode": "fixed"
+                  "mode": "fixed",
+                  "fixedColor": "#CCCCDC"
                 }
               },
               {
                 "id": "custom.lineWidth",
                 "value": 2
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 6
-              },
-              {
-                "id": "decimals",
-                "value": 0
               }
             ]
           },
@@ -1264,1168 +2745,98 @@
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "#5794F2",
-                  "mode": "fixed"
+                  "mode": "fixed",
+                  "fixedColor": "#6E9F18"
                 }
-              },
-              {
-                "id": "custom.lineWidth",
-                "value": 1
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 0
               },
               {
                 "id": "custom.lineStyle",
                 "value": {
+                  "fill": "dash",
                   "dash": [
-                    4,
-                    6
-                  ],
-                  "fill": "dash"
+                    8,
+                    4
+                  ]
                 }
               },
               {
-                "id": "decimals",
+                "id": "custom.fillOpacity",
                 "value": 0
               }
             ]
           }
         ]
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 62,
+      "title": "PPA Internals \u2014 Safety Factor, Rate Limiting, Clamping  (t10m active)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 9,
-        "w": 24,
-        "x": 0,
-        "y": 34
-      },
-      "id": 14,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max",
-            "last"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "title": "HPA Scaling Behavior  \u2014  Desired vs Ready  (gap = cold-start lag PPA eliminates)",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=\"test-app\",namespace=\"default\"}",
-          "legendFormat": "HPA Desired",
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "kube_deployment_status_replicas_ready{deployment=\"test-app\"}",
-          "legendFormat": "Ready Replicas",
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "kube_horizontalpodautoscaler_spec_min_replicas{horizontalpodautoscaler=\"test-app\",namespace=\"default\"}",
-          "legendFormat": "Min Replicas",
-          "refId": "C"
-        }
-      ]
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 43
-      },
-      "id": 15,
-      "title": "PPA vs HPA \u2014 Live Comparison",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 1,
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#FF9830",
-                "value": null
-              }
-            ]
-          },
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 0,
-        "y": 44
-      },
-      "id": 16,
-      "options": {
-        "colorMode": "none",
-        "graphMode": "area",
-        "justifyMode": "center",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "title": "PPA Predicted Load (active t10m)",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"}",
-          "legendFormat": "",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 0,
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#1F60C4",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 6,
-        "y": 44
-      },
-      "id": 17,
-      "options": {
-        "colorMode": "none",
-        "graphMode": "area",
-        "justifyMode": "center",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "title": "PPA Desired Replicas (t10m active)",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "ppa_desired_replicas{cr_name=\"test-app-ppa-t10m\"}",
-          "legendFormat": "",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 0,
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#FADE2A",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 12,
-        "y": 44
-      },
-      "id": 18,
-      "options": {
-        "colorMode": "none",
-        "graphMode": "area",
-        "justifyMode": "center",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "title": "HPA Desired Replicas",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=\"test-app\",namespace=\"default\"}",
-          "legendFormat": "",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 0,
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#73BF69",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 44
-      },
-      "id": 19,
-      "options": {
-        "colorMode": "none",
-        "graphMode": "area",
-        "justifyMode": "center",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "title": "PPA Scale Events (total)",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "ppa_scale_events_total{cr_name=\"test-app-ppa-t10m\"}",
-          "legendFormat": "",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "description": "HPA (yellow) reacts to current CPU. PPA t10m (blue) reacts to predicted RPS. Actual (green) shows who is winning.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#cccccc"
-          },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "stepAfter",
-            "lineWidth": 2,
-            "pointSize": 4,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short",
-          "min": 0,
-          "max": 22,
-          "decimals": 0
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "HPA Desired"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#FADE2A",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.lineWidth",
-                "value": 2
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "PPA t10m Desired"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#1F60C4",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.lineWidth",
-                "value": 2
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Actual Ready"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#73BF69",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.lineWidth",
-                "value": 3
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 8
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 10,
-        "w": 24,
-        "x": 0,
-        "y": 48
-      },
-      "id": 20,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max",
-            "last"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "title": "HPA vs PPA (t10m) vs Actual Replicas",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=\"test-app\",namespace=\"default\"}",
-          "legendFormat": "HPA Desired",
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "ppa_desired_replicas{cr_name=\"test-app-ppa-t10m\"}",
-          "legendFormat": "PPA t10m Desired",
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "kube_deployment_status_replicas_ready{deployment=\"test-app\"}",
-          "legendFormat": "Actual Ready",
-          "refId": "C"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "description": "Each prediction is shifted forward by its horizon using offset -10m so it aligns with the actual RPS at the time it was targeting. Tight overlap = accurate model. Orange dashed = what the model said 10m ago would happen now.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#cccccc"
-          },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "req/s",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 4,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "reqps"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Actual RPS"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#5794F2",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.lineWidth",
-                "value": 2
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 6
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "PPA t10m Predicted"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#FF9830",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.lineStyle",
-                "value": {
-                  "dash": [
-                    8,
-                    4
-                  ],
-                  "fill": "dash"
-                }
-              },
-              {
-                "id": "custom.lineWidth",
-                "value": 2
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 0,
-        "y": 58
-      },
-      "id": 21,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max",
-            "last"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "title": "t10m Prediction vs What Actually Happened (time-aligned)",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))",
-          "legendFormat": "Actual RPS (now)",
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"} offset -10m",
-          "legendFormat": "t10m Prediction (made 10m ago, shifted forward to align)",
-          "refId": "B"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "description": "Positive = HPA wants more pods than PPA. Negative = PPA wants more. Zero = agreement.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#FADE2A"
-          },
-          "custom": {
-            "axisCenteredZero": true,
-            "axisColorMode": "text",
-            "axisLabel": "pods",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 20,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "stepAfter",
-            "lineWidth": 2,
-            "pointSize": 4,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "line"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 3
-              },
-              {
-                "color": "red",
-                "value": 6
-              }
-            ]
-          },
-          "unit": "short",
-          "decimals": 0
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 12,
-        "y": 58
-      },
-      "id": 22,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "min",
-            "max",
-            "last"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "title": "Scaling Gap \u2014 HPA desired \u2212 PPA desired",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=\"test-app\",namespace=\"default\"} - ppa_desired_replicas{cr_name=\"test-app-ppa-t10m\"}",
-          "legendFormat": "Gap (HPA \u2212 PPA)",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 67
-      },
-      "id": 23,
-      "title": "Prediction Accuracy \u2014 t+10 Validation",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "description": "Orange dashed = what PPA predicted 10 minutes ago (offset 10m). Blue = what actually happened. Tight overlap = good LSTM.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#cccccc"
-          },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "req/s",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 4,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "reqps"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Actual RPS (now)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#5794F2",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.lineWidth",
-                "value": 2
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 6
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "PPA t10m (from 10m ago)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#FF9830",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.lineStyle",
-                "value": {
-                  "dash": [
-                    8,
-                    4
-                  ],
-                  "fill": "dash"
-                }
-              },
-              {
-                "id": "custom.lineWidth",
-                "value": 2
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 10,
         "w": 16,
         "x": 0,
-        "y": 68
+        "y": 116
       },
-      "id": 24,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "last"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "legendFormat": "Raw Desired (unclamped)",
+          "expr": "ppa_raw_desired_replicas{cr_name=\"test-app-ppa-t10m\"}"
         },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "B",
+          "legendFormat": "Inflated Load / capacity",
+          "expr": "ppa_inflated_load_rps{cr_name=\"test-app-ppa-t10m\"} / 80"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "C",
+          "legendFormat": "PPA Final Desired",
+          "expr": "ppa_desired_replicas{cr_name=\"test-app-ppa-t10m\"}"
+        }
+      ],
+      "options": {
         "tooltip": {
           "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "title": "t+10 Accuracy \u2014 Prediction from 10 minutes ago vs Actual RPS now",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))",
-          "legendFormat": "Actual RPS (now)",
-          "refId": "A"
+          "sort": "none"
         },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"} offset 10m",
-          "legendFormat": "PPA t10m (from 10m ago)",
-          "refId": "B"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "green",
-                  "index": 0,
-                  "text": "OK"
-                },
-                "1": {
-                  "color": "red",
-                  "index": 1,
-                  "text": "FAILED"
-                }
-              },
-              "type": "value"
-            }
-          ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Warmup Progress"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "percentunit"
-              },
-              {
-                "id": "mappings",
-                "value": []
-              },
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "red",
-                      "value": null
-                    },
-                    {
-                      "color": "orange",
-                      "value": 0.5
-                    },
-                    {
-                      "color": "green",
-                      "value": 1
-                    }
-                  ]
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Consecutive Skips"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "short"
-              },
-              {
-                "id": "mappings",
-                "value": []
-              },
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": null
-                    },
-                    {
-                      "color": "orange",
-                      "value": 3
-                    },
-                    {
-                      "color": "red",
-                      "value": 8
-                    }
-                  ]
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 10,
-        "w": 8,
-        "x": 16,
-        "y": 68
-      },
-      "id": 25,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "vertical",
-        "reduceOptions": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
           "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "title": "PPA Health (t10m)",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "ppa_warmup_progress{cr_name=\"test-app-ppa-t10m\"}",
-          "legendFormat": "Warmup Progress",
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "ppa_consecutive_skips{cr_name=\"test-app-ppa-t10m\"}",
-          "legendFormat": "Consecutive Skips",
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "ppa_model_load_failed{cr_name=\"test-app-ppa-t10m\"}",
-          "legendFormat": "Model Load Failed",
-          "refId": "C"
+            "last",
+            "min",
+            "max"
+          ]
         }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
       },
-      "description": "Raw desired (grey dashed) = ceil(predicted * safety / capacity). Inflated (orange dashed) = predicted * safety. Final (blue) = after rate-limiting and min/max clamping.",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "fixed",
-            "fixedColor": "#cccccc"
+            "mode": "palette-classic"
           },
           "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "stepAfter",
             "lineWidth": 2,
-            "pointSize": 4,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
+            "fillOpacity": 10,
+            "spanNulls": true
           },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short",
-          "min": 0,
-          "decimals": 0
+          "unit": "short"
         },
         "overrides": [
           {
@@ -2437,18 +2848,8 @@
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "#888888",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.lineStyle",
-                "value": {
-                  "dash": [
-                    4,
-                    6
-                  ],
-                  "fill": "dash"
+                  "mode": "fixed",
+                  "fixedColor": "#FF780A"
                 }
               }
             ]
@@ -2462,18 +2863,8 @@
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "#FF9830",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.lineStyle",
-                "value": {
-                  "dash": [
-                    8,
-                    4
-                  ],
-                  "fill": "dash"
+                  "mode": "fixed",
+                  "fixedColor": "#FADE2A"
                 }
               }
             ]
@@ -2487,8 +2878,8 @@
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "#1F60C4",
-                  "mode": "fixed"
+                  "mode": "fixed",
+                  "fixedColor": "#73BF69"
                 }
               },
               {
@@ -2498,86 +2889,74 @@
             ]
           }
         ]
+      }
+    },
+    {
+      "type": "stat",
+      "id": 63,
+      "title": "PPA Health (t10m)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 9,
-        "w": 24,
-        "x": 0,
-        "y": 78
+        "w": 8,
+        "x": 16,
+        "y": 116
       },
-      "id": 26,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max",
-            "last"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "title": "PPA Internals \u2014 Safety Factor, Rate Limiting, Clamping",
-      "type": "timeseries",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "ppa_raw_desired_replicas{cr_name=\"test-app-ppa-t10m\"}",
-          "legendFormat": "Raw Desired (unclamped)",
-          "refId": "A"
+          "expr": "ppa_warmup_progress{cr_name=\"test-app-ppa-t10m\"}",
+          "refId": "A",
+          "legendFormat": "Warmup Progress"
         },
         {
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "ppa_inflated_load_rps{cr_name=\"test-app-ppa-t10m\"} / 80",
-          "legendFormat": "Inflated Load / capacity",
-          "refId": "B"
+          "expr": "ppa_consecutive_skips{cr_name=\"test-app-ppa-t10m\"}",
+          "refId": "B",
+          "legendFormat": "Consecutive Skips"
         },
         {
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "ppa_desired_replicas{cr_name=\"test-app-ppa-t10m\"}",
-          "legendFormat": "PPA Final Desired",
-          "refId": "C"
+          "expr": "ppa_model_load_failed{cr_name=\"test-app-ppa-t10m\"}",
+          "refId": "C",
+          "legendFormat": "Model Load Failed"
         }
-      ]
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 87
-      },
-      "id": 27,
-      "title": "All-Model Prediction Comparison \u2014 t3m vs t5m vs t10m (shadow)",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
       },
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
           },
-          "decimals": 1,
+          "decimals": 2,
           "mappings": [],
+          "unit": "short",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -2586,421 +2965,24 @@
                 "value": null
               }
             ]
-          },
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 0,
-        "y": 88
-      },
-      "id": 28,
-      "options": {
-        "colorMode": "none",
-        "graphMode": "area",
-        "justifyMode": "center",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "title": "t3m Predicted Load (observer \u2014 sMAPE 10.47)",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t3m\"}",
-          "legendFormat": "",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 1,
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#FADE2A",
-                "value": null
-              }
-            ]
-          },
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 8,
-        "y": 88
-      },
-      "id": 29,
-      "options": {
-        "colorMode": "none",
-        "graphMode": "area",
-        "justifyMode": "center",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "title": "t5m Predicted Load (observer \u2014 sMAPE 7.33)",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t5m\"}",
-          "legendFormat": "",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 1,
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#FF9830",
-                "value": null
-              }
-            ]
-          },
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 16,
-        "y": 88
-      },
-      "id": 30,
-      "options": {
-        "colorMode": "none",
-        "graphMode": "area",
-        "justifyMode": "center",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "title": "t10m Predicted Load (ACTIVE \u2014 sMAPE 6.72)",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"}",
-          "legendFormat": "",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "description": "All 3 predictions are shifted forward to the time they were targeting (offset -3m, -5m, -10m) so they land on the actual RPS they were trying to predict. Tight overlap with the blue line = good model. Use this to compare which horizon tracks reality best.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#cccccc"
-          },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "req/s",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 4,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "reqps"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Actual RPS"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#5794F2",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.lineWidth",
-                "value": 3
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 6
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "t3m Predicted"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#73BF69",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.lineStyle",
-                "value": {
-                  "dash": [
-                    4,
-                    4
-                  ],
-                  "fill": "dash"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "t5m Predicted"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#FADE2A",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.lineStyle",
-                "value": {
-                  "dash": [
-                    6,
-                    4
-                  ],
-                  "fill": "dash"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "t10m Predicted (active)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#FF9830",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.lineStyle",
-                "value": {
-                  "dash": [
-                    8,
-                    4
-                  ],
-                  "fill": "dash"
-                }
-              },
-              {
-                "id": "custom.lineWidth",
-                "value": 2
-              }
-            ]
           }
-        ]
-      },
-      "gridPos": {
-        "h": 10,
-        "w": 24,
-        "x": 0,
-        "y": 92
-      },
-      "id": 31,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "last"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
         },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "title": "All Models vs Actual RPS \u2014 predictions shifted forward to align with actual",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))",
-          "legendFormat": "Actual RPS (now)",
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t3m\"} offset -3m",
-          "legendFormat": "t3m Prediction (shifted +3m forward)",
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t5m\"} offset -5m",
-          "legendFormat": "t5m Prediction (shifted +5m forward)",
-          "refId": "C"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"} offset -10m",
-          "legendFormat": "t10m Prediction (shifted +10m forward)",
-          "refId": "D"
-        }
-      ]
-    },
-    {
-      "gridPos": {
-        "h": 6,
-        "w": 24,
-        "x": 0,
-        "y": 102
-      },
-      "id": 32,
-      "options": {
-        "content": "## Champion Model Quality Summary (eval on held-out test set)\n\n| Horizon | sMAPE | MAPE | MAE (req/s) | RMSE (req/s) | PPA Under-prov% | Replica Savings% |\n|---------|-------|------|-------------|--------------|-----------------|------------------|\n| **rps_t3m** (observer) | 10.47 | 12.94 | 21.18 | 36.80 | 15.79% | \u22120.86% |\n| **rps_t5m** (observer) | 7.33 | 8.00 | 14.49 | 22.29 | 15.42% | +0.81% |\n| **rps_t10m** \u2605 active | **6.72** | **6.84** | **12.29** | **18.97** | **10.30%** | **+0.44%** |\n\n> \u2605 t10m is the active scaler. t3m and t5m run in observer mode (predict only, do not scale).",
-        "mode": "markdown"
-      },
-      "title": "Champion Model Eval Summary (offline test set)",
-      "type": "text"
+        "overrides": []
+      }
     }
   ],
-  "refresh": "10s",
+  "refresh": "30s",
   "schemaVersion": 36,
   "style": "dark",
   "tags": [
     "ppa",
-    "k8s",
-    "autoscaling",
-    "sre"
+    "autoscaler",
+    "ml"
   ],
   "templating": {
     "list": [
       {
         "current": {},
-        "datasource": {
-          "type": "prometheus",
-          "uid": "P1805D491E3002AE7"
-        },
         "hide": 0,
         "includeAll": false,
         "label": "Datasource",
@@ -3009,8 +2991,6 @@
         "options": [],
         "query": "prometheus",
         "refresh": 1,
-        "regex": "",
-        "skipUrlSync": false,
         "type": "datasource"
       }
     ]
@@ -3020,9 +3000,8 @@
     "to": "now"
   },
   "timepicker": {},
-  "timezone": "",
-  "title": "PPA \u2014 Predictive Pod Autoscaler Monitor",
-  "uid": "ppa-monitor-v3",
-  "version": 3,
-  "weekStart": ""
+  "timezone": "browser",
+  "title": "Predictive Pod Autoscaler",
+  "uid": "ppa-v3",
+  "version": 3
 }

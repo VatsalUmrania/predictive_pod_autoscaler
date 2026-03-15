@@ -41,7 +41,7 @@ from config import (
     DEFAULT_MODEL_DIR,
     NAMESPACE,
 )
-from features import build_feature_vector
+from features import build_feature_vector, build_historical_features
 from predictor import Predictor
 from scaler import calculate_replicas, scale_deployment
 
@@ -94,20 +94,20 @@ class CRState:
 _cr_state: dict[tuple[str, str], CRState] = {}
 
 
-def _resolve_paths(spec: dict, target: str) -> tuple[str, str, str | None]:
+def _resolve_paths(spec: dict, target_app: str, target_horizon: str) -> tuple[str, str, str | None]:
     """Compute model + scaler + target_scaler paths from CRD spec, falling back to convention."""
     model_dir = DEFAULT_MODEL_DIR
-    model_path = spec.get("modelPath") or os.path.join(model_dir, target, "ppa_model.tflite")
-    scaler_path = spec.get("scalerPath") or os.path.join(model_dir, target, "scaler.pkl")
+    model_path = spec.get("modelPath") or os.path.join(model_dir, target_app, target_horizon, "ppa_model.tflite")
+    scaler_path = spec.get("scalerPath") or os.path.join(model_dir, target_app, target_horizon, "scaler.pkl")
     # Target scaler is optional (backward compat with models trained without it)
-    target_scaler_path = spec.get("targetScalerPath") or os.path.join(model_dir, target, "target_scaler.pkl")
+    target_scaler_path = spec.get("targetScalerPath") or os.path.join(model_dir, target_app, target_horizon, "target_scaler.pkl")
     if not os.path.exists(target_scaler_path):
         target_scaler_path = None
     return model_path, scaler_path, target_scaler_path
 
 
-def _get_or_create_state(key: tuple[str, str], model_path: str, scaler_path: str, target_scaler_path: str | None = None) -> CRState:
-    """Lazy-init or reload CRState if model paths changed."""
+def _get_or_create_state(key: tuple[str, str], model_path: str, scaler_path: str, target_scaler_path: str | None = None, target_app: str = "", target_ns: str = "", max_r: int = 1, container_name: str | None = None) -> CRState:
+    """Lazy-init or reload CRState if model paths changed. Prefills history on initial creation."""
     existing = _cr_state.get(key)
     if existing and existing.predictor.paths_match(model_path, scaler_path, target_scaler_path):
         return existing
@@ -116,6 +116,16 @@ def _get_or_create_state(key: tuple[str, str], model_path: str, scaler_path: str
         logger.info(f"Model paths changed for {key}, reloading predictor...")
 
     state = CRState(predictor=Predictor(model_path, scaler_path, target_scaler_path))
+    
+    # Prefill history from Prometheus startup data to eliminate cold-start
+    if target_app and target_ns:
+        try:
+            historical_rows = build_historical_features(target_app, target_ns, max_r, container_name)
+            if historical_rows:
+                state.predictor.prefill_from_history(historical_rows)
+        except Exception as exc:
+            logger.warning(f"Failed to prefill history from Prometheus: {exc}")
+    
     _cr_state[key] = state
     return state
 
@@ -134,6 +144,11 @@ def reconcile(spec, status, meta, patch, **kwargs):
     # Read CR spec with defaults
     target = spec["targetDeployment"]
     target_ns = spec.get("namespace", cr_ns)
+    
+    # CR Template will expose appName and horizon directly. If missing, try fallback logic.
+    target_app = spec.get("appName", target)
+    target_horizon = spec.get("horizon", "rps_t3m")  # Assume standard fallback for horizon
+    
     min_r = spec.get("minReplicas", DEFAULT_MIN_REPLICAS)
     max_r = spec.get("maxReplicas")
     if max_r is None:
@@ -145,8 +160,8 @@ def reconcile(spec, status, meta, patch, **kwargs):
     observer_mode = bool(spec.get("observerMode", False))
     container_name = spec.get("containerName") or None
 
-    model_path, scaler_path, target_scaler_path = _resolve_paths(spec, target)
-    state = _get_or_create_state(key, model_path, scaler_path, target_scaler_path)
+    model_path, scaler_path, target_scaler_path = _resolve_paths(spec, target_app, target_horizon)
+    state = _get_or_create_state(key, model_path, scaler_path, target_scaler_path, target, target_ns, max_r, container_name)
 
     # 1. Fetch features from Prometheus (namespace-scoped)
     features, current_replicas = build_feature_vector(target, target_ns, max_r, container_name)

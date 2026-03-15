@@ -14,7 +14,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from common.feature_spec import FEATURE_COLUMNS, NUM_FEATURES
-from config import LOOKBACK_STEPS
+from config import LOOKBACK_STEPS, TIMER_INTERVAL
 
 logger = logging.getLogger("ppa.predictor")
 
@@ -64,6 +64,15 @@ class Predictor:
 
             self.input_details = self.interpreter.get_input_details()
             self.output_details = self.interpreter.get_output_details()
+            
+            # Detect lookback from input tensor shape: (batch, lookback, features)
+            input_shape = self.input_details[0]["shape"]
+            self.lookback = input_shape[1]
+            logger.info(f"Detected model lookback: {self.lookback}")
+            
+            # Re-initialize history with the detected lookback
+            self.history = deque(maxlen=self.lookback)
+
             self.scaler = joblib.load(self.scaler_path)
 
             # Target scaler: inverse-transforms model output [0,1] → raw RPS
@@ -97,7 +106,7 @@ class Predictor:
         if self._load_failed:
             self._try_load()
         return (
-            len(self.history) >= LOOKBACK_STEPS
+            len(self.history) >= self.lookback
             and self.interpreter is not None
             and self.scaler is not None
         )
@@ -106,9 +115,9 @@ class Predictor:
         if not self.ready():
             return 0.0
 
-        window = np.array(self.history, dtype=np.float32)[-LOOKBACK_STEPS:]
+        window = np.array(self.history, dtype=np.float32)[-self.lookback:]
         scaled = self.scaler.transform(window)
-        input_data = scaled.reshape(1, LOOKBACK_STEPS, NUM_FEATURES).astype(np.float32)
+        input_data = scaled.reshape(1, self.lookback, NUM_FEATURES).astype(np.float32)
 
         self.interpreter.set_tensor(self.input_details[0]["index"], input_data)
         self.interpreter.invoke()
@@ -126,3 +135,12 @@ class Predictor:
             predicted_rps = predicted_scaled
 
         return max(0.0, float(predicted_rps))
+
+    def prefill_from_history(self, feature_rows: list[dict]):
+        """Populate history deque from a list of feature dictionaries (e.g. from Prometheus range query)."""
+        for features in feature_rows:
+            row = np.array([features.get(name, 0.0) for name in FEATURE_COLUMNS], dtype=np.float32)
+            self.history.append(row)
+        filled = len(self.history)
+        logger.info(f"Prefilled history: {filled}/{self.history.maxlen} steps loaded from startup fetch")
+

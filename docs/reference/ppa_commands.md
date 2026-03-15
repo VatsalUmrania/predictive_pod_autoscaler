@@ -8,20 +8,21 @@
 
 ### 🚀 Get Started Quickly
 
-| Task | Command | Reference |
-|------|---------|-----------|
-| **Deploy operator to Minikube** | `./scripts/ppa_redeploy.sh --retrain --epochs 100` | [Deployment Guide](../operator/deployment.md) |
-| **Train ML models** | `python model/pipeline.py --csv data-collection/training-data/training_data_v2.csv --epochs 50` | [ML Commands](./ml_commands.md) |
-| **Check operator health** | `kubectl get ppa` | [Operator Commands](./operator_commands.md) |
-| **Watch operator scaling** | `kubectl logs -l app=ppa-operator -f` | [Operator Commands](./operator_commands.md) |
-| **See detailed ML guide** | Read [ML Commands](./ml_commands.md) | In-depth training & evaluation |
-| **See detailed operator guide** | Read [Operator Commands](./operator_commands.md) | In-depth deployment & debugging |
+| Task                            | Command                                                                                         | Reference                                     |
+| ------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| **Deploy operator to Minikube** | `./scripts/ppa_redeploy.sh --retrain --epochs 100`                                              | [Deployment Guide](../operator/deployment.md) |
+| **Train ML models**             | `python model/pipeline.py --csv data-collection/training-data/training_data_v2.csv --epochs 50` | [ML Commands](./ml_commands.md)               |
+| **Check operator health**       | `kubectl get ppa`                                                                               | [Operator Commands](./operator_commands.md)   |
+| **Watch operator scaling**      | `kubectl logs -l app=ppa-operator -f`                                                           | [Operator Commands](./operator_commands.md)   |
+| **See detailed ML guide**       | Read [ML Commands](./ml_commands.md)                                                            | In-depth training & evaluation                |
+| **See detailed operator guide** | Read [Operator Commands](./operator_commands.md)                                                | In-depth deployment & debugging               |
 
 ---
 
 ## Detailed Command References
 
 👉 **[ML Pipeline Commands](./ml_commands.md)**
+
 - Training with `model/train.py`
 - Evaluation with `model/evaluate.py`
 - Conversion to TFLite with `model/convert.py`
@@ -30,6 +31,7 @@
 - Data validation
 
 👉 **[Operator Commands](./operator_commands.md)**
+
 - One-command deployment: `./scripts/ppa_redeploy.sh` (retrain + convert + deploy)
 - Configuration via environment variables
 - Monitoring & status checks
@@ -63,6 +65,7 @@
 ## Individual Commands by Step
 
 ### Step 1 — Check Prerequisites
+
 ```bash
 docker --version
 kubectl version --client
@@ -75,6 +78,7 @@ pip install locust pandas requests
 ---
 
 ### Step 2 — Start Minikube
+
 ```bash
 # Start (KVM2 — required for this project)
 minikube start --driver=kvm2 --cpus=4 --memory=8192
@@ -92,6 +96,7 @@ minikube stop
 ---
 
 ### Step 3 — Minikube Addons
+
 ```bash
 # Enable addons
 minikube addons enable metrics-server
@@ -110,6 +115,7 @@ kubectl top pods --all-namespaces
 ---
 
 ### Step 4 — Prometheus Stack
+
 ```bash
 # Add helm repo
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
@@ -141,6 +147,7 @@ helm uninstall prometheus -n monitoring
 ---
 
 ### Step 5 — Build & Deploy Instrumented Test App
+
 ```bash
 # Build image inside minikube's Docker daemon
 eval $(minikube docker-env)
@@ -166,6 +173,7 @@ kubectl apply -f data-collection/test-app-deployment.yaml
 ---
 
 ### Step 6 — In-Cluster Variable Traffic Generator (Locust)
+
 The Locust traffic generator runs **inside the cluster** to constantly generate phased load for the HorizontalPodAutoscaler.
 
 ```bash
@@ -183,6 +191,7 @@ kubectl delete deployment traffic-gen
 ---
 
 ### Step 6.5 — Fixed Replica Scale Profiling (Chaos Testing)
+
 For generating boundary scaling data, you can temporarily disable the HPA and run the headless Locust tester with the `ChaoticLoadShape`.
 
 ```bash
@@ -194,7 +203,9 @@ source venv/bin/activate
 ---
 
 ### Step 8, 9, 10 — Automated by Script
+
 The `ppa_startup.sh` script handles:
+
 - **Step 8**: Port Forward Watchdog (auto-restarts dead port-forwards)
 - **Step 9**: Feature Verification (waits for metrics to populate)
 - **Step 10**: CronJob Deployment (hourly data collection)
@@ -202,7 +213,9 @@ The `ppa_startup.sh` script handles:
 ---
 
 ### Manual Validation
+
 After extracting the CSV from Prometheus, pass it through the ML quality gates to ensure model readiness:
+
 ```bash
 venv/bin/python data-collection/validate_training_data.py data-collection/training-data/training_data_v2.csv
 ```
@@ -210,6 +223,7 @@ venv/bin/python data-collection/validate_training_data.py data-collection/traini
 ---
 
 ### Step 7 — Port Forwards
+
 ```bash
 # Start all port-forwards
 kubectl port-forward svc/prometheus-kube-prometheus-prometheus 9090:9090 -n monitoring &
@@ -238,12 +252,14 @@ tail -f /tmp/ppa_watchdog.log
 ## Daily Operations
 
 ### Verify All 14 Features
+
 ```bash
-cd /run/media/vatsal/Drive/Projects/predictive_pod_autoscaler
+cd predictive_pod_autoscaler
 python3 data-collection/verify_features.py
 ```
 
 ### Export Training Data CSV
+
 The data collection python script pulls natively from Prometheus. We use the virtual environment to execute it.
 
 ```bash
@@ -270,6 +286,7 @@ python data-collection/export_training_data.py --hours 24 --step 15s
 ```
 
 ### Check Data Volume in Prometheus
+
 ```bash
 kubectl exec -n monitoring \
   prometheus-prometheus-kube-prometheus-prometheus-0 \
@@ -277,6 +294,7 @@ kubectl exec -n monitoring \
 ```
 
 ### Check All Pods Healthy
+
 ```bash
 kubectl get pods --all-namespaces
 kubectl get pods -n default        # test-app (1/1), traffic-gen (1/1)
@@ -289,25 +307,25 @@ kubectl get pods -n monitoring     # prometheus, grafana, alertmanager
 
 ## Prometheus Queries — 14 Input Features + Targets
 
-| Feature | Source / Details |
-|---|---|
-| rps_per_replica | App RPM per replica |
-| cpu_utilization_pct | cAdvisor CPU relative to limits |
-| memory_utilization_pct | cAdvisor memory set relative to limits |
-| latency_p95_ms | App P95 latency |
-| replicas_normalized | Replicas relative to maxCapacity |
-| active_connections | Istio / App Connections |
-| error_rate | HTTP 4xx/5xx total errors |
-| cpu_acceleration | Rate of change over 5m |
-| rps_acceleration | Request rate change over 5m |
-| hour_sin | Generated cyclical time |
-| hour_cos | Generated cyclical time |
-| dow_sin | Generated cyclical time |
-| dow_cos | Generated cyclical time |
-| is_weekend | Generated binary feature |
-| **Targets (y)** | |
-| rps_t3m / t5m / t10m | App feature shifted by minutes |
-| replicas_t3m / t5m / t10m | Target load capacity ceiling |
+| Feature                   | Source / Details                       |
+| ------------------------- | -------------------------------------- |
+| rps_per_replica           | App RPM per replica                    |
+| cpu_utilization_pct       | cAdvisor CPU relative to limits        |
+| memory_utilization_pct    | cAdvisor memory set relative to limits |
+| latency_p95_ms            | App P95 latency                        |
+| replicas_normalized       | Replicas relative to maxCapacity       |
+| active_connections        | Istio / App Connections                |
+| error_rate                | HTTP 4xx/5xx total errors              |
+| cpu_acceleration          | Rate of change over 5m                 |
+| rps_acceleration          | Request rate change over 5m            |
+| hour_sin                  | Generated cyclical time                |
+| hour_cos                  | Generated cyclical time                |
+| dow_sin                   | Generated cyclical time                |
+| dow_cos                   | Generated cyclical time                |
+| is_weekend                | Generated binary feature               |
+| **Targets (y)**           |                                        |
+| rps_t3m / t5m / t10m      | App feature shifted by minutes         |
+| replicas_t3m / t5m / t10m | Target load capacity ceiling           |
 
 ---
 
@@ -350,11 +368,11 @@ tail -f /tmp/ppa_watchdog.log
 
 ## Access URLs
 
-| Service | URL | Credentials |
-|---|---|---|
-| Prometheus | http://localhost:9090 | none |
-| Grafana | http://localhost:3000 | admin / admin123 |
-| Test App | http://localhost:8080 | none |
+| Service    | URL                   | Credentials      |
+| ---------- | --------------------- | ---------------- |
+| Prometheus | http://localhost:9090 | none             |
+| Grafana    | http://localhost:3000 | admin / admin123 |
+| Test App   | http://localhost:8080 | none             |
 
 ---
 

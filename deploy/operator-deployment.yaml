@@ -59,11 +59,11 @@ spec:
         - name: PPA_PROM_FAILURE_THRESHOLD
           value: "10"
         volumeMounts:
-        - name: model-storage
+        - name: models
           mountPath: /models
           readOnly: true
       volumes:
-      - name: model-storage
+      - name: models
         persistentVolumeClaim:
           claimName: ppa-models
 ---
