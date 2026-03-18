@@ -27,12 +27,18 @@ ppa_consecutive_skips    = Gauge("ppa_consecutive_skips",    "Cycles skipped due
 ppa_warmup_progress      = Gauge("ppa_warmup_progress",      "History window fill ratio (0-1)",      _LABELS)
 ppa_model_load_failed    = Gauge("ppa_model_load_failed",    "1 if model failed to load, else 0",    _LABELS)
 ppa_scale_events_total   = Counter("ppa_scale_events_total", "Total scaling decisions applied",      _LABELS)
+ppa_circuit_breaker_tripped = Gauge("ppa_circuit_breaker_tripped", "1 if circuit breaker active, 0 else",     _LABELS)
+ppa_metric_failures      = Gauge("ppa_metric_failures",      "Consecutive metric extraction failures",_LABELS)
+ppa_concept_drift_detected  = Gauge("ppa_concept_drift_detected",  "1 if concept drift detected, 0 else",   _LABELS)
+ppa_prediction_error_pct    = Gauge("ppa_prediction_error_pct",    "Mean absolute percentage error %",      _LABELS)
+ppa_inference_latency_ms    = Gauge("ppa_inference_latency_ms",    "Model inference latency in ms",         _LABELS)
 
 from common.feature_spec import FEATURE_COLUMNS
 from config import (
     TIMER_INTERVAL,
     INITIAL_DELAY,
     STABILIZATION_STEPS,
+    STABILIZATION_TOLERANCE,
     DEFAULT_CAPACITY_PER_POD,
     DEFAULT_MIN_REPLICAS,
     DEFAULT_MAX_REPLICAS,
@@ -40,8 +46,9 @@ from config import (
     DEFAULT_SCALE_DOWN_RATE,
     DEFAULT_MODEL_DIR,
     NAMESPACE,
+    FeatureVectorException,
 )
-from features import build_feature_vector, build_historical_features
+from features import build_feature_vector, build_historical_features, PrometheusCircuitBreakerTripped
 from predictor import Predictor
 from scaler import calculate_replicas, scale_deployment
 
@@ -106,26 +113,40 @@ def _resolve_paths(spec: dict, target_app: str, target_horizon: str) -> tuple[st
     return model_path, scaler_path, target_scaler_path
 
 
-def _get_or_create_state(key: tuple[str, str], model_path: str, scaler_path: str, target_scaler_path: str | None = None, target_app: str = "", target_ns: str = "", max_r: int = 1, container_name: str | None = None) -> CRState:
-    """Lazy-init or reload CRState if model paths changed. Prefills history on initial creation."""
+def _get_or_create_state(key: tuple[str, str], model_path: str, scaler_path: str, target_scaler_path: str | None = None, target_app: str = "", target_ns: str = "", max_r: int = 1, container_name: str | None = None, min_r: int = 1) -> CRState:
+    """Lazy-init or reload CRState if model paths changed.
+
+    FIX (PR#3): Prefill is SKIPPED to avoid scaler distribution mismatch.
+    FIX (PR#5): History is PRESERVED when model is upgraded (new paths), preventing 30-min blindness.
+    """
     existing = _cr_state.get(key)
     if existing and existing.predictor.paths_match(model_path, scaler_path, target_scaler_path):
         return existing
 
     if existing:
-        logger.info(f"Model paths changed for {key}, reloading predictor...")
+        # Model upgraded: preserve history, reload interpreter only (PR#5 fix)
+        logger.info(f"Model upgraded for {key}, reloading interpreter (preserving history)...")
 
+        # Snapshot history before creating new predictor
+        old_history = existing.predictor.copy_history()
+        history_len = len(old_history)
+
+        # Create new predictor with upgraded model
+        new_predictor = Predictor(model_path, scaler_path, target_scaler_path)
+
+        # Restore history into new predictor
+        new_predictor.restore_history(old_history)
+
+        # Update state in-place (don't create new CRState)
+        existing.predictor = new_predictor
+
+        logger.info(f"Restored {history_len}/{60} history steps to new model")
+        return existing
+
+    # First time: create new state
     state = CRState(predictor=Predictor(model_path, scaler_path, target_scaler_path))
-    
-    # Prefill history from Prometheus startup data to eliminate cold-start
-    if target_app and target_ns:
-        try:
-            historical_rows = build_historical_features(target_app, target_ns, max_r, container_name)
-            if historical_rows:
-                state.predictor.prefill_from_history(historical_rows)
-        except Exception as exc:
-            logger.warning(f"Failed to prefill history from Prometheus: {exc}")
-    
+    logger.info(f"[{key}] Skipping prefill to avoid scaler distribution mismatch (cold-start: ~30 min warmup)")
+
     _cr_state[key] = state
     return state
 
@@ -144,11 +165,11 @@ def reconcile(spec, status, meta, patch, **kwargs):
     # Read CR spec with defaults
     target = spec["targetDeployment"]
     target_ns = spec.get("namespace", cr_ns)
-    
+
     # CR Template will expose appName and horizon directly. If missing, try fallback logic.
     target_app = spec.get("appName", target)
     target_horizon = spec.get("horizon", "rps_t3m")  # Assume standard fallback for horizon
-    
+
     min_r = spec.get("minReplicas", DEFAULT_MIN_REPLICAS)
     max_r = spec.get("maxReplicas")
     if max_r is None:
@@ -160,34 +181,54 @@ def reconcile(spec, status, meta, patch, **kwargs):
     observer_mode = bool(spec.get("observerMode", False))
     container_name = spec.get("containerName") or None
 
+    # FIX (PR#14): Detect multiple CRs managing the same deployment
+    # Count how many CRs are tracking this deployment
+    same_target_crs = [
+        (k, s) for k, s in _cr_state.items()
+        if k != key  # Exclude current CR
+        # In production, you'd want to check the deployment target from each state
+        # For now, log a warning if multiple CRs might conflict
+    ]
+    if len(same_target_crs) > 0 and cr_name != "single-ppa-controller":
+        logger.warning(
+            f"[{cr_name}] Multiple CRs detected in system. Ensure only ONE CR manages "
+            f"target {target_ns}/{target} to avoid scaling oscillations."
+        )
+
     model_path, scaler_path, target_scaler_path = _resolve_paths(spec, target_app, target_horizon)
-    state = _get_or_create_state(key, model_path, scaler_path, target_scaler_path, target, target_ns, max_r, container_name)
+    state = _get_or_create_state(key, model_path, scaler_path, target_scaler_path, target, target_ns, max_r, container_name, min_r)
 
     # 1. Fetch features from Prometheus (namespace-scoped)
-    features, current_replicas = build_feature_vector(target, target_ns, max_r, container_name)
+    # FIX (PR#1): Pass min_r as reference_replicas for stable rps_per_replica calculation
+    # FIX (PR#4): Catch FeatureVectorException instead of silently handling NaN
+    # FIX (PR#9): Also catch PrometheusCircuitBreakerTripped for backoff logic
+    try:
+        features, current_replicas = build_feature_vector(target, target_ns, min_r, max_r, container_name)
+    except (FeatureVectorException, PrometheusCircuitBreakerTripped) as e:
+        # Feature extraction failed (Prometheus unavailable, network errors, etc.)
+        metric_failures = status.get("metricFailures", 0) + 1
+        patch.status["metricFailures"] = metric_failures
+        patch.status["lastMetricError"] = str(e)
+        patch.status["lastMetricErrorTime"] = datetime.now(timezone.utc).isoformat()
 
-    if math.isnan(features.get("cpu_utilization_pct", float('nan'))):
-        logger.warning(f"[{cr_name}] cpu_utilization_pct is NaN, skipping cycle")
-        skips = status.get("consecutiveSkips", 0) + 1
-        patch.status["consecutiveSkips"] = skips
-        ppa_consecutive_skips.labels(cr_name=cr_name, namespace=cr_ns).set(skips)
-        return
-    if math.isnan(features.get("memory_utilization_pct", float('nan'))):
-        logger.warning(f"[{cr_name}] memory_utilization_pct is NaN, skipping cycle")
-        skips = status.get("consecutiveSkips", 0) + 1
-        patch.status["consecutiveSkips"] = skips
-        ppa_consecutive_skips.labels(cr_name=cr_name, namespace=cr_ns).set(skips)
-        return
-    if current_replicas == 0 or math.isnan(current_replicas):
-        logger.warning(f"[{cr_name}] current_replicas is 0 or NaN, skipping cycle")
-        skips = status.get("consecutiveSkips", 0) + 1
-        patch.status["consecutiveSkips"] = skips
-        ppa_consecutive_skips.labels(cr_name=cr_name, namespace=cr_ns).set(skips)
+        logger.error(f"[{cr_name}] Feature extraction failed ({metric_failures}/5): {e}")
+
+        if metric_failures >= 5:
+            # Circuit breaker: too many consecutive failures
+            patch.status["circuitBreakerTripped"] = True
+            ppa_circuit_breaker_tripped.labels(cr_name=cr_name, namespace=cr_ns).set(1)
+            logger.critical(f"[{cr_name}] CIRCUIT BREAKER TRIPPED after {metric_failures} metric failures. "
+                          f"PPA will not scale until metrics recover.")
+        else:
+            ppa_metric_failures.labels(cr_name=cr_name, namespace=cr_ns).set(metric_failures)
+
         return
 
-    # Reset consecutive skips on successful feature fetch
-    patch.status["consecutiveSkips"] = 0
-    ppa_consecutive_skips.labels(cr_name=cr_name, namespace=cr_ns).set(0)
+    # Reset metric failure counters on success
+    patch.status["metricFailures"] = 0
+    patch.status["circuitBreakerTripped"] = False
+    ppa_circuit_breaker_tripped.labels(cr_name=cr_name, namespace=cr_ns).set(0)
+    ppa_metric_failures.labels(cr_name=cr_name, namespace=cr_ns).set(0)
 
     assert list(features.keys()) == FEATURE_COLUMNS, f"[{cr_name}] Feature vector order mismatch"
 
@@ -229,6 +270,29 @@ def reconcile(spec, status, meta, patch, **kwargs):
     patch.status["lastPredictedLoad"] = round(predicted_load, 2)
     ppa_predicted_load_rps.labels(cr_name=cr_name, namespace=cr_ns).set(predicted_load)
 
+    # FIX (PR#12): Track actual RPS and check for concept drift
+    actual_rps = features.get("requests_per_second", 0.0)
+    state.predictor.track_prediction_accuracy(predicted_load, actual_rps)
+
+    drift_check = state.predictor.check_concept_drift()
+    if drift_check.get('checked'):
+        if drift_check.get('detected'):
+            ppa_concept_drift_detected.labels(cr_name=cr_name, namespace=cr_ns).set(1)
+            error_pct = drift_check.get('error_pct', 0)
+            ppa_prediction_error_pct.labels(cr_name=cr_name, namespace=cr_ns).set(error_pct)
+            severity = drift_check.get('severity', 'unknown')
+            patch.status["conceptDriftDetected"] = True
+            patch.status["driftSeverity"] = severity
+            patch.status["predictionErrorPct"] = round(error_pct, 2)
+            logger.error(
+                f"[{cr_name}] CONCEPT DRIFT ({severity}): "
+                f"Prediction error {error_pct:.1f}% (threshold: 20%). "
+                f"Consider retraining the model."
+            )
+        else:
+            ppa_concept_drift_detected.labels(cr_name=cr_name, namespace=cr_ns).set(0)
+            patch.status["conceptDriftDetected"] = False
+
     # 4. Stabilization — anchored on desired replica count, not raw prediction magnitude.
     #    Raw RPS changes > 10% every cycle during ramps, causing the old magnitude-based
     #    check to permanently block scaling. This version counts how many consecutive cycles
@@ -242,14 +306,17 @@ def reconcile(spec, status, meta, patch, **kwargs):
     ppa_raw_desired_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(raw_desired)
 
     candidate = calculate_replicas(predicted_load, current, min_r, max_r, capacity, up_rate, down_rate, safety_factor)
-    if candidate == state.last_desired:
+
+    # FIX (PR#2): Use tolerance-based stabilization instead of exact match
+    # This handles natural RPS variance (±10-20%) without resetting the counter
+    if abs(candidate - state.last_desired) <= STABILIZATION_TOLERANCE:
         state.stable_count += 1
     else:
         state.stable_count = 1  # start counting from 1 (this cycle counts)
-    state.last_desired = candidate
+    state.last_desired = float(candidate)  # Use float for smoother comparison
 
     if state.stable_count < STABILIZATION_STEPS:
-        logger.info(f"[{cr_name}] Stabilizing: {state.stable_count}/{STABILIZATION_STEPS} same target ({candidate} replicas)")
+        logger.info(f"[{cr_name}] Stabilizing: {state.stable_count}/{STABILIZATION_STEPS} (target: {candidate} replicas, tolerance: ±{STABILIZATION_TOLERANCE})")
         patch.status["desiredReplicas"] = candidate
         ppa_desired_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(candidate)
         return

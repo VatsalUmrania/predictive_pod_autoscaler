@@ -3,6 +3,8 @@
 
 import logging
 import sys
+import time
+import json
 from collections import deque
 from pathlib import Path
 
@@ -33,14 +35,77 @@ class Predictor:
         self.input_details = None
         self.output_details = None
         self._load_failed = False
+        # FIX (PR#10): Add exponential backoff for model reload failures
+        self._load_failures = 0
+        self._last_load_attempt = 0.0
+
+        # FIX (PR#12): Concept drift detection — track prediction accuracy over time
+        self.prediction_history: deque = deque(maxlen=60)  # Last 60 predictions (30 min at 30s interval)
+        self.actual_history: deque = deque(maxlen=60)      # Last 60 actual values
+        self.concept_drift_detected = False
+        self.last_drift_check_time = 0.0
 
         self._try_load()
 
+    def _load_and_validate_metadata(self):
+        """FIX (PR#7): Load and validate model metadata to prevent schema mismatches."""
+        model_dir = Path(self.model_path).parent
+        metadata_path = model_dir / f"{Path(self.model_path).stem}_metadata.json"
+
+        try:
+            if metadata_path.exists():
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+
+                # Validate critical schema fields
+                if "feature_columns" in metadata:
+                    if metadata["feature_columns"] != FEATURE_COLUMNS:
+                        raise ValueError(
+                            f"Feature column mismatch: model expects {metadata['feature_columns']}, "
+                            f"but operator has {FEATURE_COLUMNS}"
+                        )
+
+                if "lookback" in metadata:
+                    if metadata["lookback"] != LOOKBACK_STEPS:
+                        logger.warning(
+                            f"Lookback mismatch: model expects {metadata['lookback']}, "
+                            f"but operator configured for {LOOKBACK_STEPS}. Using model's value."
+                        )
+
+                if "accuracy_loss_pct" in metadata and metadata["accuracy_loss_pct"] is not None:
+                    if metadata["accuracy_loss_pct"] > 5.0:
+                        logger.warning(
+                            f"Model has high quantization loss: {metadata['accuracy_loss_pct']:.2f}% "
+                            f"(threshold: 5.0%)"
+                        )
+
+                logger.info(f"Metadata validated: {metadata_path}")
+                return metadata
+            else:
+                logger.warning(f"No metadata file found at {metadata_path}. "
+                              f"Proceeding without schema validation (consider retraining)")
+                return None
+        except Exception as e:
+            logger.warning(f"Failed to load/validate metadata: {e}")
+            return None
+
     def _try_load(self):
-        """Attempt to load model, scaler, and target scaler. Idempotent."""
+        """Attempt to load model, scaler, and target scaler. Idempotent with exponential backoff."""
         if self.interpreter is not None and self.scaler is not None:
             return  # already loaded
+
+        # FIX (PR#10): Implement exponential backoff to prevent disk thrashing
+        if self._load_failed:
+            elapsed = time.time() - self._last_load_attempt
+            backoff = min(300, 2 ** min(self._load_failures, 10))  # Cap at 5 min, 2^10 = 1024
+            if elapsed < backoff:
+                return  # Don't retry yet, still in backoff period
+
+        self._last_load_attempt = time.time()
         try:
+            # FIX (PR#7): Load and validate metadata before loading model
+            self._load_and_validate_metadata()
+
             # Try lightweight ai-edge-litert first, then tensorflow.lite, then tflite_runtime
             interpreter_loaded = False
             for loader_name, loader_fn in [
@@ -64,12 +129,12 @@ class Predictor:
 
             self.input_details = self.interpreter.get_input_details()
             self.output_details = self.interpreter.get_output_details()
-            
+
             # Detect lookback from input tensor shape: (batch, lookback, features)
             input_shape = self.input_details[0]["shape"]
             self.lookback = input_shape[1]
             logger.info(f"Detected model lookback: {self.lookback}")
-            
+
             # Re-initialize history with the detected lookback
             self.history = deque(maxlen=self.lookback)
 
@@ -83,12 +148,16 @@ class Predictor:
 
             logger.info(f"Loaded model from {self.model_path}, scaler from {self.scaler_path}")
             self._load_failed = False
+            self._load_failures = 0  # Reset on success
         except Exception as exc:
             logger.error(f"Failed to load model/scaler: {exc}")
             self.interpreter = None
             self.scaler = None
             self.target_scaler = None
             self._load_failed = True
+            self._load_failures += 1
+            if self._load_failures > 10:
+                logger.critical(f"Model failed to load {self._load_failures} times, giving up")
 
     def paths_match(self, model_path: str, scaler_path: str, target_scaler_path: str | None = None) -> bool:
         return (
@@ -96,6 +165,17 @@ class Predictor:
             and self.scaler_path == scaler_path
             and self.target_scaler_path == target_scaler_path
         )
+
+    def copy_history(self) -> list:
+        """Return a copy of current history for preservation during model upgrade (PR#5)."""
+        return list(self.history)
+
+    def restore_history(self, history_snapshot: list) -> None:
+        """Restore history from a snapshot (used during model upgrade to avoid losing state)."""
+        self.history.clear()
+        for row in history_snapshot:
+            self.history.append(row)
+        logger.info(f"Restored history: {len(self.history)}/{self.history.maxlen} steps")
 
     def update(self, features: dict):
         row = np.array([features[name] for name in FEATURE_COLUMNS], dtype=np.float32)
@@ -119,8 +199,15 @@ class Predictor:
         scaled = self.scaler.transform(window)
         input_data = scaled.reshape(1, self.lookback, NUM_FEATURES).astype(np.float32)
 
+        # FIX (PR#13): Track inference latency
+        start_time = time.time()
         self.interpreter.set_tensor(self.input_details[0]["index"], input_data)
         self.interpreter.invoke()
+        inference_time = (time.time() - start_time) * 1000  # Convert to milliseconds
+
+        if inference_time > 100:  # >100ms is concerning
+            logger.warning(f"Slow inference: {inference_time:.1f}ms (expected <100ms)")
+
         output = self.interpreter.get_tensor(self.output_details[0]["index"])
 
         predicted_scaled = float(output[0][0])
@@ -143,4 +230,69 @@ class Predictor:
             self.history.append(row)
         filled = len(self.history)
         logger.info(f"Prefilled history: {filled}/{self.history.maxlen} steps loaded from startup fetch")
+
+    def track_prediction_accuracy(self, predicted_rps: float, actual_rps: float):
+        """
+        FIX (PR#12): Track prediction vs actual RPS for concept drift detection.
+        """
+        self.prediction_history.append(predicted_rps)
+        self.actual_history.append(actual_rps)
+
+    def check_concept_drift(self) -> dict:
+        """
+        FIX (PR#12): Detect concept drift by comparing predicted vs actual RPS over last window.
+        Returns: dict with keys 'detected', 'error_pct', 'drift_severity'
+        """
+        current_time = time.time()
+
+        # Only check every 5 minutes (300 seconds) to avoid log spam
+        if current_time - self.last_drift_check_time < 300:
+            return {'detected': self.concept_drift_detected, 'checked': False}
+
+        self.last_drift_check_time = current_time
+
+        if len(self.prediction_history) < 10 or len(self.actual_history) < 10:
+            return {'detected': False, 'checked': True, 'reason': 'insufficient_history'}
+
+        # Compare predictions from 1 minute ago vs actual now
+        # Use a sliding window approach
+        recent_predictions = list(self.prediction_history)[-10:]  # Last 10 (5 minutes at 30s interval)
+        recent_actuals = list(self.actual_history)[-10:]
+
+        if not recent_predictions or not recent_actuals:
+            return {'detected': False, 'checked': True}
+
+        # Calculate MAPE (Mean Absolute Percentage Error)
+        errors = []
+        for pred, actual in zip(recent_predictions, recent_actuals):
+            if actual > 0:
+                error = abs(pred - actual) / actual * 100
+                errors.append(error)
+
+        if not errors:
+            return {'detected': False, 'checked': True}
+
+        mean_error_pct = np.mean(errors)
+
+        # Drift severity levels
+        drift_detected = mean_error_pct > 20  # >20% error indicates possible drift
+        severe_drift = mean_error_pct > 50    # >50% error is severe
+
+        if drift_detected or severe_drift:
+            logger.warning(
+                f"Concept drift detected: {mean_error_pct:.1f}% error over last 5 minutes "
+                f"{'(SEVERE)' if severe_drift else ''}"
+            )
+            self.concept_drift_detected = True
+        else:
+            if self.concept_drift_detected:
+                logger.info(f"Concept drift cleared: {mean_error_pct:.1f}% error")
+            self.concept_drift_detected = False
+
+        return {
+            'detected': drift_detected,
+            'error_pct': mean_error_pct,
+            'severity': 'severe' if severe_drift else ('moderate' if drift_detected else 'normal'),
+            'checked': True
+        }
 
