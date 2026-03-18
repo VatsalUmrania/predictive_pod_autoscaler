@@ -13,27 +13,30 @@ from cli.utils import console
 
 
 def get_completer_dict() -> dict:
-    """Dynamically build a nested dictionary for auto-completion."""
-    completer_dict = {}
+    """Dynamically build a nested dictionary for auto-completion using Typer/Click internals."""
+    from typer.main import get_command
     
-    # 1. Add direct commands (e.g. status, monitor)
-    for cmd in app.registered_commands:
-        if cmd.name:
-            completer_dict[cmd.name] = None
+    click_command = get_command(app)
+    
+    def _build_dict(cmd) -> dict:
+        d = {}
+        # Add subcommands if it's a group
+        if hasattr(cmd, "commands"):
+            for sub_name, sub_cmd in cmd.commands.items():
+                d[sub_name] = _build_dict(sub_cmd)
+        
+        # Add options/flags
+        for param in cmd.params:
+            for opt in param.opts:
+                d[opt] = None
+            for opt in param.secondary_opts:
+                d[opt] = None
+        
+        return d
 
-    # 2. Add command groups and their sub-commands
-    for group in app.registered_groups:
-        if group.name:
-            sub_dict = {}
-            # Access the Typer instance inside the group to find its commands
-            if hasattr(group, "typer_instance") and group.typer_instance:
-                for sub_cmd in group.typer_instance.registered_commands:
-                    if sub_cmd.name:
-                        sub_dict[sub_cmd.name] = None
-            
-            completer_dict[group.name] = sub_dict if sub_dict else None
+    completer_dict = _build_dict(click_command)
     
-    # 3. Add standard shell commands
+    # Add shell-specific commands
     completer_dict["help"] = None
     completer_dict["exit"] = None
     completer_dict["quit"] = None
@@ -44,7 +47,7 @@ def get_completer_dict() -> dict:
 def run_interactive() -> None:
     """Run the PPA CLI in a persistent interactive loop with nested auto-completion."""
     console.print(get_banner())
-    console.print("[bold cyan]PPA Interactive Shell[/bold cyan] (Type 'exit' or Ctrl+C to quit)")
+    console.print("[info]PPA Interactive Shell[/info] (Type 'exit' or Ctrl+C to quit)")
     console.print("Try [bold]status[/bold], [bold]startup --list[/bold], or [bold]monitor[/bold].")
 
     # Setup nested auto-completion
@@ -57,7 +60,7 @@ def run_interactive() -> None:
             # We use a simple prompt string because prompt_toolkit doesn't natively parse Rich markup
             # unless we use their HTML/ANSI formatting features, but keeping it simple for now.
             user_input = prompt(
-                "ppa⚡ ",
+                "ppa > ",
                 completer=completer,
                 history=history,
                 complete_while_typing=True,
@@ -71,6 +74,13 @@ def run_interactive() -> None:
                 console.print("[info]Goodbye![/info]")
                 break
             
+            if clean_input.lower() == "help":
+                try:
+                    app(["help"])
+                except SystemExit:
+                    pass
+                continue
+
             # Use shlex to correctly parse arguments
             try:
                 args = shlex.split(clean_input)

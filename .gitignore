@@ -9,6 +9,12 @@ model/artifacts/
 !model/artifacts/.gitkeep
 *fixed_rep*
 .agent/
+.claude/
+.agents/
+tests/
+*.png
+*.svg
+*.json
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

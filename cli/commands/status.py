@@ -26,7 +26,7 @@ app = typer.Typer(rich_markup_mode="rich", invoke_without_command=True)
 
 
 def _status_icon(ok: bool) -> str:
-    return "[green]🟢[/green]" if ok else "[red]🔴[/red]"
+    return "[success]✓[/success]" if ok else "[error]✗[/error]"
 
 
 def _check_pod_status(label: str, namespace: str = DEFAULT_NAMESPACE) -> tuple[bool, str]:
@@ -55,51 +55,60 @@ def _check_port(port: int) -> bool:
     """Check if a local port is responding."""
     import requests
     try:
-        requests.get(f"http://localhost:{port}", timeout=2)
+        requests.get(f"http://localhost:{port}", timeout=0.5)
         return True
     except Exception:
         return False
 
 
-@app.callback(invoke_without_command=True)
-def status(ctx: typer.Context) -> None:
-    """
-    [bold]Show cluster health status[/] for all PPA components.
-
-    Checks Minikube, pods, port-forwards, Prometheus, and PPA CRs.
-    """
-    if ctx.invoked_subcommand is not None:
-        return
-
-    # ── Infrastructure ────────────────────────────────────────────────
-    heading("PPA Cluster Status")
-
-    # Minikube
+def _build_infra_panel() -> Panel:
+    """Infrastructure status table."""
     mk_result = run_cmd_silent(["minikube", "status", "--format", "{{.Host}}"], check=False)
     mk_running = mk_result.returncode == 0 and "Running" in mk_result.stdout
 
-    infra_table = Table(show_header=False, border_style="bright_cyan", padding=(0, 1))
-    infra_table.add_column("Component", style="bold", min_width=20)
-    infra_table.add_column("Status", min_width=10)
-    infra_table.add_column("Details", style="dim")
+    table = Table(show_header=False, border_style="info", padding=(0, 1), box=None)
+    table.add_column("Component", style="bold", min_width=16)
+    table.add_column("Status", min_width=6)
+    table.add_column("Details", justify="right", style="italic")
 
-    infra_table.add_row("Minikube", _status_icon(mk_running), "Running" if mk_running else "Stopped")
+    table.add_row("Minikube", _status_icon(mk_running), "Running" if mk_running else "Stopped")
 
-    # Tools
     for tool in ["kubectl", "helm", "docker"]:
         found = check_binary(tool)
-        infra_table.add_row(f"  {tool}", _status_icon(found), "installed" if found else "missing")
+        table.add_row(f"  {tool}", _status_icon(found), "OK" if found else "MISSING")
 
-    console.print()
-    console.print(Panel(infra_table, title="[bold]🔧 Infrastructure[/]", border_style="bright_cyan"))
+    return Panel(table, title="[bold]Infrastructure[/]", border_style="info")
 
-    # ── Pods ──────────────────────────────────────────────────────────
-    pods_table = Table(show_header=True, border_style="bright_cyan", padding=(0, 1), header_style="bold")
-    pods_table.add_column("Pod", style="bold", min_width=20)
-    pods_table.add_column("Status", min_width=6)
-    pods_table.add_column("Ready", style="dim")
 
-    pod_checks = [
+def _build_ports_panel() -> Panel:
+    """Connectivity / Port Forwards status table."""
+    table = Table(show_header=True, border_style="info", padding=(0, 1), header_style="heading", box=None)
+    table.add_column("Service", style="bold", min_width=12)
+    table.add_column("Port", justify="right", min_width=6)
+    table.add_column("Status", justify="center", min_width=6)
+
+    ports = [
+        ("Prometheus", PROMETHEUS_PORT),
+        ("Grafana", GRAFANA_PORT),
+        ("Test App", APP_PORT),
+        ("Metrics", METRICS_PORT),
+    ]
+
+    for name, port in ports:
+        ok = _check_port(port)
+        table.add_row(name, str(port), _status_icon(ok))
+
+    return Panel(table, title="[bold]Connectivity[/]", border_style="info")
+
+
+def _build_pods_panel() -> Panel:
+    """Pod health status table."""
+    table = Table(show_header=True, border_style="info", padding=(0, 1), header_style="heading")
+    table.add_column("Pod Group", style="bold", min_width=20)
+    table.add_column("Status", justify="center", min_width=8)
+    table.add_column("Ready Replicas", justify="right", style="italic")
+
+    checks = [
         ("PPA Operator", "app=ppa-operator", DEFAULT_NAMESPACE),
         ("Test App", "app=test-app", DEFAULT_NAMESPACE),
         ("Traffic Gen", "app=traffic-gen", DEFAULT_NAMESPACE),
@@ -107,64 +116,86 @@ def status(ctx: typer.Context) -> None:
         ("Grafana", "app.kubernetes.io/name=grafana", "monitoring"),
     ]
 
-    for name, label, ns in pod_checks:
+    for name, label, ns in checks:
         ok, details = _check_pod_status(label, ns)
-        pods_table.add_row(name, _status_icon(ok), details)
+        table.add_row(name, _status_icon(ok), details)
 
-    console.print()
-    console.print(Panel(pods_table, title="[bold]📦 Pods[/]", border_style="bright_cyan"))
+    return Panel(table, title="[bold]Pod Health[/]", border_style="info")
 
-    # ── Port Forwards ─────────────────────────────────────────────────
-    ports_table = Table(show_header=True, border_style="bright_cyan", padding=(0, 1), header_style="bold")
-    ports_table.add_column("Service", style="bold", min_width=14)
-    ports_table.add_column("Port", justify="right", min_width=6)
-    ports_table.add_column("Status", min_width=6)
 
-    port_checks = [
-        ("Prometheus", PROMETHEUS_PORT),
-        ("Grafana", GRAFANA_PORT),
-        ("Test App", APP_PORT),
-        ("Metrics", METRICS_PORT),
-    ]
-
-    for name, port in port_checks:
-        ok = _check_port(port)
-        ports_table.add_row(name, str(port), _status_icon(ok))
-
-    # Prometheus deep check
-    prom_ok = prometheus_ready()
-
-    console.print()
-    console.print(Panel(ports_table, title="[bold]🔌 Port Forwards[/]", border_style="bright_cyan"))
-
-    # ── PPA Custom Resources ──────────────────────────────────────────
+def _build_cr_panel() -> Panel:
+    """PPA Custom Resources status table."""
     cr_result = run_cmd_silent(
         ["kubectl", "get", "ppa", "--all-namespaces", "-o", "wide", "--no-headers"],
         check=False,
     )
 
-    if cr_result.returncode == 0 and cr_result.stdout.strip():
-        cr_table = Table(border_style="bright_magenta", padding=(0, 1), header_style="bold")
-        cr_table.add_column("Name", style="bold")
-        cr_table.add_column("Namespace")
-        cr_table.add_column("Details", style="dim")
+    if not cr_result.stdout.strip():
+        return Panel("[italic]No PredictiveAutoscaler CRs found[/italic]", title="[bold]PPA Resources[/]", border_style="step")
 
-        for line in cr_result.stdout.strip().splitlines():
-            parts = line.split(None, 2)
-            if len(parts) >= 2:
-                cr_table.add_row(parts[1] if len(parts) > 1 else parts[0], parts[0], parts[2] if len(parts) > 2 else "")
+    table = Table(border_style="step", padding=(0, 1), header_style="heading")
+    table.add_column("Name", style="bold", min_width=20)
+    table.add_column("Deployment", min_width=12)
+    table.add_column("Min", justify="center")
+    table.add_column("Max", justify="center")
+    table.add_column("Predicted Load", justify="right", no_wrap=True)
+    table.add_column("Last Scale", justify="right", no_wrap=True)
 
-        console.print()
-        console.print(Panel(cr_table, title="[bold]🤖 PredictiveAutoscaler CRs[/]", border_style="bright_magenta"))
-    else:
-        console.print()
-        console.print(Panel("[dim]No PredictiveAutoscaler CRs found[/dim]", title="[bold]🤖 PPA CRs[/]", border_style="dim"))
+    for line in cr_result.stdout.strip().splitlines():
+        parts = line.split()
+        if len(parts) >= 8:
+            # NAMESPACE[0] NAME[1] DEPLOY[2] CONTAINER[3] MIN[4] MAX[5] LOAD[6] SCALE[7]
+            table.add_row(
+                parts[1], parts[2], parts[4], parts[5], 
+                f"[metric]{parts[6]}[/metric]", parts[7]
+            )
+        elif len(parts) >= 2:
+            table.add_row(parts[1], parts[0], "-", "-", "-", "-")
 
-    # ── Summary ───────────────────────────────────────────────────────
+    return Panel(table, title="[bold]PredictiveAutoscaler Resources[/]", border_style="step")
+
+
+@app.callback(invoke_without_command=True)
+def status(ctx: typer.Context) -> None:
+    """
+    [bold]Show cluster health status dashboard[/] for all PPA components.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+
+    from cli.config import get_banner
+    console.print(get_banner())
+    console.print("\n[bold]Cluster Status Summary[/]")
+
+    # Build components
+    infra = _build_infra_panel()
+    ports = _build_ports_panel()
+    pods = _build_pods_panel()
+    crs = _build_cr_panel()
+
+    # Layout for combined Infrastructure and Ports
+    top_grid = Table.grid(expand=True)
+    top_grid.add_column(ratio=1)
+    top_grid.add_column(ratio=1)
+    top_grid.add_row(infra, ports)
+
+    console.print()
+    console.print(top_grid)
+    console.print()
+    console.print(pods)
+    console.print()
+    console.print(crs)
+
+    # Summary logic (remain same but more compact)
+    mk_running = "[success]✓[/success]" in infra.renderable.columns[1]._cells[0] # Very crude check, maybe keep original logic
+    # Re-run quick checks for summary
+    mk_running = run_cmd_silent(["minikube", "status"], check=False).returncode == 0
+    prom_ok = prometheus_ready()
+
     console.print()
     if mk_running and prom_ok:
-        console.print("[success]✔[/success] Cluster is healthy")
+        console.print("[success]✓[/success] Cluster is healthy")
     elif mk_running:
         console.print("[warning]⚠[/warning] Cluster is running but Prometheus is not reachable")
     else:
-        console.print("[error]✘[/error] Minikube is not running")
+        console.print("[error]✗[/error] Minikube is not running")

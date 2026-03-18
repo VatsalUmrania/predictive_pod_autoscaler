@@ -12,13 +12,13 @@
       }
     ]
   },
-  "description": "Predictive Pod Autoscaler \u2014 SRE Comparison Dashboard (v3: multi-horizon, colour-coded, side-by-side accuracy)",
+  "description": "Predictive Pod Autoscaler \u2014 SRE Comparison Dashboard (v4: enhanced visualization, multi-horizon accuracy tracking, improved data density)",
   "editable": true,
   "fiscalYearStartMonth": 0,
-  "graphTooltip": 1,
+  "graphTooltip": 2,
   "id": null,
   "links": [],
-  "liveNow": false,
+  "liveNow": true,
   "panels": [
     {
       "collapsed": false,
@@ -30,12 +30,13 @@
       },
       "id": 1,
       "title": "System KPIs",
-      "type": "row"
+      "type": "row",
+      "description": "System-wide monitoring KPIs: request rate, replica status, latency, and error metrics"
     },
     {
       "type": "stat",
       "id": 2,
-      "title": "Total RPS",
+      "title": "Total RPS (Requests/sec)",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -52,14 +53,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))",
+          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])) or vector(0)",
           "refId": "A",
-          "legendFormat": ""
+          "legendFormat": "RPS"
         }
       ],
       "options": {
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "gradient",
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
@@ -69,13 +70,13 @@
           "fields": "",
           "values": false
         },
-        "textMode": "auto"
+        "textMode": "auto",
+        "displayMode": "auto"
       },
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "fixed",
-            "fixedColor": "#5794F2"
+            "mode": "thresholds"
           },
           "decimals": 1,
           "mappings": [],
@@ -84,19 +85,36 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "#5794F2",
+                "color": "#73BF69",
                 "value": null
+              },
+              {
+                "color": "#73BF69",
+                "value": 0
+              },
+              {
+                "color": "#FADE2A",
+                "value": 50
+              },
+              {
+                "color": "#FF9830",
+                "value": 200
+              },
+              {
+                "color": "#F2495C",
+                "value": 500
               }
             ]
           }
         },
         "overrides": []
-      }
+      },
+      "description": "Total RPS (Requests/sec)"
     },
     {
       "type": "stat",
       "id": 3,
-      "title": "Ready Replicas",
+      "title": "Ready Replicas (Active Pods)",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -113,14 +131,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "kube_deployment_status_replicas_ready{deployment=\"test-app\"}",
+          "expr": "sum(kube_deployment_status_replicas_ready{deployment=\"test-app\"}) or vector(0)",
           "refId": "A",
-          "legendFormat": ""
+          "legendFormat": "Replicas"
         }
       ],
       "options": {
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "gradient",
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
@@ -135,8 +153,7 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "fixed",
-            "fixedColor": "#73BF69"
+            "mode": "thresholds"
           },
           "decimals": 1,
           "mappings": [],
@@ -145,14 +162,23 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "#73BF69",
+                "color": "#F2495C",
                 "value": null
+              },
+              {
+                "color": "#FADE2A",
+                "value": 1
+              },
+              {
+                "color": "#73BF69",
+                "value": 2
               }
             ]
           }
         },
         "overrides": []
-      }
+      },
+      "description": "Ready Replicas (Active Pods)"
     },
     {
       "type": "stat",
@@ -174,14 +200,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{pod=~\"test-app.*\"}[5m])) by (le)) * 1000",
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{pod=~\"test-app.*\"}[1m])) by (le)) * 1000 or vector(0)",
           "refId": "A",
-          "legendFormat": ""
+          "legendFormat": "P95 (ms)"
         }
       ],
       "options": {
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "gradient",
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
@@ -196,8 +222,7 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "fixed",
-            "fixedColor": "#FF9830"
+            "mode": "thresholds"
           },
           "decimals": 1,
           "mappings": [],
@@ -206,19 +231,36 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "#FF9830",
+                "color": "#73BF69",
                 "value": null
+              },
+              {
+                "color": "#73BF69",
+                "value": 0
+              },
+              {
+                "color": "#FADE2A",
+                "value": 100
+              },
+              {
+                "color": "#FF9830",
+                "value": 200
+              },
+              {
+                "color": "#F2495C",
+                "value": 500
               }
             ]
           }
         },
         "overrides": []
-      }
+      },
+      "description": "P95 Latency (ms)"
     },
     {
       "type": "stat",
       "id": 5,
-      "title": "Error Rate",
+      "title": "Error Rate (%)",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -235,14 +277,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\",status=~\"[45].*\"}[1m])) / sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])) * 100",
+          "expr": "(sum(rate(http_requests_total{pod=~\"test-app.*\",status=~\"[45][0-9]{2}\"}[1m])) or vector(0)) / (sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])) or vector(1)) * 100",
           "refId": "A",
-          "legendFormat": ""
+          "legendFormat": "Error %"
         }
       ],
       "options": {
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "gradient",
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
@@ -257,8 +299,7 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "fixed",
-            "fixedColor": "#F2495C"
+            "mode": "thresholds"
           },
           "decimals": 1,
           "mappings": [],
@@ -267,14 +308,31 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "#F2495C",
+                "color": "#73BF69",
                 "value": null
+              },
+              {
+                "color": "#73BF69",
+                "value": 0
+              },
+              {
+                "color": "#FADE2A",
+                "value": 1
+              },
+              {
+                "color": "#FF9830",
+                "value": 3
+              },
+              {
+                "color": "#F2495C",
+                "value": 5
               }
             ]
           }
         },
         "overrides": []
-      }
+      },
+      "description": "Error Rate (%)"
     },
     {
       "collapsed": false,
@@ -286,7 +344,8 @@
       },
       "id": 10,
       "title": "Live Model Comparison \u2014 All 3 Horizons",
-      "type": "row"
+      "type": "row",
+      "description": "Real-time predictions from all 3 models (3m, 5m, 10m) and HPA comparison"
     },
     {
       "type": "stat",
@@ -308,14 +367,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t3m\"}",
+          "expr": "last_over_time(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t3m\"}[5m]) OR on() vector(0)",
           "refId": "A",
           "legendFormat": ""
         }
       ],
       "options": {
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "gradient",
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
@@ -330,7 +389,7 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "fixed",
+            "mode": "thresholds",
             "fixedColor": "#FF9830"
           },
           "decimals": 1,
@@ -347,7 +406,8 @@
           }
         },
         "overrides": []
-      }
+      },
+      "description": "t3m Predicted Load"
     },
     {
       "type": "stat",
@@ -369,14 +429,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t5m\"}",
+          "expr": "last_over_time(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t5m\"}[5m]) OR on() vector(0)",
           "refId": "A",
           "legendFormat": ""
         }
       ],
       "options": {
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "gradient",
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
@@ -391,7 +451,7 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "fixed",
+            "mode": "thresholds",
             "fixedColor": "#5794F2"
           },
           "decimals": 1,
@@ -408,7 +468,8 @@
           }
         },
         "overrides": []
-      }
+      },
+      "description": "t5m Predicted Load"
     },
     {
       "type": "stat",
@@ -430,14 +491,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"}",
+          "expr": "last_over_time(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"}[5m]) OR on() vector(0)",
           "refId": "A",
           "legendFormat": ""
         }
       ],
       "options": {
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "gradient",
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
@@ -452,7 +513,7 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "fixed",
+            "mode": "thresholds",
             "fixedColor": "#73BF69"
           },
           "decimals": 1,
@@ -469,7 +530,8 @@
           }
         },
         "overrides": []
-      }
+      },
+      "description": "t10m Predicted Load"
     },
     {
       "type": "stat",
@@ -491,14 +553,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=\"test-app\",namespace=\"default\"}",
+          "expr": "last_over_time(kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=\"test-app\",namespace=\"default\"}[5m]) OR on() vector(0)",
           "refId": "A",
           "legendFormat": ""
         }
       ],
       "options": {
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "gradient",
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
@@ -513,7 +575,7 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "fixed",
+            "mode": "thresholds",
             "fixedColor": "#F2495C"
           },
           "decimals": 1,
@@ -530,7 +592,8 @@
           }
         },
         "overrides": []
-      }
+      },
+      "description": "HPA Desired Replicas"
     },
     {
       "type": "timeseries",
@@ -554,7 +617,7 @@
           },
           "refId": "A",
           "legendFormat": "Actual RPS",
-          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))"
+          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])) OR on() vector(0)"
         },
         {
           "datasource": {
@@ -595,8 +658,10 @@
           "calcs": [
             "last",
             "min",
-            "max"
-          ]
+            "max",
+            "mean"
+          ],
+          "showLegend": true
         }
       },
       "fieldConfig": {
@@ -606,8 +671,10 @@
           },
           "custom": {
             "lineWidth": 2,
-            "fillOpacity": 0,
-            "spanNulls": true
+            "fillOpacity": 10,
+            "spanNulls": true,
+            "pointSize": 3,
+            "showPoints": "auto"
           },
           "unit": "reqps"
         },
@@ -809,8 +876,10 @@
           "calcs": [
             "last",
             "min",
-            "max"
-          ]
+            "max",
+            "mean"
+          ],
+          "showLegend": true
         }
       },
       "fieldConfig": {
@@ -820,8 +889,10 @@
           },
           "custom": {
             "lineWidth": 2,
-            "fillOpacity": 0,
-            "spanNulls": true
+            "fillOpacity": 10,
+            "spanNulls": true,
+            "pointSize": 3,
+            "showPoints": "auto"
           },
           "unit": "short"
         },
@@ -964,7 +1035,8 @@
       },
       "id": 30,
       "title": "Per-Model Accuracy \u2014 Prediction vs Actual (time-aligned)",
-      "type": "row"
+      "type": "row",
+      "description": "Per-model accuracy showing prediction vs actual load for each time horizon"
     },
     {
       "type": "timeseries",
@@ -988,7 +1060,7 @@
           },
           "refId": "A",
           "legendFormat": "Actual RPS",
-          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))"
+          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])) OR on() vector(0)"
         },
         {
           "datasource": {
@@ -1011,8 +1083,10 @@
           "calcs": [
             "last",
             "min",
-            "max"
-          ]
+            "max",
+            "mean"
+          ],
+          "showLegend": true
         }
       },
       "fieldConfig": {
@@ -1022,8 +1096,10 @@
           },
           "custom": {
             "lineWidth": 2,
-            "fillOpacity": 0,
-            "spanNulls": true
+            "fillOpacity": 10,
+            "spanNulls": true,
+            "pointSize": 3,
+            "showPoints": "auto"
           },
           "unit": "reqps"
         },
@@ -1109,7 +1185,7 @@
           },
           "refId": "A",
           "legendFormat": "Actual RPS",
-          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))"
+          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])) OR on() vector(0)"
         },
         {
           "datasource": {
@@ -1132,8 +1208,10 @@
           "calcs": [
             "last",
             "min",
-            "max"
-          ]
+            "max",
+            "mean"
+          ],
+          "showLegend": true
         }
       },
       "fieldConfig": {
@@ -1143,8 +1221,10 @@
           },
           "custom": {
             "lineWidth": 2,
-            "fillOpacity": 0,
-            "spanNulls": true
+            "fillOpacity": 10,
+            "spanNulls": true,
+            "pointSize": 3,
+            "showPoints": "auto"
           },
           "unit": "reqps"
         },
@@ -1230,7 +1310,7 @@
           },
           "refId": "A",
           "legendFormat": "Actual RPS",
-          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))"
+          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])) OR on() vector(0)"
         },
         {
           "datasource": {
@@ -1253,8 +1333,10 @@
           "calcs": [
             "last",
             "min",
-            "max"
-          ]
+            "max",
+            "mean"
+          ],
+          "showLegend": true
         }
       },
       "fieldConfig": {
@@ -1264,8 +1346,10 @@
           },
           "custom": {
             "lineWidth": 2,
-            "fillOpacity": 0,
-            "spanNulls": true
+            "fillOpacity": 10,
+            "spanNulls": true,
+            "pointSize": 3,
+            "showPoints": "auto"
           },
           "unit": "reqps"
         },
@@ -1338,7 +1422,7 @@
         "uid": "${datasource}"
       },
       "gridPos": {
-        "h": 7,
+        "h": 8,
         "w": 24,
         "x": 0,
         "y": 39
@@ -1383,8 +1467,10 @@
           "calcs": [
             "last",
             "min",
-            "max"
-          ]
+            "max",
+            "mean"
+          ],
+          "showLegend": true
         }
       },
       "fieldConfig": {
@@ -1394,8 +1480,10 @@
           },
           "custom": {
             "lineWidth": 2,
-            "fillOpacity": 5,
-            "spanNulls": true
+            "fillOpacity": 10,
+            "spanNulls": true,
+            "pointSize": 3,
+            "showPoints": "auto"
           },
           "unit": "short"
         },
@@ -1458,7 +1546,8 @@
       },
       "id": 70,
       "title": "Live Model Error Analysis",
-      "type": "row"
+      "type": "row",
+      "description": "Model error analysis with MAPE percentages and SLA breach tracking"
     },
     {
       "type": "stat",
@@ -1480,14 +1569,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "abs(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t3m\"} - sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))) / clamp_min(sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])), 1) * 100",
+          "expr": "abs(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t3m\"} - sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))) / clamp_min(sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])), 1) * 100 OR on() vector(0)",
           "refId": "A",
           "legendFormat": "t3m MAPE"
         }
       ],
       "options": {
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "gradient",
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
@@ -1534,7 +1623,8 @@
           }
         },
         "overrides": []
-      }
+      },
+      "description": "t3m MAPE % (threshold: green <10%, orange <20%, red \u226520%)"
     },
     {
       "type": "stat",
@@ -1556,14 +1646,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "abs(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t5m\"} - sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))) / clamp_min(sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])), 1) * 100",
+          "expr": "abs(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t5m\"} - sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))) / clamp_min(sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])), 1) * 100 OR on() vector(0)",
           "refId": "A",
           "legendFormat": "t5m MAPE"
         }
       ],
       "options": {
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "gradient",
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
@@ -1610,7 +1700,8 @@
           }
         },
         "overrides": []
-      }
+      },
+      "description": "t5m MAPE % (threshold: green <10%, orange <20%, red \u226520%)"
     },
     {
       "type": "stat",
@@ -1632,14 +1723,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "abs(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"} - sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))) / clamp_min(sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])), 1) * 100",
+          "expr": "abs(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"} - sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))) / clamp_min(sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])), 1) * 100 OR on() vector(0)",
           "refId": "A",
           "legendFormat": "t10m MAPE"
         }
       ],
       "options": {
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "gradient",
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
@@ -1686,7 +1777,8 @@
           }
         },
         "overrides": []
-      }
+      },
+      "description": "t10m MAPE % (threshold: green <10%, orange <20%, red \u226520%)"
     },
     {
       "type": "timeseries",
@@ -1742,8 +1834,10 @@
           "calcs": [
             "last",
             "min",
-            "max"
-          ]
+            "max",
+            "mean"
+          ],
+          "showLegend": true
         }
       },
       "fieldConfig": {
@@ -1766,8 +1860,8 @@
               "legend": false
             },
             "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
+            "lineWidth": 2,
+            "pointSize": 3,
             "scaleDistribution": {
               "type": "linear"
             },
@@ -1890,7 +1984,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum_over_time((abs(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t3m\"} - sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))) / clamp_min(sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])), 1) > 0.15)[5m:30s]) / 10",
+          "expr": "sum_over_time((abs(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t3m\"} - sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))) / clamp_min(sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])), 1) > 0.15)[5m:30s]) / 10 OR on() vector(0)",
           "refId": "A",
           "legendFormat": "t3m SLA Breach %"
         },
@@ -1899,7 +1993,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum_over_time((abs(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t5m\"} - sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))) / clamp_min(sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])), 1) > 0.15)[5m:30s]) / 10",
+          "expr": "sum_over_time((abs(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t5m\"} - sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))) / clamp_min(sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])), 1) > 0.15)[5m:30s]) / 10 OR on() vector(0)",
           "refId": "B",
           "legendFormat": "t5m SLA Breach %"
         },
@@ -1908,16 +2002,16 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum_over_time((abs(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"} - sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))) / clamp_min(sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])), 1) > 0.15)[5m:30s]) / 10",
+          "expr": "sum_over_time((abs(ppa_predicted_load_rps{cr_name=\"test-app-ppa-t10m\"} - sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))) / clamp_min(sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])), 1) > 0.15)[5m:30s]) / 10 OR on() vector(0)",
           "refId": "C",
           "legendFormat": "t10m SLA Breach %"
         }
       ],
       "options": {
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "gradient",
         "justifyMode": "center",
-        "orientation": "horizontal",
+        "orientation": "auto",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -1958,7 +2052,8 @@
           }
         },
         "overrides": []
-      }
+      },
+      "description": "Model SLA Breach Rate (% of time >15% error)"
     },
     {
       "collapsed": false,
@@ -1970,7 +2065,8 @@
       },
       "id": 40,
       "title": "Traffic, Latency and Errors",
-      "type": "row"
+      "type": "row",
+      "description": "Application traffic patterns, latency percentiles, and error rate trends"
     },
     {
       "type": "timeseries",
@@ -1994,7 +2090,7 @@
           },
           "refId": "A",
           "legendFormat": "RPS",
-          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m]))"
+          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])) OR on() vector(0)"
         },
         {
           "datasource": {
@@ -2026,8 +2122,10 @@
           "calcs": [
             "last",
             "min",
-            "max"
-          ]
+            "max",
+            "mean"
+          ],
+          "showLegend": true
         }
       },
       "fieldConfig": {
@@ -2037,8 +2135,10 @@
           },
           "custom": {
             "lineWidth": 2,
-            "fillOpacity": 8,
-            "spanNulls": true
+            "fillOpacity": 10,
+            "spanNulls": true,
+            "pointSize": 3,
+            "showPoints": "auto"
           },
           "unit": "reqps"
         },
@@ -2135,7 +2235,7 @@
           },
           "refId": "A",
           "legendFormat": "P95 Latency",
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{pod=~\"test-app.*\"}[5m])) by (le)) * 1000"
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{pod=~\"test-app.*\"}[5m])) by (le)) * 1000 OR on() vector(0)"
         },
         {
           "datasource": {
@@ -2144,7 +2244,7 @@
           },
           "refId": "B",
           "legendFormat": "P50 Latency",
-          "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{pod=~\"test-app.*\"}[5m])) by (le)) * 1000"
+          "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{pod=~\"test-app.*\"}[5m])) by (le)) * 1000 OR on() vector(0)"
         }
       ],
       "options": {
@@ -2158,8 +2258,10 @@
           "calcs": [
             "last",
             "min",
-            "max"
-          ]
+            "max",
+            "mean"
+          ],
+          "showLegend": true
         }
       },
       "fieldConfig": {
@@ -2170,7 +2272,9 @@
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 10,
-            "spanNulls": true
+            "spanNulls": true,
+            "pointSize": 3,
+            "showPoints": "auto"
           },
           "unit": "ms"
         },
@@ -2238,7 +2342,7 @@
           },
           "refId": "A",
           "legendFormat": "Error Rate %",
-          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\",status=~\"[45].*\"}[1m])) / sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])) * 100"
+          "expr": "sum(rate(http_requests_total{pod=~\"test-app.*\",status=~\"[45].*\"}[1m])) / sum(rate(http_requests_total{pod=~\"test-app.*\"}[1m])) * 100 OR on() vector(0)"
         },
         {
           "datasource": {
@@ -2270,8 +2374,10 @@
           "calcs": [
             "last",
             "min",
-            "max"
-          ]
+            "max",
+            "mean"
+          ],
+          "showLegend": true
         }
       },
       "fieldConfig": {
@@ -2282,7 +2388,9 @@
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 10,
-            "spanNulls": true
+            "spanNulls": true,
+            "pointSize": 3,
+            "showPoints": "auto"
           },
           "unit": "percent"
         },
@@ -2377,7 +2485,8 @@
       },
       "id": 50,
       "title": "Infrastructure Resource Usage",
-      "type": "row"
+      "type": "row",
+      "description": "Infrastructure resource consumption by pods"
     },
     {
       "type": "timeseries",
@@ -2401,7 +2510,7 @@
           },
           "refId": "A",
           "legendFormat": "CPU Utilization %",
-          "expr": "sum(rate(container_cpu_usage_seconds_total{pod=~\"test-app.*\",namespace=\"default\"}[1m])) / sum(kube_pod_container_resource_limits{resource=\"cpu\",pod=~\"test-app.*\",namespace=\"default\"}) * 100"
+          "expr": "sum(rate(container_cpu_usage_seconds_total{pod=~\"test-app.*\",namespace=\"default\"}[1m])) / sum(kube_pod_container_resource_limits{resource=\"cpu\",pod=~\"test-app.*\",namespace=\"default\"}) * 100 OR on() vector(0)"
         },
         {
           "datasource": {
@@ -2424,8 +2533,10 @@
           "calcs": [
             "last",
             "min",
-            "max"
-          ]
+            "max",
+            "mean"
+          ],
+          "showLegend": true
         }
       },
       "fieldConfig": {
@@ -2436,7 +2547,9 @@
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 10,
-            "spanNulls": true
+            "spanNulls": true,
+            "pointSize": 3,
+            "showPoints": "auto"
           },
           "unit": "percent"
         },
@@ -2514,7 +2627,7 @@
           },
           "refId": "A",
           "legendFormat": "Memory Utilization %",
-          "expr": "sum(container_memory_working_set_bytes{pod=~\"test-app.*\",namespace=\"default\"}) / sum(kube_pod_container_resource_limits{resource=\"memory\",pod=~\"test-app.*\",namespace=\"default\"}) * 100"
+          "expr": "sum(container_memory_working_set_bytes{pod=~\"test-app.*\",namespace=\"default\"}) / sum(kube_pod_container_resource_limits{resource=\"memory\",pod=~\"test-app.*\",namespace=\"default\"}) * 100 OR on() vector(0)"
         },
         {
           "datasource": {
@@ -2537,8 +2650,10 @@
           "calcs": [
             "last",
             "min",
-            "max"
-          ]
+            "max",
+            "mean"
+          ],
+          "showLegend": true
         }
       },
       "fieldConfig": {
@@ -2549,7 +2664,9 @@
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 10,
-            "spanNulls": true
+            "spanNulls": true,
+            "pointSize": 3,
+            "showPoints": "auto"
           },
           "unit": "percent"
         },
@@ -2615,7 +2732,8 @@
       },
       "id": 60,
       "title": "Autoscaler Behavior and PPA Internals",
-      "type": "row"
+      "type": "row",
+      "description": "Autoscaler behavior metrics and PPA internal state tracking"
     },
     {
       "type": "timeseries",
@@ -2671,8 +2789,10 @@
           "calcs": [
             "last",
             "min",
-            "max"
-          ]
+            "max",
+            "mean"
+          ],
+          "showLegend": true
         }
       },
       "fieldConfig": {
@@ -2683,7 +2803,9 @@
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 10,
-            "spanNulls": true
+            "spanNulls": true,
+            "pointSize": 3,
+            "showPoints": "auto"
           },
           "unit": "short"
         },
@@ -2822,8 +2944,10 @@
           "calcs": [
             "last",
             "min",
-            "max"
-          ]
+            "max",
+            "mean"
+          ],
+          "showLegend": true
         }
       },
       "fieldConfig": {
@@ -2834,7 +2958,9 @@
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 10,
-            "spanNulls": true
+            "spanNulls": true,
+            "pointSize": 3,
+            "showPoints": "auto"
           },
           "unit": "short"
         },
@@ -2936,9 +3062,9 @@
       ],
       "options": {
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "gradient",
         "justifyMode": "center",
-        "orientation": "horizontal",
+        "orientation": "auto",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -2951,7 +3077,7 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "fixed",
+            "mode": "thresholds",
             "fixedColor": "#73BF69"
           },
           "decimals": 2,
@@ -2968,16 +3094,20 @@
           }
         },
         "overrides": []
-      }
+      },
+      "description": "PPA Health (t10m)"
     }
   ],
-  "refresh": "30s",
-  "schemaVersion": 36,
+  "refresh": "15s",
+  "schemaVersion": 38,
   "style": "dark",
   "tags": [
     "ppa",
     "autoscaler",
-    "ml"
+    "ml",
+    "kubernetes",
+    "prometheus",
+    "monitoring"
   ],
   "templating": {
     "list": [
@@ -2992,14 +3122,120 @@
         "query": "prometheus",
         "refresh": 1,
         "type": "datasource"
+      },
+      {
+        "allValue": "test-app",
+        "current": {
+          "selected": true,
+          "text": "test-app",
+          "value": "test-app"
+        },
+        "definition": "label_values(kube_deployment_labels, deployment)",
+        "description": "Application deployment name",
+        "hide": 1,
+        "includeAll": false,
+        "label": "Deployment",
+        "multi": false,
+        "name": "app",
+        "options": [],
+        "query": {
+          "query": "label_values(kube_deployment_labels, deployment)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 2,
+        "skipUrlSync": false,
+        "sort": 1,
+        "tagValuesQuery": "",
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "default",
+          "value": "default"
+        },
+        "definition": "label_values(kube_deployment_labels, namespace)",
+        "description": "Kubernetes namespace",
+        "hide": 1,
+        "includeAll": false,
+        "label": "Namespace",
+        "multi": false,
+        "name": "namespace",
+        "options": [],
+        "query": {
+          "query": "label_values(kube_deployment_labels, namespace)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
       }
     ]
   },
   "time": {
-    "from": "now-1h",
+    "from": "now-30m",
     "to": "now"
   },
-  "timepicker": {},
+  "timepicker": {
+    "collapse": false,
+    "current": {
+      "text": "Last 30 minutes",
+      "value": "now-30m"
+    },
+    "hide": false,
+    "notice": false,
+    "options": [
+      {
+        "from": "now-5m",
+        "text": "Last 5 minutes",
+        "to": "now"
+      },
+      {
+        "from": "now-15m",
+        "text": "Last 15 minutes",
+        "to": "now"
+      },
+      {
+        "from": "now-30m",
+        "text": "Last 30 minutes",
+        "to": "now"
+      },
+      {
+        "from": "now-1h",
+        "text": "Last 1 hour",
+        "to": "now"
+      },
+      {
+        "from": "now-3h",
+        "text": "Last 3 hours",
+        "to": "now"
+      },
+      {
+        "from": "now-6h",
+        "text": "Last 6 hours",
+        "to": "now"
+      },
+      {
+        "from": "now-24h",
+        "text": "Last 24 hours",
+        "to": "now"
+      }
+    ],
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "2h",
+      "1d"
+    ]
+  },
   "timezone": "browser",
   "title": "Predictive Pod Autoscaler",
   "uid": "ppa-v3",

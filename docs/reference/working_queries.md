@@ -22,7 +22,7 @@
 - **latency_p95_ms**: leading indicator — latency spikes before CPU because the queue fills up first
 
 ## Setup That Works
-- Minikube: KVM2 driver
+- Minikube: Auto-detected driver (kvm2 on Linux, docker on macOS/Windows)
 - Prometheus: kube-prometheus-stack (PodMonitor auto-discovery)
 - Test App: Custom Python app with prometheus_client (single container, metrics on :9091)
 - Traffic: in-cluster traffic-gen deployment + Locust variable pattern

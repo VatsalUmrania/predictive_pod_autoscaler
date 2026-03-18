@@ -134,7 +134,7 @@ kubectl get hpa test-app -w
 
 ```bash
 # Desktop/development machine
-cd /run/media/vatsal/Drive/Projects/predictive_pod_autoscaler
+cd predictive_pod_autoscaler
 source venv/bin/activate
 
 # Verify packages

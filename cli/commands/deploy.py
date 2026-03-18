@@ -30,6 +30,7 @@ from cli.config import (
 from cli.utils import (
     console,
     error,
+    get_minikube_docker_env,
     heading,
     info,
     kubectl,
@@ -84,7 +85,8 @@ def deploy(
     for k, v in banner_data.items():
         table.add_row(k, v)
     console.print()
-    console.print(Panel(table, title="[bold bright_cyan]PPA Deploy[/]", border_style="bright_cyan"))
+    with console.status("[bold bright_cyan]PPA Deploy[/]", spinner="clock"):
+        console.print(Panel(table, title="[bold bright_cyan]PPA Deploy[/]", border_style="bright_cyan"))
 
     if dry_run:
         heading("DRY RUN — Planned steps")
@@ -94,69 +96,87 @@ def deploy(
             info(f"Step {i}: {s}")
         raise typer.Exit()
 
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+    
     total_steps = 9 if retrain else 6
     current = 0
 
-    # ── Step 1–3: Retrain + Convert + Promote ─────────────────────────
-    if retrain:
-        current += 1
-        step_heading(current, total_steps, f"Retraining LSTM ({horizon})")
+    with Progress(
+        SpinnerColumn(style="bright_magenta"),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(bar_width=30, style="bright_cyan", complete_style="bright_green"),
+        TaskProgressColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("[bold]PPA Deploy[/bold]", total=total_steps)
 
-        if not os.path.exists(csv):
-            error(f"Training CSV not found: {csv}")
-            raise typer.Exit(1)
+        # ── Step 1–3: Retrain + Convert + Promote ─────────────────────────
+        if retrain:
+            current += 1
+            step_heading(current, total_steps, f"Retraining LSTM ({horizon})")
+            progress.update(task, description=f"[bold]Step {current}:[/bold] Retraining LSTM")
 
-        # Direct Python import for training
-        sys.path.insert(0, str(PROJECT_DIR))
-        try:
-            from model.train import train_model
-            result = train_model(
-                csv_path=csv,
-                lookback=lookback,
-                epochs=epochs,
-                target_col=horizon,
-                output_dir=artifacts_dir,
-                early_stopping_patience=patience,
-            )
-            if result is None:
-                error("Training failed")
+            if not os.path.exists(csv):
+                error(f"Training CSV not found: {csv}")
                 raise typer.Exit(1)
-            success(f"Training complete — Val MAE: {result['metrics']['val_mae']:.4f}")
-        except ImportError:
-            warn("Cannot import model.train — falling back to subprocess")
-            run_cmd(
-                [
-                    "python", str(PROJECT_DIR / "model" / "train.py"),
-                    "--csv", csv, "--lookback", str(lookback),
-                    "--epochs", str(epochs), "--target", horizon,
-                    "--output-dir", artifacts_dir, "--patience", str(patience),
-                ],
-                title="Training LSTM",
-            )
 
-        # Convert
-        current += 1
-        step_heading(current, total_steps, "Converting Keras → TFLite")
-        keras_model = os.path.join(artifacts_dir, f"ppa_model_{horizon}.keras")
-        tflite_out = os.path.join(artifacts_dir, "ppa_model.tflite")
+            # Direct Python import for training
+            sys.path.insert(0, str(PROJECT_DIR))
+            try:
+                from model.train import train_model
+                result = train_model(
+                    csv_path=csv,
+                    lookback=lookback,
+                    epochs=epochs,
+                    target_col=horizon,
+                    output_dir=artifacts_dir,
+                    early_stopping_patience=patience,
+                )
+                if result is None:
+                    error("Training failed")
+                    raise typer.Exit(1)
+                success(f"Training complete — Val MAE: {result['metrics']['val_mae']:.4f}")
+            except ImportError:
+                warn("Cannot import model.train — falling back to subprocess")
+                run_cmd(
+                    [
+                        "python", str(PROJECT_DIR / "model" / "train.py"),
+                        "--csv", csv, "--lookback", str(lookback),
+                        "--epochs", str(epochs), "--target", horizon,
+                        "--output-dir", artifacts_dir, "--patience", str(patience),
+                    ],
+                    title="Training LSTM",
+                )
+            
+            progress.advance(task)
 
-        try:
-            from model.convert import convert_model
-            conv = convert_model(model_path=keras_model, output_path=tflite_out)
-            if conv:
-                success(f"Converted → {tflite_out} ({conv['size_kb']:.1f} KB)")
-            else:
-                error("Conversion failed")
-                raise typer.Exit(1)
-        except ImportError:
-            run_cmd(
-                ["python", str(PROJECT_DIR / "model" / "convert.py"), "--model", keras_model, "--output", tflite_out],
-                title="Converting to TFLite",
-            )
+            # Convert
+            current += 1
+            step_heading(current, total_steps, "Converting Keras → TFLite")
+            progress.update(task, description=f"[bold]Step {current}:[/bold] Converting model")
+            keras_model = os.path.join(artifacts_dir, f"ppa_model_{horizon}.keras")
+            tflite_out = os.path.join(artifacts_dir, "ppa_model.tflite")
 
-        # Promote
-        current += 1
-        step_heading(current, total_steps, f"Promoting artifacts → {champion_dir}")
+            try:
+                from model.convert import convert_model
+                conv = convert_model(model_path=keras_model, output_path=tflite_out)
+                if conv:
+                    success(f"Converted → {tflite_out} ({conv['size_kb']:.1f} KB)")
+                else:
+                    error("Conversion failed")
+                    raise typer.Exit(1)
+            except ImportError:
+                run_cmd(
+                    ["python", str(PROJECT_DIR / "model" / "convert.py"), "--model", keras_model, "--output", tflite_out],
+                    title="Converting to TFLite",
+                )
+            
+            progress.advance(task)
+
+            # Promote
+            current += 1
+            step_heading(current, total_steps, f"Promoting artifacts")
+            progress.update(task, description=f"[bold]Step {current}:[/bold] Promoting artifacts")
         os.makedirs(champion_dir, exist_ok=True)
         import shutil
         shutil.copy2(tflite_out, os.path.join(champion_dir, "ppa_model.tflite"))
@@ -168,6 +188,7 @@ def deploy(
             if os.path.exists(src):
                 shutil.copy2(src, os.path.join(champion_dir, dst_name))
         success("Artifacts promoted to champions")
+        progress.advance(task)
 
     # ── Verify champion dir ───────────────────────────────────────────
     if not os.path.isdir(champion_dir):
@@ -177,6 +198,7 @@ def deploy(
     # ── Step: Handle HPA ──────────────────────────────────────────────
     current += 1
     step_heading(current, total_steps, "Checking HPA")
+    progress.update(task, description=f"[bold]Step {current}:[/bold] Checking HPA")
 
     hpa_result = kubectl("get", "hpa", app_name, namespace=DEFAULT_NAMESPACE, check=False)
     if hpa_result.returncode == 0:
@@ -190,10 +212,12 @@ def deploy(
             warn("Keeping HPA — PPA and HPA will both run")
     else:
         success(f"No HPA found for '{app_name}'")
+    progress.advance(task)
 
     # ── Step: Scale down operator ─────────────────────────────────────
     current += 1
     step_heading(current, total_steps, "Scaling down existing operator")
+    progress.update(task, description=f"[bold]Step {current}:[/bold] Scaling down operator")
 
     op_result = kubectl("get", "deployment", "ppa-operator", namespace=DEFAULT_NAMESPACE, check=False)
     if op_result.returncode == 0:
@@ -201,25 +225,33 @@ def deploy(
         success("Operator scaled to 0")
     else:
         success("No existing operator deployment")
+    progress.advance(task)
 
     # ── Step: Build Docker image ──────────────────────────────────────
     current += 1
     if not skip_build:
-        step_heading(current, total_steps, "Building ppa-operator:latest inside Minikube")
+        step_heading(current, total_steps, "Building ppa-operator:latest")
+        progress.update(task, description=f"[bold]Step {current}:[/bold] Building operator image")
+        docker_env = {**os.environ, **get_minikube_docker_env()}
         run_cmd(
-            f'eval $(minikube docker-env) && docker build -t ppa-operator:latest '
-            f'-f "{PROJECT_DIR / "operator" / "Dockerfile"}" "{PROJECT_DIR}"',
+            [
+                "docker", "build", "-t", "ppa-operator:latest",
+                "-f", str(PROJECT_DIR / "operator" / "Dockerfile"),
+                str(PROJECT_DIR),
+            ],
             title="Building ppa-operator Docker image",
-            shell=True,
+            env=docker_env,
         )
         success("Image built: ppa-operator:latest")
     else:
-        step_heading(current, total_steps, "Skipping image build (--skip-build)")
-        run_cmd_silent("eval $(minikube docker-env)", shell=True, check=False)
+        step_heading(current, total_steps, "Skipping image build")
+        progress.update(task, description=f"[bold]Step {current}:[/bold] Skipping image build")
+    progress.advance(task)
 
     # ── Step: Apply CRD + RBAC ────────────────────────────────────────
     current += 1
     step_heading(current, total_steps, "Applying CRD + RBAC + Deployment")
+    progress.update(task, description=f"[bold]Step {current}:[/bold] Deploying operator")
     kubectl("apply", "-f", str(DEPLOY_DIR / "crd.yaml"))
     kubectl("apply", "-f", str(DEPLOY_DIR / "rbac.yaml"))
     kubectl("apply", "-f", str(DEPLOY_DIR / "operator-deployment.yaml"))
@@ -230,12 +262,15 @@ def deploy(
         title="Operator rollout",
     )
     success("Operator deployment rolled out")
+    progress.advance(task)
 
     # ── Step: Apply CR ────────────────────────────────────────────────
     current += 1
     step_heading(current, total_steps, "Applying PredictiveAutoscaler CR")
+    progress.update(task, description=f"[bold]Step {current}:[/bold] Applying CR")
     kubectl("apply", "-f", str(DEPLOY_DIR / "predictiveautoscaler.yaml"))
     success("CR applied")
+    progress.advance(task)
 
     # ── Summary ───────────────────────────────────────────────────────
     console.print()
@@ -259,12 +294,23 @@ def deploy(
         info("Tailing operator logs — Ctrl+C to exit")
         time.sleep(3)
         try:
-            run_cmd(
-                f'kubectl logs -l app=ppa-operator -n {DEFAULT_NAMESPACE} -f --tail=50 '
-                f'| grep --line-buffered -E "Predicted|Scaling|Patched|Warming|ERROR|WARN|champion|model"',
-                title="Tailing logs",
-                shell=True,
-                check=False,
+            # Stream logs with cross-platform filtering (no grep needed)
+            import re
+            import subprocess as _sp
+
+            pattern = re.compile(r"Predicted|Scaling|Patched|Warming|ERROR|WARN|champion|model", re.IGNORECASE)
+            proc = _sp.Popen(
+                ["kubectl", "logs", "-l", f"app=ppa-operator", "-n", DEFAULT_NAMESPACE, "-f", "--tail=50"],
+                stdout=_sp.PIPE,
+                stderr=_sp.PIPE,
+                text=True,
+                bufsize=1,  # Line buffered
             )
+
+            for line in proc.stdout or []:
+                if pattern.search(line):
+                    console.print(line.rstrip())
+
+            proc.wait()
         except KeyboardInterrupt:
             success("Log tailing stopped")

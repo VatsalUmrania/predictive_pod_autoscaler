@@ -27,7 +27,7 @@ PPA is designed with a strict separation of concerns, decoupling offline heavy l
 
 ##  Quick Start
 
-A comprehensive bash wrapper is provided to bootstrap the local development environment (requires `minikube` with the `kvm2` driver, `kubectl`, and `helm`).
+A comprehensive wrapper is provided to bootstrap the local development environment (requires `minikube`, `kubectl`, and `helm`). The Minikube driver is auto-detected based on your platform (`kvm2` on Linux, `docker` on macOS/Windows).
 
 ```bash
 # 1. Boot the Minikube cluster, install the kube-prometheus-stack, 

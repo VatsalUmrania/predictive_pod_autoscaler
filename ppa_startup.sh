@@ -22,10 +22,44 @@ BOLD='\033[1m'
 NC='\033[0m' # No Color
 
 # ── Config ───────────────────────────────────────────────────
-PROJECT_DIR="/run/media/vatsal/Drive/Projects/predictive_pod_autoscaler"
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROMETHEUS_PORT=9090
 GRAFANA_PORT=3000
 APP_PORT=8080
+
+# ── Minikube Driver (Cross-Platform) ───────────────────────────
+# Auto-detect appropriate driver based on platform
+# Override by setting: PPA_MINIKUBE_DRIVER=docker ./ppa_startup.sh
+_detect_minikube_driver() {
+    # Use override if set
+    if [[ -n "${PPA_MINIKUBE_DRIVER:-}" ]]; then
+        echo "$PPA_MINIKUBE_DRIVER"
+        return
+    fi
+
+    local system
+    system="$(uname -s | tr '[:upper:]' '[:lower:]')"
+    case "$system" in
+        linux)
+            echo "kvm2"
+            ;;
+        darwin)
+            echo "docker"
+            ;;
+        msys*|mingw*|cygwin*)
+            echo "docker"
+            ;;
+        *)
+            echo ""  # Let Minikube auto-detect
+            ;;
+    esac
+}
+
+MINIKUBE_DRIVER="$(_detect_minikube_driver)"
+MINIKUBE_CPUS=4
+MINIKUBE_MEMORY=8192
+MINIKUBE_DISK_SIZE="20g"
+MINIKUBE_K8S_VERSION="v1.28.3"
 
 # ── Helpers ──────────────────────────────────────────────────
 log()     { echo -e "${GREEN}[✔]${NC} $1"; }
@@ -46,11 +80,13 @@ wait_for_pods() {
 
 # ── Step List ─────────────────────────────────────────────────
 list_steps() {
+    local driver_display
+    driver_display="${MINIKUBE_DRIVER:-auto}"
     echo ""
     echo -e "${BOLD}PPA Startup Steps:${NC}"
     echo ""
     echo "  1  — Check prerequisites (docker, kubectl, helm, python3)"
-    echo "  2  — Start Minikube (KVM2 driver)"
+    echo "  2  — Start Minikube (${driver_display} driver, ${MINIKUBE_CPUS} CPU, ${MINIKUBE_MEMORY} GB RAM)"
     echo "  3  — Enable Minikube addons (metrics-server, ingress)"
     echo "  4  — Install Prometheus stack"
     echo "  5  — Build & deploy instrumented test-app"
@@ -104,20 +140,22 @@ fi
 #  STEP 2 — Start Minikube
 # ═══════════════════════════════════════════════════════════════
 if ! run_step 2; then
-heading "STEP 2 — Starting Minikube (KVM2)"
+heading "STEP 2 — Starting Minikube"
 
 MINIKUBE_STATUS=$(minikube status --format='{{.Host}}' 2>/dev/null || echo "Stopped")
 
 if [[ "$MINIKUBE_STATUS" == "Running" ]]; then
     log "Minikube already running"
 else
-    info "Starting minikube with KVM2 driver..."
-    minikube start \
-        --driver=kvm2 \
-        --cpus=4 \
-        --memory=8192 \
-        --disk-size=20g \
-        --kubernetes-version=v1.28.3
+    local driver_display
+    driver_display="${MINIKUBE_DRIVER:-auto}"
+    info "Starting minikube with ${driver_display} driver..."
+    local minikube_cmd
+    minikube_cmd="minikube start --cpus=${MINIKUBE_CPUS} --memory=${MINIKUBE_MEMORY} --disk-size=${MINIKUBE_DISK_SIZE} --kubernetes-version=${MINIKUBE_K8S_VERSION}"
+    if [[ -n "${MINIKUBE_DRIVER}" ]]; then
+        minikube_cmd="${minikube_cmd} --driver=${MINIKUBE_DRIVER}"
+    fi
+    eval "$minikube_cmd"
     log "Minikube started"
 fi
 

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import tempfile
 import time
 from datetime import datetime
 
@@ -24,24 +26,28 @@ from cli.utils import console, kubectl, query_prometheus, run_cmd_silent
 
 app = typer.Typer(rich_markup_mode="rich", invoke_without_command=True)
 
-PREDICTIONS_FILE = "/tmp/ppa_predictions.txt"
+def _get_predictions_file() -> str:
+    """Get cross-platform predictions file path."""
+    return os.path.join(tempfile.gettempdir(), "ppa_predictions.txt")
+
+PREDICTIONS_FILE = _get_predictions_file()
 PREDICTION_LOG = "prediction_validation.log"
 
 
 def _color_accuracy(value: float | None) -> str:
     if value is None:
-        return "[dim]N/A[/dim]"
+        return "[italic]N/A[/italic]"
     if value >= 90:
         return f"[bold green]{value:.1f}%[/bold green]"
     if value >= 80:
-        return f"[bold yellow]{value:.1f}%[/bold yellow]"
+        return f"[bold blue]{value:.1f}%[/bold blue]"
     return f"[bold red]{value:.1f}%[/bold red]"
 
 
 def _color_metric(value: str | None, suffix: str = "") -> str:
     if value is None or value == "N/A":
-        return "[dim]N/A[/dim]"
-    return f"[bold white]{value}{suffix}[/bold white]"
+        return "[italic]N/A[/italic]"
+    return f"[metric]{value}{suffix}[/metric]"
 
 
 def _get_ppa_status() -> dict:
@@ -106,7 +112,7 @@ def _build_scaling_panel() -> Panel:
         check=False,
     ).stdout.strip() or "?"
 
-    table = Table(show_header=True, border_style="cyan", header_style="bold cyan", padding=(0, 1))
+    table = Table(show_header=True, border_style="info", header_style="heading", padding=(0, 1))
     table.add_column("Component", style="bold", min_width=12)
     table.add_column("Current", justify="center", min_width=8)
     table.add_column("Desired", justify="center", min_width=8)
@@ -115,7 +121,7 @@ def _build_scaling_panel() -> Panel:
     table.add_row("PPA", ppa["current"], ppa["desired"])
     table.add_row("Deployment", ready, actual)
 
-    return Panel(table, title="📊 [bold]Scaling State[/]", border_style="bright_cyan")
+    return Panel(table, title="[bold]Scaling State[/]", border_style="info")
 
 
 def _build_metrics_panel() -> Panel:
@@ -133,7 +139,7 @@ def _build_metrics_panel() -> Panel:
         'histogram_quantile(0.95,sum(rate(http_request_duration_seconds_bucket{pod=~"test-app.*"}[1m]))by(le))*1000'
     ) or "N/A"
 
-    table = Table(show_header=False, border_style="cyan", padding=(0, 1))
+    table = Table(show_header=False, border_style="info", padding=(0, 1))
     table.add_column("Metric", style="bold", min_width=16)
     table.add_column("Value", justify="right", min_width=12)
 
@@ -142,7 +148,7 @@ def _build_metrics_panel() -> Panel:
     table.add_row("CPU util", _color_metric(cpu, "%"))
     table.add_row("P95 latency", _color_metric(p95, " ms"))
 
-    return Panel(table, title="📈 [bold]Real-Time Metrics[/]", border_style="bright_cyan")
+    return Panel(table, title="[bold]Real-Time Metrics[/]", border_style="info")
 
 
 def _build_prediction_panel() -> Panel:
@@ -156,7 +162,7 @@ def _build_prediction_panel() -> Panel:
         check=False,
     ).stdout.strip() or "?"
 
-    table = Table(show_header=False, border_style="magenta", padding=(0, 1))
+    table = Table(show_header=False, border_style="step", padding=(0, 1))
     table.add_column("Metric", style="bold", min_width=22)
     table.add_column("Value", justify="right", min_width=12)
 
@@ -165,7 +171,7 @@ def _build_prediction_panel() -> Panel:
     table.add_row("PPA desired replicas", _color_metric(ppa["desired"]))
     table.add_row("HPA CPU (trigger=50%)", _color_metric(hpa_cpu, "%"))
 
-    return Panel(table, title="🔮 [bold]PPA Prediction (t+10m)[/]", border_style="bright_magenta")
+    return Panel(table, title="[bold]PPA Prediction (t+10m)[/]", border_style="step")
 
 
 def _build_comparison_panel() -> Panel:
@@ -186,29 +192,29 @@ def _build_comparison_panel() -> Panel:
         hpa_int = int(hpa)
         ppa_int = int(ppa)
         if hpa_int > ppa_int:
-            verdict = "[yellow]⚠  HPA more conservative[/yellow] (wants more replicas)"
+            verdict = "[bold magenta][ HPA MORE CONSERVATIVE ][/bold magenta] (wants more replicas)"
         elif ppa_int > hpa_int:
-            verdict = "[green]✓  PPA more conservative[/green] (forecasts higher load)"
+            verdict = "[bold green][ PPA MORE CONSERVATIVE ][/bold green] (forecasts higher load)"
         else:
-            verdict = "[bold]🤝  Agreement[/bold] (both want same replicas)"
+            verdict = "[bold blue][ MATCH ][/bold blue] (both want same replicas)"
     except ValueError:
-        verdict = "[dim]Waiting for data...[/dim]"
+        verdict = "[italic]Waiting for data...[/italic]"
 
     content = f"{verdict}\n\n  Actual running: [bold]{actual}[/bold] replicas"
-    return Panel(content, title="🏆 [bold]Scaling Comparison[/]", border_style="bright_green")
+    return Panel(content, title="[bold]Scaling Comparison[/]", border_style="success")
 
 
 def _build_accuracy_panel() -> Panel:
     """Section 6: Overall prediction accuracy stats."""
     if not os.path.exists(PREDICTION_LOG):
-        return Panel("[dim]No validation data yet[/dim]", title="📊 [bold]Accuracy[/]", border_style="bright_yellow")
+        return Panel("[dim]No validation data yet[/dim]", title="[bold]Accuracy[/]", border_style="bright_yellow")
 
     try:
         with open(PREDICTION_LOG) as f:
             lines = f.readlines()[1:]  # skip header
 
         if not lines:
-            return Panel("[dim]Waiting for 10+ minutes...[/dim]", title="📊 [bold]Accuracy[/]", border_style="bright_yellow")
+            return Panel("[italic]Waiting for 10+ minutes...[/italic]", title="[bold]Accuracy[/]", border_style="warning")
 
         total = len(lines)
         accuracies = []
@@ -227,9 +233,9 @@ def _build_accuracy_panel() -> Panel:
             f"  Avg accuracy:      {_color_accuracy(avg_acc)}"
         )
     except Exception:
-        content = "[dim]Error reading log[/dim]"
+        content = "[italic]Error reading log[/italic]"
 
-    return Panel(content, title="📊 [bold]Prediction Accuracy[/]", border_style="bright_yellow")
+    return Panel(content, title="[bold]Prediction Accuracy[/]", border_style="warning")
 
 
 def _build_dashboard() -> Layout:
@@ -237,8 +243,8 @@ def _build_dashboard() -> Layout:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     header = Panel(
-        Align.center(Text(f"HPA vs PPA — Live t+10 Prediction Validation\n{now}", style="bold bright_cyan")),
-        border_style="bright_cyan",
+        Align.center(Text(f"HPA vs PPA — Live t+10 Prediction Validation\n{now}", style="heading")),
+        border_style="info",
     )
 
     # Build panels
@@ -294,7 +300,7 @@ def monitor(
             f.write("timestamp,predicted_rps,actual_rps_10min_later,error_percent,accuracy\n")
 
     console.print()
-    console.print("[dim]Starting live dashboard — Ctrl+C to exit[/dim]")
+    console.print("[italic]Starting live dashboard — Ctrl+C to exit[/italic]")
     console.print()
 
     try:
@@ -309,4 +315,4 @@ def monitor(
                 time.sleep(interval)
     except KeyboardInterrupt:
         console.print()
-        console.print("[success]✔[/success] Monitor stopped")
+        console.print("[success]✓[/success] Monitor stopped")

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+from datetime import datetime
 import subprocess
 import sys
 
@@ -12,7 +14,10 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from cli.config import PPA_THEME, PROMETHEUS_URL
+import signal
+from pathlib import Path
+
+from cli.config import PPA_THEME, PROMETHEUS_URL, SESSION_FILE
 
 # ── Singleton Console ────────────────────────────────────────────────────────
 console = Console(theme=PPA_THEME, highlight=False)
@@ -21,7 +26,7 @@ console = Console(theme=PPA_THEME, highlight=False)
 # ── Styled output helpers ────────────────────────────────────────────────────
 
 def success(msg: str) -> None:
-    console.print(f"  [success]✔[/success] {msg}")
+    console.print(f"  [success]✓[/success] {msg}")
 
 
 def warn(msg: str) -> None:
@@ -29,16 +34,16 @@ def warn(msg: str) -> None:
 
 
 def error(msg: str) -> None:
-    console.print(f"  [error]✘[/error] {msg}")
+    console.print(f"  [error]✗[/error] {msg}")
 
 
 def info(msg: str) -> None:
-    console.print(f"  [info]→[/info] {msg}")
+    console.print(f"  [info]ℹ[/info] {msg}")
 
 
 def heading(title: str) -> None:
     console.print()
-    console.rule(f"[heading]{title}[/heading]", style="bright_cyan")
+    console.rule(f"[heading]{title}[/heading]", style="info")
 
 
 def step_heading(step_num: int, total: int, title: str) -> None:
@@ -46,7 +51,7 @@ def step_heading(step_num: int, total: int, title: str) -> None:
     console.print(
         Panel(
             f"[step]STEP {step_num}/{total}[/step]  [bold]{title}[/bold]",
-            border_style="bright_magenta",
+            border_style="step",
             padding=(0, 2),
         )
     )
@@ -180,9 +185,99 @@ def prometheus_ready(url: str = PROMETHEUS_URL) -> bool:
 
 def build_kv_table(title: str, data: dict[str, str], key_style: str = "info", val_style: str = "") -> Table:
     """Build a simple key-value Rich table."""
-    table = Table(title=title, show_header=False, border_style="bright_cyan", padding=(0, 2))
+    table = Table(title=title, show_header=False, border_style="info", padding=(0, 2))
     table.add_column("Key", style=key_style, min_width=20)
     table.add_column("Value", style=val_style)
     for k, v in data.items():
         table.add_row(k, str(v))
     return table
+
+
+def get_minikube_docker_env() -> dict[str, str]:
+    """Return Docker env vars from minikube without shell eval (cross-platform)."""
+    result = subprocess.run(
+        ["minikube", "docker-env", "--shell", "none"],
+        capture_output=True, text=True, check=False,
+    )
+    env_vars: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, _, value = line.partition("=")
+            env_vars[key.strip()] = value.strip().strip('"').strip("'")
+    return env_vars
+
+
+# ── Session Management ───────────────────────────────────────────────────────
+
+def save_session(pids: dict[str, int]) -> None:
+    """Save background process PIDs and metadata to session file."""
+    try:
+        data = load_session()
+        data["updated_at"] = datetime.now().isoformat()
+        if "start_time" not in data:
+            data["start_time"] = data["updated_at"]
+        
+        if "pids" not in data:
+            data["pids"] = {}
+        
+        data["pids"].update(pids)
+        
+        with open(SESSION_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        warn(f"Failed to save session: {e}")
+
+
+def load_session() -> dict:
+    """Load session data from file and migrate old formats."""
+    if not SESSION_FILE.exists():
+        return {}
+    try:
+        with open(SESSION_FILE, "r") as f:
+            data = json.load(f)
+        
+        # Migration: if data is a flat dict of PIDs, move to "pids" key
+        if data and "pids" not in data:
+            # Filter out metadata keys if they somehow exist
+            pids = {k: v for k, v in data.items() if k not in ["updated_at", "start_time"]}
+            meta = {k: v for k, v in data.items() if k in ["updated_at", "start_time"]}
+            data = {"pids": pids, **meta}
+            
+        return data
+    except Exception:
+        return {}
+
+
+def cleanup_session() -> None:
+    """Kill all tracked PIDs and remove session file."""
+    session = load_session()
+    pids = session.get("pids", {})
+    if not pids:
+        info("No active PPA session found.")
+        return
+
+    heading("Cleaning up PPA Session")
+    for name, pid in pids.items():
+        try:
+            if sys.platform == "win32":
+                result = subprocess.run(
+                    ["taskkill", "/F", "/PID", str(pid)],
+                    capture_output=True, check=False,
+                )
+                if result.returncode == 0:
+                    success(f"Stopped {name}")
+                # returncode != 0 means process was already gone — ignore
+            else:
+                os.kill(pid, 0)  # Raises ProcessLookupError if already dead
+                info(f"Stopping {name} (PID: {pid})...")
+                os.kill(pid, signal.SIGTERM)
+                success(f"Stopped {name}")
+        except ProcessLookupError:
+            pass  # Process already dead
+        except Exception as e:
+            warn(f"Could not stop {name}: {e}")
+
+    if SESSION_FILE.exists():
+        SESSION_FILE.unlink()
+    success("Session cleanup complete.")

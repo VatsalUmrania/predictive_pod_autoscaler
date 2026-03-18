@@ -80,8 +80,12 @@ pip install locust pandas requests
 ### Step 2 — Start Minikube
 
 ```bash
-# Start (KVM2 — required for this project)
-minikube start --driver=kvm2 --cpus=4 --memory=8192
+# Start (driver auto-detected: kvm2 on Linux, docker on macOS/Windows)
+minikube start --cpus=4 --memory=8192
+
+# Override driver explicitly
+minikube start --driver=docker --cpus=4 --memory=8192
+# or set PPA_MINIKUBE_DRIVER=docker before running startup scripts
 
 # Check status
 minikube status
@@ -92,6 +96,12 @@ minikube stop
 # NEVER run this — deletes all data
 # minikube delete
 ```
+
+**Note on Drivers:**
+- Linux: `kvm2` (best performance, requires KVM support)
+- macOS: `docker` (Docker Desktop) or `podman`
+- Windows: `docker` (Docker Desktop) or `hyperv`
+- The startup scripts auto-detect the appropriate driver based on platform
 
 ---
 
