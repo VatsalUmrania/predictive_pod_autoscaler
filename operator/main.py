@@ -4,6 +4,7 @@
 import logging
 import os
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -95,6 +96,11 @@ class CRState:
     stable_count: int = 0
     last_prediction: float = 0.0
     last_desired: int = -1  # replica target from previous cycle (stabilisation anchor)
+    # FIX: Graceful degradation tracking
+    last_known_good_replicas: int = 0
+    last_known_good_prediction: float = 0.0
+    consecutive_failures: int = 0
+    last_successful_cycle: float = 0.0
 
 
 # Registry keyed by (cr_namespace, cr_name) to avoid cross-namespace collisions.
@@ -113,11 +119,12 @@ def _resolve_paths(spec: dict, target_app: str, target_horizon: str) -> tuple[st
     return model_path, scaler_path, target_scaler_path
 
 
-def _get_or_create_state(key: tuple[str, str], model_path: str, scaler_path: str, target_scaler_path: str | None = None, target_app: str = "", target_ns: str = "", max_r: int = 1, container_name: str | None = None, min_r: int = 1) -> CRState:
+def _get_or_create_state(key: tuple[str, str], model_path: str, scaler_path: str, target_scaler_path: str | None = None, target_app: str = "", target_ns: str = "", max_r: int = 1, container_name: str | None = None, min_r: int = 1, persisted_history: dict | None = None) -> CRState:
     """Lazy-init or reload CRState if model paths changed.
 
     FIX (PR#3): Prefill is SKIPPED to avoid scaler distribution mismatch.
     FIX (PR#5): History is PRESERVED when model is upgraded (new paths), preventing 30-min blindness.
+    FIX (PR#15): Restore history from CR status on pod restart.
     """
     existing = _cr_state.get(key)
     if existing and existing.predictor.paths_match(model_path, scaler_path, target_scaler_path):
@@ -145,7 +152,20 @@ def _get_or_create_state(key: tuple[str, str], model_path: str, scaler_path: str
 
     # First time: create new state
     state = CRState(predictor=Predictor(model_path, scaler_path, target_scaler_path))
-    logger.info(f"[{key}] Skipping prefill to avoid scaler distribution mismatch (cold-start: ~30 min warmup)")
+
+    # FIX (PR#15): Restore history from CR status if available (pod restart resilience)
+    if persisted_history and persisted_history.get("data"):
+        try:
+            history_data = persisted_history["data"]
+            restored = state.predictor.deserialize_history(history_data)
+            if restored:
+                logger.info(f"[{key}] Restored {len(history_data)} history steps from CR status (PR#15)")
+            else:
+                logger.warning(f"[{key}] Failed to restore history from CR status, starting fresh")
+        except Exception as exc:
+            logger.warning(f"[{key}] Error restoring history: {exc}, starting fresh")
+    else:
+        logger.info(f"[{key}] Skipping prefill to avoid scaler distribution mismatch (cold-start: ~30 min warmup)")
 
     _cr_state[key] = state
     return state
@@ -181,6 +201,9 @@ def reconcile(spec, status, meta, patch, **kwargs):
     observer_mode = bool(spec.get("observerMode", False))
     container_name = spec.get("containerName") or None
 
+    # FIX (PR#18): Support per-CR Prometheus URL for multi-region deployments
+    prom_url = spec.get("prometheusUrl") or None
+
     # FIX (PR#14): Detect multiple CRs managing the same deployment
     # Count how many CRs are tracking this deployment
     same_target_crs = [
@@ -196,22 +219,52 @@ def reconcile(spec, status, meta, patch, **kwargs):
         )
 
     model_path, scaler_path, target_scaler_path = _resolve_paths(spec, target_app, target_horizon)
-    state = _get_or_create_state(key, model_path, scaler_path, target_scaler_path, target, target_ns, max_r, container_name, min_r)
+    # FIX (PR#15): Pass persisted history from CR status for pod restart resilience
+    persisted_history = status.get("historySnapshot") if status else None
+    state = _get_or_create_state(key, model_path, scaler_path, target_scaler_path, target, target_ns, max_r, container_name, min_r, persisted_history)
 
     # 1. Fetch features from Prometheus (namespace-scoped)
     # FIX (PR#1): Pass min_r as reference_replicas for stable rps_per_replica calculation
     # FIX (PR#4): Catch FeatureVectorException instead of silently handling NaN
     # FIX (PR#9): Also catch PrometheusCircuitBreakerTripped for backoff logic
+    # FIX (PR#18): Pass custom Prometheus URL for multi-region support
     try:
-        features, current_replicas = build_feature_vector(target, target_ns, min_r, max_r, container_name)
+        features, current_replicas = build_feature_vector(target, target_ns, min_r, max_r, container_name, prom_url)
+        # Track successful cycle for graceful degradation
+        state.last_successful_cycle = time.time()
+        state.consecutive_failures = 0
+        state.last_known_good_replicas = int(current_replicas)
     except (FeatureVectorException, PrometheusCircuitBreakerTripped) as e:
         # Feature extraction failed (Prometheus unavailable, network errors, etc.)
+        state.consecutive_failures += 1
         metric_failures = status.get("metricFailures", 0) + 1
         patch.status["metricFailures"] = metric_failures
         patch.status["lastMetricError"] = str(e)
         patch.status["lastMetricErrorTime"] = datetime.now(timezone.utc).isoformat()
 
         logger.error(f"[{cr_name}] Feature extraction failed ({metric_failures}/5): {e}")
+
+        # FIX: Graceful degradation - use fallback scaling if we have recent history
+        if state.last_known_good_replicas > 0 and state.consecutive_failures <= 3:
+            # Use last known good state with slight safety margin
+            fallback_replicas = state.last_known_good_replicas
+            logger.warning(
+                f"[{cr_name}] Using fallback scaling: {fallback_replicas} replicas "
+                f"(last known good, failure {state.consecutive_failures}/3)"
+            )
+            patch.status["fallbackScaling"] = True
+            patch.status["fallbackReason"] = f"Feature extraction failed: {str(e)[:100]}"
+            patch.status["fallbackReplicas"] = fallback_replicas
+
+            # Apply fallback scaling if different from current
+            if fallback_replicas != current:
+                if not observer_mode:
+                    logger.info(f"[{cr_name}] FALLBACK: Scaling {target_ns}/{target}: {current} → {fallback_replicas}")
+                    scale_deployment(target, fallback_replicas, target_ns)
+
+            # Don't return - continue with limited functionality
+            # But we can't predict without features, so skip prediction
+            return
 
         if metric_failures >= 5:
             # Circuit breaker: too many consecutive failures
@@ -250,6 +303,19 @@ def reconcile(spec, status, meta, patch, **kwargs):
     maxlen = state.predictor.history.maxlen
     ppa_warmup_progress.labels(cr_name=cr_name, namespace=cr_ns).set(history_len / maxlen if maxlen else 0)
     ppa_model_load_failed.labels(cr_name=cr_name, namespace=cr_ns).set(1 if state.predictor._load_failed else 0)
+
+    # FIX (PR#15): Persist history in CR status for pod restart resilience
+    # Store compact history representation (only if significant change to avoid etcd churn)
+    if history_len >= maxlen * 0.9:  # Only store when nearly full to reduce writes
+        serialized = state.predictor.serialize_history()
+        if serialized:
+            patch.status["historySnapshot"] = {
+                "steps": len(serialized),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                # Store only the last 30 steps to save space (~5KB instead of ~10KB)
+                "data": serialized[-30:] if len(serialized) > 30 else serialized
+            }
+
     if not state.predictor.ready():
         if state.predictor._load_failed:
             logger.warning(
@@ -289,9 +355,22 @@ def reconcile(spec, status, meta, patch, **kwargs):
                 f"Prediction error {error_pct:.1f}% (threshold: 20%). "
                 f"Consider retraining the model."
             )
+
+            # FIX (PR#16): Check if retraining should be triggered
+            retraining_check = state.predictor.should_trigger_retraining(severity, error_pct)
+            if retraining_check.get('trigger'):
+                patch.status["retrainingRecommended"] = True
+                patch.status["retrainingReason"] = retraining_check.get('reason')
+                logger.critical(
+                    f"[{cr_name}] RETRAINING TRIGGERED: {retraining_check.get('reason')}. "
+                    f"Please run 'ppa model retrain --app {target_app} --horizon {target_horizon}' "
+                    f"or enable auto-retraining in CR spec."
+                )
         else:
             ppa_concept_drift_detected.labels(cr_name=cr_name, namespace=cr_ns).set(0)
             patch.status["conceptDriftDetected"] = False
+            # Clear retraining recommendation if drift clears
+            patch.status["retrainingRecommended"] = False
 
     # 4. Stabilization — anchored on desired replica count, not raw prediction magnitude.
     #    Raw RPS changes > 10% every cycle during ramps, causing the old magnitude-based

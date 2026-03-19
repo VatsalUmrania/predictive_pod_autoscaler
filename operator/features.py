@@ -5,6 +5,7 @@ import logging
 import math
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -94,9 +95,28 @@ def validate_feature_bounds(features: dict) -> tuple[dict, list]:
 
 
 
-def prom_query(query: str) -> float | None:
+# FIX (PR#18): Per-query Prometheus URL storage for multi-region support
+_thread_local_prom_url: str = PROMETHEUS_URL
+
+
+def set_prometheus_url(url: str) -> None:
+    """Set the Prometheus URL for the current execution context (thread-safe)."""
+    global _thread_local_prom_url
+    _thread_local_prom_url = url
+
+
+def get_current_prometheus_url() -> str:
+    """Get the current Prometheus URL (may be per-CR or default)."""
+    global _thread_local_prom_url
+    return _thread_local_prom_url
+
+
+def prom_query(query: str, prom_url: str | None = None) -> float | None:
     """Query Prometheus with exponential backoff on failures. Circuit breaks after PROM_FAILURE_THRESHOLD failures."""
     global _prom_consecutive_failures, _prom_last_failure_time
+
+    # FIX (PR#18): Use provided URL or fall back to current context URL
+    url = prom_url or get_current_prometheus_url()
 
     # FIX (PR#9): Check circuit breaker status
     if _prom_consecutive_failures >= PROM_FAILURE_THRESHOLD:
@@ -111,7 +131,7 @@ def prom_query(query: str) -> float | None:
 
     try:
         resp = requests.get(
-            f"{PROMETHEUS_URL}/api/v1/query",
+            f"{url}/api/v1/query",
             params={"query": query},
             timeout=2,  # Short timeout to fail fast
         )
@@ -135,10 +155,73 @@ def prom_query(query: str) -> float | None:
         return None
 
 
-def build_feature_vector(target_app: str, namespace: str, reference_replicas: int, max_replicas: int, container_name: str | None = None) -> tuple[dict, float]:
+def prom_query_parallel(queries: dict[str, str], max_workers: int = 5, timeout: float = 2.0, prom_url: str | None = None) -> dict[str, float | None]:
+    """
+    FIX (PR#20): Execute Prometheus queries in parallel using ThreadPoolExecutor.
+
+    Args:
+        queries: Dict mapping feature_name -> promql query string
+        max_workers: Number of parallel threads (default 5)
+        timeout: Per-query timeout in seconds
+        prom_url: Optional custom Prometheus URL (PR#18: multi-region support)
+
+    Returns:
+        Dict mapping feature_name -> result (float or None if failed)
+    """
+    results: dict[str, float | None] = {}
+
+    def _query_single(feature_query_pair: tuple[str, str]) -> tuple[str, float | None]:
+        feature_name, query = feature_query_pair
+        try:
+            result = prom_query(query, prom_url=prom_url)  # PR#18: pass custom URL
+            return feature_name, result
+        except PrometheusCircuitBreakerTripped:
+            raise  # Re-raise circuit breaker to stop all queries
+        except Exception as exc:
+            logger.debug(f"Query failed for {feature_name}: {exc}")
+            return feature_name, None
+
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all queries
+            future_to_feature = {
+                executor.submit(_query_single, (name, query)): name
+                for name, query in queries.items()
+            }
+
+            # Collect results with timeout
+            for future in future_to_feature:
+                feature_name = future_to_feature[future]
+                try:
+                    _, result = future.result(timeout=timeout)
+                    results[feature_name] = result
+                except FutureTimeoutError:
+                    logger.warning(f"Query timeout for {feature_name}")
+                    results[feature_name] = None
+                except PrometheusCircuitBreakerTripped:
+                    raise  # Propagate circuit breaker
+                except Exception as exc:
+                    logger.debug(f"Query exception for {feature_name}: {exc}")
+                    results[feature_name] = None
+
+    except PrometheusCircuitBreakerTripped:
+        # Circuit breaker active - all queries should fail
+        logger.error("Circuit breaker active, aborting parallel queries")
+        raise
+
+    return results
+
+
+def build_feature_vector(target_app: str, namespace: str, reference_replicas: int, max_replicas: int, container_name: str | None = None, prom_url: str | None = None) -> tuple[dict, float]:
     """Fetch current values for all features in the exact training order, returning (features, current_replicas)."""
+    # FIX (PR#18): Set Prometheus URL for this execution context
+    if prom_url:
+        set_prometheus_url(prom_url)
+
     queries = build_queries(target_app, namespace, container_name)
-    values = {feature_name: prom_query(query) for feature_name, query in queries.items()}
+    # FIX (PR#20): Use parallel queries instead of sequential
+    # FIX (PR#18): Pass custom Prometheus URL for multi-region support
+    values = prom_query_parallel(queries, max_workers=5, timeout=2.0, prom_url=prom_url)
 
     if values.get("cpu_utilization_pct") is None:
         # FIX (PR#6): Don't fall back to absolute CPU cores (mixing units)

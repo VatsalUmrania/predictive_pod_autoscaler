@@ -6,6 +6,7 @@ import sys
 import time
 import json
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 
 import joblib
@@ -223,7 +224,43 @@ class Predictor:
 
         return max(0.0, float(predicted_rps))
 
-    def prefill_from_history(self, feature_rows: list[dict]):
+    def serialize_history(self) -> list[list[float]] | None:
+        """
+        FIX (PR#15): Serialize history for storage in CR status.
+        Returns compact list format suitable for JSON serialization.
+        """
+        if not self.history:
+            return None
+        # Convert deque to list of lists (JSON serializable)
+        return [row.tolist() for row in self.history]
+
+    def deserialize_history(self, serialized: list[list[float]]) -> bool:
+        """
+        FIX (PR#15): Restore history from serialized format.
+        Returns True if successfully restored.
+        """
+        try:
+            self.history.clear()
+            for row in serialized:
+                self.history.append(np.array(row, dtype=np.float32))
+            logger.info(f"Deserialized history: {len(self.history)}/{self.history.maxlen} steps")
+            return True
+        except Exception as exc:
+            logger.warning(f"Failed to deserialize history: {exc}")
+            return False
+
+    def get_history_summary(self) -> dict:
+        """
+        Get a summary of history state for CR status.
+        Compact representation for monitoring.
+        """
+        return {
+            "filled_steps": len(self.history),
+            "max_steps": self.history.maxlen,
+            "ready": self.ready(),
+            "last_drift_check": datetime.fromtimestamp(self.last_drift_check_time, tz=timezone.utc).isoformat() if self.last_drift_check_time > 0 else None,
+            "drift_detected": self.concept_drift_detected
+        }
         """Populate history deque from a list of feature dictionaries (e.g. from Prometheus range query)."""
         for features in feature_rows:
             row = np.array([features.get(name, 0.0) for name in FEATURE_COLUMNS], dtype=np.float32)
@@ -295,4 +332,50 @@ class Predictor:
             'severity': 'severe' if severe_drift else ('moderate' if drift_detected else 'normal'),
             'checked': True
         }
+
+    def should_trigger_retraining(self, drift_severity: str, error_pct: float) -> dict:
+        """
+        FIX (PR#16): Determine if retraining should be triggered based on drift severity.
+
+        Returns: dict with 'trigger', 'reason', 'suggested_action'
+        """
+        current_time = time.time()
+
+        # Track severe drift duration
+        if not hasattr(self, '_severe_drift_start_time'):
+            self._severe_drift_start_time = None
+            self._retraining_triggered = False
+
+        if drift_severity == 'severe' and error_pct > 50:
+            if self._severe_drift_start_time is None:
+                self._severe_drift_start_time = current_time
+                logger.info(f"Severe drift detected, starting 1-hour retraining timer")
+
+            # Check if severe drift has persisted for >1 hour
+            drift_duration = current_time - self._severe_drift_start_time
+            if drift_duration > 3600 and not self._retraining_triggered:  # 1 hour
+                self._retraining_triggered = True
+                return {
+                    'trigger': True,
+                    'reason': f'Severe drift ({error_pct:.1f}%) persisted for {drift_duration/60:.0f} minutes',
+                    'suggested_action': 'trigger_retraining_job',
+                    'drift_duration_minutes': drift_duration / 60
+                }
+        else:
+            # Reset timer if drift clears
+            if self._severe_drift_start_time is not None:
+                logger.info(f"Drift cleared after {(current_time - self._severe_drift_start_time)/60:.0f} minutes")
+            self._severe_drift_start_time = None
+
+        return {
+            'trigger': False,
+            'reason': 'No sustained severe drift detected',
+            'suggested_action': 'continue_monitoring'
+        }
+
+    def reset_retraining_flag(self):
+        """Call after retraining job completes successfully."""
+        self._retraining_triggered = False
+        self._severe_drift_start_time = None
+        logger.info("Retraining flag reset - monitoring resumed")
 

@@ -13,6 +13,13 @@ from common.constants import CAPACITY_PER_POD
 from common.promql import RATE_WINDOW
 
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus-kube-prometheus-prometheus.monitoring:9090")
+
+# FIX (PR#18): Support per-CR Prometheus URLs for multi-region deployments
+def get_prometheus_url(cr_spec_url: str | None = None) -> str:
+    """Get Prometheus URL, preferring CR-specific URL over global default."""
+    if cr_spec_url:
+        return cr_spec_url
+    return PROMETHEUS_URL
 NAMESPACE = os.getenv("PPA_NAMESPACE", "default")
 SCRAPE_WINDOW = RATE_WINDOW
 LOOKBACK_STEPS = int(os.getenv("PPA_LOOKBACK_STEPS", "60"))  # 60 × 30s = 30 min history (must match training)

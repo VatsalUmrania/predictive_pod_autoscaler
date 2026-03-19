@@ -1,0 +1,123 @@
+# kubernetes/retraining-cronjob.yaml
+# FIX (PR#16): Auto-retraining CronJob for concept drift recovery
+# Apply this to enable automatic retraining when drift >50% for >1 hour
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ppa-auto-retraining
+  namespace: ppa-system  # Adjust to your PPA namespace
+spec:
+  # Run daily at 2 AM, plus on-demand via manual trigger
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid  # Don't run multiple retrainings simultaneously
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: ppa-retraining-sa
+          restartPolicy: OnFailure
+          containers:
+          - name: retraining-controller
+            image: ppa-operator:latest  # Same image as operator
+            command:
+            - python
+            - -m
+            - operator.retraining_controller
+            env:
+            - name: PPA_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: DRIFT_THRESHOLD
+              value: "50"  # Trigger retraining at >50% error
+            - name: DRIFT_DURATION_MINUTES
+              value: "60"  # Must persist for 1 hour
+            - name: RETRAINING_IMAGE
+              value: "ppa-ml-pipeline:latest"
+            - name: MODEL_STORAGE_PATH
+              value: "/models"
+            - name: PROMETHEUS_URL
+              value: "http://prometheus-kube-prometheus-prometheus.monitoring:9090"
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "500m"
+            volumeMounts:
+            - name: model-storage
+              mountPath: /models
+            - name: retraining-config
+              mountPath: /config
+          volumes:
+          - name: model-storage
+            persistentVolumeClaim:
+              claimName: ppa-models-pvc
+          - name: retraining-config
+            configMap:
+              name: ppa-retraining-config
+---
+# ConfigMap for retraining configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ppa-retraining-config
+  namespace: ppa-system
+data:
+  config.yaml: |
+    # Retraining controller configuration
+    drift_threshold: 50.0  # Percentage error to trigger retraining
+    min_drift_duration_minutes: 60  # How long drift must persist
+    evaluation_split: 0.2  # Holdout set for validation
+    max_training_time_minutes: 120  # Timeout for training job
+    rollback_on_degradation: true  # Auto-rollback if new model worse
+    accuracy_degradation_threshold: 5.0  # Max % accuracy loss allowed
+---
+# ServiceAccount for retraining controller
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ppa-retraining-sa
+  namespace: ppa-system
+---
+# RBAC permissions for retraining controller
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ppa-retraining-role
+  namespace: ppa-system
+rules:
+# Read PredictiveAutoscaler CRs to check drift status
+- apiGroups: ["ppa.example.com"]
+  resources: ["predictiveautoscalers"]
+  verbs: ["get", "list", "watch"]
+# Create training Jobs
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["create", "get", "list", "watch", "delete"]
+# Read model storage
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get"]
+# Update CR status with retraining info
+- apiGroups: ["ppa.example.com"]
+  resources: ["predictiveautoscalers/status"]
+  verbs: ["update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ppa-retraining-rb
+  namespace: ppa-system
+subjects:
+- kind: ServiceAccount
+  name: ppa-retraining-sa
+  namespace: ppa-system
+roleRef:
+  kind: Role
+  name: ppa-retraining-role
+  apiGroup: rbac.authorization.k8s.io
