@@ -11,10 +11,15 @@ model/artifacts/
 .agent/
 .claude/
 .agents/
+.vscode/
 tests/
 *.png
 *.svg
 *.json
+*.pkl
+*.tflite
+*.keras
+*.csv
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

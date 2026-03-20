@@ -29,13 +29,13 @@
 Currently `model/pipeline.py` trains on a fixed CSV. Make it app-aware:
 
 - Add `--app-name` flag to `pipeline.py` and `export_training_data.py`
-- Output models to `model/champions/{app-name}/rps_{t3m,t5m,t10m}/`
-- Store eval metrics in `model/champions/{app-name}/eval_summary.json`
+- Output models to `data/champions/{app-name}/rps_{t3m,t5m,t10m}/`
+- Store eval metrics in `data/champions/{app-name}/eval_summary.json`
 
 ```bash
 python model/pipeline.py \
   --app-name payments-api \
-  --csv data-collection/training-data/payments-api.csv \
+  --csv data/training-data/payments-api.csv \
   --horizons rps_t3m,rps_t5m,rps_t10m \
   --promote-if-better \
   --champion-dir model/champions

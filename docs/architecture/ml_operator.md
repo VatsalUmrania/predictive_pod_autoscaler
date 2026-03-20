@@ -55,8 +55,8 @@ flowchart TB
     end
 
     subgraph "Developer Laptop (Offline)"
-        TRAIN["model/train.py<br/>(Keras LSTM)"]
-        CONV["model/convert.py<br/>(TFLite + quantize)"]
+        TRAIN["ppa model train<br/>(Keras LSTM)"]
+        CONV["ppa model convert<br/>(TFLite + quantize)"]
     end
 
     TG -->|HTTP traffic| TA
@@ -375,8 +375,8 @@ flowchart TD
 
 1. **Instrument** the app with `prometheus_client` (expose `http_requests_total`, `http_request_duration_seconds`, `http_connections_active`)
 2. **Collect data** — run traffic, let the CronJob accumulate ≥5,000 CSV rows
-3. **Train** — `python model/train.py --csv <path>`
-4. **Convert** — `python model/convert.py`
+3. **Train** — `ppa model train --csv <path>`
+4. **Convert** — `ppa model convert`
 5. **Deploy model** — copy `ppa_model.tflite` + `scaler.pkl` to `/models/{app}/` on the PVC
 6. **Apply CR** — `kubectl apply -f` a `PredictiveAutoscaler` CR targeting the new deployment
 7. The operator auto-detects the CR and starts scaling

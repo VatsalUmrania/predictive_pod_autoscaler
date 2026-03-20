@@ -1,0 +1,9 @@
+# Medium sustained load profile
+
+stage_low: "50"
+stage_med: "250"
+stage_spike: "1000"
+stage_recovery: "250"
+stage_low_2: "20"
+stage_duration_secs: "180"
+fast_mode: "false"

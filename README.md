@@ -1,7 +1,7 @@
 # Predictive Pod Autoscaler (PPA)
 
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-1.28%2B-blue.svg)](https://kubernetes.io)
-[![Python](https://img.shields.io/badge/Python-3.11-blue.svg)](https://python.org)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://python.org)
 [![Prometheus](https://img.shields.io/badge/Prometheus-Monitoring-orange.svg)](https://prometheus.io)
 [![TensorFlow Lite](https://img.shields.io/badge/TensorFlow-Lite-FF6F00.svg)](https://tensorflow.org/lite)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
@@ -25,35 +25,54 @@ PPA is designed with a strict separation of concerns, decoupling offline heavy l
 
 ---
 
+##  Package Structure
+
+```
+src/ppa/
+├── common/          # Shared: constants, feature_spec, promql
+├── operator/        # Kopf operator: main, features, predictor, scaler
+├── model/          # ML training: train, evaluate, convert
+├── dataflow/       # Data collection: export_training_data
+└── cli/            # Command-line interface
+```
+
+**Key Files:**
+- `pyproject.toml` — Python package configuration
+- `deploy/` — Kubernetes manifests (CRD, RBAC, operator deployment)
+- `src/ppa/cli/` — CLI commands (`ppa operator`, `ppa deploy`, etc.)
+
+---
+
 ##  Quick Start
 
-A comprehensive wrapper is provided to bootstrap the local development environment (requires `minikube`, `kubectl`, and `helm`). The Minikube driver is auto-detected based on your platform (`kvm2` on Linux, `docker` on macOS/Windows).
-
 ```bash
-# 1. Boot the Minikube cluster, install the kube-prometheus-stack, 
-# deploy the instrumented test application, and spin up the Locust swarm.
-./ppa_startup.sh
+# Install PPA
+pip install -e .
 
-# 2. Wait ~2 hours. The Locust swarm runs in FAST_MODE, aggressively
-# compounding traffic to force mathematical variance in the metrics.
+# CLI help
+ppa --help
 
-# 3. Export the 14-dimensional feature set to CSV via the virtual environment.
-venv/bin/python data-collection/export_training_data.py --hours 168 --step 15s
+# Operator lifecycle
+ppa operator build      # Build Docker image
+ppa operator deploy     # Deploy to Kubernetes
+ppa operator restart    # Build + deploy + rollout
+ppa operator status     # Check deployment status
 ```
+
+For full cluster bootstrap, see [docs/index.md](./docs/index.md).
 
 ---
 
 ##  Technical Documentation
 
-Comprehensive documentation has been separated into the `docs/` index to maintain repository cleanliness.
-
 | Category | Resource | Description |
-| :--- | :--- | :--- |
+|:---|:---|:---|
 |**System Design** | [Architecture Hub](./docs/architecture.md) | Macro topology & interaction diagrams |
 | | [Data Collection](./docs/architecture/data_collection.md) | Metrics & chaotic load generation |
 | | [ML Operator](./docs/architecture/ml_operator.md) | Kopf operator & TFLite inference |
 |**Operations** | [Command Reference](./docs/reference/ppa_commands.md) | CLI reference for cluster debugging |
 | | [Working Queries](./docs/reference/working_queries.md) | PromQL snippet libraries |
 |**Historical** | [Archive](./docs/archive) | Specs, audits, and legacy records |
+
 
 ---

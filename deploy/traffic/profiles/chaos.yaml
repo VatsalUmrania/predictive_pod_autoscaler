@@ -1,0 +1,9 @@
+# Chaos profiling: alternating low/high with short durations
+
+stage_low: "10"
+stage_med: "50"
+stage_spike: "500"
+stage_recovery: "50"
+stage_low_2: "10"
+stage_duration_secs: "60"
+fast_mode: "true"

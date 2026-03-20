@@ -1,0 +1,10 @@
+# Low baseline traffic profile
+# STAGE_DURATION_SECS controls how long each stage runs before rotating
+
+stage_low: "20"
+stage_med: "100"
+stage_spike: "500"
+stage_recovery: "100"
+stage_low_2: "10"
+stage_duration_secs: "300"
+fast_mode: "false"

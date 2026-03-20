@@ -25,7 +25,7 @@ data collected         train model        convert & promote    deploy live   pre
 - Kubernetes cluster running (Minikube or production)
 - Prometheus deployed with 15s scrape interval
 - Target deployment (`test-app` or your app) is deployed and running
-- Training data collected in `data-collection/training-data/training_data_v2.csv`
+- Training data collected in `data/training-data/training_data_v2.csv`
 - Python venv activated with `model/requirements.txt` packages installed
 - Minikube Docker environment configured (`eval $(minikube docker-env)`)
 
@@ -43,7 +43,7 @@ python3 -c "import keras; print('Keras OK')"
 
 ### Scenario A: Deploy existing champion (no retraining)
 
-If you already have a trained model in `model/champions/rps_t10m/`, deploy directly:
+If you already have a trained model in `data/champions/rps_t10m/`, deploy directly:
 
 ```bash
 # Non-interactive deployment (doesn't ask about HPA)
@@ -110,10 +110,10 @@ If you prefer to understand each step or troubleshoot, follow this:
 
 ```bash
 # Training CSV should exist at:
-ls -lh data-collection/training-data/training_data_v2.csv
+ls -lh data/training-data/training_data_v2.csv
 
 # Verify data quality
-wc -l data-collection/training-data/training_data_v2.csv  # Should be > 1000
+wc -l data/training-data/training_data_v2.csv  # Should be > 1000
 ```
 
 **If starting fresh data collection:**
@@ -147,25 +147,24 @@ python3 -c "import keras, tensorflow, sklearn; print('All OK')"
 
 ```bash
 # Full retraining
-python model/train.py \
-  --csv data-collection/training-data/training_data_v2.csv \
+ppa model train \
+  --csv data/training-data/training_data_v2.csv \
   --target rps_t10m \
   --lookback 24 \
   --epochs 100 \
-  --patience 20 \
-  --output-dir model/artifacts
+  --patience 20
 
 # Expected: ~5-10 min depending on CPU
 # Output:
-#   model/artifacts/ppa_model_rps_t10m.keras
-#   model/artifacts/scaler_rps_t10m.pkl
-#   model/artifacts/target_scaler_rps_t10m.pkl
-#   model/artifacts/split_meta_rps_t10m.json
+#   data/artifacts/ppa_model_rps_t10m.keras
+#   data/artifacts/scaler_rps_t10m.pkl
+#   data/artifacts/target_scaler_rps_t10m.pkl
+#   data/artifacts/split_meta_rps_t10m.json
 ```
 
 **Verify:**
 ```bash
-ls -lh model/artifacts/ppa_model_rps_t10m.keras
+ls -lh data/artifacts/ppa_model_rps_t10m.keras
 ```
 
 ---
@@ -173,18 +172,18 @@ ls -lh model/artifacts/ppa_model_rps_t10m.keras
 ### Step 4: Convert to TFLite
 
 ```bash
-python model/convert.py \
-  --model model/artifacts/ppa_model_rps_t10m.keras \
-  --output model/artifacts/ppa_model.tflite
+ppa model convert \
+  --model data/artifacts/ppa_model_rps_t10m.keras \
+  --output data/artifacts/ppa_model.tflite
 
 # Expected:
-# Successfully saved TFLite model to model/artifacts/ppa_model.tflite
+# Successfully saved TFLite model to data/artifacts/ppa_model.tflite
 # Size: 278.64 KB
 ```
 
 **Verify:**
 ```bash
-file model/artifacts/ppa_model.tflite
+file data/artifacts/ppa_model.tflite
 ```
 
 ---
@@ -192,20 +191,20 @@ file model/artifacts/ppa_model.tflite
 ### Step 5: Promote to Champions
 
 ```bash
-mkdir -p model/champions/rps_t10m
+mkdir -p data/champions/rps_t10m
 
 # Copy artifacts
-cp model/artifacts/ppa_model.tflite \
-   model/champions/rps_t10m/ppa_model.tflite
+cp data/artifacts/ppa_model.tflite \
+   data/champions/rps_t10m/ppa_model.tflite
 
-cp model/artifacts/scaler_rps_t10m.pkl \
-   model/champions/rps_t10m/scaler.pkl
+cp data/artifacts/scaler_rps_t10m.pkl \
+   data/champions/rps_t10m/scaler.pkl
 
-cp model/artifacts/target_scaler_rps_t10m.pkl \
-   model/champions/rps_t10m/target_scaler.pkl
+cp data/artifacts/target_scaler_rps_t10m.pkl \
+   data/champions/rps_t10m/target_scaler.pkl
 
 # Verify
-ls -lh model/champions/rps_t10m/
+ls -lh data/champions/rps_t10m/
 ```
 
 ---
@@ -289,11 +288,11 @@ spec:
 EOF
 
 # Copy TFLite model
-kubectl cp model/champions/rps_t10m/ppa_model.tflite \
+kubectl cp data/champions/rps_t10m/ppa_model.tflite \
   default/ppa-model-loader:/models/test-app/
 
 # Copy training CSV to pod
-kubectl cp data-collection/training-data/training_data_v2.csv \
+kubectl cp data/training-data/training_data_v2.csv \
   default/ppa-model-loader:/tmp/training_data.csv
 
 # Regenerate scalers inside pod (Python 3.11 environment)
@@ -546,7 +545,7 @@ kubectl top pods -l app=ppa-operator
 To deploy a new model without restarting:
 ```bash
 # Copy new model to PVC
-kubectl cp model/champions/rps_t10m/ppa_model.tflite \
+kubectl cp data/champions/rps_t10m/ppa_model.tflite \
   default/ppa-model-loader:/models/test-app/
 
 # Operator reloads on next cycle (~30s)
@@ -557,7 +556,7 @@ kubectl logs -f deployment/ppa-operator
 For production, consider:
 - PVC with replicated storage (e.g., Ceph RBD, AWS EBS)
 - Multiple operator replicas with leader election (requires etcd coordination)
-- Backup of champion models: `git add model/champions/` → automatic backup
+- Backup of champion models: `git add data/champions/` → automatic backup
 
 ---
 

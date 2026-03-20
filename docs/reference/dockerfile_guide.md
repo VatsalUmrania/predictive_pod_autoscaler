@@ -14,7 +14,7 @@ project/
 ├── operator/
 │   ├── Dockerfile
 │   └── requirements.txt      ← OPERATOR (minimal: kopf, kubernetes, requests)
-├── data-collection/
+├── data/
 │   ├── Dockerfile
 │   └── requirements.txt      ← DATA COLLECTION (metrics scraping)
 └── model/
@@ -102,7 +102,7 @@ docker images | grep ppa-operator
 ```bash
 # If you build the data collector container
 eval $(minikube docker-env)
-docker build -t ppa-data-collector:latest -f data-collection/Dockerfile .
+docker build -t ppa-data-collector:latest -f data/Dockerfile .
 ```
 
 ---

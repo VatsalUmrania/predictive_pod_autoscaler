@@ -1,6 +1,0 @@
-# Model artifacts — generated, not committed
-*.tflite
-*.pkl
-*.keras
-*.h5
-*.json

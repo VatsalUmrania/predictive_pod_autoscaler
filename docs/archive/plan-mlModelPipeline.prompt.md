@@ -10,10 +10,10 @@
    - Change artifact output names to include horizon: `ppa_model_rps_t3m.keras`, `scaler_rps_t3m.pkl`
    - Make `train_model()` **return** `(model, scaler, history, metrics_dict)` instead of only printing — downstream stages need these
    - Add a `--test-split` arg (default `0.1`) to hold out a final test set beyond the existing 80/20 train/val split → producing a 70/20/10 split (train/val/test), saving the test indices for `evaluate.py`
-   - Save split metadata (test start index, target column, lookback) as `model/artifacts/split_meta_{horizon}.json` so evaluation can reproduce the exact test set
+   - Save split metadata (test start index, target column, lookback) as `data/artifacts/split_meta_{horizon}.json` so evaluation can reproduce the exact test set
 
 2. **Implement `model/evaluate.py` — metrics, plots, HPA comparison**
-   - **Inputs:** `--model` (`.keras` path), `--scaler` (`.pkl` path), `--csv`, `--target`, `--output-dir` (default `model/artifacts/`)
+   - **Inputs:** `--model` (`.keras` path), `--scaler` (`.pkl` path), `--csv`, `--target`, `--output-dir` (default `data/artifacts/`)
    - **Metric computation:** Load the held-out test set using saved split metadata, run predictions, compute:
      - MAPE (Mean Absolute Percentage Error)
      - MAE (Mean Absolute Error)
@@ -59,8 +59,8 @@
    - All tests use synthetic data — no dependency on the real training CSV
 
 **Verification**
-- Run the full pipeline: `python model/pipeline.py --csv data-collection/training-data/training_data_v2.csv --epochs 10` (small epoch count for quick validation)
-- Verify artifacts are created in `model/artifacts/`: 3 `.keras`, 3 `.tflite`, 3 `.pkl`, 3 plots, 3 JSON summaries
+- Run the full pipeline: `python model/pipeline.py --csv data/training-data/training_data_v2.csv --epochs 10` (small epoch count for quick validation)
+- Verify artifacts are created in `data/artifacts/`: 3 `.keras`, 3 `.tflite`, 3 `.pkl`, 3 plots, 3 JSON summaries
 - Run tests: `pytest tests/test_train.py tests/test_evaluate.py tests/test_convert.py -v`
 - Inspect evaluation plots visually for sanity
 

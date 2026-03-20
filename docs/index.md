@@ -2,6 +2,32 @@
 
 > Central index for all Predictive Pod Autoscaler technical documentation.
 
+## Package Structure
+
+```
+src/ppa/
+├── __init__.py      # Version, public API exports
+├── config.py        # Centralized configuration (single source of truth)
+├── common/          # Shared utilities: constants, feature_spec, promql
+├── operator/        # Kopf operator: main, features, predictor, scaler
+├── model/           # ML training: train, evaluate, convert, pipeline
+├── dataflow/        # Metrics collection: export, validate, verify
+└── cli/             # Command-line interface with subcommands
+```
+
+**Key Paths:**
+- `src/ppa/` — Canonical import root (`from ppa.config import ...`)
+- `deploy/` — Kubernetes manifests (CRD, RBAC, operator deployment)
+- `data/` — Training data, model artifacts, champions, test-app
+
+---
+
+## For Contributors
+
+- [DEVELOPMENT.md](./DEVELOPMENT.md) — Setup, testing, code quality, project structure, debugging
+
+---
+
 ## Core Architecture
 
 ### System Overview
@@ -53,23 +79,34 @@ Old planning, sprint tracking, and architectural decision files have been moved 
 
 ### 🚀 Deploy Operator (Fastest Path)
 
-After collecting training data:
 ```bash
-./scripts/ppa_redeploy.sh --retrain
-kubectl get ppa -w          # Watch status & predictions
-kubectl logs -l app=ppa-operator -f  # Watch logs
+# Install PPA
+pip install -e .
+
+# Build, deploy, and restart operator
+ppa operator build
+ppa operator deploy
+ppa operator restart
 ```
 
-See **[Deployment Guide](./operator/deployment.md)** for step-by-step instructions and troubleshooting.
+### 🛠️ Operator Lifecycle Commands
+
+```bash
+ppa operator build      # Build Docker image
+ppa operator deploy     # Deploy to Kubernetes
+ppa operator restart     # Build + deploy + rollout
+ppa operator status      # Check deployment status
+```
 
 ### 🧠 Train & Promote Models
+
 ```bash
-python model/pipeline.py \
-  --csv data-collection/training-data/training_data_v2.csv \
+# Full ML pipeline
+ppa model pipeline \
+  --csv data/training-data/training_data_v2.csv \
   --horizons rps_t10m \
   --epochs 50 \
-  --promote-if-better \
-  --champion-dir model/champions
+  --promote-if-better
 ```
 
 See **[ML Commands](./reference/ml_commands.md)** for details.
@@ -84,13 +121,13 @@ docs/
 ├── architecture.md             ← System overview (start here)
 ├── architecture/
 │   ├── data_collection.md     ← Data pipeline
-│   ├── ml_pipeline.md         ← [NEW] Training & promotion
-│   ├── ml_operator.md         ← [UPDATED] Live operator
+│   ├── ml_pipeline.md         ← Training & promotion
+│   ├── ml_operator.md         ← Live operator
 │   └── queries.md             ← PromQL details
 ├── reference/
 │   ├── ppa_commands.md        ← Command index (start here for ops)
-│   ├── ml_commands.md         ← [NEW] All ML commands
-│   ├── operator_commands.md   ← [NEW] All operator commands
+│   ├── ml_commands.md         ← ML commands
+│   ├── operator_commands.md    ← Operator commands
 │   └── working_queries.md     ← PromQL snippets
 └── archive/
     └── (historical planning & decision logs)

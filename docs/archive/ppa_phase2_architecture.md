@@ -66,7 +66,7 @@ Build the LSTM prediction model and embedded kopf operator. Single pod reads Pro
 
 ```
 predictive_pod_autoscaler/
-├── data-collection/               # existing
+├── data/               # existing
 ├── model/
 │   ├── train.py                   # CSV → Keras LSTM
 │   ├── convert.py                 # Keras → .tflite + quantize

@@ -1,0 +1,9 @@
+# Spike stress test profile
+
+stage_low: "100"
+stage_med: "500"
+stage_spike: "2000"
+stage_recovery: "500"
+stage_low_2: "50"
+stage_duration_secs: "120"
+fast_mode: "false"

@@ -8,17 +8,17 @@ Make the data collection pipeline 100% reusable and robust by parameterizing all
 ## Scope & File Changes
 
 ### 1. Parameterization & Central Configuration
-- **File**: `data-collection/config.py` [NEW]
+- **File**: `data/config.py` [NEW]
 - **Details**: 
   - Define `TARGET_APP`, `PROMETHEUS_URL`, `NAMESPACE`, `CONTAINER_NAME` as environment variables.
   - Define `QUERIES` dictionary with parameterized PromQL including 12 features (6 existing + 4 new + 2 derivatives).
 
 ### 2. Script Updates
-- **File**: `data-collection/verify_features.py` [UPDATE]
+- **File**: `src/ppa/dataflow/verify_features.py` [UPDATE]
 - **Details**: 
   - Import `QUERIES` and config from `config.py`.
   - Iterate and verify all features dynamically.
-- **File**: `data-collection/export_training_data.py` [UPDATE]
+- **File**: `data/export_training_data.py` [UPDATE]
 - **Details**: 
   - Import config parameterization.
   - Rely on internal cluster DNS (`PROMETHEUS_URL`) to access Prometheus remotely.
@@ -35,7 +35,7 @@ Make the data collection pipeline 100% reusable and robust by parameterizing all
 - **`devops-engineer`**: Setting up the internal cluster CronJob, PVC, and networking.
 
 ## Verification Checklist
-- [ ] Ensure local connection to Prometheus: run `python3 data-collection/verify_features.py`
+- [ ] Ensure local connection to Prometheus: run `python3 src/ppa/dataflow/verify_features.py`
 - [ ] Apply Kubernetes manifests: `kubectl apply -f deploy/cronjob-data-collector.yaml`
 - [ ] Perform a manual job test: `kubectl create job --from=cronjob/ppa-data-collector ppa-collect-now`
 - [ ] Check logs of the job: `kubectl logs -l job-name=ppa-collect-now -f`

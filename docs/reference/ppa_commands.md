@@ -11,7 +11,7 @@
 | Task                            | Command                                                                                         | Reference                                     |
 | ------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------- |
 | **Deploy operator to Minikube** | `./scripts/ppa_redeploy.sh --retrain --epochs 100`                                              | [Deployment Guide](../operator/deployment.md) |
-| **Train ML models**             | `python model/pipeline.py --csv data-collection/training-data/training_data_v2.csv --epochs 50` | [ML Commands](./ml_commands.md)               |
+| **Train ML models**             | `ppa model pipeline --csv data/training-data/training_data_v2.csv --epochs 50` | [ML Commands](./ml_commands.md)               |
 | **Check operator health**       | `kubectl get ppa`                                                                               | [Operator Commands](./operator_commands.md)   |
 | **Watch operator scaling**      | `kubectl logs -l app=ppa-operator -f`                                                           | [Operator Commands](./operator_commands.md)   |
 | **See detailed ML guide**       | Read [ML Commands](./ml_commands.md)                                                            | In-depth training & evaluation                |
@@ -23,12 +23,12 @@
 
 👉 **[ML Pipeline Commands](./ml_commands.md)**
 
-- Training with `model/train.py`
-- Evaluation with `model/evaluate.py`
-- Conversion to TFLite with `model/convert.py`
-- Full pipeline orchestration with `model/pipeline.py`
+- Training with `ppa model train`
+- Evaluation with `ppa model evaluate`
+- Conversion to TFLite with `ppa model convert`
+- Full pipeline orchestration with `ppa model pipeline`
 - Champion-challenger promotion
-- Data validation
+- Data validation with `ppa data validate`
 
 👉 **[Operator Commands](./operator_commands.md)**
 
@@ -161,10 +161,10 @@ helm uninstall prometheus -n monitoring
 ```bash
 # Build image inside minikube's Docker daemon
 eval $(minikube docker-env)
-docker build -t test-app:latest data-collection/test-app/
+docker build -t test-app:latest data/test-app/
 
 # Deploy (Deployment + Service + PodMonitor)
-kubectl apply -f data-collection/test-app-deployment.yaml
+kubectl apply -f data/test-app/deployment.yaml
 
 # Verify pod is running (should show 1/1 — single container, no sidecars)
 kubectl get pods -l app=test-app
@@ -176,8 +176,8 @@ kubectl rollout restart deployment/test-app
 kubectl logs -l app=test-app
 
 # Delete and redeploy
-kubectl delete -f data-collection/test-app-deployment.yaml
-kubectl apply -f data-collection/test-app-deployment.yaml
+kubectl delete -f data/test-app/deployment.yaml
+kubectl apply -f data/test-app/deployment.yaml
 ```
 
 ---
@@ -227,7 +227,7 @@ The `ppa_startup.sh` script handles:
 After extracting the CSV from Prometheus, pass it through the ML quality gates to ensure model readiness:
 
 ```bash
-venv/bin/python data-collection/validate_training_data.py data-collection/training-data/training_data_v2.csv
+ppa data validate data/training-data/training_data_v2.csv
 ```
 
 ---
@@ -251,7 +251,7 @@ pkill -f "port-forward.*3000"
 pkill -f "port-forward.*8080"
 
 # Start watchdog (auto-restarts dead port-forwards)
-nohup bash data-collection/keep_portforwards.sh > /tmp/ppa_watchdog.log 2>&1 &
+nohup bash data/keep_portforwards.sh > /tmp/ppa_watchdog.log 2>&1 &
 
 # Check watchdog logs
 tail -f /tmp/ppa_watchdog.log
@@ -264,8 +264,28 @@ tail -f /tmp/ppa_watchdog.log
 ### Verify All 14 Features
 
 ```bash
-cd predictive_pod_autoscaler
-python3 data-collection/verify_features.py
+python -m ppa.dataflow.verify_features
+```
+
+### Export Training Data CSV
+
+The data collection CLI pulls natively from Prometheus.
+
+```bash
+# Verify v2 schema compliance before training
+ppa data export --dry-run --assert-schema v2
+
+# This should be the FIRST command any new team member runs
+# after cloning the repo
+
+# High-Density 7-Day export (1 row = 15 seconds) - RECOMMENDED for Full Scale Training
+ppa data export --hours 168 --step 15s
+
+# Standard recent export (e.g. after a chaos script run)
+ppa data export --hours 2 --step 15s
+
+# Recover legacy 24h data and format with new horizons
+ppa data export --hours 24 --step 15s
 ```
 
 ### Export Training Data CSV
@@ -274,7 +294,7 @@ The data collection python script pulls natively from Prometheus. We use the vir
 
 ```bash
 # Verify v2 schema compliance before training
-python data-collection/export_training_data.py \
+python data/export_training_data.py \
   --hours 1 \
   --dry-run \
   --assert-schema v2
@@ -284,15 +304,15 @@ python data-collection/export_training_data.py \
 
 # High-Density 7-Day export (1 row = 15 seconds) - RECOMMENDED for Full Scale Training
 source venv/bin/activate
-python data-collection/export_training_data.py --hours 168 --step 15s
+python data/export_training_data.py --hours 168 --step 15s
 
 # Standard recent export (e.g. after a chaos script run)
 source venv/bin/activate
-python data-collection/export_training_data.py --hours 2 --step 15s
+python data/export_training_data.py --hours 2 --step 15s
 
 # Recover legacy 24h data and format with new horizons
 source venv/bin/activate
-python data-collection/export_training_data.py --hours 24 --step 15s
+python data/export_training_data.py --hours 24 --step 15s
 ```
 
 ### Check Data Volume in Prometheus

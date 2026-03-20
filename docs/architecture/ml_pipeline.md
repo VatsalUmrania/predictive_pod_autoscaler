@@ -272,7 +272,7 @@ graph LR
 ### Training Artifacts
 
 ```
-model/artifacts/
+data/artifacts/
 ├── ppa_model_rps_t3m.keras
 ├── ppa_model_rps_t5m.keras
 ├── ppa_model_rps_t10m.keras
@@ -296,7 +296,7 @@ model/artifacts/
 ### Champion Artifacts (Promoted)
 
 ```
-model/champions/
+data/champions/
 ├── rps_t3m/
 │   ├── ppa_model.tflite
 │   ├── scaler.pkl

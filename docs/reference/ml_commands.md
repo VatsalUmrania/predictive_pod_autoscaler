@@ -7,22 +7,22 @@
 ## Quick Start
 
 ```bash
-# Activate venv
-source venv/bin/activate
+# Install PPA
+pip install -e .
 
 # Train all three horizons with default settings
-python model/pipeline.py \
-  --csv data-collection/training-data/training_data_v2.csv \
+ppa model pipeline \
+  --csv data/training-data/training_data_v2.csv \
   --horizons rps_t3m,rps_t5m,rps_t10m \
   --epochs 50
 
 # Train with champion-challenger promotion
-python model/pipeline.py \
-  --csv data-collection/training-data/training_data_v2.csv \
+ppa model pipeline \
+  --csv data/training-data/training_data_v2.csv \
   --horizons rps_t10m \
   --epochs 50 \
   --promote-if-better \
-  --champion-dir model/champions \
+  --champion-dir data/champions \
   --promotion-metric smape \
   --promotion-gate 35 \
   --min-relative-improvement 2 \
@@ -36,8 +36,8 @@ python model/pipeline.py \
 ### Basic Training (Single Horizon)
 
 ```bash
-python model/train.py \
-  --csv data-collection/training-data/training_data_v2.csv \
+ppa model train \
+  --csv data/training-data/training_data_v2.csv \
   --target rps_t10m \
   --epochs 50 \
   --batch-size 32 \
@@ -48,7 +48,7 @@ python model/train.py \
 
 **Output Artifacts:**
 ```
-model/artifacts/
+data/artifacts/
 ├── ppa_model_rps_t10m.keras
 ├── scaler_rps_t10m.pkl
 ├── target_scaler_rps_t10m.pkl
@@ -66,15 +66,15 @@ model/artifacts/
 | `--patience` | 15 | int | Early stopping patience (epochs) |
 | `--target-floor` | 5.0 | float | Min RPS floor for clipping |
 | `--test-split` | 0.1 | float | Holdout test fraction (0-1) |
-| `--output-dir` | `model/artifacts` | str | Output directory for model & scaler |
+| `--output-dir` | `data/artifacts` | str | Output directory for model & scaler |
 
 ### Multi-Horizon Training
 
 ```bash
 # Train all three horizons independently
 for horizon in rps_t3m rps_t5m rps_t10m; do
-  python model/train.py \
-    --csv data-collection/training-data/training_data_v2.csv \
+  ppa model train \
+    --csv data/training-data/training_data_v2.csv \
     --target "$horizon" \
     --epochs 50 \
     --patience 15 \
@@ -84,7 +84,7 @@ done
 
 **Models Trained:**
 ```
-model/artifacts/
+data/artifacts/
 ├── ppa_model_rps_t3m.keras     sMAPE: 23.14%
 ├── ppa_model_rps_t5m.keras     sMAPE: 20.39%
 └── ppa_model_rps_t10m.keras    sMAPE: 18.57% ← Best
@@ -97,29 +97,29 @@ model/artifacts/
 ### Evaluate Single Model
 
 ```bash
-python model/evaluate.py \
-  --model model/artifacts/ppa_model_rps_t10m.keras \
-  --scaler model/artifacts/scaler_rps_t10m.pkl \
-  --target-scaler model/artifacts/target_scaler_rps_t10m.pkl \
-  --csv data-collection/training-data/training_data_v2.csv \
+ppa model evaluate \
+  --model data/artifacts/ppa_model_rps_t10m.keras \
+  --scaler data/artifacts/scaler_rps_t10m.pkl \
+  --target-scaler data/artifacts/target_scaler_rps_t10m.pkl \
+  --csv data/training-data/training_data_v2.csv \
   --target rps_t10m \
-  --metadata model/artifacts/split_meta_rps_t10m.json \
-  --output-dir model/artifacts
+  --metadata data/artifacts/split_meta_rps_t10m.json \
+  --output-dir data/artifacts
 ```
 
 **Output:**
 ```
 Evaluation Results — rps_t10m
-═════════════════════════════════════════
+════════════════════════════════════════
 Metric          │  Value
-─────────────────────────────────────────
+────────────────────────────────────────
 sMAPE           │  16.72 %
 Filtered MAPE   │  20.64 % (RPS > 10)
 MAE             │  34.39 req/s
 RMSE            │  51.29 req/s
-─────────────────────────────────────────
+────────────────────────────────────────
 PPA (Predictive) vs HPA (Reactive)
-─────────────────────────────────────────
+────────────────────────────────────────
 Avg Replicas    │  PPA: 6.03  HPA: 6.14
 Over-provision  │  PPA: 75.8% HPA: 100%
 Under-provision │  PPA: 24.2% HPA: 0%
@@ -138,7 +138,7 @@ eval_summary_rps_t10m.json written
 | `--csv` | str | Training data CSV (required) |
 | `--target` | str | Target column (required) |
 | `--metadata` | str | Path to split_meta JSON (required for test split) |
-| `--output-dir` | str | Output directory (default: model/artifacts) |
+| `--output-dir` | str | Output directory (default: data/artifacts) |
 | `--low-traffic-threshold` | float | RPS threshold for filtered MAPE (default: 10) |
 
 ---
@@ -148,9 +148,9 @@ eval_summary_rps_t10m.json written
 ### Convert Single Model
 
 ```bash
-python model/convert.py \
-  --model model/artifacts/ppa_model_rps_t10m.keras \
-  --output model/artifacts/ppa_model_rps_t10m.tflite \
+ppa model convert \
+  --model data/artifacts/ppa_model_rps_t10m.keras \
+  --output data/artifacts/ppa_model_rps_t10m.tflite \
   --quantization float16
 ```
 
@@ -189,37 +189,37 @@ Converting ppa_model_rps_t10m.keras to TFLite...
 ### Full Training → Evaluation → Conversion
 
 ```bash
-python model/pipeline.py \
-  --csv data-collection/training-data/training_data_v2.csv \
+ppa model pipeline \
+  --csv data/training-data/training_data_v2.csv \
   --horizons rps_t3m,rps_t5m,rps_t10m \
   --epochs 50 \
-  --output-dir model/artifacts \
+  --output-dir data/artifacts \
   --quality-gate 35
 ```
 
 **Output:**
 ```
 Pipeline: Training multi-horizon LSTM models
-═════════════════════════════════════════════════════════════════
+════════════════════════════════════════════════════════════════
 Horizon    │ Rows   │ sMAPE   │ MAE    │ RMSE   │ Size   │ Status
-─────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────
 rps_t3m    │ 1,602  │ 23.14%  │ 50.81  │ 76.13  │ 113 KB │ ✅ PASS
 rps_t5m    │ 1,602  │ 20.39%  │ 49.97  │ 74.07  │ 113 KB │ ✅ PASS
 rps_t10m   │ 1,602  │ 18.57%  │ 35.97  │ 52.91  │ 113 KB │ ✅ PASS
-─────────────────────────────────────────────────────────────────
-All models trained and converted. Artifacts in model/artifacts/
+────────────────────────────────────────────────────────────────
+All models trained and converted. Artifacts in data/artifacts/
 ```
 
 ### Pipeline with Champion-Challenger Promotion
 
 ```bash
 # Run pipeline AND promote winning horizon to champion dir
-python model/pipeline.py \
-  --csv data-collection/training-data/training_data_v2.csv \
+ppa model pipeline \
+  --csv data/training-data/training_data_v2.csv \
   --horizons rps_t10m \
   --epochs 50 \
   --promote-if-better \
-  --champion-dir model/champions \
+  --champion-dir data/champions \
   --promotion-metric smape \
   --promotion-gate 35.0 \
   --min-relative-improvement 2.0 \
@@ -231,7 +231,7 @@ python model/pipeline.py \
 **Output:**
 ```
 Pipeline: Training multi-horizon LSTM models (with promotion)
-═════════════════════════════════════════════════════════════════
+════════════════════════════════════════════════════════════════
 
 [Training]
 rps_t10m: Keras model → 50 epochs → sMAPE 18.57% ✅
@@ -246,10 +246,10 @@ ppa_model_rps_t10m.keras → ppa_model_rps_t10m.tflite (113 KB) ✅
 No previous champion → Promoting rps_t10m as new champion
 
 [Promotion]
-✅ Copied ppa_model.tflite to model/champions/rps_t10m/
-✅ Copied scaler.pkl to model/champions/rps_t10m/
-✅ Copied target_scaler.pkl to model/champions/rps_t10m/
-✅ Copied eval_summary.json to model/champions/rps_t10m/
+✅ Copied ppa_model.tflite to data/champions/rps_t10m/
+✅ Copied scaler.pkl to data/champions/rps_t10m/
+✅ Copied target_scaler.pkl to data/champions/rps_t10m/
+✅ Copied eval_summary.json to data/champions/rps_t10m/
 ✅ Patched PredictiveAutoscaler CR test-app-ppa:
      modelPath: /models/test-app/ppa_model.tflite
      scalerPath: /models/test-app/scaler.pkl
@@ -265,13 +265,13 @@ Operator will reload on next 30s cycle
 | `--csv` | — | str | Training data CSV (required) |
 | `--horizons` | rps_t3m,rps_t5m,rps_t10m | str | Comma-separated horizons to train |
 | `--epochs` | 50 | int | Training epochs |
-| `--output-dir` | model/artifacts | str | Output directory |
+| `--output-dir` | data/artifacts | str | Output directory |
 | `--quality-gate` | 35.0 | float | sMAPE threshold (%) — fail if exceeded |
 | `--gate-metric` | smape | str | Which metric for gate (smape, mape_filtered, mae) |
 | `--patience` | 15 | int | Early stopping patience |
 | `--target-floor` | 5.0 | float | Min RPS floor |
 | `--promote-if-better` | false | flag | Enable champion-challenger promotion |
-| `--champion-dir` | model/champions | str | Champion storage directory |
+| `--champion-dir` | data/champions | str | Champion storage directory |
 | `--promotion-metric` | smape | str | Optimization metric (smape, mape_filtered, mae) |
 | `--promotion-gate` | 35.0 | float | Quality gate for promotion (%) |
 | `--min-relative-improvement` | 2.0 | float | Min % improvement to promote (%) |
@@ -286,14 +286,13 @@ Operator will reload on next 30s cycle
 ### Validate Training Data Quality
 
 ```bash
-python data-collection/validate_training_data.py \
-  data-collection/training-data/training_data_v2.csv
+ppa data validate data/training-data/training_data_v2.csv
 ```
 
 **Output:**
 ```
 Validating training_data_v2.csv
-═════════════════════════════════════════════════════
+════════════════════════════════════════════════════
 ✅ File exists: 12,800 rows × 20 columns
 ✅ All required features present
 ✅ No NaN values in numeric columns
@@ -304,14 +303,14 @@ Validating training_data_v2.csv
     Latency: 0 → 500 ms ✅
 ✅ Sufficient data for LSTM (>3,000 rows needed, have 12,800)
 ✅ Time gaps handled (21 segments detected)
-═════════════════════════════════════════════════════
+════════════════════════════════════════════════════
 Status: READY FOR TRAINING ✅
 ```
 
 ### Verify Feature Extraction
 
 ```bash
-python data-collection/verify_features.py
+python -m ppa.dataflow.verify_features
 ```
 
 **Output:**
@@ -337,7 +336,7 @@ python -m pytest tests/test_train.py tests/test_evaluate.py tests/test_convert.p
 pytest tests/test_train.py::TestCreateDatasetFromSegments::test_correct_window_shape -v
 
 # Test coverage
-pytest tests/ --cov=model --cov-report=html
+pytest tests/ --cov=ppa.model --cov-report=html
 ```
 
 ---
@@ -349,19 +348,19 @@ pytest tests/ --cov=model --cov-report=html
 **Problem:** Early stopping triggers too early
 ```
 Solution: Increase --patience (try 15, 20, 30)
-python model/train.py --csv ... --patience 30
+ppa model train --csv ... --patience 30
 ```
 
 **Problem:** NaN loss during training
 ```
 Solution: Check for data quality or try reducing learning rate
-python model/train.py --csv ... --target-floor 5.0  # Clamp targets
+ppa model train --csv ... --target-floor 5.0  # Clamp targets
 ```
 
 **Problem:** Model predictions are all zeros or negative
 ```
 Solution: Target scaler may not be fitted correctly
-Check: ls -la model/artifacts/target_scaler*.pkl
+Check: ls -la data/artifacts/target_scaler*.pkl
 ```
 
 ### Evaluation Issues
@@ -375,7 +374,7 @@ Use --low-traffic-threshold 10 to filter them
 **Problem:** Evaluation crashes with "Split metadata not found"
 ```
 Solution: Pass --metadata flag with split_meta JSON
-python model/evaluate.py ... --metadata model/artifacts/split_meta_rps_t10m.json
+ppa model evaluate ... --metadata data/artifacts/split_meta_rps_t10m.json
 ```
 
 ### Deployment Issues
@@ -390,7 +389,7 @@ Then use correct --promote-cr-name and --promote-cr-namespace
 **Problem:** TFLite model crashes on inference
 ```
 Solution: Check quantization type and model shape
-python model/convert.py --quantization float16  # Use default
+ppa model convert --quantization float16  # Use default
 ```
 
 ---

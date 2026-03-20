@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ traffic_deployment_name | default("traffic-gen") }}
+  namespace: {{ namespace | default("default") }}
+spec:
+  replicas: {{ replicas | default(1) }}
+  selector:
+    matchLabels:
+      app: {{ app_name | default("traffic-gen") }}
+  template:
+    metadata:
+      labels:
+        app: {{ app_name | default("traffic-gen") }}
+    spec:
+      containers:
+      - name: {{ app_name | default("traffic-gen") }}
+        image: {{ locust_image | default("locustio/locust:2.43.3") }}
+        imagePullPolicy: {{ image_pull_policy | default("IfNotPresent") }}
+        command:
+        - locust
+        - -f
+        - /mnt/locust/locustfile.py
+        - --host={{ target_service }}
+        - --headless
+        - --only-summary
+        {% if users is defined %}
+        - --users
+        - "{{ users }}"
+        {% endif %}
+        {% if spawn_rate is defined %}
+        - --spawn-rate
+        - "{{ spawn_rate }}"
+        {% endif %}
+        {% if run_time is defined %}
+        - --run-time
+        - "{{ run_time }}"
+        {% endif %}
+        env:
+        - name: FAST_MODE
+          value: "{{ fast_mode | default("false") }}"
+        - name: STAGE_LOW_USERS
+          value: "{{ stage_low | default("50") }}"
+        - name: STAGE_MED_USERS
+          value: "{{ stage_med | default("250") }}"
+        - name: STAGE_SPIKE_USERS
+          value: "{{ stage_spike | default("1000") }}"
+        - name: STAGE_RECOVERY_USERS
+          value: "{{ stage_recovery | default("250") }}"
+        - name: STAGE_LOW_USERS_2
+          value: "{{ stage_low_2 | default("20") }}"
+        volumeMounts:
+        - name: locustfile
+          mountPath: /mnt/locust
+        resources:
+          requests:
+            cpu: {{ cpu_request | default('"100m"') }}
+            memory: {{ memory_request | default('"128Mi"') }}
+          limits:
+            cpu: {{ cpu_limit | default('"500m"') }}
+            memory: {{ memory_limit | default('"512Mi"') }}
+      volumes:
+      - name: locustfile
+        configMap:
+          name: {{ configmap_name | default("traffic-gen-locustfile") }}

@@ -1,0 +1,101 @@
+"""Locust load test file for PPA traffic profiling.
+
+Usage:
+    locust -f locustfile.py --host=http://test-app.default.svc.cluster.local
+    locust -f locustfile.py --headless -u 100 -r 10 -t 10m --host=...
+
+Profiles (set via STAGE_* env vars or --profile flag):
+    - low:    Baseline traffic (e.g., 50 users)
+    - med:    Medium load (e.g., 250 users)
+    - spike:  Load spike (e.g., 1000 users)
+    - recovery: Return to medium after spike
+    - low2:   Cooldown phase (e.g., 20 users)
+"""
+
+from locust import HttpUser, task, between, events
+import os
+import random
+import time
+
+
+STAGE_LOW = int(os.getenv("STAGE_LOW_USERS", "50"))
+STAGE_MED = int(os.getenv("STAGE_MED_USERS", "250"))
+STAGE_SPIKE = int(os.getenv("STAGE_SPIKE_USERS", "1000"))
+STAGE_RECOVERY = int(os.getenv("STAGE_RECOVERY_USERS", "250"))
+STAGE_LOW_2 = int(os.getenv("STAGE_LOW_USERS_2", "20"))
+
+PROFILE = os.getenv("TRAFFIC_PROFILE", "low")
+STAGE_DURATION = int(os.getenv("STAGE_DURATION_SECS", "120"))
+
+STAGES = [
+    ("low", STAGE_LOW),
+    ("med", STAGE_MED),
+    ("spike", STAGE_SPIKE),
+    ("recovery", STAGE_RECOVERY),
+    ("low2", STAGE_LOW_2),
+]
+
+STAGE_INDEX = 0
+_STAGE_START = time.time()
+_USER_COUNT = STAGES[0][1]
+
+
+def _get_current_stage_users() -> int:
+    global _USER_COUNT, STAGE_INDEX, _STAGE_START
+    elapsed = time.time() - _STAGE_START
+    if elapsed >= STAGE_DURATION:
+        STAGE_INDEX = (STAGE_INDEX + 1) % len(STAGES)
+        _STAGE_START = time.time()
+        _USER_COUNT = STAGES[STAGE_INDEX][1]
+    return _USER_COUNT
+
+
+class PPAUser(HttpUser):
+    wait_time = between(0.5, 2.0)
+    host = os.getenv("LOCUST_HOST", "http://test-app.default.svc.cluster.local")
+
+    @task(3)
+    def get_index(self):
+        self.client.get("/")
+
+    @task(2)
+    def get_health(self):
+        self.client.get("/health")
+
+    @task(1)
+    def get_metrics(self):
+        self.client.get("/metrics")
+
+    @task(1)
+    def post_data(self):
+        payload = {
+            "value": random.randint(1, 100),
+            "timestamp": time.time(),
+            "source": "locust",
+        }
+        self.client.post("/data", json=payload)
+
+
+@events.init_command_line_parser.add_listener
+def _add_profile_args(parser):
+    parser.add_argument("--profile", choices=["low", "med", "spike", "recovery", "low2", "auto"], default="auto",
+                        help="Traffic profile: low/med/spike/recovery/low2 or auto (stage rotation)")
+
+
+@events.test_start.add_listener
+def _on_test_start(environment, **kwargs):
+    global STAGE_INDEX, _USER_COUNT
+    profile = environment.runner.user_classes if hasattr(environment.runner, 'user_classes') else None
+    if parser_args.profile != "auto":
+        STAGE_INDEX = ["low", "med", "spike", "recovery", "low2"].index(parser_args.profile)
+        _USER_COUNT = STAGES[STAGE_INDEX][1]
+    print(f"Locust test started — profile: {parser_args.profile}, stages: {STAGES}")
+
+
+@events.request.add_listener
+def _on_request(request_type, name, response_time, response_length, response, context, exception, **kwargs):
+    pass
+
+
+# Module-level parser args reference (populated by locust events)
+parser_args = type("ParserArgs", (), {"profile": "auto"})()
