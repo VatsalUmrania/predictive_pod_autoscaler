@@ -24,4 +24,8 @@ RUN pip install --no-cache-dir \
     scikit-learn>=1.5.0
 {% endif %}
 
-CMD {{ cmd if cmd else '["python3", "-m", "ppa.dataflow.export_training_data"]' }}
+{% if cmd %}
+CMD {{ cmd }}
+{% else %}
+CMD ["python3", "-m", "ppa.dataflow.export_training_data"]
+{% endif %}
