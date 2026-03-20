@@ -2,8 +2,8 @@
 
 import typer
 
-from ppa.config import get_banner
 from ppa.cli.utils import console
+from ppa.config import get_banner
 
 # ── Root app ─────────────────────────────────────────────────────────────────
 app = typer.Typer(

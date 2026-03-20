@@ -7,7 +7,6 @@ import subprocess
 import typer
 from rich.panel import Panel
 
-from ppa.config import DEFAULT_NAMESPACE, PROJECT_DIR
 from ppa.cli.utils import (
     console,
     error,
@@ -18,6 +17,7 @@ from ppa.cli.utils import (
     success,
     warn,
 )
+from ppa.config import DEFAULT_NAMESPACE, PROJECT_DIR
 
 app = typer.Typer(rich_markup_mode="rich")
 traffic_app = typer.Typer(rich_markup_mode="rich")

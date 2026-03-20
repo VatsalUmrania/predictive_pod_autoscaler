@@ -12,7 +12,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
-import requests
+import requests  # type: ignore[import-untyped]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 logger = logging.getLogger("ppa.retraining")

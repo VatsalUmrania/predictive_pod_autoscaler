@@ -8,8 +8,8 @@ import sys
 import typer
 from rich.table import Table
 
-from ppa.config import DEFAULT_APP_NAME, DEFAULT_CSV, PROJECT_DIR, TRAINING_DATA_DIR
 from ppa.cli.utils import console, error, heading, info, success, warn
+from ppa.config import DEFAULT_APP_NAME, DEFAULT_CSV, PROJECT_DIR, TRAINING_DATA_DIR
 
 app = typer.Typer(rich_markup_mode="rich")
 

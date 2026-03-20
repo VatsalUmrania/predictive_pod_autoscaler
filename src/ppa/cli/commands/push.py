@@ -10,7 +10,6 @@ from pathlib import Path
 
 import typer
 
-from ppa.config import CHAMPION_DIR, PROJECT_DIR
 from ppa.cli.k8s import (
     cp,
     create_loader_pod,
@@ -31,6 +30,7 @@ from ppa.cli.utils import (
     success,
     warn,
 )
+from ppa.config import CHAMPION_DIR, PROJECT_DIR, TRAINING_DATA_DIR
 
 app = typer.Typer(rich_markup_mode="rich")
 
@@ -113,7 +113,7 @@ def push_models(
         result.success = True
         return result
 
-    LOADER_IMAGE = "ppa-loader:latest"
+    loader_image = "ppa-loader:latest"
     loader_dockerfile = PROJECT_DIR / "src" / "ppa" / "loader" / "Dockerfile"
     if loader_dockerfile.exists():
         info("Building loader image...")
@@ -128,7 +128,7 @@ def push_models(
                 "-f",
                 str(loader_dockerfile),
                 "-t",
-                LOADER_IMAGE,
+                loader_image,
                 str(PROJECT_DIR),
             ],
             env=docker_env,
@@ -137,7 +137,7 @@ def push_models(
         info("Loader image built (ready in minikube docker)")
         success("Image ready in minikube")
     else:
-        LOADER_IMAGE = "python:3.11-slim"
+        loader_image = "python:3.11-slim"
 
     ensure_exists(pvc_name, namespace)
     success("PVC ready")
@@ -147,7 +147,7 @@ def push_models(
     _active_pod = (pod_name, namespace)
 
     info(f"Creating loader pod: {pod_name}")
-    create_loader_pod(pod_name, LOADER_IMAGE, pvc_name, namespace)
+    create_loader_pod(pod_name, loader_image, pvc_name, namespace)
 
     if not wait_for_ready(pod_name, namespace):
         error("Loader pod failed to start")

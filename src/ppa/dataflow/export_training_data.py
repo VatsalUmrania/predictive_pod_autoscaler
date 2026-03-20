@@ -9,14 +9,11 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pandas as pd
-import requests
-
-ROOT_DIR = Path(__file__).resolve().parents[1]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
+import requests  # type: ignore[import-untyped]
 
 from ppa.common.constants import CAPACITY_PER_POD, GAP_THRESHOLD_MINUTES
 from ppa.common.feature_spec import FEATURE_COLUMNS, QUERIED_FEATURES, TARGET_COLUMNS
@@ -28,6 +25,10 @@ from ppa.dataflow.config import (
     REQUIRED_QUERY_FEATURES,
     TARGET_APP,
 )
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 
 def step_to_seconds(step: str) -> int:
@@ -54,14 +55,15 @@ PROM_TIMEOUT = 120  # Seconds — histogram_quantile over large ranges needs mor
 
 def _fetch_chunk(query: str, start: datetime, end: datetime, step: str) -> list:
     """Fetch a single time range chunk from Prometheus. Returns raw values list."""
+    params: dict[str, str | float] = {
+        "query": query,
+        "start": start.timestamp(),
+        "end": end.timestamp(),
+        "step": step,
+    }
     response = requests.get(
         f"{PROMETHEUS_URL}/api/v1/query_range",
-        params={
-            "query": query,
-            "start": start.timestamp(),
-            "end": end.timestamp(),
-            "step": step,
-        },
+        params=cast(dict[str, str | int | float], params),
         timeout=PROM_TIMEOUT,
     )
     response.raise_for_status()
@@ -71,7 +73,7 @@ def _fetch_chunk(query: str, start: datetime, end: datetime, step: str) -> list:
     data = payload.get("data", {}).get("result", [])
     if not data:
         return []
-    return data[0]["values"]
+    return data[0]["values"]  # type: ignore[no-any-return]
 
 
 def collect_range(query: str, hours: int = 24, step: str = "1m") -> pd.Series:
@@ -207,7 +209,7 @@ def add_prediction_targets(df: pd.DataFrame) -> pd.DataFrame:
     seg_ids = _detect_segments(df)
     parts = []
 
-    for seg_id, seg in df.groupby(seg_ids):
+    for _seg_id, seg in df.groupby(seg_ids):
         base = seg["requests_per_second"]
         seg = seg.copy()
         seg["rps_t3m"] = base.reindex(seg.index + pd.Timedelta(minutes=3)).to_numpy()
@@ -267,8 +269,6 @@ def build_feature_dataframe(
     feature_series = {}
     missing_features = []
 
-    MAX_REPLICAS = int(os.getenv("DATA_COLLECTION_MAX_REPLICAS", "20"))
-
     # Generate dynamic queries for the specific app_name to avoid being bound to config.TARGET_APP
     from ppa.common.promql import build_fallback_queries
 
@@ -312,7 +312,7 @@ def build_feature_dataframe(
     if "requests_per_second" in df.columns and "current_replicas" in df.columns:
         df["rps_per_replica"] = df["requests_per_second"] / df["current_replicas"].clip(lower=1)
     if "current_replicas" in df.columns:
-        df["replicas_normalized"] = df["current_replicas"] / MAX_REPLICAS
+        df["replicas_normalized"] = df["current_replicas"] / float(os.getenv("DATA_COLLECTION_MAX_REPLICAS", "20"))
     if "cpu_utilization_pct" in df.columns:
         df["cpu_acceleration"] = df["cpu_utilization_pct"].diff()
     if "rps_per_replica" in df.columns:
@@ -393,14 +393,14 @@ def print_dataset_health(health: dict[str, object]) -> None:
     print(f"Segments         : {health['segment_count']}")
     if health["max_gap"]:
         print(f"Max time gap     : {health['max_gap']}")
-    if health["date_range"]["start"]:
+    if health["date_range"]["start"]:  # type: ignore[index]
         print(
-            f"Date range       : {health['date_range']['start']} -> {health['date_range']['end']}"
+            f"Date range       : {health['date_range']['start']} -> {health['date_range']['end']}"  # type: ignore[index]
         )
-    missing_required = health.get("missing_required_values", {})
+    missing_required = health.get("missing_required_values", {})  # type: ignore[index,arg-type]
     if missing_required:
         print("Missing required :")
-        for feature_name, count in sorted(missing_required.items()):
+        for feature_name, count in sorted(missing_required.items()):  # type: ignore[index,attr-defined]
             print(f"  - {feature_name}: {count}")
     print(f"{'=' * 50}")
 

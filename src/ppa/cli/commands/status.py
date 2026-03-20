@@ -6,18 +6,18 @@ import typer
 from rich.panel import Panel
 from rich.table import Table
 
+from ppa.cli.utils import (
+    check_binary,
+    console,
+    prometheus_ready,
+    run_cmd_silent,
+)
 from ppa.config import (
     APP_PORT,
     DEFAULT_NAMESPACE,
     GRAFANA_PORT,
     METRICS_PORT,
     PROMETHEUS_PORT,
-)
-from ppa.cli.utils import (
-    check_binary,
-    console,
-    prometheus_ready,
-    run_cmd_silent,
 )
 
 app = typer.Typer(rich_markup_mode="rich", invoke_without_command=True)
@@ -35,13 +35,13 @@ def _check_pod_status(label: str, namespace: str = DEFAULT_NAMESPACE) -> tuple[b
     )
     if result.returncode != 0:
         return False, "not found"
-    lines = [l for l in result.stdout.strip().splitlines() if l.strip()]
-    if not lines:
+    lines_list = [line for line in result.stdout.strip().splitlines() if line.strip()]
+    if not lines_list:
         return False, "no pods"
     # Check if all pods show Running
-    all_running = all("Running" in line for line in lines)
+    all_running = all("Running" in line for line in lines_list)
     ready_counts = []
-    for line in lines:
+    for line in lines_list:
         parts = line.split()
         if len(parts) >= 2:
             ready_counts.append(parts[1])
@@ -51,7 +51,7 @@ def _check_pod_status(label: str, namespace: str = DEFAULT_NAMESPACE) -> tuple[b
 
 def _check_port(port: int) -> bool:
     """Check if a local port is responding."""
-    import requests
+    import requests  # type: ignore[import-untyped]
 
     try:
         requests.get(f"http://localhost:{port}", timeout=0.5)
@@ -202,7 +202,7 @@ def status(ctx: typer.Context) -> None:
 
     # Summary logic (remain same but more compact)
     mk_running = (
-        "[success]✓[/success]" in infra.renderable.columns[1]._cells[0]
+        "[success]✓[/success]" in infra.renderable.columns[1]._cells[0]  # type: ignore[union-attr,index]
     )  # Very crude check, maybe keep original logic
     # Re-run quick checks for summary
     mk_running = run_cmd_silent(["minikube", "status"], check=False).returncode == 0

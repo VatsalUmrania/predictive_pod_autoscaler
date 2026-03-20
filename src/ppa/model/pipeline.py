@@ -15,21 +15,21 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-
 from ppa.common.feature_spec import TARGET_COLUMNS
 from ppa.model.convert import convert_model
 from ppa.model.evaluate import evaluate_model
 from ppa.model.train import LOOKBACK_STEPS, train_model
 
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
-def _load_json(path: str) -> dict | None:
+
+def _load_json(path: str) -> dict[str, object] | None:
     if not path or not os.path.exists(path):
         return None
     with open(path) as f:
-        return json.load(f)
+        return json.load(f)  # type: ignore[no-any-return]
 
 
 def should_promote(
@@ -286,6 +286,7 @@ def run_pipeline(
                 )
                 if promote and conv_result is not None:
                     promoted_paths = promote_artifacts(
+                        app_name=app_name,
                         target=target,
                         challenger_paths={
                             "tflite": tflite_path,

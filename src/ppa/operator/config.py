@@ -14,16 +14,16 @@ This module exists for backward compatibility and will be removed in a future ve
 
 import warnings
 
+from ppa.config import (
+    PROMETHEUS_URL,
+    FeatureVectorException,
+    get_prometheus_url,
+)
+
 warnings.warn(
     "ppa.operator.config is deprecated. Import from ppa.config instead.",
     DeprecationWarning,
     stacklevel=2,
-)
-
-from ppa.config import (
-    FeatureVectorException,
-    PROMETHEUS_URL,
-    get_prometheus_url,
 )
 
 NAMESPACE = "default"

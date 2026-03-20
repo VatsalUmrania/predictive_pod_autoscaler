@@ -13,18 +13,6 @@ from rich.panel import Panel
 from rich.prompt import Confirm
 from rich.table import Table
 
-from ppa.config import (
-    ARTIFACTS_DIR,
-    CHAMPION_DIR,
-    DEFAULT_APP_NAME,
-    DEFAULT_CSV,
-    DEFAULT_EPOCHS,
-    DEFAULT_HORIZON,
-    DEFAULT_LOOKBACK,
-    DEFAULT_NAMESPACE,
-    DEPLOY_DIR,
-    PROJECT_DIR,
-)
 from ppa.cli.utils import (
     console,
     error,
@@ -36,6 +24,18 @@ from ppa.cli.utils import (
     step_heading,
     success,
     warn,
+)
+from ppa.config import (
+    ARTIFACTS_DIR,
+    CHAMPION_DIR,
+    DEFAULT_APP_NAME,
+    DEFAULT_CSV,
+    DEFAULT_EPOCHS,
+    DEFAULT_HORIZON,
+    DEFAULT_LOOKBACK,
+    DEFAULT_NAMESPACE,
+    DEPLOY_DIR,
+    PROJECT_DIR,
 )
 
 app = typer.Typer(rich_markup_mode="rich", invoke_without_command=True)

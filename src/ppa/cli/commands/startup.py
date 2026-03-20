@@ -9,10 +9,26 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import typer
 
+from ppa.cli.utils import (
+    check_binary,
+    console,
+    error,
+    get_minikube_docker_env,
+    heading,
+    info,
+    run_cmd,
+    run_cmd_silent,
+    save_session,
+    step_heading,
+    success,
+    wait_for_pods,
+    warn,
+)
 from ppa.config import (
     APP_PORT,
     DEFAULT_APP_NAME,
@@ -29,21 +45,6 @@ from ppa.config import (
     PROMETHEUS_PORT,
     get_banner,
 )
-from ppa.cli.utils import (
-    check_binary,
-    console,
-    error,
-    get_minikube_docker_env,
-    heading,
-    info,
-    run_cmd,
-    run_cmd_silent,
-    save_session,
-    step_heading,
-    success,
-    wait_for_pods,
-    warn,
-)
 
 app = typer.Typer(rich_markup_mode="rich", invoke_without_command=True)
 
@@ -54,7 +55,7 @@ def _get_step_2_description() -> str:
     return f"{driver_display} driver, {MINIKUBE_CPUS} CPU, {MINIKUBE_MEMORY // 1024} GB RAM"
 
 
-STEPS: list[tuple[int, str, str | callable]] = [
+STEPS: list[tuple[int, str, str | Callable[[], str]]] = [
     (1, "Check Prerequisites", "docker, kubectl, helm, python3, git"),
     (2, "Start Minikube", _get_step_2_description),
     (3, "Enable Minikube Addons", "metrics-server, ingress"),
@@ -589,7 +590,7 @@ def _step_9_verify_features() -> None:
             time.sleep(30)
 
             try:
-                import requests
+                import requests  # type: ignore[import-untyped]
 
                 resp = requests.get(
                     f"http://localhost:{PROMETHEUS_PORT}/api/v1/query",
@@ -684,7 +685,7 @@ def _step_11_chaos() -> None:
 
 
 # ── Step dispatcher ──────────────────────────────────────────────────────────
-STEP_FUNCS = {
+STEP_FUNCS: dict[int, Callable[[], None]] = {
     1: _step_1_prerequisites,
     2: _step_2_minikube,
     3: _step_3_addons,
@@ -784,7 +785,7 @@ def startup(
     ) as progress:
         task = progress.add_task("[bold]PPA Startup[/bold]", total=total)
 
-        for i, s in enumerate(steps_to_run, 1):
+        for _i, s in enumerate(steps_to_run, 1):
             _, name, desc = STEPS[s - 1]
             step_heading(s, 11, name)
             progress.update(task, description=f"[bold]Step {s}:[/bold] {name}")
@@ -794,7 +795,7 @@ def startup(
             except Exception as e:
                 error(f"Step {s} failed: {e}")
                 if step:
-                    raise typer.Exit(1)
+                    raise typer.Exit(1) from None
                 warn("Continuing to next step...")
 
             progress.advance(task)

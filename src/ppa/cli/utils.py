@@ -169,7 +169,7 @@ def wait_for_pods(label: str, namespace: str = "default", timeout: int = 120) ->
 
 def query_prometheus(query: str, url: str = PROMETHEUS_URL) -> str | None:
     """Run an instant query against Prometheus. Returns the scalar value or None."""
-    import requests
+    import requests  # type: ignore[import-untyped]
 
     try:
         resp = requests.get(
@@ -244,7 +244,7 @@ def save_session(pids: dict[str, int]) -> None:
         if "pids" not in data:
             data["pids"] = {}
 
-        data["pids"].update(pids)
+        data["pids"].update(pids)  # type: ignore[attr-defined,index]
 
         with open(SESSION_FILE, "w") as f:
             json.dump(data, f, indent=2)
@@ -252,7 +252,7 @@ def save_session(pids: dict[str, int]) -> None:
         warn(f"Failed to save session: {e}")
 
 
-def load_session() -> dict:
+def load_session() -> dict[str, object]:
     """Load session data from file and migrate old formats."""
     if not SESSION_FILE.exists():
         return {}
@@ -267,7 +267,7 @@ def load_session() -> dict:
             meta = {k: v for k, v in data.items() if k in ["updated_at", "start_time"]}
             data = {"pids": pids, **meta}
 
-        return data
+        return data  # type: ignore[no-any-return]
     except Exception:
         return {}
 
@@ -275,13 +275,13 @@ def load_session() -> dict:
 def cleanup_session() -> None:
     """Kill all tracked PIDs and remove session file."""
     session = load_session()
-    pids = session.get("pids", {})
+    pids = session.get("pids", {})  # type: ignore[attr-defined]
     if not pids:
         info("No active PPA session found.")
         return
 
     heading("Cleaning up PPA Session")
-    for name, pid in pids.items():
+    for name, pid in pids.items():  # type: ignore[attr-defined]
         try:
             if sys.platform == "win32":
                 result = subprocess.run(

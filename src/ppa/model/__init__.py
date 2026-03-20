@@ -14,10 +14,10 @@ try:
 
     _TENSORFLOW_AVAILABLE = True
 except ImportError:
-    train_model = None
-    create_dataset_from_segments = None
-    LOOKBACK_STEPS = None
-    convert_model = None
+    train_model = None  # type: ignore[assignment]
+    create_dataset_from_segments = None  # type: ignore[assignment]
+    LOOKBACK_STEPS = None  # type: ignore[assignment]
+    convert_model = None  # type: ignore[assignment]
     _TENSORFLOW_AVAILABLE = False
 
 try:
@@ -30,12 +30,12 @@ try:
         rps_to_replicas,
     )
 except ImportError:
-    evaluate_model = None
-    compute_mae = None
-    compute_rmse = None
-    compute_mape = None
-    compute_scaling_stats = None
-    rps_to_replicas = None
+    evaluate_model = None  # type: ignore[assignment]
+    compute_mae = None  # type: ignore[assignment]
+    compute_rmse = None  # type: ignore[assignment]
+    compute_mape = None  # type: ignore[assignment]
+    compute_scaling_stats = None  # type: ignore[assignment]
+    rps_to_replicas = None  # type: ignore[assignment]
 
 __all__ = [
     "train_model",

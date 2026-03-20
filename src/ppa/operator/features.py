@@ -9,13 +9,10 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import cast
 
 import numpy as np
-import requests
-
-ROOT_DIR = Path(__file__).resolve().parents[1]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
+import requests  # type: ignore[import-untyped]
 
 from ppa.common.feature_spec import FEATURE_COLUMNS
 from ppa.common.promql import build_fallback_queries, build_queries
@@ -24,8 +21,12 @@ from ppa.config import (
     PROM_FAILURE_THRESHOLD,
     PROMETHEUS_URL,
     TIMER_INTERVAL,
-    FeatureVectorException,
+    FeatureVectorError,
 )
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 logger = logging.getLogger("ppa.features")
 
@@ -53,13 +54,17 @@ _prom_consecutive_failures: int = 0
 _prom_last_failure_time: float = 0.0
 
 
-class PrometheusCircuitBreakerTripped(FeatureVectorException):
+class PrometheusCircuitBreakerError(FeatureVectorError):
     """Raised when Prometheus circuit breaker is active due to repeated failures."""
 
     pass
 
 
-def validate_feature_bounds(features: dict) -> tuple[dict, list]:
+# Backward compatibility alias
+PrometheusCircuitBreakerTripped = PrometheusCircuitBreakerError
+
+
+def validate_feature_bounds(features: dict) -> tuple[dict[str, float | None], list]:
     """
     FIX (PR#11): Validate features are within expected bounds.
     Returns (validated_features, out_of_bounds_features).
@@ -94,7 +99,7 @@ def validate_feature_bounds(features: dict) -> tuple[dict, list]:
 
     # If >20% of features are out of bounds, raise exception (signal something is very wrong)
     if len(out_of_bounds) > len(FEATURE_BOUNDS) * 0.2:
-        raise FeatureVectorException(
+        raise FeatureVectorError(
             f"Too many features out of bounds ({len(out_of_bounds)}/{len(FEATURE_BOUNDS)}): "
             f"{[f['feature'] for f in out_of_bounds]}"
         )
@@ -156,7 +161,7 @@ def prom_query(query: str, prom_url: str | None = None) -> float | None:
             logger.critical(
                 f"Prometheus circuit breaker TRIPPED ({_prom_consecutive_failures}/{PROM_FAILURE_THRESHOLD} failures): {exc}"
             )
-            raise PrometheusCircuitBreakerTripped(str(exc))
+            raise PrometheusCircuitBreakerError(str(exc)) from exc
         else:
             logger.warning(
                 f"Prometheus query failed ({_prom_consecutive_failures}/{PROM_FAILURE_THRESHOLD}): {exc}"
@@ -189,7 +194,7 @@ def prom_query_parallel(
         try:
             result = prom_query(query, prom_url=prom_url)  # PR#18: pass custom URL
             return feature_name, result
-        except PrometheusCircuitBreakerTripped:
+        except PrometheusCircuitBreakerError:
             raise  # Re-raise circuit breaker to stop all queries
         except Exception as exc:
             logger.debug(f"Query failed for {feature_name}: {exc}")
@@ -212,13 +217,13 @@ def prom_query_parallel(
                 except FutureTimeoutError:
                     logger.warning(f"Query timeout for {feature_name}")
                     results[feature_name] = None
-                except PrometheusCircuitBreakerTripped:
+                except PrometheusCircuitBreakerError:
                     raise  # Propagate circuit breaker
                 except Exception as exc:
                     logger.debug(f"Query exception for {feature_name}: {exc}")
                     results[feature_name] = None
 
-    except PrometheusCircuitBreakerTripped:
+    except PrometheusCircuitBreakerError:
         # Circuit breaker active - all queries should fail
         logger.error("Circuit breaker active, aborting parallel queries")
         raise
@@ -233,7 +238,7 @@ def build_feature_vector(
     max_replicas: int,
     container_name: str | None = None,
     prom_url: str | None = None,
-) -> tuple[dict, float]:
+) -> tuple[dict[str, float | None], float]:
     """Fetch current values for all features in the exact training order, returning (features, current_replicas)."""
     # FIX (PR#18): Set Prometheus URL for this execution context
     if prom_url:
@@ -247,12 +252,12 @@ def build_feature_vector(
     if values.get("cpu_utilization_pct") is None:
         # FIX (PR#6): Don't fall back to absolute CPU cores (mixing units)
         # Raise exception instead to force user to set resource requests
-        raise FeatureVectorException(
+        raise FeatureVectorError(
             f"CPU utilization unavailable for {target_app}, resource requests not set on target deployment"
         )
 
     if values.get("memory_utilization_pct") is None:
-        raise FeatureVectorException(
+        raise FeatureVectorError(
             f"Memory utilization unavailable for {target_app}, resource requests not set on target deployment"
         )
 
@@ -268,27 +273,24 @@ def build_feature_vector(
 
     if missing_features:
         # Raise exception instead of silently proceeding with NaN
-        raise FeatureVectorException(f"Missing critical features: {missing_features}")
+        raise FeatureVectorError(f"Missing critical features: {missing_features}")
 
     # Non-critical features can be NaN (will be handled later)
     for k, v in values.items():
         if v is None and k not in critical_features:
             values[k] = float("nan")
 
-    current_replicas = values.get("current_replicas", float("nan"))
-    safe_replicas = (
-        current_replicas if not math.isnan(current_replicas) and current_replicas > 0 else 1.0
-    )
+    current_replicas = values.get("current_replicas", float("nan"))  # type: ignore[assignment]
 
-    rps = values.get("requests_per_second", 0.0)
-    if math.isnan(rps):
+    rps = values.get("requests_per_second", 0.0)  # type: ignore[assignment]
+    if math.isnan(rps):  # type: ignore[arg-type]
         rps = 0.0
 
     # FIX: Use reference_replicas (stable) instead of current_replicas (volatile)
     # This ensures the feature has consistent meaning across scale events
     stable_ref = max(reference_replicas, 1)  # Clamp to 1 to avoid division by zero
-    values["rps_per_replica"] = rps / stable_ref
-    values["replicas_normalized"] = current_replicas / float(max_replicas)
+    values["rps_per_replica"] = rps / stable_ref  # type: ignore[operator]
+    values["replicas_normalized"] = current_replicas / float(max_replicas)  # type: ignore[operator]
 
     now = datetime.now(timezone.utc)
     hour = now.hour + now.minute / 60.0 + now.second / 3600.0
@@ -311,7 +313,7 @@ def build_feature_vector(
     if oob:
         logger.info(f"Clipped {len(oob)} out-of-bounds features")
 
-    return final_features, current_replicas
+    return final_features, float(current_replicas)  # type: ignore[arg-type]
 
 
 def prom_range_query(query: str, step_seconds: int = 30, hours: int = 1) -> dict[float, float]:
@@ -322,14 +324,15 @@ def prom_range_query(query: str, step_seconds: int = 30, hours: int = 1) -> dict
     try:
         end = datetime.now(timezone.utc)
         start = end - timedelta(hours=hours)
+        params: dict[str, str | int] = {
+            "query": query,
+            "start": int(start.timestamp()),
+            "end": int(end.timestamp()),
+            "step": f"{step_seconds}s",
+        }
         resp = requests.get(
             f"{PROMETHEUS_URL}/api/v1/query_range",
-            params={
-                "query": query,
-                "start": int(start.timestamp()),
-                "end": int(end.timestamp()),
-                "step": f"{step_seconds}s",
-            },
+            params=cast(dict[str, str | int | float], params),
             timeout=60,
         )
         resp.raise_for_status()
@@ -374,26 +377,26 @@ def build_historical_features(
         if feature_name in ["cpu_acceleration", "rps_acceleration"]:
             continue  # Skip acceleration (derived later)
 
-        ts_data = prom_range_query(query, step_seconds=step_seconds, hours=max(hours, 1))
+        ts_data = prom_range_query(query, step_seconds=step_seconds, hours=int(max(hours, 1)))  # type: ignore[arg-type]
         if not ts_data and feature_name == "cpu_utilization_pct":
             logger.warning("No CPU limits, trying fallback cpu_core_percent")
             ts_data = prom_range_query(
                 fallbacks["cpu_core_percent"],
                 step_seconds=step_seconds,
-                hours=max(hours, 1),
+                hours=int(max(hours, 1)),  # type: ignore[arg-type]
             )
         if not ts_data and feature_name == "memory_utilization_pct":
             logger.warning("No memory limits, trying fallback memory_usage_bytes")
             ts_data = prom_range_query(
                 fallbacks["memory_usage_bytes"],
                 step_seconds=step_seconds,
-                hours=max(hours, 1),
+                hours=int(max(hours, 1)),  # type: ignore[arg-type]
             )
 
         metric_timeseries[feature_name] = ts_data
 
     # Align all timeseries to the same set of timestamps (use rps_per_second as anchor, or any queried metric)
-    all_timestamps = set()
+    all_timestamps: set[float] = set()  # type: ignore[var-annotated]
     for ts_data in metric_timeseries.values():
         all_timestamps.update(ts_data.keys())
 

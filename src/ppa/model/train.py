@@ -12,11 +12,11 @@ import pandas as pd
 from keras import layers
 from sklearn.preprocessing import MinMaxScaler
 
+from ppa.common.feature_spec import FEATURE_COLUMNS, TARGET_COLUMNS
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
-
-from ppa.common.feature_spec import FEATURE_COLUMNS, TARGET_COLUMNS
 
 LOOKBACK_STEPS = 60  # 60 minutes of historical data to predict the next time step
 
@@ -32,23 +32,23 @@ DEFAULT_TARGET = TARGET_COLUMNS[0]  # rps_t3m
 
 def create_dataset_from_segments(df, feature_cols, target_col, scaler, lookback):
     """Build sliding windows respecting segment_id boundaries."""
-    X_all, y_all = [], []
+    x_all, y_all = [], []
 
     if "segment_id" in df.columns:
         for _, seg in df.groupby("segment_id"):
             seg_scaled = scaler.transform(seg[feature_cols])
             seg_targets = seg[target_col].values
             for i in range(len(seg_scaled) - lookback):
-                X_all.append(seg_scaled[i : (i + lookback)])
+                x_all.append(seg_scaled[i : (i + lookback)])
                 y_all.append(seg_targets[i + lookback - 1])
     else:
         scaled_features = scaler.transform(df[feature_cols])
         target_vals = df[target_col].values
         for i in range(len(scaled_features) - lookback):
-            X_all.append(scaled_features[i : (i + lookback)])
+            x_all.append(scaled_features[i : (i + lookback)])
             y_all.append(target_vals[i + lookback - 1])
 
-    return np.array(X_all), np.array(y_all)
+    return np.array(x_all), np.array(y_all)
 
 
 def build_model(lookback, num_features):
@@ -117,41 +117,40 @@ def train_model(
 
     scaler = MinMaxScaler()
     scaler.fit(df[FEATURE_COLUMNS])
-    X, y = create_dataset_from_segments(df, FEATURE_COLUMNS, target_col, scaler, lookback)
+    x, y = create_dataset_from_segments(df, FEATURE_COLUMNS, target_col, scaler, lookback)
 
     # Shuffle windows before splitting so val/test see patterns from all
     # segments/time-periods.  Each window is self-contained (lookback steps)
     # so shuffling does NOT leak future→past; it just ensures the val set
     # is representative of the full traffic distribution.
     rng = np.random.RandomState(42)
-    shuffle_idx = rng.permutation(len(X))
-    X, y = X[shuffle_idx], y[shuffle_idx]
+    shuffle_idx = rng.permutation(len(x))
+    x, y = x[shuffle_idx], y[shuffle_idx]
 
     # 3-way split: train / val / test
-    n = len(X)
+    n = len(x)
     test_start = int(n * (1 - test_split))
     val_start = int(test_start * 0.8)  # 80% of non-test data for training
 
-    X_train, y_train_raw = X[:val_start], y[:val_start]
-    X_val, y_val_raw = X[val_start:test_start], y[val_start:test_start]
-    X_test, y_test_raw = X[test_start:], y[test_start:]
+    x_train, y_train_raw = x[:val_start], y[:val_start]
+    x_val, y_val_raw = x[val_start:test_start], y[val_start:test_start]
+    x_test, _ = x[test_start:], y[test_start:]
 
     # Scale targets to [0,1] using train split only (avoids leakage).
     target_scaler = MinMaxScaler()
     y_train = target_scaler.fit_transform(y_train_raw.reshape(-1, 1)).flatten()
     y_val = target_scaler.transform(y_val_raw.reshape(-1, 1)).flatten()
-    y_test = target_scaler.transform(y_test_raw.reshape(-1, 1)).flatten()
 
-    print(f"Split sizes — train: {len(X_train)}, val: {len(X_val)}, test: {len(X_test)}")
+    print(f"Split sizes — train: {len(x_train)}, val: {len(x_val)}, test: {len(x_test)}")
 
     model = build_model(lookback, len(FEATURE_COLUMNS))
     model.summary()
 
     print("Training model...")
     history = model.fit(
-        X_train,
+        x_train,
         y_train,
-        validation_data=(X_val, y_val),
+        validation_data=(x_val, y_val),
         epochs=epochs,
         batch_size=32,
         callbacks=[
@@ -190,9 +189,9 @@ def train_model(
         "total_windows": n,
         "val_start_idx": val_start,
         "test_start_idx": test_start,
-        "train_size": len(X_train),
-        "val_size": len(X_val),
-        "test_size": len(X_test),
+        "train_size": len(x_train),
+        "val_size": len(x_val),
+        "test_size": len(x_test),
         "csv_path": csv_path,
     }
     with open(meta_path, "w") as f:
@@ -204,7 +203,7 @@ def train_model(
     print(f"Saved meta           → {meta_path}")
 
     # Compute final metrics on validation set
-    val_loss, val_mae = model.evaluate(X_val, y_val, verbose=0)
+    val_loss, val_mae = model.evaluate(x_val, y_val, verbose=0)
     metrics = {
         "val_loss": float(val_loss),
         "val_mae": float(val_mae),

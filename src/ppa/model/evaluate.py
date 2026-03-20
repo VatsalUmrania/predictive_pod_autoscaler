@@ -15,25 +15,23 @@ import sys
 from pathlib import Path
 
 import joblib
-import keras
+import keras as _keras
 import numpy as np
 import pandas as pd
-
-ROOT_DIR = Path(__file__).resolve().parents[1]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-
-import keras as _keras
-
-# Backward-compat shim: models trained before the MSE migration used
-# asymmetric_huber as their loss.  Registering it here allows Keras to
-# deserialise those .keras files without error.  New models compiled with
-# loss="mse" don't need this, but it is harmless to keep registered.
 import tensorflow as tf
 
 from ppa.common.constants import CAPACITY_PER_POD
 from ppa.common.feature_spec import FEATURE_COLUMNS, TARGET_COLUMNS
 from ppa.model.train import LOOKBACK_STEPS, create_dataset_from_segments
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+# Backward-compat shim: models trained before the MSE migration used
+# asymmetric_huber as their loss.  Registering it here allows Keras to
+# deserialise those .keras files without error.  New models compiled with
+# loss="mse" don't need this, but it is harmless to keep registered.
 
 
 @_keras.saving.register_keras_serializable(package="ppa")
@@ -88,7 +86,7 @@ def compute_rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 def rps_to_replicas(rps: np.ndarray, capacity: float, min_r: int, max_r: int) -> np.ndarray:
     """Convert RPS values to replica counts (ceil division, clamped)."""
     replicas = np.ceil(rps / capacity).astype(int)
-    return np.clip(replicas, min_r, max_r)
+    return np.clip(replicas, min_r, max_r)  # type: ignore[no-any-return]
 
 
 def compute_scaling_stats(
@@ -228,7 +226,7 @@ def evaluate_model(
     print(f"{'─' * 60}")
 
     # Load model + scaler
-    model = keras.models.load_model(model_path)
+    model = _keras.models.load_model(model_path)
     scaler = joblib.load(scaler_path)
 
     # Load target scaler if available (model outputs scaled [0,1] targets)
@@ -240,7 +238,7 @@ def evaluate_model(
     df = pd.read_csv(csv_path, index_col="timestamp", parse_dates=True)
     df = df.dropna(subset=FEATURE_COLUMNS + [target_col])
 
-    X, y = create_dataset_from_segments(df, FEATURE_COLUMNS, target_col, scaler, lookback)
+    x, y = create_dataset_from_segments(df, FEATURE_COLUMNS, target_col, scaler, lookback)
 
     # Determine test boundaries
     if meta_path and os.path.exists(meta_path):
@@ -248,18 +246,18 @@ def evaluate_model(
             meta = json.load(f)
         test_start = meta["test_start_idx"]
     else:
-        test_start = int(len(X) * (1 - test_split))
+        test_start = int(len(x) * (1 - test_split))
 
-    X_test, y_test = X[test_start:], y[test_start:]
+    x_test, y_test = x[test_start:], y[test_start:]
 
-    if len(X_test) == 0:
+    if len(x_test) == 0:
         print("No test samples available.")
         return None
 
-    print(f"  Test samples: {len(X_test)}")
+    print(f"  Test samples: {len(x_test)}")
 
     # Predict
-    y_pred = model.predict(X_test, verbose=0).flatten()
+    y_pred = model.predict(x_test, verbose=0).flatten()
 
     # Inverse-transform predictions only.  y_test is already raw RPS
     # (create_dataset_from_segments returns unscaled targets), but y_pred
@@ -300,7 +298,7 @@ def evaluate_model(
     # Summary
     summary = {
         "target": target_col,
-        "test_samples": len(X_test),
+        "test_samples": len(x_test),
         "mape": round(mape, 4),
         "smape": round(smape, 4),
         "mape_filtered": round(mape_filtered, 4),

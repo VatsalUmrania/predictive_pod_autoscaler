@@ -11,7 +11,6 @@ import subprocess
 import typer
 from rich.table import Table
 
-from ppa.config import DEPLOY_DIR, PROJECT_DIR
 from ppa.cli.utils import (
     console,
     error,
@@ -23,6 +22,7 @@ from ppa.cli.utils import (
     success,
     warn,
 )
+from ppa.config import DEPLOY_DIR, PROJECT_DIR
 
 app = typer.Typer(rich_markup_mode="rich", invoke_without_command=True)
 
@@ -73,8 +73,6 @@ def build_cmd(
     no_cache: bool = typer.Option(False, "--no-cache", help="Build without Docker cache."),
 ) -> None:
     """[bold]Build[/] the PPA operator Docker image."""
-    namespace = ctx.obj["namespace"]
-
     heading("Building PPA Operator Image")
 
     if not _check_minikube():

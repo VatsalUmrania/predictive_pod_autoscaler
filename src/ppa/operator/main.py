@@ -14,6 +14,27 @@ import kopf
 from prometheus_client import Counter, Gauge
 from prometheus_client import start_http_server as _prom_start_http_server
 
+from ppa.common.feature_spec import FEATURE_COLUMNS
+from ppa.config import (
+    DEFAULT_CAPACITY_PER_POD,
+    DEFAULT_MIN_REPLICAS,
+    DEFAULT_MODEL_DIR,
+    DEFAULT_SCALE_DOWN_RATE,
+    DEFAULT_SCALE_UP_RATE,
+    INITIAL_DELAY,
+    NAMESPACE,
+    STABILIZATION_STEPS,
+    STABILIZATION_TOLERANCE,
+    TIMER_INTERVAL,
+    FeatureVectorException,
+)
+from ppa.operator.features import (
+    PrometheusCircuitBreakerTripped,
+    build_feature_vector,
+)
+from ppa.operator.predictor import Predictor
+from ppa.operator.scaler import calculate_replicas, scale_deployment
+
 # ---------------------------------------------------------------------------
 # Prometheus metrics — labelled by cr_name + namespace for multi-CR support
 # ---------------------------------------------------------------------------
@@ -47,27 +68,6 @@ ppa_prediction_error_pct = Gauge(
 ppa_inference_latency_ms = Gauge(
     "ppa_inference_latency_ms", "Model inference latency in ms", _LABELS
 )
-
-from ppa.common.feature_spec import FEATURE_COLUMNS
-from ppa.config import (
-    DEFAULT_CAPACITY_PER_POD,
-    DEFAULT_MIN_REPLICAS,
-    DEFAULT_MODEL_DIR,
-    DEFAULT_SCALE_DOWN_RATE,
-    DEFAULT_SCALE_UP_RATE,
-    INITIAL_DELAY,
-    NAMESPACE,
-    STABILIZATION_STEPS,
-    STABILIZATION_TOLERANCE,
-    TIMER_INTERVAL,
-    FeatureVectorException,
-)
-from ppa.operator.features import (
-    PrometheusCircuitBreakerTripped,
-    build_feature_vector,
-)
-from ppa.operator.predictor import Predictor
-from ppa.operator.scaler import calculate_replicas, scale_deployment
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 logger = logging.getLogger("ppa.operator")
@@ -310,13 +310,12 @@ def reconcile(spec, status, meta, patch, **kwargs):
             patch.status["fallbackReason"] = f"Feature extraction failed: {str(e)[:100]}"
             patch.status["fallbackReplicas"] = fallback_replicas
 
-            # Apply fallback scaling if different from current
-            if fallback_replicas != current:
-                if not observer_mode:
-                    logger.info(
-                        f"[{cr_name}] FALLBACK: Scaling {target_ns}/{target}: {current} → {fallback_replicas}"
-                    )
-                    scale_deployment(target, fallback_replicas, target_ns)
+            # Apply fallback scaling
+            if not observer_mode:
+                logger.info(
+                    f"[{cr_name}] FALLBACK: Scaling {target_ns}/{target} to {fallback_replicas} replicas"
+                )
+                scale_deployment(target, fallback_replicas, target_ns)
 
             # Don't return - continue with limited functionality
             # But we can't predict without features, so skip prediction

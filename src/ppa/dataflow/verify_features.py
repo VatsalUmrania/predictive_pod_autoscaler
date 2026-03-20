@@ -2,14 +2,14 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import requests
+import requests  # type: ignore[import-untyped]
+
+from ppa.common.feature_spec import QUERIED_FEATURES, TEMPORAL_FEATURES
+from ppa.dataflow.config import PROMETHEUS_URL, QUERIES, TARGET_APP
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
-
-from ppa.common.feature_spec import QUERIED_FEATURES, TEMPORAL_FEATURES
-from ppa.dataflow.config import PROMETHEUS_URL, QUERIES, TARGET_APP
 
 print(f"\n{'=' * 55}")
 print(

@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pandas as pd
 
+from ppa.common.constants import GAP_THRESHOLD_MINUTES
+from ppa.common.feature_spec import FEATURE_COLUMNS, TARGET_COLUMNS
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
-
-from ppa.common.constants import GAP_THRESHOLD_MINUTES
-from ppa.common.feature_spec import FEATURE_COLUMNS, TARGET_COLUMNS
 
 
 def validate(csv_path: str) -> bool:
@@ -59,7 +59,7 @@ def validate(csv_path: str) -> bool:
             if "sin" in col1 or "cos" in col1 or "sin" in col2 or "cos" in col2:
                 continue
 
-            cor_val = getattr(corr.iloc[i, j], "item", lambda: corr.iloc[i, j])()
+            cor_val = getattr(corr.iloc[i, j], "item", lambda i=i, j=j: corr.iloc[i, j])()
             if cor_val > 0.98:
                 errors.append(f"High correlation (>0.98) between {col1} and {col2}: {cor_val:.3f}")
 

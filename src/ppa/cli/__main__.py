@@ -8,18 +8,18 @@ from prompt_toolkit.completion import NestedCompleter
 from prompt_toolkit.history import InMemoryHistory
 
 from ppa.cli.app import app
-from ppa.config import get_banner
 from ppa.cli.utils import console
+from ppa.config import get_banner
 
 
-def get_completer_dict() -> dict:
+def get_completer_dict() -> dict[str, object | None]:
     """Dynamically build a nested dictionary for auto-completion using Typer/Click internals."""
     from typer.main import get_command
 
     click_command = get_command(app)
 
-    def _build_dict(cmd) -> dict:
-        d = {}
+    def _build_dict(cmd) -> dict[str, object | None]:
+        d: dict[str, object | None] = {}
         # Add subcommands if it's a group
         if hasattr(cmd, "commands"):
             for sub_name, sub_cmd in cmd.commands.items():

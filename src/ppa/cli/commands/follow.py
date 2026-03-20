@@ -9,6 +9,11 @@ import typer
 from rich.live import Live
 from rich.table import Table
 
+from ppa.cli.utils import (
+    cleanup_session,
+    console,
+    load_session,
+)
 from ppa.config import (
     APP_PORT,
     GRAFANA_PORT,
@@ -16,17 +21,12 @@ from ppa.config import (
     PROMETHEUS_PORT,
     get_banner,
 )
-from ppa.cli.utils import (
-    cleanup_session,
-    console,
-    load_session,
-)
 
 app = typer.Typer(rich_markup_mode="rich", invoke_without_command=True)
 
 
 def _check_port(port: int) -> bool:
-    import requests
+    import requests  # type: ignore[import-untyped]
 
     try:
         requests.get(f"http://localhost:{port}", timeout=0.5)

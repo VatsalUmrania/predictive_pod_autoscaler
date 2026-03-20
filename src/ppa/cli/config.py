@@ -14,12 +14,6 @@ This module exists for backward compatibility and will be removed in a future ve
 
 import warnings
 
-warnings.warn(
-    "ppa.cli.config is deprecated. Import from ppa.config instead.",
-    DeprecationWarning,
-    stacklevel=2,
-)
-
 from ppa.config import (
     ARTIFACTS_DIR,
     CHAMPION_DIR,
@@ -36,7 +30,6 @@ from ppa.config import (
     DEFAULT_MODEL_DIR,
     DEFAULT_NAMESPACE,
     DEPLOY_DIR,
-    get_banner,
     GRAFANA_PORT,
     INITIAL_DELAY,
     LOOKBACK_STEPS,
@@ -49,10 +42,10 @@ from ppa.config import (
     MODEL_DIR,
     NAMESPACE,
     PPA_THEME,
-    PROMETHEUS_PORT,
-    PROMETHEUS_URL,
     PROJECT_DIR,
     PROM_FAILURE_THRESHOLD,
+    PROMETHEUS_PORT,
+    PROMETHEUS_URL,
     SCRIPTS_DIR,
     SESSION_FILE,
     STABILIZATION_STEPS,
@@ -60,6 +53,13 @@ from ppa.config import (
     TESTS_DIR,
     TIMER_INTERVAL,
     TRAINING_DATA_DIR,
+    get_banner,
+)
+
+warnings.warn(
+    "ppa.cli.config is deprecated. Import from ppa.config instead.",
+    DeprecationWarning,
+    stacklevel=2,
 )
 
 __all__ = [

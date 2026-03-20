@@ -8,8 +8,8 @@ import typer
 from rich.panel import Panel
 from rich.table import Table
 
-from ppa.config import DEFAULT_NAMESPACE, DEPLOY_DIR, PROJECT_DIR
 from ppa.cli.utils import console, error, info, kubectl, success
+from ppa.config import DEFAULT_NAMESPACE, DEPLOY_DIR, PROJECT_DIR
 
 app = typer.Typer(rich_markup_mode="rich", invoke_without_command=True)
 

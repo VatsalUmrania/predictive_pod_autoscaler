@@ -8,6 +8,7 @@ import typer
 from rich.panel import Panel
 from rich.table import Table
 
+from ppa.cli.utils import console, error, heading, success
 from ppa.config import (
     ARTIFACTS_DIR,
     CHAMPION_DIR,
@@ -16,9 +17,7 @@ from ppa.config import (
     DEFAULT_EPOCHS,
     DEFAULT_HORIZON,
     DEFAULT_LOOKBACK,
-    PROJECT_DIR,
 )
-from ppa.cli.utils import console, error, heading, success
 
 app = typer.Typer(rich_markup_mode="rich")
 

@@ -12,12 +12,12 @@ from pathlib import Path
 import joblib
 import numpy as np
 
+from ppa.common.feature_spec import FEATURE_COLUMNS, NUM_FEATURES
+from ppa.config import LOOKBACK_STEPS
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
-
-from ppa.common.feature_spec import FEATURE_COLUMNS, NUM_FEATURES
-from ppa.config import LOOKBACK_STEPS
 
 logger = logging.getLogger("ppa.predictor")
 
@@ -30,11 +30,11 @@ class Predictor:
         self.scaler_path = scaler_path
         self.target_scaler_path = target_scaler_path
         self.history: deque = deque(maxlen=LOOKBACK_STEPS)
-        self.interpreter = None
-        self.scaler = None
-        self.target_scaler = None
-        self.input_details = None
-        self.output_details = None
+        self.interpreter: object | None = None  # type: ignore[assignment]
+        self.scaler: object | None = None  # type: ignore[assignment]
+        self.target_scaler: object | None = None  # type: ignore[assignment]
+        self.input_details: object | None = None  # type: ignore[assignment]
+        self.output_details: object | None = None  # type: ignore[assignment]
         self._load_failed = False
         # FIX (PR#10): Add exponential backoff for model reload failures
         self._load_failures = 0
@@ -133,8 +133,8 @@ class Predictor:
                 ),
             ]:
                 try:
-                    InterpreterClass = loader_fn()
-                    self.interpreter = InterpreterClass(model_path=self.model_path)
+                    interpreter_class = loader_fn()
+                    self.interpreter = interpreter_class(model_path=self.model_path)
                     self.interpreter.allocate_tensors()
                     logger.info(f"Model loaded via {loader_name}")
                     interpreter_loaded = True
@@ -219,27 +219,26 @@ class Predictor:
             return 0.0
 
         window = np.array(self.history, dtype=np.float32)[-self.lookback :]
-        scaled = self.scaler.transform(window)
+        scaled = self.scaler.transform(window)  # type: ignore[union-attr]
         input_data = scaled.reshape(1, self.lookback, NUM_FEATURES).astype(np.float32)
 
         # FIX (PR#13): Track inference latency
         start_time = time.time()
-        self.interpreter.set_tensor(self.input_details[0]["index"], input_data)
-        self.interpreter.invoke()
+        self.interpreter.set_tensor(self.input_details[0]["index"], input_data)  # type: ignore[union-attr,index]
+        self.interpreter.invoke()  # type: ignore[union-attr]
         inference_time = (time.time() - start_time) * 1000  # Convert to milliseconds
 
         if inference_time > 100:  # >100ms is concerning
             logger.warning(f"Slow inference: {inference_time:.1f}ms (expected <100ms)")
 
-        output = self.interpreter.get_tensor(self.output_details[0]["index"])
+        output = self.interpreter.get_tensor(self.output_details[0]["index"])  # type: ignore[union-attr,index]
 
         predicted_scaled = float(output[0][0])
 
         # Inverse-transform model output using target scaler
         if self.target_scaler is not None:
-            predicted_rps = self.target_scaler.inverse_transform(np.array([[predicted_scaled]]))[
-                0, 0
-            ]
+            result = self.target_scaler.inverse_transform(np.array([[predicted_scaled]]))  # type: ignore[attr-defined]
+            predicted_rps = result[0, 0]
         else:
             # Legacy fallback: model was trained without target scaling
             predicted_rps = predicted_scaled
@@ -287,6 +286,8 @@ class Predictor:
             ),
             "drift_detected": self.concept_drift_detected,
         }
+
+    def prefill_history(self, feature_rows: list) -> None:
         """Populate history deque from a list of feature dictionaries (e.g. from Prometheus range query)."""
         for features in feature_rows:
             row = np.array([features.get(name, 0.0) for name in FEATURE_COLUMNS], dtype=np.float32)
@@ -335,7 +336,7 @@ class Predictor:
 
         # Calculate MAPE (Mean Absolute Percentage Error)
         errors = []
-        for pred, actual in zip(recent_predictions, recent_actuals):
+        for pred, actual in zip(recent_predictions, recent_actuals, strict=True):
             if actual > 0:
                 error = abs(pred - actual) / actual * 100
                 errors.append(error)

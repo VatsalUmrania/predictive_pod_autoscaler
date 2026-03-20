@@ -13,10 +13,10 @@ def evaluate_model_accuracy(model, eval_data=None):
     if eval_data is None:
         return None
     try:
-        # Assume eval_data is a tuple (X, y) or dataset
+        # Assume eval_data is a tuple (x, y) or dataset
         if isinstance(eval_data, tuple):
-            X, y = eval_data
-            predictions = model.predict(X, verbose=0)
+            x, y = eval_data
+            predictions = model.predict(x, verbose=0)
             mae = np.mean(np.abs(predictions.flatten() - y.flatten()))
             return float(mae)
         else:
@@ -76,9 +76,9 @@ def convert_model(
         # FIX (PR#8): Use representative dataset if available for better quantization
         if validation_data is not None and isinstance(validation_data, tuple):
             try:
-                X, _ = validation_data
+                x, _ = validation_data
                 # Use first 100 samples for quantization calibration
-                rep_samples = X[: min(100, len(X))]
+                rep_samples = x[: min(100, len(x))]
 
                 def representative_dataset():
                     for sample in rep_samples:
@@ -122,9 +122,9 @@ def convert_model(
             output_details = interpreter.get_output_details()
 
             # Evaluate on validation set
-            X, y = validation_data
+            x, y = validation_data
             predictions = []
-            for sample in X[: min(100, len(X))]:
+            for sample in x[: min(100, len(x))]:
                 interpreter.set_tensor(
                     input_details[0]["index"],
                     np.expand_dims(sample, axis=0).astype(np.float32),

@@ -11,16 +11,15 @@ from __future__ import annotations
 
 import os
 import platform
-import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 # ── Global config singleton ──────────────────────────────────────────────────
-_global_config: Optional["Config"] = None
+_global_config: Config | None = None
 
 
-def get_config() -> "Config":
+def get_config() -> Config:
     """Get the current configuration (lazy-loaded from env on first call)."""
     global _global_config
     if _global_config is None:
@@ -28,7 +27,7 @@ def get_config() -> "Config":
     return _global_config
 
 
-def set_config(config: "Config") -> None:
+def set_config(config: Config) -> None:
     """Override configuration (for testing)."""
     global _global_config
     _global_config = config
@@ -134,7 +133,7 @@ class PrometheusConfig:
     failure_threshold: int = 10
 
     @classmethod
-    def from_env(cls) -> "PrometheusConfig":
+    def from_env(cls) -> PrometheusConfig:
         return cls(
             url=os.getenv("PROMETHEUS_URL", "http://prometheus:9090"),
             timeout=int(os.getenv("PROM_TIMEOUT", "2")),
@@ -155,7 +154,7 @@ class OperatorConfig:
     log_level: str = "INFO"
 
     @classmethod
-    def from_env(cls) -> "OperatorConfig":
+    def from_env(cls) -> OperatorConfig:
         return cls(
             namespace=os.getenv("PPA_NAMESPACE", "default"),
             timer_interval=int(os.getenv("PPA_TIMER_INTERVAL", "30")),
@@ -176,7 +175,7 @@ class ModelConfig:
     lookback_steps: int = 60
 
     @classmethod
-    def from_env(cls) -> "ModelConfig":
+    def from_env(cls) -> ModelConfig:
         return cls(
             model_dir=os.getenv("PPA_MODEL_DIR", "/models"),
             default_horizon=os.getenv("PPA_DEFAULT_HORIZON", "rps_t10m"),
@@ -196,7 +195,7 @@ class ScalingConfig:
     safety_factor: float = 1.10
 
     @classmethod
-    def from_env(cls) -> "ScalingConfig":
+    def from_env(cls) -> ScalingConfig:
         return cls(
             min_replicas=int(os.getenv("PPA_MIN_REPLICAS", "2")),
             max_replicas=int(os.getenv("PPA_MAX_REPLICAS", "20")),
@@ -217,7 +216,7 @@ class DataflowConfig:
     training_data_dir: str = "data/training-data"
 
     @classmethod
-    def from_env(cls) -> "DataflowConfig":
+    def from_env(cls) -> DataflowConfig:
         return cls(
             target_app=os.getenv("TARGET_APP", "test-app"),
             namespace=os.getenv("NAMESPACE", "default"),
@@ -240,7 +239,7 @@ class CLIConfig:
     minikube_k8s_version: str = "v1.28.3"
 
     @classmethod
-    def from_env(cls) -> "CLIConfig":
+    def from_env(cls) -> CLIConfig:
         return cls(
             prometheus_port=int(os.getenv("PROMETHEUS_PORT", "9090")),
             grafana_port=int(os.getenv("GRAFANA_PORT", "3000")),
@@ -278,7 +277,7 @@ class PathsConfig:
         self.tests_dir = self.project_dir / "tests"
 
     @classmethod
-    def from_env(cls) -> "PathsConfig":
+    def from_env(cls) -> PathsConfig:
         project_dir_str = os.getenv("PROJECT_DIR")
         if project_dir_str:
             return cls(project_dir=Path(project_dir_str))
@@ -322,7 +321,7 @@ class Config:
         }
 
     @classmethod
-    def from_env(cls) -> "Config":
+    def from_env(cls) -> Config:
         return cls(
             prometheus=PrometheusConfig.from_env(),
             operator=OperatorConfig.from_env(),
@@ -337,10 +336,14 @@ class Config:
 # ── Exception classes ────────────────────────────────────────────────────────
 
 
-class FeatureVectorException(Exception):
+class FeatureVectorError(Exception):
     """Raised when feature extraction fails (Prometheus unavailable, network issues, etc.)."""
 
     pass
+
+
+# Backward compatibility alias
+FeatureVectorException = FeatureVectorError
 
 
 # ── Rich theme ───────────────────────────────────────────────────────────────
@@ -393,7 +396,7 @@ __all__ = [
     "CLIConfig",
     "PathsConfig",
     # Exceptions
-    "FeatureVectorException",
+    "FeatureVectorError",
     # Theme
     "PPA_THEME",
     "get_banner",
@@ -440,4 +443,7 @@ __all__ = [
     "DEFAULT_SCALE_UP_RATE",
     "DEFAULT_SCALE_DOWN_RATE",
     "DEFAULT_MODEL_DIR",
+    # Exceptions
+    "FeatureVectorError",
+    "FeatureVectorException",  # Backward compatibility alias
 ]

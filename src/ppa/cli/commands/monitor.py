@@ -81,7 +81,7 @@ def _get_predicted_rps_from_logs() -> str:
             parts = line.split("Predicted load:")
             if len(parts) > 1:
                 try:
-                    return parts[1].strip().split()[0]
+                    return parts[1].strip().split()[0]  # type: ignore[no-any-return]
                 except (IndexError, ValueError):
                     pass
     return "?"
