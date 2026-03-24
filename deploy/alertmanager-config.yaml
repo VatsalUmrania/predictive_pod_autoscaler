@@ -1,0 +1,83 @@
+# deploy/alertmanager-config.yaml
+# AlertmanagerConfig for PPA alerts
+# Routes alerts to appropriate channels based on severity
+---
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: ppa-alertmanager
+  namespace: monitoring
+spec:
+  route:
+    # Default route
+    receiver: "ppa-default"
+    groupBy: ["alertname", "cluster", "service", "cr_name", "namespace"]
+    groupWait: 10s
+    groupInterval: 10s
+    repeatInterval: 12h
+    
+    # Nested routes by severity
+    routes:
+      # Critical alerts — immediate notification
+      - matchers:
+          - name: severity
+            value: critical
+        receiver: "ppa-critical"
+        groupWait: 0s
+        groupInterval: 5m
+        repeatInterval: 1h
+        
+      # Warning alerts — delayed grouping
+      - matchers:
+          - name: severity
+            value: warning
+        receiver: "ppa-warnings"
+        groupWait: 30s
+        groupInterval: 5m
+        repeatInterval: 4h
+        
+      # Info alerts — infrequent notifications
+      - matchers:
+          - name: severity
+            value: info
+        receiver: "ppa-info"
+        groupWait: 1m
+        groupInterval: 15m
+        repeatInterval: 1d
+
+  receivers:
+    # Default receiver for uncategorized alerts
+    - name: "ppa-default"
+      # Add webhook, email, or other notification channels here
+      # webhookConfigs:
+      #   - url: "http://webhook-receiver:5000/alerts"
+
+    # Critical receiver — page on-call engineers immediately
+    - name: "ppa-critical"
+      # Example: PagerDuty integration
+      # pagerdutyConfigs:
+      #   - routingKey: "<YOUR_ROUTING_KEY>"
+      #     description: "{{ .AlertName }} for {{ .Labels.cr_name }}"
+      # Or webhook to incident system:
+      webhookConfigs:
+        - url: "http://incident-system:8080/create-incident"
+          sendResolved: false
+
+    # Warning receiver — log and aggregate
+    - name: "ppa-warnings"
+      # Example: Slack integration
+      # slackConfigs:
+      #   - apiURL: "<YOUR_SLACK_WEBHOOK>"
+      #     channel: "#ppa-warnings"
+      #     title: "PPA Warning: {{ .AlertName }}"
+      # Or webhook for aggregation:
+      webhookConfigs:
+        - url: "http://alert-aggregator:8080/aggregate"
+          sendResolved: true
+
+    # Info receiver — minimal logging
+    - name: "ppa-info"
+      # Example: Just log to webhook
+      webhookConfigs:
+        - url: "http://logging-system:8080/log"
+          sendResolved: false

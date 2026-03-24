@@ -118,6 +118,9 @@ class CRState:
     last_known_good_prediction: float = 0.0
     consecutive_failures: int = 0
     last_successful_cycle: float = 0.0
+    # FIX (PR#1): Per-CR circuit breaker state (moved from module-level globals)
+    prom_failures: int = 0
+    prom_last_failure_time: float = 0.0
 
 
 # Registry keyed by (cr_namespace, cr_name) to avoid cross-namespace collisions.
@@ -280,9 +283,10 @@ def reconcile(spec, status, meta, patch, **kwargs):
     # FIX (PR#4): Catch FeatureVectorException instead of silently handling NaN
     # FIX (PR#9): Also catch PrometheusCircuitBreakerTripped for backoff logic
     # FIX (PR#18): Pass custom Prometheus URL for multi-region support
+    # FIX (PR#1): Pass CR state for per-CR circuit breaker isolation
     try:
         features, current_replicas = build_feature_vector(
-            target, target_ns, min_r, max_r, container_name, prom_url
+            target, target_ns, min_r, max_r, container_name, prom_url, state
         )
         # Track successful cycle for graceful degradation
         state.last_successful_cycle = time.time()

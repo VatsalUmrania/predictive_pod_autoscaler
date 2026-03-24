@@ -4,6 +4,7 @@
 import logging
 import math
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -50,6 +51,8 @@ FEATURE_BOUNDS = {
 }
 
 # Module-level counter: consecutive Prometheus failures across all queries
+# NOTE: This is deprecated. Use CRState.prom_failures and CRState.prom_last_failure_time instead.
+# Keeping for backward compatibility with standalone tools.
 _prom_consecutive_failures: int = 0
 _prom_last_failure_time: float = 0.0
 
@@ -62,6 +65,24 @@ class PrometheusCircuitBreakerError(FeatureVectorError):
 
 # Backward compatibility alias
 PrometheusCircuitBreakerTripped = PrometheusCircuitBreakerError
+
+
+def _get_circuit_breaker(cr_state: object | None) -> tuple[int, float]:
+    """Get circuit breaker state from CR state or module-level fallback."""
+    if cr_state is not None and hasattr(cr_state, 'prom_failures'):
+        return cr_state.prom_failures, cr_state.prom_last_failure_time  # type: ignore[attr-defined]
+    return _prom_consecutive_failures, _prom_last_failure_time
+
+
+def _set_circuit_breaker(cr_state: object | None, failures: int, last_time: float) -> None:
+    """Set circuit breaker state in CR state or module-level fallback."""
+    if cr_state is not None and hasattr(cr_state, 'prom_failures'):
+        cr_state.prom_failures = failures  # type: ignore[attr-defined]
+        cr_state.prom_last_failure_time = last_time  # type: ignore[attr-defined]
+    else:
+        global _prom_consecutive_failures, _prom_last_failure_time
+        _prom_consecutive_failures = failures
+        _prom_last_failure_time = last_time
 
 
 def validate_feature_bounds(features: dict) -> tuple[dict[str, float | None], list]:
@@ -108,33 +129,47 @@ def validate_feature_bounds(features: dict) -> tuple[dict[str, float | None], li
 
 
 # FIX (PR#18): Per-query Prometheus URL storage for multi-region support
-_thread_local_prom_url: str = PROMETHEUS_URL
+# Uses threading.local() to ensure each thread has its own URL without cross-thread contamination
+_thread_local_storage = threading.local()
 
 
 def set_prometheus_url(url: str) -> None:
-    """Set the Prometheus URL for the current execution context (thread-safe)."""
-    global _thread_local_prom_url
-    _thread_local_prom_url = url
+    """Set the Prometheus URL for the current thread's execution context (thread-safe via threading.local).
+    
+    This enables multi-region support where different threads (e.g., in prom_query_parallel)
+    can query different Prometheus instances without interfering with each other.
+    """
+    _thread_local_storage.prom_url = url
 
 
 def get_current_prometheus_url() -> str:
-    """Get the current Prometheus URL (may be per-CR or default)."""
-    global _thread_local_prom_url
-    return _thread_local_prom_url
+    """Get the Prometheus URL for the current thread.
+    
+    Returns the thread-local URL if set, otherwise defaults to PROMETHEUS_URL.
+    Thread-local isolation prevents one thread's URL from affecting another.
+    """
+    return getattr(_thread_local_storage, 'prom_url', PROMETHEUS_URL)
 
 
-def prom_query(query: str, prom_url: str | None = None) -> float | None:
-    """Query Prometheus with exponential backoff on failures. Circuit breaks after PROM_FAILURE_THRESHOLD failures."""
-    global _prom_consecutive_failures, _prom_last_failure_time
+def prom_query(query: str, prom_url: str | None = None, cr_state: object | None = None) -> float | None:
+    """Query Prometheus with exponential backoff on failures. Circuit breaks after PROM_FAILURE_THRESHOLD failures.
+    
+    Args:
+        query: PromQL query string
+        prom_url: Optional custom Prometheus URL (PR#18: multi-region support)
+        cr_state: Optional CRState for per-CR circuit breaker (PR#1 fix)
+    """
+    # FIX (PR#1): Get circuit breaker state (per-CR or fallback to module-level)
+    prom_failures, prom_last_failure_time = _get_circuit_breaker(cr_state)
 
     # FIX (PR#18): Use provided URL or fall back to current context URL
     url = prom_url or get_current_prometheus_url()
 
     # FIX (PR#9): Check circuit breaker status
-    if _prom_consecutive_failures >= PROM_FAILURE_THRESHOLD:
+    if prom_failures >= PROM_FAILURE_THRESHOLD:
         # Circuit breaker active: apply exponential backoff
-        backoff_time = min(300, 2 ** min(_prom_consecutive_failures - PROM_FAILURE_THRESHOLD, 10))
-        elapsed = time.time() - _prom_last_failure_time
+        backoff_time = min(300, 2 ** min(prom_failures - PROM_FAILURE_THRESHOLD, 10))
+        elapsed = time.time() - prom_last_failure_time
         if elapsed < backoff_time:
             # Still in backoff, raise exception to block feature extraction
             raise PrometheusCircuitBreakerTripped(
@@ -152,19 +187,21 @@ def prom_query(query: str, prom_url: str | None = None) -> float | None:
         result = payload.get("data", {}).get("result", [])
         if not result:
             return None
-        _prom_consecutive_failures = 0  # reset on success
+        _set_circuit_breaker(cr_state, 0, 0.0)  # Reset on success
         return float(result[0]["value"][1])
     except Exception as exc:
-        _prom_consecutive_failures += 1
-        _prom_last_failure_time = time.time()
-        if _prom_consecutive_failures >= PROM_FAILURE_THRESHOLD:
+        prom_failures += 1
+        prom_last_failure_time = time.time()
+        _set_circuit_breaker(cr_state, prom_failures, prom_last_failure_time)
+        
+        if prom_failures >= PROM_FAILURE_THRESHOLD:
             logger.critical(
-                f"Prometheus circuit breaker TRIPPED ({_prom_consecutive_failures}/{PROM_FAILURE_THRESHOLD} failures): {exc}"
+                f"Prometheus circuit breaker TRIPPED ({prom_failures}/{PROM_FAILURE_THRESHOLD} failures): {exc}"
             )
             raise PrometheusCircuitBreakerError(str(exc)) from exc
         else:
             logger.warning(
-                f"Prometheus query failed ({_prom_consecutive_failures}/{PROM_FAILURE_THRESHOLD}): {exc}"
+                f"Prometheus query failed ({prom_failures}/{PROM_FAILURE_THRESHOLD}): {exc}"
             )
         return None
 
@@ -174,6 +211,7 @@ def prom_query_parallel(
     max_workers: int = 5,
     timeout: float = 2.0,
     prom_url: str | None = None,
+    cr_state: object | None = None,
 ) -> dict[str, float | None]:
     """
     FIX (PR#20): Execute Prometheus queries in parallel using ThreadPoolExecutor.
@@ -183,6 +221,7 @@ def prom_query_parallel(
         max_workers: Number of parallel threads (default 5)
         timeout: Per-query timeout in seconds
         prom_url: Optional custom Prometheus URL (PR#18: multi-region support)
+        cr_state: Optional CRState for per-CR circuit breaker (PR#1 fix)
 
     Returns:
         Dict mapping feature_name -> result (float or None if failed)
@@ -192,7 +231,7 @@ def prom_query_parallel(
     def _query_single(feature_query_pair: tuple[str, str]) -> tuple[str, float | None]:
         feature_name, query = feature_query_pair
         try:
-            result = prom_query(query, prom_url=prom_url)  # PR#18: pass custom URL
+            result = prom_query(query, prom_url=prom_url, cr_state=cr_state)  # PR#18: pass custom URL; PR#1: pass CR state
             return feature_name, result
         except PrometheusCircuitBreakerError:
             raise  # Re-raise circuit breaker to stop all queries
@@ -238,6 +277,7 @@ def build_feature_vector(
     max_replicas: int,
     container_name: str | None = None,
     prom_url: str | None = None,
+    cr_state: object | None = None,
 ) -> tuple[dict[str, float | None], float]:
     """Fetch current values for all features in the exact training order, returning (features, current_replicas)."""
     # FIX (PR#18): Set Prometheus URL for this execution context
@@ -247,7 +287,8 @@ def build_feature_vector(
     queries = build_queries(target_app, namespace, container_name)
     # FIX (PR#20): Use parallel queries instead of sequential
     # FIX (PR#18): Pass custom Prometheus URL for multi-region support
-    values = prom_query_parallel(queries, max_workers=5, timeout=2.0, prom_url=prom_url)
+    # FIX (PR#1): Pass CR state for per-CR circuit breaker isolation
+    values = prom_query_parallel(queries, max_workers=5, timeout=2.0, prom_url=prom_url, cr_state=cr_state)
 
     if values.get("cpu_utilization_pct") is None:
         # FIX (PR#6): Don't fall back to absolute CPU cores (mixing units)

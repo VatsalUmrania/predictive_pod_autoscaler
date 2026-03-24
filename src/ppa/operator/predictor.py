@@ -39,6 +39,8 @@ class Predictor:
         # FIX (PR#10): Add exponential backoff for model reload failures
         self._load_failures = 0
         self._last_load_attempt = 0.0
+        # FIX (PR#8): Initialize lookback to prevent AttributeError if load fails
+        self.lookback = LOOKBACK_STEPS
 
         # FIX (PR#12): Concept drift detection — track prediction accuracy over time
         self.prediction_history: deque = deque(
@@ -51,48 +53,63 @@ class Predictor:
         self._try_load()
 
     def _load_and_validate_metadata(self):
-        """FIX (PR#7): Load and validate model metadata to prevent schema mismatches."""
+        """FIX (PR#7/PR#8): Load and validate model metadata to prevent schema mismatches.
+        
+        CRITICAL ERRORS (re-raised immediately to fail fast):
+        - Feature column mismatch: model trained with different features
+        - JSON parse error: metadata corrupted
+        
+        WARNINGS (logged but don't fail):
+        - Lookback mismatch: model expects different history length
+        - High quantization loss: model has degraded inference accuracy
+        - Missing metadata file: proceed without validation (backward compat)
+        """
         model_dir = Path(self.model_path).parent
         metadata_path = model_dir / f"{Path(self.model_path).stem}_metadata.json"
 
-        try:
-            if metadata_path.exists():
-                with open(metadata_path) as f:
-                    metadata = json.load(f)
-
-                # Validate critical schema fields
-                if "feature_columns" in metadata:
-                    if metadata["feature_columns"] != FEATURE_COLUMNS:
-                        raise ValueError(
-                            f"Feature column mismatch: model expects {metadata['feature_columns']}, "
-                            f"but operator has {FEATURE_COLUMNS}"
-                        )
-
-                if "lookback" in metadata:
-                    if metadata["lookback"] != LOOKBACK_STEPS:
-                        logger.warning(
-                            f"Lookback mismatch: model expects {metadata['lookback']}, "
-                            f"but operator configured for {LOOKBACK_STEPS}. Using model's value."
-                        )
-
-                if "accuracy_loss_pct" in metadata and metadata["accuracy_loss_pct"] is not None:
-                    if metadata["accuracy_loss_pct"] > 5.0:
-                        logger.warning(
-                            f"Model has high quantization loss: {metadata['accuracy_loss_pct']:.2f}% "
-                            f"(threshold: 5.0%)"
-                        )
-
-                logger.info(f"Metadata validated: {metadata_path}")
-                return metadata
-            else:
-                logger.warning(
-                    f"No metadata file found at {metadata_path}. "
-                    f"Proceeding without schema validation (consider retraining)"
-                )
-                return None
-        except Exception as e:
-            logger.warning(f"Failed to load/validate metadata: {e}")
+        if not metadata_path.exists():
+            logger.warning(
+                f"No metadata file found at {metadata_path}. "
+                f"Proceeding without schema validation (consider retraining)"
+            )
             return None
+
+        try:
+            with open(metadata_path) as f:
+                metadata = json.load(f)
+        except json.JSONDecodeError as e:
+            # FIX (PR#8): JSON corruption is critical — fail fast
+            raise ValueError(f"Metadata file corrupted: {e}")
+        except Exception as e:
+            raise ValueError(f"Failed to read metadata file: {e}")
+
+        # Validate critical schema fields — these are deal-breakers
+        if "feature_columns" in metadata:
+            if metadata["feature_columns"] != FEATURE_COLUMNS:
+                # FIX (PR#8): Re-raise immediately instead of logging and continuing
+                # This ensures schema mismatches are caught at load time, not after 30min
+                raise ValueError(
+                    f"Feature column mismatch: model expects {metadata['feature_columns']}, "
+                    f"but operator has {FEATURE_COLUMNS}"
+                )
+
+        # Non-critical warnings — log and continue
+        if "lookback" in metadata:
+            if metadata["lookback"] != LOOKBACK_STEPS:
+                logger.warning(
+                    f"Lookback mismatch: model expects {metadata['lookback']}, "
+                    f"but operator configured for {LOOKBACK_STEPS}. Using model's value."
+                )
+
+        if "accuracy_loss_pct" in metadata and metadata["accuracy_loss_pct"] is not None:
+            if metadata["accuracy_loss_pct"] > 5.0:
+                logger.warning(
+                    f"Model has high quantization loss: {metadata['accuracy_loss_pct']:.2f}% "
+                    f"(threshold: 5.0%)"
+                )
+
+        logger.info(f"Metadata validated: {metadata_path}")
+        return metadata
 
     def _try_load(self):
         """Attempt to load model, scaler, and target scaler. Idempotent with exponential backoff."""

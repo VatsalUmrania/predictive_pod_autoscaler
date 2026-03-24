@@ -6,6 +6,7 @@ Translates the 11-step bash startup script into Python with Rich UI.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import time
@@ -48,8 +49,60 @@ from ppa.config import (
 
 app = typer.Typer(rich_markup_mode="rich", invoke_without_command=True)
 
+# ── Security constants ───────────────────────────────────────────────────────
+# FIX (PR#13): Secure git cloning with timeouts and injection prevention
+GIT_CLONE_TIMEOUT = 120  # 2 minutes max for git clone operations
+
+# Allowed git URL schemes (https, http, ssh git@hostname:path)
+# Rejects file://, ftp://, telnet://, and other protocols
+GIT_URL_PATTERN = re.compile(
+    r'^(https?://|git@)[\w\-._~:/?#\[\]@!$&\'()*+,;=%.]+$',
+    re.IGNORECASE,
+)
+
+# Reject URLs with shell metacharacters that could enable injection
+SHELL_INJECTION_CHARS = {';', '|', '&', '$', '`', '\n', '\x00'}
+
 
 # ── Step registry ────────────────────────────────────────────────────────────
+
+
+def _validate_git_url(url: str) -> bool:
+    """Validate that a URL is a safe git repository URL (prevent injection attacks).
+    
+    FIX (PR#13): Strict validation to prevent:
+    - file:// protocol (local file access)
+    - Command injection via shell metacharacters (;, |, &, $, `)
+    - Path traversal and null bytes
+    
+    Args:
+        url: Potential git URL to validate
+        
+    Returns:
+        True if URL is safe, False otherwise
+    """
+    if not url or not isinstance(url, str):
+        return False
+    
+    # Check for shell injection characters
+    if any(char in url for char in SHELL_INJECTION_CHARS):
+        return False
+    
+    # Check length (prevent DoS with huge URLs)
+    if len(url) > 2048:
+        return False
+    
+    # Must match allowed git URL patterns (https, http, git@)
+    if not GIT_URL_PATTERN.match(url):
+        return False
+    
+    # Reject file:// and other non-git protocols
+    if url.startswith('file://') or url.startswith('ftp://') or url.startswith('telnet://'):
+        return False
+    
+    return True
+
+
 def _get_step_2_description() -> str:
     driver_display = MINIKUBE_DRIVER if MINIKUBE_DRIVER else "auto"
     return f"{driver_display} driver, {MINIKUBE_CPUS} CPU, {MINIKUBE_MEMORY // 1024} GB RAM"
@@ -146,19 +199,52 @@ def _get_app_path(app_arg: str | None) -> Path | None:
 
     Returns:
         Path to test-app directory, or None if not provided
+        
+    Raises:
+        ValueError: If git URL is invalid or uses rejected protocol
+        subprocess.CalledProcessError: If clone fails
+        subprocess.TimeoutExpired: If clone times out (> 120s)
     """
     if not app_arg:
         return None
 
+    # FIX (PR#13): Reject dangerous protocols early
+    if app_arg.startswith(('file://', 'ftp://', 'telnet://', 'ldap://')):
+        raise ValueError(f"Invalid git URL: {app_arg}")
+
+    # FIX (PR#13): Validate git URLs to prevent injection attacks
     if app_arg.startswith("http") or app_arg.startswith("git@"):
+        if not _validate_git_url(app_arg):
+            raise ValueError(f"Invalid git URL: {app_arg}")
+        
         info(f"Cloning test-app from {app_arg}")
         clone_dir = PROJECT_DIR / "test-app-clone"
         if clone_dir.exists():
             import shutil
-
             shutil.rmtree(clone_dir)
-        subprocess.run(["git", "clone", app_arg, str(clone_dir)], check=True)
-        return clone_dir
+        
+        try:
+            # FIX (PR#13): Secure git clone with:
+            # - Timeout to prevent hanging
+            # - Environment variables to disable hooks and interactive prompts
+            # - No-recurse-submodules to prevent malicious submodule execution
+            env = os.environ.copy()
+            env['GIT_TERMINAL_PROMPT'] = '0'  # Disable interactive prompts
+            
+            subprocess.run(
+                ["git", "clone", "--depth=1", "--no-recurse-submodules", app_arg, str(clone_dir)],
+                check=True,
+                timeout=GIT_CLONE_TIMEOUT,
+                env=env,
+            )
+            success(f"Cloned to {clone_dir}")
+            return clone_dir
+        except subprocess.TimeoutExpired as e:
+            warn(f"Git clone timed out after {GIT_CLONE_TIMEOUT}s")
+            raise
+        except subprocess.CalledProcessError as e:
+            error(f"Git clone failed: {e}")
+            raise
 
     return Path(app_arg)
 

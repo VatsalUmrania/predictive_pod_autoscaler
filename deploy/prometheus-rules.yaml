@@ -1,0 +1,193 @@
+# deploy/prometheus-rules.yaml
+# Prometheus alert rules for PPA operator observability
+# Monitors model health, scaling decisions, and prediction quality
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ppa-operator-alerts
+  namespace: monitoring
+  labels:
+    prometheus: kube-prometheus
+spec:
+  groups:
+    # =========================================================================
+    # Group 1: Model Health (Critical — operator cannot function)
+    # =========================================================================
+    - name: ppa.model_health
+      interval: 15s
+      rules:
+        - alert: PPAModelLoadFailed
+          expr: |
+            ppa_model_load_failed{job="ppa-operator"} > 0
+          for: 2m
+          labels:
+            severity: critical
+            component: model
+          annotations:
+            summary: "PPA Model load failed for {{ $labels.cr_name }}"
+            description: |
+              Model failed to load for {{ $labels.namespace }}/{{ $labels.cr_name }}.
+              Operator cannot make scaling decisions without a loaded model.
+              Action: Check model artifact availability, metadata schema, and operator logs.
+            runbook_url: "https://github.com/predictive-pod-autoscaler/docs/TROUBLESHOOTING.md#model-load-failed"
+
+        - alert: PPAInferenceLaencyHigh
+          expr: |
+            ppa_inference_latency_ms{job="ppa-operator"} > 100
+          for: 5m
+          labels:
+            severity: warning
+            component: model
+          annotations:
+            summary: "PPA inference latency high for {{ $labels.cr_name }}"
+            description: |
+              Model inference taking {{ $value | humanize }}ms (threshold: 100ms)
+              for {{ $labels.namespace }}/{{ $labels.cr_name }}.
+              This slows down scaling decisions. Check model size, pod resources, and CPU contention.
+            runbook_url: "https://github.com/predictive-pod-autoscaler/docs/TROUBLESHOOTING.md#high-inference-latency"
+
+    # =========================================================================
+    # Group 2: Data Quality (Warning — scaling decisions may be suboptimal)
+    # =========================================================================
+    - name: ppa.data_quality
+      interval: 15s
+      rules:
+        - alert: PPAConsecutiveSkipsHigh
+          expr: |
+            ppa_consecutive_skips{job="ppa-operator"} > 5
+          for: 5m
+          labels:
+            severity: warning
+            component: metrics
+          annotations:
+            summary: "PPA skipping {{ $value }} cycles for {{ $labels.cr_name }}"
+            description: |
+              Operator skipped {{ $value }} consecutive scaling cycles for {{ $labels.namespace }}/{{ $labels.cr_name }}
+              due to bad data (NaN, missing metrics, or validation errors).
+              Scaling may be stale. Check Prometheus metrics availability and query correctness.
+            runbook_url: "https://github.com/predictive-pod-autoscaler/docs/TROUBLESHOOTING.md#consecutive-skips"
+
+        - alert: PPAMetricExtractionFailures
+          expr: |
+            ppa_metric_failures{job="ppa-operator"} > 3
+          for: 5m
+          labels:
+            severity: warning
+            component: metrics
+          annotations:
+            summary: "PPA metric extraction failing for {{ $labels.cr_name }}"
+            description: |
+              {{ $value | humanunit }} consecutive metric extraction failures
+              for {{ $labels.namespace }}/{{ $labels.cr_name }}.
+              Check Prometheus connectivity, query syntax, and metric availability.
+            runbook_url: "https://github.com/predictive-pod-autoscaler/docs/TROUBLESHOOTING.md#metric-extraction-failures"
+
+        - alert: PPAWarmupStalled
+          expr: |
+            ppa_warmup_progress{job="ppa-operator"} < 0.9
+            and
+            (time() - ppa_warmup_progress) > 3600
+          for: 10m
+          labels:
+            severity: info
+            component: initialization
+          annotations:
+            summary: "PPA warmup incomplete for {{ $labels.cr_name }}"
+            description: |
+              Model history not fully warmed up ({{ $value | humanizePercentage }}) for
+              {{ $labels.namespace }}/{{ $labels.cr_name }} after 1 hour.
+              Scaling decisions may be inaccurate. Wait for history to fill (LOOKBACK_STEPS cycles required).
+
+    # =========================================================================
+    # Group 3: Prediction Quality (Warning — model degradation)
+    # =========================================================================
+    - name: ppa.prediction_quality
+      interval: 15s
+      rules:
+        - alert: PPAPredictionErrorHigh
+          expr: |
+            ppa_prediction_error_pct{job="ppa-operator"} > 30
+          for: 10m
+          labels:
+            severity: warning
+            component: model
+          annotations:
+            summary: "PPA prediction error high for {{ $labels.cr_name }}"
+            description: |
+              Mean absolute percentage error (MAPE) is {{ $value | humanize }}% (threshold: 30%)
+              for {{ $labels.namespace }}/{{ $labels.cr_name }}.
+              Model predictions may be inaccurate. Check for concept drift and consider retraining.
+            runbook_url: "https://github.com/predictive-pod-autoscaler/docs/TROUBLESHOOTING.md#high-prediction-error"
+
+        - alert: PPAConceptDriftDetected
+          expr: |
+            ppa_concept_drift_detected{job="ppa-operator"} > 0
+          for: 2m
+          labels:
+            severity: warning
+            component: model_quality
+          annotations:
+            summary: "PPA concept drift detected for {{ $labels.cr_name }}"
+            description: |
+              Concept drift detected for {{ $labels.namespace }}/{{ $labels.cr_name }}.
+              Recent prediction errors exceed thresholds. Model may need retraining.
+              Action: Review recent traffic patterns and consider triggering retraining job.
+            runbook_url: "https://github.com/predictive-pod-autoscaler/docs/TROUBLESHOOTING.md#concept-drift"
+
+    # =========================================================================
+    # Group 4: Control Flow (Warning — safety mechanisms active)
+    # =========================================================================
+    - name: ppa.control_flow
+      interval: 15s
+      rules:
+        - alert: PPACircuitBreakerTripped
+          expr: |
+            ppa_circuit_breaker_tripped{job="ppa-operator"} > 0
+          for: 2m
+          labels:
+            severity: warning
+            component: safety
+          annotations:
+            summary: "PPA circuit breaker active for {{ $labels.cr_name }}"
+            description: |
+              Circuit breaker tripped for {{ $labels.namespace }}/{{ $labels.cr_name }}.
+              Operator paused scaling due to consecutive metric failures.
+              Action: Fix underlying metric issue, then manually reset CB if needed.
+            runbook_url: "https://github.com/predictive-pod-autoscaler/docs/TROUBLESHOOTING.md#circuit-breaker"
+
+        - alert: PPAScalingStalled
+          expr: |
+            rate(ppa_scale_events_total{job="ppa-operator"}[5m]) == 0
+            and
+            abs(ppa_desired_replicas{job="ppa-operator"} - ppa_current_replicas{job="ppa-operator"}) > 0
+          for: 10m
+          labels:
+            severity: warning
+            component: scaling
+          annotations:
+            summary: "PPA not scaling for {{ $labels.cr_name }}"
+            description: |
+              Desired replicas ({{ $value | humanize }}) differ from current
+              for {{ $labels.namespace }}/{{ $labels.cr_name }}, but no scaling happened in 5m.
+              Check Kubernetes RBAC, rate limits, or resource quotas.
+            runbook_url: "https://github.com/predictive-pod-autoscaler/docs/TROUBLESHOOTING.md#scaling-stalled"
+
+    # =========================================================================
+    # Group 5: Operator Health (info — for SLO tracking)
+    # =========================================================================
+    - name: ppa.operator_health
+      interval: 15s
+      rules:
+        - alert: PPANoCRsManaged
+          expr: |
+            count(ppa_predicted_load_rps{job="ppa-operator"}) == 0
+          for: 5m
+          labels:
+            severity: info
+            component: operator
+          annotations:
+            summary: "PPA operator has no CRs to manage"
+            description: |
+              Operator is running but has no PredictiveAutoscaler CRs.
+              This is normal if no apps are configured for PPA.
