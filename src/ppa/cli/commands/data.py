@@ -23,6 +23,9 @@ def data_export(
     step: str = typer.Option("1m", "--step", help="Prometheus query step (e.g. 15s, 1m)."),
     resample: str | None = typer.Option(None, "--resample", help="Resample interval (e.g. 1m)."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Run without saving the CSV."),
+    output: str | None = typer.Option(
+        None, "--output", "-o", help="Output CSV path (default: data/train/{app_name}.csv)."
+    ),
 ) -> None:
     """
     [bold]Export training data[/] from Prometheus into a CSV dataset.
@@ -39,6 +42,7 @@ def data_export(
     config_table.add_row("Step", step)
     config_table.add_row("Resample", resample or "None")
     config_table.add_row("Dry run", str(dry_run))
+    config_table.add_row("Output", output or f"data/train/{app_name}.csv")
     console.print(config_table)
 
     try:
@@ -63,8 +67,11 @@ def data_export(
         info(f"Collected {len(df)} rows with {len(df.columns)} features")
 
         if not dry_run:
-            output_path = str(TRAINING_DATA_DIR / f"{app_name}.csv")
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            if output:
+                output_path = output
+            else:
+                output_path = str(TRAINING_DATA_DIR / f"{app_name}.csv")
+            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
             df.to_csv(output_path)
             success(f"Saved dataset → {output_path}")
 

@@ -4,10 +4,6 @@
 import logging
 import math
 import sys
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
@@ -19,11 +15,25 @@ from ppa.common.feature_spec import FEATURE_COLUMNS
 from ppa.common.promql import build_fallback_queries, build_queries
 from ppa.config import (
     LOOKBACK_STEPS,
-    PROM_FAILURE_THRESHOLD,
     PROMETHEUS_URL,
     TIMER_INTERVAL,
     FeatureVectorError,
 )
+from ppa.operator.prometheus import (
+    PrometheusCircuitBreakerError,
+    PrometheusCircuitBreakerTripped,
+    prom_query_parallel,
+    set_prometheus_url,
+)
+
+__all__ = [
+    "PrometheusCircuitBreakerError",
+    "PrometheusCircuitBreakerTripped",
+    "build_feature_vector",
+    "validate_feature_bounds",
+    "build_historical_features",
+    "prom_range_query",
+]
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -50,46 +60,60 @@ FEATURE_BOUNDS = {
     "is_weekend": (0, 1),  # Binary
 }
 
-# Module-level counter: consecutive Prometheus failures across all queries
-# NOTE: This is deprecated. Use CRState.prom_failures and CRState.prom_last_failure_time instead.
-# Keeping for backward compatibility with standalone tools.
-_prom_consecutive_failures: int = 0
-_prom_last_failure_time: float = 0.0
 
-
-class PrometheusCircuitBreakerError(FeatureVectorError):
-    """Raised when Prometheus circuit breaker is active due to repeated failures."""
-
-    pass
-
-
-# Backward compatibility alias
-PrometheusCircuitBreakerTripped = PrometheusCircuitBreakerError
-
-
-def _get_circuit_breaker(cr_state: object | None) -> tuple[int, float]:
-    """Get circuit breaker state from CR state or module-level fallback."""
-    if cr_state is not None and hasattr(cr_state, 'prom_failures'):
-        return cr_state.prom_failures, cr_state.prom_last_failure_time  # type: ignore[attr-defined]
-    return _prom_consecutive_failures, _prom_last_failure_time
-
-
-def _set_circuit_breaker(cr_state: object | None, failures: int, last_time: float) -> None:
-    """Set circuit breaker state in CR state or module-level fallback."""
-    if cr_state is not None and hasattr(cr_state, 'prom_failures'):
-        cr_state.prom_failures = failures  # type: ignore[attr-defined]
-        cr_state.prom_last_failure_time = last_time  # type: ignore[attr-defined]
-    else:
-        global _prom_consecutive_failures, _prom_last_failure_time
-        _prom_consecutive_failures = failures
-        _prom_last_failure_time = last_time
 
 
 def validate_feature_bounds(features: dict) -> tuple[dict[str, float | None], list]:
-    """
-    FIX (PR#11): Validate features are within expected bounds.
-    Returns (validated_features, out_of_bounds_features).
-    Clips out-of-bounds values if possible, raises exception if too many features are invalid.
+    """Validate feature vector for data quality issues and concept drift.
+
+    Detects common problems that indicate data collection failures or model staleness:
+    - NaN values (missing metrics from Prometheus timeouts)
+    - Out-of-range values (e.g., CPU >150%, negative RPS)
+    - Extreme values (likely data collection bugs or scaling anomalies)
+
+    This is called before every prediction to catch issues early and log them
+    for debugging. Invalid features are clipped to bounds and warnings recorded.
+
+    Feature Bounds (from PR#11):
+        rps_per_replica: [0.01, 100] RPS/pod
+        cpu_utilization_pct: [0, 150] %
+        memory_utilization_pct: [0, 150] %
+        latency_p95_ms: [1, 10000] ms
+        error_rate: [0, 1] (0-100%)
+        Acceleration metrics: [-100, 100]
+        Time features: [-1, 1] (sin/cos of hour/dow)
+
+    Args:
+        features: Dict mapping metric names to float values.
+                  Expected keys: rps_per_replica, cpu_utilization_pct, etc.
+
+    Returns:
+        Tuple of (cleaned_features, warnings_list) where:
+        - cleaned_features: Dict with out-of-bounds values clipped to [min, max]
+        - warnings_list: List of dicts describing each anomaly
+
+    Raises:
+        FeatureVectorException: If >50% of features are invalid (data collection broken)
+
+    Example:
+        >>> features = {
+        ...     'rps_per_replica': 45.2,
+        ...     'cpu_utilization_pct': 250,  # Out of bounds!
+        ... }
+        >>> cleaned, warnings = validate_feature_bounds(features)
+        >>> assert cleaned['cpu_utilization_pct'] == 150  # Clipped
+        >>> assert len(warnings) == 1
+
+    Design Notes:
+        - Fail-safe: clips values rather than dropping them (maintains prediction)
+        - Observable: logs all anomalies for debugging
+        - Strict threshold: >50% invalid triggers exception (prevents bad predictions)
+        - Idempotent: safe to call multiple times (doesn't modify input dict)
+
+    See Also:
+        build_feature_vector: Creates features from Prometheus (upstream)
+        PR#11: Feature bounds validation design docs
+        PR#12: Concept drift detection
     """
     out_of_bounds = []
     validated = features.copy()
@@ -128,178 +152,21 @@ def validate_feature_bounds(features: dict) -> tuple[dict[str, float | None], li
     return validated, out_of_bounds
 
 
-# FIX (PR#18): Per-query Prometheus URL storage for multi-region support
-# Uses threading.local() to ensure each thread has its own URL without cross-thread contamination
-_thread_local_storage = threading.local()
+def _validate_critical_metrics(values: dict) -> None:
+    """Validate that critical metrics are available (not None).
 
-
-def set_prometheus_url(url: str) -> None:
-    """Set the Prometheus URL for the current thread's execution context (thread-safe via threading.local).
-    
-    This enables multi-region support where different threads (e.g., in prom_query_parallel)
-    can query different Prometheus instances without interfering with each other.
+    Raises FeatureVectorException if cpu/memory utilization or critical features missing.
     """
-    _thread_local_storage.prom_url = url
-
-
-def get_current_prometheus_url() -> str:
-    """Get the Prometheus URL for the current thread.
-    
-    Returns the thread-local URL if set, otherwise defaults to PROMETHEUS_URL.
-    Thread-local isolation prevents one thread's URL from affecting another.
-    """
-    return getattr(_thread_local_storage, 'prom_url', PROMETHEUS_URL)
-
-
-def prom_query(query: str, prom_url: str | None = None, cr_state: object | None = None) -> float | None:
-    """Query Prometheus with exponential backoff on failures. Circuit breaks after PROM_FAILURE_THRESHOLD failures.
-    
-    Args:
-        query: PromQL query string
-        prom_url: Optional custom Prometheus URL (PR#18: multi-region support)
-        cr_state: Optional CRState for per-CR circuit breaker (PR#1 fix)
-    """
-    # FIX (PR#1): Get circuit breaker state (per-CR or fallback to module-level)
-    prom_failures, prom_last_failure_time = _get_circuit_breaker(cr_state)
-
-    # FIX (PR#18): Use provided URL or fall back to current context URL
-    url = prom_url or get_current_prometheus_url()
-
-    # FIX (PR#9): Check circuit breaker status
-    if prom_failures >= PROM_FAILURE_THRESHOLD:
-        # Circuit breaker active: apply exponential backoff
-        backoff_time = min(300, 2 ** min(prom_failures - PROM_FAILURE_THRESHOLD, 10))
-        elapsed = time.time() - prom_last_failure_time
-        if elapsed < backoff_time:
-            # Still in backoff, raise exception to block feature extraction
-            raise PrometheusCircuitBreakerTripped(
-                f"Prometheus circuit breaker active for {elapsed:.0f}s (backoff: {backoff_time}s)"
-            )
-
-    try:
-        resp = requests.get(
-            f"{url}/api/v1/query",
-            params={"query": query},
-            timeout=2,  # Short timeout to fail fast
-        )
-        resp.raise_for_status()
-        payload = resp.json()
-        result = payload.get("data", {}).get("result", [])
-        if not result:
-            return None
-        _set_circuit_breaker(cr_state, 0, 0.0)  # Reset on success
-        return float(result[0]["value"][1])
-    except Exception as exc:
-        prom_failures += 1
-        prom_last_failure_time = time.time()
-        _set_circuit_breaker(cr_state, prom_failures, prom_last_failure_time)
-        
-        if prom_failures >= PROM_FAILURE_THRESHOLD:
-            logger.critical(
-                f"Prometheus circuit breaker TRIPPED ({prom_failures}/{PROM_FAILURE_THRESHOLD} failures): {exc}"
-            )
-            raise PrometheusCircuitBreakerError(str(exc)) from exc
-        else:
-            logger.warning(
-                f"Prometheus query failed ({prom_failures}/{PROM_FAILURE_THRESHOLD}): {exc}"
-            )
-        return None
-
-
-def prom_query_parallel(
-    queries: dict[str, str],
-    max_workers: int = 5,
-    timeout: float = 2.0,
-    prom_url: str | None = None,
-    cr_state: object | None = None,
-) -> dict[str, float | None]:
-    """
-    FIX (PR#20): Execute Prometheus queries in parallel using ThreadPoolExecutor.
-
-    Args:
-        queries: Dict mapping feature_name -> promql query string
-        max_workers: Number of parallel threads (default 5)
-        timeout: Per-query timeout in seconds
-        prom_url: Optional custom Prometheus URL (PR#18: multi-region support)
-        cr_state: Optional CRState for per-CR circuit breaker (PR#1 fix)
-
-    Returns:
-        Dict mapping feature_name -> result (float or None if failed)
-    """
-    results: dict[str, float | None] = {}
-
-    def _query_single(feature_query_pair: tuple[str, str]) -> tuple[str, float | None]:
-        feature_name, query = feature_query_pair
-        try:
-            result = prom_query(query, prom_url=prom_url, cr_state=cr_state)  # PR#18: pass custom URL; PR#1: pass CR state
-            return feature_name, result
-        except PrometheusCircuitBreakerError:
-            raise  # Re-raise circuit breaker to stop all queries
-        except Exception as exc:
-            logger.debug(f"Query failed for {feature_name}: {exc}")
-            return feature_name, None
-
-    try:
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all queries
-            future_to_feature = {
-                executor.submit(_query_single, (name, query)): name
-                for name, query in queries.items()
-            }
-
-            # Collect results with timeout
-            for future in future_to_feature:
-                feature_name = future_to_feature[future]
-                try:
-                    _, result = future.result(timeout=timeout)
-                    results[feature_name] = result
-                except FutureTimeoutError:
-                    logger.warning(f"Query timeout for {feature_name}")
-                    results[feature_name] = None
-                except PrometheusCircuitBreakerError:
-                    raise  # Propagate circuit breaker
-                except Exception as exc:
-                    logger.debug(f"Query exception for {feature_name}: {exc}")
-                    results[feature_name] = None
-
-    except PrometheusCircuitBreakerError:
-        # Circuit breaker active - all queries should fail
-        logger.error("Circuit breaker active, aborting parallel queries")
-        raise
-
-    return results
-
-
-def build_feature_vector(
-    target_app: str,
-    namespace: str,
-    reference_replicas: int,
-    max_replicas: int,
-    container_name: str | None = None,
-    prom_url: str | None = None,
-    cr_state: object | None = None,
-) -> tuple[dict[str, float | None], float]:
-    """Fetch current values for all features in the exact training order, returning (features, current_replicas)."""
-    # FIX (PR#18): Set Prometheus URL for this execution context
-    if prom_url:
-        set_prometheus_url(prom_url)
-
-    queries = build_queries(target_app, namespace, container_name)
-    # FIX (PR#20): Use parallel queries instead of sequential
-    # FIX (PR#18): Pass custom Prometheus URL for multi-region support
-    # FIX (PR#1): Pass CR state for per-CR circuit breaker isolation
-    values = prom_query_parallel(queries, max_workers=5, timeout=2.0, prom_url=prom_url, cr_state=cr_state)
-
     if values.get("cpu_utilization_pct") is None:
         # FIX (PR#6): Don't fall back to absolute CPU cores (mixing units)
         # Raise exception instead to force user to set resource requests
         raise FeatureVectorError(
-            f"CPU utilization unavailable for {target_app}, resource requests not set on target deployment"
+            "CPU utilization unavailable, resource requests not set on target deployment"
         )
 
     if values.get("memory_utilization_pct") is None:
         raise FeatureVectorError(
-            f"Memory utilization unavailable for {target_app}, resource requests not set on target deployment"
+            "Memory utilization unavailable, resource requests not set on target deployment"
         )
 
     # FIX (PR#4): Don't silently convert None → NaN
@@ -316,13 +183,24 @@ def build_feature_vector(
         # Raise exception instead of silently proceeding with NaN
         raise FeatureVectorError(f"Missing critical features: {missing_features}")
 
-    # Non-critical features can be NaN (will be handled later)
-    for k, v in values.items():
-        if v is None and k not in critical_features:
-            values[k] = float("nan")
 
-    current_replicas = values.get("current_replicas", float("nan"))  # type: ignore[assignment]
+def _normalize_metrics(
+    values: dict,
+    reference_replicas: int,
+    max_replicas: int,
+) -> dict:
+    """Normalize metrics for LSTM input.
 
+    Converts RPS to per-replica and normalizes replica count to [0,1].
+
+    Args:
+        values: Raw metric values dict
+        reference_replicas: Current pod count for RPS normalization
+        max_replicas: Maximum pod count for replica normalization
+
+    Returns:
+        Updated values dict with normalized metrics
+    """
     rps = values.get("requests_per_second", 0.0)  # type: ignore[assignment]
     if math.isnan(rps):  # type: ignore[arg-type]
         rps = 0.0
@@ -331,8 +209,16 @@ def build_feature_vector(
     # This ensures the feature has consistent meaning across scale events
     stable_ref = max(reference_replicas, 1)  # Clamp to 1 to avoid division by zero
     values["rps_per_replica"] = rps / stable_ref  # type: ignore[operator]
-    values["replicas_normalized"] = current_replicas / float(max_replicas)  # type: ignore[operator]
+    values["replicas_normalized"] = values["current_replicas"] / float(max_replicas)  # type: ignore[operator]
 
+    return values
+
+
+def _add_temporal_features(values: dict) -> dict:
+    """Add time-based features for seasonality.
+
+    Computes sin/cos of hour and day-of-week for cyclic encoding.
+    """
     now = datetime.now(timezone.utc)
     hour = now.hour + now.minute / 60.0 + now.second / 3600.0
     dow = now.weekday()
@@ -347,7 +233,110 @@ def build_feature_vector(
         }
     )
 
-    # FIX (PR#11): Validate all features are within expected bounds
+    return values
+
+
+def build_feature_vector(
+    target_app: str,
+    namespace: str,
+    reference_replicas: int,
+    max_replicas: int,
+    container_name: str | None = None,
+    prom_url: str | None = None,
+    cr_state: object | None = None,
+) -> tuple[dict[str, float | None], float]:
+    """Build feature vector from Prometheus metrics for LSTM prediction.
+
+    Queries Prometheus for current load metrics, resource usage, and time features.
+    Results are validated for critical fields and normalized for LSTM input.
+
+    Feature Vector Components (in training order):
+    - **Load metrics:** requests_per_second, latency_p95_ms, error_rate
+    - **Resource metrics:** cpu_utilization_pct, memory_utilization_pct
+    - **Pod metrics:** current_replicas, active_connections
+    - **Acceleration:** cpu_acceleration, rps_acceleration (delta from last cycle)
+    - **Time features:** hour_sin, hour_cos, day_of_week_sin, day_of_week_cos (seasonality)
+    - **Weekend flag:** is_weekend (binary)
+
+    Query Resilience:
+    - Uses parallel queries for speed (5 workers, 2s timeout per query)
+    - Circuit breaker activates after 10 consecutive Prometheus failures
+    - Returns None for optional features, raises exception for critical ones
+    - Multi-region support via custom prom_url parameter (PR#18)
+
+    Validation:
+    - Raises FeatureVectorException if cpu_utilization_pct or memory_utilization_pct missing
+    - Raises FeatureVectorException if any of 4 critical features are None
+    - Sets missing optional features to NaN (handled by validation layer)
+
+    Args:
+        target_app: Kubernetes Deployment name to monitor
+        namespace: Kubernetes namespace containing the deployment
+        reference_replicas: Current pod count (for normalization)
+        max_replicas: Maximum allowed pod count (for normalization)
+        container_name: Optional container name (for resource metrics)
+        prom_url: Optional custom Prometheus URL (for multi-region deployments)
+        cr_state: Optional CRD status object for circuit breaker state
+
+    Returns:
+        Tuple of (feature_dict, current_replica_count) where:
+        - feature_dict: Dict mapping metric names to float values
+        - current_replica_count: Current pod count from Prometheus
+
+    Raises:
+        FeatureVectorException: If critical features are missing or unavailable
+        PrometheusCircuitBreakerError: If circuit breaker is open (Prometheus down)
+
+    Example:
+        >>> features, replicas = build_feature_vector(
+        ...     'my-api', 'production', 10, 50
+        ... )
+        >>> print(f"RPS: {features['requests_per_second']}, Pods: {replicas}")
+        RPS: 1234.5, Pods: 10
+
+    Performance:
+        - Typical: 5-7 parallel queries, <1000ms total
+        - Worst case: 10s timeout (circuit breaker activates)
+
+    Design Notes:
+        - Thread-safe: uses ThreadPoolExecutor for parallel queries
+        - Stateless: all state in CRD status (enables multi-pod operators)
+        - Fail-fast: raises exceptions rather than returning partial data
+        - Observable: logs all query failures and anomalies
+
+    See Also:
+        prom_query_parallel: Parallel Prometheus query executor
+        validate_feature_bounds: Data quality checks (downstream)
+        PR#20: Parallel query optimization
+        PR#18: Multi-region Prometheus support
+        PR#11: Feature bounds validation
+    """
+    # FIX (PR#18): Set Prometheus URL for this execution context
+    if prom_url:
+        set_prometheus_url(prom_url)
+
+    # Step 1: Query Prometheus
+    queries = build_queries(target_app, namespace, container_name)
+    values = prom_query_parallel(queries, max_workers=5, timeout=2.0, prom_url=prom_url, cr_state=cr_state)
+
+    # Step 2: Validate critical metrics are available
+    _validate_critical_metrics(values)
+
+    # Step 3: Convert None to NaN for optional features
+    critical_features = ["cpu_utilization_pct", "memory_utilization_pct", "current_replicas", "requests_per_second"]
+    for k, v in values.items():
+        if v is None and k not in critical_features:
+            values[k] = float("nan")
+
+    current_replicas = values.get("current_replicas", float("nan"))  # type: ignore[assignment]
+
+    # Step 4: Normalize metrics for LSTM
+    values = _normalize_metrics(values, reference_replicas, max_replicas)
+
+    # Step 5: Add temporal features
+    values = _add_temporal_features(values)
+
+    # Step 6: Validate feature bounds
     final_features = {feature_name: values[feature_name] for feature_name in FEATURE_COLUMNS}
     final_features, oob = validate_feature_bounds(final_features)
 

@@ -114,12 +114,24 @@ def compute_scaling_stats(
 # ── Plotting ────────────────────────────────────────────────────────────────
 
 
-def plot_pred_vs_actual(y_true, y_pred, target_col, output_path):
-    """Generate predicted vs actual time-series plot."""
-    import matplotlib
+def _load_pyplot():
+    """Return matplotlib.pyplot configured for headless use, or None if unavailable."""
+    try:
+        import matplotlib
 
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return None
+    return plt
+
+
+def plot_pred_vs_actual(y_true, y_pred, target_col, output_path):
+    """Generate predicted vs actual time-series plot when matplotlib is available."""
+    plt = _load_pyplot()
+    if plt is None:
+        print("  WARNING: matplotlib not installed; skipping predicted-vs-actual plot")
+        return False
 
     fig, ax = plt.subplots(figsize=(14, 5))
     ax.plot(y_true, label="Actual", alpha=0.8, linewidth=0.8)
@@ -133,6 +145,7 @@ def plot_pred_vs_actual(y_true, y_pred, target_col, output_path):
     fig.savefig(output_path, dpi=150)
     plt.close(fig)
     print(f"  Plot saved → {output_path}")
+    return True
 
 
 def plot_ppa_vs_hpa(
@@ -142,11 +155,11 @@ def plot_ppa_vs_hpa(
     target_col,
     output_path,
 ):
-    """Dual-axis plot: replica counts + RPS over time."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    """Generate replica comparison plot when matplotlib is available."""
+    plt = _load_pyplot()
+    if plt is None:
+        print("  WARNING: matplotlib not installed; skipping PPA-vs-HPA plot")
+        return False
 
     fig, ax1 = plt.subplots(figsize=(14, 5))
 
@@ -183,6 +196,7 @@ def plot_ppa_vs_hpa(
     fig.savefig(output_path, dpi=150)
     plt.close(fig)
     print(f"  Plot saved → {output_path}")
+    return True
 
 
 # ── Main evaluation ────────────────────────────────────────────────────────

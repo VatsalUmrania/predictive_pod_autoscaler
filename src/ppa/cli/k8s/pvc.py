@@ -1,6 +1,12 @@
 """PVC operations."""
 
-from kubernetes.client import ApiException, V1PersistentVolumeClaim
+from kubernetes.client import (
+    ApiException,
+    V1ObjectMeta,
+    V1PersistentVolumeClaim,
+    V1PersistentVolumeClaimSpec,
+    V1ResourceRequirements,
+)
 
 from .client import get_core_v1
 
@@ -22,11 +28,13 @@ def ensure_exists(
         pvc = V1PersistentVolumeClaim(
             api_version="v1",
             kind="PersistentVolumeClaim",
-            metadata={"name": name, "namespace": namespace},
-            spec={
-                "access_modes": ["ReadWriteOnce"],
-                "resources": {"requests": {"storage": size}},
-            },
+            metadata=V1ObjectMeta(name=name, namespace=namespace),
+            spec=V1PersistentVolumeClaimSpec(
+                access_modes=["ReadWriteOnce"],
+                resources=V1ResourceRequirements(
+                    requests={"storage": size},
+                ),
+            ),
         )
         core.create_namespaced_persistent_volume_claim(namespace, pvc)
         return True

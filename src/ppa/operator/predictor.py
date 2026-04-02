@@ -54,11 +54,11 @@ class Predictor:
 
     def _load_and_validate_metadata(self):
         """FIX (PR#7/PR#8): Load and validate model metadata to prevent schema mismatches.
-        
+
         CRITICAL ERRORS (re-raised immediately to fail fast):
         - Feature column mismatch: model trained with different features
         - JSON parse error: metadata corrupted
-        
+
         WARNINGS (logged but don't fail):
         - Lookback mismatch: model expects different history length
         - High quantization loss: model has degraded inference accuracy
@@ -79,9 +79,9 @@ class Predictor:
                 metadata = json.load(f)
         except json.JSONDecodeError as e:
             # FIX (PR#8): JSON corruption is critical — fail fast
-            raise ValueError(f"Metadata file corrupted: {e}")
+            raise ValueError(f"Metadata file corrupted: {e}") from e
         except Exception as e:
-            raise ValueError(f"Failed to read metadata file: {e}")
+            raise ValueError(f"Failed to read metadata file: {e}") from e
 
         # Validate critical schema fields — these are deal-breakers
         if "feature_columns" in metadata:

@@ -44,6 +44,7 @@ pandas==3.0.1
 pillow==12.1.1
 pluggy==1.6.0
 prometheus-api-client==0.7.0
+prometheus-client==0.23.1
 propcache==0.4.1
 protobuf==7.34.0
 Pygments==2.19.2

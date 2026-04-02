@@ -51,6 +51,21 @@ def step_to_pandas_freq(step: str) -> str:
 
 CHUNK_HOURS = 6  # Max hours per individual Prometheus request
 PROM_TIMEOUT = 120  # Seconds — histogram_quantile over large ranges needs more than 30s
+ZERO_FILL_BOUNDARY_FEATURES = {"requests_per_second", "active_connections", "error_rate"}
+
+
+def _align_query_window(
+    hours: float,
+    step: str,
+    end: datetime | None = None,
+) -> tuple[datetime, datetime]:
+    """Return a shared UTC query window snapped to the requested step."""
+    step_seconds = step_to_seconds(step)
+    raw_end = end or datetime.now(timezone.utc)
+    aligned_end_seconds = int(raw_end.timestamp()) // step_seconds * step_seconds
+    aligned_end = datetime.fromtimestamp(aligned_end_seconds, timezone.utc)
+    aligned_start = aligned_end - timedelta(hours=hours)
+    return aligned_start, aligned_end
 
 
 def _fetch_chunk(query: str, start: datetime, end: datetime, step: str) -> list:
@@ -76,9 +91,29 @@ def _fetch_chunk(query: str, start: datetime, end: datetime, step: str) -> list:
     return data[0]["values"]  # type: ignore[no-any-return]
 
 
-def collect_range(query: str, hours: int = 24, step: str = "1m") -> pd.Series:
-    end = datetime.now(timezone.utc)
+def _align_series_to_expected_index(
+    series: pd.Series,
+    expected_index: pd.DatetimeIndex,
+    feature_name: str,
+) -> pd.Series:
+    """Reindex to the shared window and zero-fill safe boundary gaps only."""
+    aligned = series.reindex(expected_index)
+    if feature_name in ZERO_FILL_BOUNDARY_FEATURES and not series.empty:
+        first = series.index.min()
+        last = series.index.max()
+        aligned.loc[aligned.index < first] = 0.0
+        aligned.loc[aligned.index > last] = 0.0
+    return aligned
 
+
+def collect_range(
+    query: str,
+    hours: int = 24,
+    step: str = "1m",
+    *,
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> pd.Series:
     step_seconds = step_to_seconds(step)
     requested_points = (hours * 3600) / step_seconds
 
@@ -94,12 +129,22 @@ def collect_range(query: str, hours: int = 24, step: str = "1m") -> pd.Series:
     else:
         total_hours = float(hours)
 
+    query_start, query_end = _align_query_window(
+        hours=total_hours,
+        step=step,
+        end=end,
+    )
+    if start is not None:
+        query_start = start
+    if end is not None:
+        query_end = end
+
     # Split into CHUNK_HOURS-sized windows to avoid Prometheus read timeouts on
     # expensive queries (e.g. histogram_quantile over large ranges).
     all_values: list = []
-    chunk_start = end - timedelta(hours=total_hours)
-    while chunk_start < end:
-        chunk_end = min(chunk_start + timedelta(hours=CHUNK_HOURS), end)
+    chunk_start = query_start
+    while chunk_start < query_end:
+        chunk_end = min(chunk_start + timedelta(hours=CHUNK_HOURS), query_end)
         chunk_points = (chunk_end - chunk_start).total_seconds() / step_seconds
         if chunk_points > 11000:
             # Shouldn't happen given CHUNK_HOURS, but guard anyway
@@ -268,6 +313,12 @@ def build_feature_dataframe(
     print(f"Collecting {hours}h of data (step={step}) for app: {app_name}")
     feature_series = {}
     missing_features = []
+    query_start, query_end = _align_query_window(hours=hours, step=step)
+    expected_index = pd.date_range(
+        start=query_start,
+        end=query_end,
+        freq=step_to_pandas_freq(step),
+    )
 
     # Generate dynamic queries for the specific app_name to avoid being bound to config.TARGET_APP
     from ppa.common.promql import build_fallback_queries
@@ -283,22 +334,38 @@ def build_feature_dataframe(
             continue
 
         print(f"  Fetching {feature_name}...")
-        series = collect_range(query, hours=hours, step=step)
+        series = collect_range(query, hours=hours, step=step, start=query_start, end=query_end)
 
         if series.empty and feature_name == "cpu_utilization_pct":
             print(
                 f"  WARNING: No CPU limits found for {app_name}, falling back to absolute cpu_core_percent"
             )
-            series = collect_range(fallbacks["cpu_core_percent"], hours=hours, step=step)
+            series = collect_range(
+                fallbacks["cpu_core_percent"],
+                hours=hours,
+                step=step,
+                start=query_start,
+                end=query_end,
+            )
 
         if series.empty and feature_name == "memory_utilization_pct":
             print(
                 f"  WARNING: No memory limits found for {app_name}, falling back to absolute memory_usage_bytes"
             )
-            series = collect_range(fallbacks["memory_usage_bytes"], hours=hours, step=step)
+            series = collect_range(
+                fallbacks["memory_usage_bytes"],
+                hours=hours,
+                step=step,
+                start=query_start,
+                end=query_end,
+            )
 
         if not series.empty:
-            feature_series[feature_name] = series
+            feature_series[feature_name] = _align_series_to_expected_index(
+                series,
+                expected_index,
+                feature_name,
+            )
         else:
             missing_features.append(feature_name)
 

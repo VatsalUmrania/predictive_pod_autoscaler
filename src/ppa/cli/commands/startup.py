@@ -69,37 +69,37 @@ SHELL_INJECTION_CHARS = {';', '|', '&', '$', '`', '\n', '\x00'}
 
 def _validate_git_url(url: str) -> bool:
     """Validate that a URL is a safe git repository URL (prevent injection attacks).
-    
+
     FIX (PR#13): Strict validation to prevent:
     - file:// protocol (local file access)
     - Command injection via shell metacharacters (;, |, &, $, `)
     - Path traversal and null bytes
-    
+
     Args:
         url: Potential git URL to validate
-        
+
     Returns:
         True if URL is safe, False otherwise
     """
     if not url or not isinstance(url, str):
         return False
-    
+
     # Check for shell injection characters
     if any(char in url for char in SHELL_INJECTION_CHARS):
         return False
-    
+
     # Check length (prevent DoS with huge URLs)
     if len(url) > 2048:
         return False
-    
+
     # Must match allowed git URL patterns (https, http, git@)
     if not GIT_URL_PATTERN.match(url):
         return False
-    
+
     # Reject file:// and other non-git protocols
     if url.startswith('file://') or url.startswith('ftp://') or url.startswith('telnet://'):
         return False
-    
+
     return True
 
 
@@ -199,7 +199,7 @@ def _get_app_path(app_arg: str | None) -> Path | None:
 
     Returns:
         Path to test-app directory, or None if not provided
-        
+
     Raises:
         ValueError: If git URL is invalid or uses rejected protocol
         subprocess.CalledProcessError: If clone fails
@@ -216,13 +216,13 @@ def _get_app_path(app_arg: str | None) -> Path | None:
     if app_arg.startswith("http") or app_arg.startswith("git@"):
         if not _validate_git_url(app_arg):
             raise ValueError(f"Invalid git URL: {app_arg}")
-        
+
         info(f"Cloning test-app from {app_arg}")
         clone_dir = PROJECT_DIR / "test-app-clone"
         if clone_dir.exists():
             import shutil
             shutil.rmtree(clone_dir)
-        
+
         try:
             # FIX (PR#13): Secure git clone with:
             # - Timeout to prevent hanging
@@ -230,7 +230,7 @@ def _get_app_path(app_arg: str | None) -> Path | None:
             # - No-recurse-submodules to prevent malicious submodule execution
             env = os.environ.copy()
             env['GIT_TERMINAL_PROMPT'] = '0'  # Disable interactive prompts
-            
+
             subprocess.run(
                 ["git", "clone", "--depth=1", "--no-recurse-submodules", app_arg, str(clone_dir)],
                 check=True,
@@ -239,7 +239,7 @@ def _get_app_path(app_arg: str | None) -> Path | None:
             )
             success(f"Cloned to {clone_dir}")
             return clone_dir
-        except subprocess.TimeoutExpired as e:
+        except subprocess.TimeoutExpired:
             warn(f"Git clone timed out after {GIT_CLONE_TIMEOUT}s")
             raise
         except subprocess.CalledProcessError as e:

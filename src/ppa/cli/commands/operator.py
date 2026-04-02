@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 
 import typer
 from rich.table import Table
@@ -48,12 +49,47 @@ def _check_minikube() -> bool:
 
     try:
         status = json.loads(result.stdout)
+        if not isinstance(status, dict):
+            warn("Minikube status returned an unexpected response. Check 'minikube status'.")
+            return False
         if status.get("Host") != "Running" or status.get("Kubeconfig") != "Configured":
             warn("Minikube is not ready. Run: minikube start")
             return False
     except (json.JSONDecodeError, KeyError):
-        pass
+        warn("Could not parse Minikube status. Run: minikube status")
+        return False
     return True
+
+
+def _render_manifest_for_namespace(path: Path, namespace: str) -> str:
+    """Render operator manifests for the requested namespace."""
+    manifest = path.read_text()
+    if namespace == "default":
+        return manifest
+
+    manifest = manifest.replace("namespace: default", f"namespace: {namespace}")
+    # ServiceMonitor.namespaceSelector.matchNames must follow the deployed namespace.
+    manifest = manifest.replace("      - default", f"      - {namespace}")
+    return manifest
+
+
+def _apply_manifest(path: Path, namespace: str, label: str) -> None:
+    """Apply a manifest, rewriting namespace-bound operator resources when needed."""
+    manifest = _render_manifest_for_namespace(path, namespace)
+    with console.status(f"[info]Applying {label}...[/info]", spinner="dots"):
+        result = subprocess.run(
+            ["kubectl", "apply", "-f", "-"],
+            input=manifest,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    if result.returncode != 0:
+        error(f"Failed to apply {label}")
+        if result.stderr:
+            console.print(f"    [dim]{result.stderr.strip()[:500]}[/dim]")
+        raise typer.Exit(result.returncode)
 
 
 @app.callback(invoke_without_command=True)
@@ -117,12 +153,15 @@ def deploy_cmd(
     info(f"Namespace: {namespace}")
     info(f"Image: {image}")
 
-    kubectl("apply", "-f", str(DEPLOY_DIR / "operator-deployment.yaml"), namespace=namespace)
+    _apply_manifest(DEPLOY_DIR / "rbac.yaml", namespace, "rbac.yaml")
+    success("Applied: rbac.yaml")
+
+    _apply_manifest(DEPLOY_DIR / "operator-deployment.yaml", namespace, "operator-deployment.yaml")
     success("Applied: operator-deployment.yaml")
 
     servicemonitor_path = DEPLOY_DIR / "operator-servicemonitor.yaml"
     if servicemonitor_path.exists():
-        kubectl("apply", "-f", str(servicemonitor_path))
+        _apply_manifest(servicemonitor_path, namespace, "operator-servicemonitor.yaml")
         success("Applied: operator-servicemonitor.yaml")
     else:
         warn("Manifest not found: operator-servicemonitor.yaml")
