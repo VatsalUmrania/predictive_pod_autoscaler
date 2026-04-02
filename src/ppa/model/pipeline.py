@@ -190,157 +190,230 @@ def run_pipeline(
         print(f"  PIPELINE — {target} ({app_name})")
         print(f"{'=' * 60}")
 
-        # ── Stage 1: Train ──────────────────────────────────────────
-        train_result = train_model(
+        # Train and evaluate model
+        result_dict = _train_and_evaluate_model(
+            app_name=app_name,
+            target=target,
             csv_path=csv_path,
-            lookback=lookback,
             epochs=epochs,
-            target_col=target,
-            test_split=test_split,
-            output_dir=output_dir,
-            target_floor=target_floor,
-            early_stopping_patience=patience,
-        )
-
-        if train_result is None:
-            results.append(
-                {
-                    "target": target,
-                    "status": "TRAIN_FAILED",
-                    "mape": None,
-                    "mae": None,
-                    "rmse": None,
-                    "size_kb": None,
-                    "passed": False,
-                }
-            )
-            continue
-
-        paths = train_result["artifact_paths"]
-
-        # ── Stage 2: Evaluate ───────────────────────────────────────
-        eval_result = evaluate_model(
-            model_path=paths["model"],
-            scaler_path=paths["scaler"],
-            csv_path=csv_path,
-            target_col=target,
             output_dir=output_dir,
             lookback=lookback,
             test_split=test_split,
-            meta_path=paths["meta"],
-            target_scaler_path=paths.get("target_scaler"),
+            target_floor=target_floor,
+            patience=patience,
             low_traffic_threshold=low_traffic_threshold,
+            quality_gate=quality_gate,
+            gate_metric=gate_metric,
+            quantize=quantize,
         )
 
-        if eval_result is None:
-            results.append(
-                {
-                    "target": target,
-                    "status": "EVAL_FAILED",
-                    "mape": None,
-                    "mae": None,
-                    "rmse": None,
-                    "size_kb": None,
-                    "passed": False,
-                }
-            )
+        if result_dict is None:
+            results.append({
+                "target": target,
+                "status": "TRAIN_FAILED",
+                "mape": None,
+                "mae": None,
+                "rmse": None,
+                "size_kb": None,
+                "passed": False,
+            })
             continue
 
-        gate_value = eval_result.get(gate_metric, eval_result["mape"])
-        passed = gate_value <= quality_gate
-
-        # ── Stage 3: Convert ───────────────────────────────────────
-        tflite_path = os.path.join(output_dir, f"ppa_model_{target}.tflite")
-        conv_result = convert_model(
-            model_path=paths["model"],
-            quantize=quantize,
-            output_path=tflite_path,
-        )
-
-        size_kb = conv_result["size_kb"] if conv_result else None
-
-        status = "PASS" if passed else f"WARN_{gate_metric.upper()}"
-        if not passed:
-            print(
-                f"\n  ⚠  Quality gate: {gate_metric.upper()} {gate_value:.2f}% > {quality_gate}% threshold"
-            )
-
-        promotion_decision = None
-        promotion_reason = None
+        # Check promotion if enabled
         if promote_if_better:
-            if not champion_dir:
-                promotion_decision = "HOLD"
-                promotion_reason = "champion_dir not provided"
-            else:
-                champion_summary_path = os.path.join(
-                    champion_dir, app_name, target, "eval_summary.json"
-                )
-                champion_metrics = _load_json(champion_summary_path)
-                promote, reason = should_promote(
-                    champion_metrics=champion_metrics,
-                    challenger_metrics=eval_result,
-                    metric=promotion_metric,
-                    gate_threshold=promotion_gate,
-                    min_relative_improvement=min_relative_improvement,
-                    max_underprov_regression=max_underprov_regression,
-                )
-                if promote and conv_result is not None:
-                    promoted_paths = promote_artifacts(
-                        app_name=app_name,
-                        target=target,
-                        challenger_paths={
-                            "tflite": tflite_path,
-                            "scaler": paths["scaler"],
-                            "target_scaler": paths.get("target_scaler"),
-                        },
-                        eval_summary_path=os.path.join(output_dir, f"eval_summary_{target}.json"),
-                        champion_dir=champion_dir,
-                    )
-                    promotion_decision = "PROMOTED"
-                    promotion_reason = reason
-                    print(f"  ✅ Champion update ({target}): {reason}")
-                    print(f"     model={promoted_paths['model']}")
+            promotion_decision, promotion_reason = _handle_promotion(
+                app_name=app_name,
+                target=target,
+                result_dict=result_dict,
+                champion_dir=champion_dir,
+                promotion_metric=promotion_metric,
+                promotion_gate=promotion_gate,
+                min_relative_improvement=min_relative_improvement,
+                max_underprov_regression=max_underprov_regression,
+                promote_cr_name=promote_cr_name,
+                promote_cr_namespace=promote_cr_namespace,
+            )
+        else:
+            promotion_decision = None
+            promotion_reason = None
 
-                    if promote_cr_name and promote_cr_namespace:
-                        patched, msg = patch_predictiveautoscaler_paths(
-                            cr_name=promote_cr_name,
-                            cr_namespace=promote_cr_namespace,
-                            model_path=promoted_paths["model"],
-                            scaler_path=promoted_paths["scaler"],
-                            target_scaler_path=promoted_paths["target_scaler"],
-                        )
-                        if patched:
-                            print(f"     CR patched: {msg}")
-                        else:
-                            promotion_decision = "PROMOTED_LOCAL_ONLY"
-                            promotion_reason = f"{reason}; CR patch failed: {msg}"
-                            print(f"     ⚠ CR patch failed: {msg}")
-                else:
-                    promotion_decision = "HOLD"
-                    promotion_reason = (
-                        reason if conv_result is not None else "conversion failed, cannot promote"
-                    )
-                    print(f"  ⏸  Champion hold ({target}): {promotion_reason}")
+        results.append(result_dict | {
+            "promotion": promotion_decision,
+            "promotion_reason": promotion_reason,
+        })
 
-        results.append(
-            {
-                "target": target,
-                "status": status,
-                "mape": eval_result["mape"],
-                "smape": eval_result.get("smape"),
-                "mape_filtered": eval_result.get("mape_filtered"),
-                "gate_metric": gate_metric,
-                "gate_value": gate_value,
-                "mae": eval_result["mae"],
-                "rmse": eval_result["rmse"],
-                "size_kb": size_kb,
-                "passed": passed,
-                "promotion": promotion_decision,
-                "promotion_reason": promotion_reason,
-            }
+    # Print summary
+    _print_pipeline_summary(results)
+
+    return 1 if any(not r["passed"] for r in results) else 0
+
+
+def _train_and_evaluate_model(
+    app_name: str,
+    target: str,
+    csv_path: str,
+    epochs: int,
+    output_dir: str,
+    lookback: int,
+    test_split: float,
+    target_floor: float,
+    patience: int,
+    low_traffic_threshold: float,
+    quality_gate: float,
+    gate_metric: str,
+    quantize: bool,
+) -> dict | None:
+    """Train, evaluate, and convert model. Returns result dict or None on failure."""
+    # Stage 1: Train
+    train_result = train_model(
+        csv_path=csv_path,
+        lookback=lookback,
+        epochs=epochs,
+        target_col=target,
+        test_split=test_split,
+        output_dir=output_dir,
+        target_floor=target_floor,
+        early_stopping_patience=patience,
+    )
+
+    if train_result is None:
+        return None
+
+    paths = train_result["artifact_paths"]
+
+    # Stage 2: Evaluate
+    eval_result = evaluate_model(
+        model_path=paths["model"],
+        scaler_path=paths["scaler"],
+        csv_path=csv_path,
+        target_col=target,
+        output_dir=output_dir,
+        lookback=lookback,
+        test_split=test_split,
+        meta_path=paths["meta"],
+        target_scaler_path=paths.get("target_scaler"),
+        low_traffic_threshold=low_traffic_threshold,
+    )
+
+    if eval_result is None:
+        return {
+            "target": target,
+            "status": "EVAL_FAILED",
+            "mape": None,
+            "mae": None,
+            "rmse": None,
+            "size_kb": None,
+            "passed": False,
+        }
+
+    gate_value = eval_result.get(gate_metric, eval_result["mape"])
+    passed = gate_value <= quality_gate
+
+    # Stage 3: Convert
+    tflite_path = os.path.join(output_dir, f"ppa_model_{target}.tflite")
+    conv_result = convert_model(
+        model_path=paths["model"],
+        quantize=quantize,
+        output_path=tflite_path,
+    )
+
+    size_kb = conv_result["size_kb"] if conv_result else None
+    status = "PASS" if passed else f"WARN_{gate_metric.upper()}"
+
+    if not passed:
+        print(f"\n  ⚠  Quality gate: {gate_metric.upper()} {gate_value:.2f}% > {quality_gate}% threshold")
+
+    return {
+        "target": target,
+        "status": status,
+        "mape": eval_result["mape"],
+        "smape": eval_result.get("smape"),
+        "mape_filtered": eval_result.get("mape_filtered"),
+        "gate_metric": gate_metric,
+        "gate_value": gate_value,
+        "mae": eval_result["mae"],
+        "rmse": eval_result["rmse"],
+        "size_kb": size_kb,
+        "passed": passed,
+        "eval_result": eval_result,
+        "paths": paths,
+        "tflite_path": tflite_path,
+    }
+
+
+def _handle_promotion(
+    app_name: str,
+    target: str,
+    result_dict: dict,
+    champion_dir: str | None,
+    promotion_metric: str,
+    promotion_gate: float,
+    min_relative_improvement: float,
+    max_underprov_regression: float,
+    promote_cr_name: str | None,
+    promote_cr_namespace: str | None,
+) -> tuple[str | None, str | None]:
+    """Handle model promotion if enabled. Returns (promotion_decision, promotion_reason)."""
+    if not champion_dir:
+        return "HOLD", "champion_dir not provided"
+
+    eval_result = result_dict["eval_result"]
+    paths = result_dict["paths"]
+    tflite_path = result_dict["tflite_path"]
+
+    champion_summary_path = os.path.join(champion_dir, app_name, target, "eval_summary.json")
+    champion_metrics = _load_json(champion_summary_path)
+
+    promote, reason = should_promote(
+        champion_metrics=champion_metrics,
+        challenger_metrics=eval_result,
+        metric=promotion_metric,
+        gate_threshold=promotion_gate,
+        min_relative_improvement=min_relative_improvement,
+        max_underprov_regression=max_underprov_regression,
+    )
+
+    if not promote:
+        print(f"  ⏸  Champion hold ({target}): {reason}")
+        return "HOLD", reason
+
+    # Promotion approved, apply it
+    promoted_paths = promote_artifacts(
+        app_name=app_name,
+        target=target,
+        challenger_paths={
+            "tflite": tflite_path,
+            "scaler": paths["scaler"],
+            "target_scaler": paths.get("target_scaler"),
+        },
+        eval_summary_path=os.path.join(os.path.dirname(tflite_path), f"eval_summary_{target}.json"),
+        champion_dir=champion_dir,
+    )
+
+    print(f"  ✅ Champion update ({target}): {reason}")
+    print(f"     model={promoted_paths['model']}")
+
+    # Patch CR if requested
+    if promote_cr_name and promote_cr_namespace:
+        patched, msg = patch_predictiveautoscaler_paths(
+            cr_name=promote_cr_name,
+            cr_namespace=promote_cr_namespace,
+            model_path=promoted_paths["model"],
+            scaler_path=promoted_paths["scaler"],
+            target_scaler_path=promoted_paths["target_scaler"],
         )
+        if patched:
+            print(f"     CR patched: {msg}")
+            return "PROMOTED", reason
+        else:
+            print(f"     ⚠ CR patch failed: {msg}")
+            return "PROMOTED_LOCAL_ONLY", f"{reason}; CR patch failed: {msg}"
 
-    # ── Final summary ───────────────────────────────────────────────
+    return "PROMOTED", reason
+
+
+def _print_pipeline_summary(results: list[dict]) -> None:
+    """Print formatted pipeline summary table."""
     print(f"\n\n{'=' * 72}")
     print("  PIPELINE SUMMARY")
     print(f"{'=' * 72}")
@@ -349,7 +422,6 @@ def run_pipeline(
     )
     print(f"  {'─' * 66}")
 
-    any_failed = False
     for r in results:
         mape_s = f"{r['mape']:.2f}" if r["mape"] is not None else "N/A"
         smape_s = f"{r['smape']:.2f}" if r.get("smape") is not None else "N/A"
@@ -361,12 +433,8 @@ def run_pipeline(
         print(
             f"  {r['target']:<14} {r['status']:<14} {mape_s:>8} {smape_s:>8} {gate_s:>8} {mae_s:>10} {rmse_s:>10} {size_s:>10} {promo_s:>12}"
         )
-        if not r["passed"]:
-            any_failed = True
 
     print(f"{'=' * 72}\n")
-
-    return 1 if any_failed else 0
 
 
 if __name__ == "__main__":
