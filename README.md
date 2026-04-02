@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>predictive-pod-autoscaler (PPA)</h1>
+  <h1>Predictive Pod Autoscaler (PPA)</h1>
   <p><strong>Proactive, ML-Driven Horizontal Pod Autoscaling for Kubernetes</strong></p>
 
   [![Kubernetes](https://img.shields.io/badge/Kubernetes-1.28%2B-blue.svg?logo=kubernetes)](https://kubernetes.io)
@@ -28,13 +28,6 @@
 
 ### The Problem
 Traditional Horizontal Pod Autoscalers (HPAs) are **reactive**: they measure current load, see it's high, and spin up new pods. By then, you've already dropped requests and degraded performance.
-
-```
-Time:    0s           30s          60s           90s
-Load:    ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▂▃▄▅▆▇█████████████
-HPA:     ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▂▃▄▅▆▇████  ← Too late!
-PPA:     ▁▁▁▁▁▁▁▁▁▁▁▁▂▃▄▅▆▇███████████████████  ← Ready in advance
-```
 
 ### The Solution
 PPA uses **LSTM neural networks** trained on your application's historical traffic patterns to forecast 3–10 minutes into the future. It scales **proactively**, ensuring capacity is ready when demand arrives.
