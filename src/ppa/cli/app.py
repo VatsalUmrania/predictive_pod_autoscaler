@@ -2,6 +2,7 @@
 
 import typer
 
+from ppa.cli.startup import print_startup_screen
 from ppa.cli.utils import console
 from ppa.config import get_banner
 
@@ -43,21 +44,15 @@ def main(
         app.pretty_exceptions_enable = True
 
     if ctx.invoked_subcommand is None:
-        console.print(get_banner())
-        console.print(
-            "\n[italic]Run [bold]ppa help[/bold] or [bold]ppa --help[/bold] for instructions.[/italic]"
-        )
+        print_startup_screen()
 
 
 @app.command("help", hidden=True)
 def help_cmd(ctx: typer.Context):
-    """Show global help with examples."""
-    console.print(get_banner())
-    console.print("\n[bold]Usage:[/] ppa [OPTIONS] COMMAND [ARGS]...")
-    console.print("\n[bold]Examples:[/]")
-    console.print("  ppa startup --follow      # Bootstrap and monitor cluster")
-    console.print("  ppa status                # Check infrastructure health")
-    console.print("  ppa cleanup               # Stop all background services")
+    """Show global help with getting started guide."""
+    print_startup_screen()
+    console.print()
+    console.print("[bold cyan]Global Options:[/]")
     console.print(ctx.get_help())
 
 
@@ -67,6 +62,29 @@ def cleanup_cmd():
     from ppa.cli.utils import cleanup_session
 
     cleanup_session()
+
+
+@app.command("guide", hidden=False)
+def guide_cmd(
+    command: str = typer.Argument(None, help="Command name (e.g., startup, deploy)")
+):
+    """Show detailed guide for a command.
+
+    Examples:
+        ppa guide startup
+        ppa guide deploy
+        ppa guide monitor
+    """
+    from ppa.cli.help import print_help_for_command
+
+    if not command:
+        console.print("[error]Usage: ppa guide <command>[/]")
+        console.print(
+            "[dim]Examples: ppa guide startup | ppa guide deploy | ppa guide monitor[/]"
+        )
+        return
+
+    print_help_for_command(command)
 
 
 # ── Subcommand groups ────────────────────────────────────────────────────────

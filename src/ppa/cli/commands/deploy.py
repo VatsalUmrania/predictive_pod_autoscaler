@@ -1,30 +1,23 @@
-"""ppa deploy — Train → Convert → Deploy operator (replaces ppa_redeploy.sh).
+"""ppa deploy — Train → Convert → Deploy operator (refactored with BaseCommand).
 
-Translates the 9-step redeploy script into Python with Rich UI.
+Orchestrates multi-stage operator deployment using stage modules.
 """
 
 from __future__ import annotations
 
-import os
-import time
-
 import typer
 from rich.panel import Panel
-from rich.prompt import Confirm
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 from rich.table import Table
 
-from ppa.cli.utils import (
-    console,
-    error,
-    get_minikube_docker_env,
-    heading,
-    info,
-    kubectl,
-    run_cmd,
-    step_heading,
-    success,
-    warn,
+from ppa.cli.commands.base import BaseCommand
+from ppa.cli.commands.deploy_stages import (
+    build_and_deploy,
+    handle_hpa,
+    retrain_lstm,
+    tail_logs,
 )
+from ppa.cli.utils import console
 from ppa.config import (
     ARTIFACTS_DIR,
     CHAMPION_DIR,
@@ -33,12 +26,188 @@ from ppa.config import (
     DEFAULT_EPOCHS,
     DEFAULT_HORIZON,
     DEFAULT_LOOKBACK,
-    DEFAULT_NAMESPACE,
-    DEPLOY_DIR,
-    PROJECT_DIR,
 )
 
 app = typer.Typer(rich_markup_mode="rich", invoke_without_command=True)
+
+
+class DeployCommand(BaseCommand):
+    """Deploy PPA operator with optional retraining."""
+
+    def run(
+        self,
+        app_name: str = DEFAULT_APP_NAME,
+        retrain: bool = False,
+        horizon: str = DEFAULT_HORIZON,
+        csv: str = DEFAULT_CSV,
+        epochs: int = DEFAULT_EPOCHS,
+        lookback: int = DEFAULT_LOOKBACK,
+        patience: int = 20,
+        skip_build: bool = False,
+        delete_hpa: bool | None = None,
+        no_watch: bool = False,
+        dry_run: bool = False,
+    ) -> None:
+        """Execute deployment pipeline.
+
+        Args:
+            app_name: Target application name
+            retrain: Whether to retrain models before deploying
+            horizon: Prediction horizon target column
+            csv: Path to training CSV
+            epochs: Number of training epochs
+            lookback: Lookback window steps
+            patience: Early stopping patience
+            skip_build: Skip Docker image rebuild
+            delete_hpa: Delete or keep existing HPA
+            no_watch: Don't tail operator logs after deploy
+            dry_run: Show planned steps without executing
+        """
+        artifacts_dir = str(ARTIFACTS_DIR)
+        champion_dir = str(CHAMPION_DIR / app_name / horizon)
+
+        # Display plan
+        self._show_plan(app_name, horizon, retrain, skip_build, csv, dry_run)
+
+        if dry_run:
+            raise typer.Exit()
+
+        # Execute deployment
+        self._execute_deployment(
+            app_name=app_name,
+            retrain=retrain,
+            horizon=horizon,
+            csv=csv,
+            epochs=epochs,
+            lookback=lookback,
+            patience=patience,
+            skip_build=skip_build,
+            delete_hpa=delete_hpa,
+            artifacts_dir=artifacts_dir,
+            champion_dir=champion_dir,
+        )
+
+        # Tail logs
+        if not no_watch:
+            tail_logs(no_watch=False)
+
+    def _show_plan(
+        self,
+        app_name: str,
+        horizon: str,
+        retrain: bool,
+        skip_build: bool,
+        csv: str,
+        dry_run: bool,
+    ) -> None:
+        """Display deployment plan."""
+        banner_data = {
+            "App": app_name,
+            "Horizon": horizon,
+            "Retrain": str(retrain),
+            "Skip build": str(skip_build),
+            "CSV": csv,
+        }
+        table = Table(show_header=False, border_style="magenta", padding=(0, 2))
+        table.add_column("Key", style="info")
+        table.add_column("Value")
+        for k, v in banner_data.items():
+            table.add_row(k, v)
+        console.print()
+        with console.status("[bold bright_cyan]PPA Deploy[/]", spinner="clock"):
+            console.print(
+                Panel(
+                    table,
+                    title="[bold bright_cyan]PPA Deploy[/]",
+                    border_style="bright_cyan",
+                )
+            )
+
+        if dry_run:
+            console.print("\n[bold]DRY RUN — Planned steps[/bold]")
+            steps = ["Retrain LSTM", "Convert → TFLite", "Promote artifacts"] if retrain else []
+            steps += [
+                "Handle HPA",
+                "Scale down operator",
+                "Build Docker image",
+                "Push models to PVC",
+                "Deploy operator",
+                "Apply CR",
+            ]
+            for i, s in enumerate(steps, 1):
+                self.info(f"Step {i}: {s}")
+
+    def _execute_deployment(
+        self,
+        app_name: str,
+        retrain: bool,
+        horizon: str,
+        csv: str,
+        epochs: int,
+        lookback: int,
+        patience: int,
+        skip_build: bool,
+        delete_hpa: bool | None,
+        artifacts_dir: str,
+        champion_dir: str,
+    ) -> None:
+        """Execute the full deployment pipeline."""
+        total_steps = 9 if retrain else 6
+        current = 0
+
+        with Progress(
+            SpinnerColumn(style="bright_magenta"),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(bar_width=30, style="bright_cyan", complete_style="bright_green"),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("[bold]PPA Deploy[/bold]", total=total_steps)
+
+            # Retrain + Convert + Promote (if enabled)
+            if retrain:
+                current = retrain_lstm(
+                    progress=progress,
+                    task=task,
+                    current=current,
+                    total_steps=total_steps,
+                    app_name=app_name,
+                    csv=csv,
+                    horizon=horizon,
+                    lookback=lookback,
+                    epochs=epochs,
+                    patience=patience,
+                    artifacts_dir=artifacts_dir,
+                )
+
+            # Verify champion dir exists
+            import os
+
+            if not os.path.isdir(champion_dir):
+                self.error(
+                    f"Champion dir not found: {champion_dir}\nRun with --retrain or train manually first."
+                )
+                raise typer.Exit(1)
+
+            # Handle HPA and scale operator
+            current = handle_hpa(
+                progress=progress,
+                task=task,
+                current=current,
+                total_steps=total_steps,
+                app_name=app_name,
+                delete_hpa=delete_hpa,
+            )
+
+            # Build and deploy
+            build_and_deploy(
+                progress=progress,
+                task=task,
+                current=current,
+                total_steps=total_steps,
+                skip_build=skip_build,
+                lookback=lookback,
+            )
 
 
 @app.callback(invoke_without_command=True)
@@ -68,328 +237,27 @@ def deploy(
     [bold]Deploy the PPA operator[/] — retrain → convert → push models → apply CRs.
 
     Replaces [dim]scripts/ppa_redeploy.sh[/dim] with Rich UI and direct Python integrations.
+
+    Examples:
+        ppa deploy                          # Deploy with existing models
+        ppa deploy --retrain                # Retrain and deploy
+        ppa deploy --retrain --horizon 3min # Retrain 3-minute model
+        ppa deploy --dry-run                # Show planned steps
     """
     if ctx.invoked_subcommand is not None:
         return
 
-    artifacts_dir = str(ARTIFACTS_DIR)
-    champion_dir = str(CHAMPION_DIR / app_name / horizon)
-
-    # ── Banner ──────────────────────────────────────────────────────────
-    banner_data = {
-        "App": app_name,
-        "Horizon": horizon,
-        "Retrain": str(retrain),
-        "Skip build": str(skip_build),
-        "CSV": csv,
-    }
-    table = Table(show_header=False, border_style="magenta", padding=(0, 2))
-    table.add_column("Key", style="info")
-    table.add_column("Value")
-    for k, v in banner_data.items():
-        table.add_row(k, v)
-    console.print()
-    with console.status("[bold bright_cyan]PPA Deploy[/]", spinner="clock"):
-        console.print(
-            Panel(
-                table,
-                title="[bold bright_cyan]PPA Deploy[/]",
-                border_style="bright_cyan",
-            )
-        )
-
-    if dry_run:
-        heading("DRY RUN — Planned steps")
-        steps = ["Retrain LSTM", "Convert → TFLite", "Promote artifacts"] if retrain else []
-        steps += [
-            "Handle HPA",
-            "Scale down operator",
-            "Build Docker image",
-            "Push models to PVC",
-            "Deploy operator",
-            "Apply CR",
-        ]
-        for i, s in enumerate(steps, 1):
-            info(f"Step {i}: {s}")
-        raise typer.Exit()
-
-    from rich.progress import (
-        BarColumn,
-        Progress,
-        SpinnerColumn,
-        TaskProgressColumn,
-        TextColumn,
+    cmd = DeployCommand()
+    cmd.run(
+        app_name=app_name,
+        retrain=retrain,
+        horizon=horizon,
+        csv=csv,
+        epochs=epochs,
+        lookback=lookback,
+        patience=patience,
+        skip_build=skip_build,
+        delete_hpa=delete_hpa,
+        no_watch=no_watch,
+        dry_run=dry_run,
     )
-
-    total_steps = 9 if retrain else 6
-    current = 0
-
-    with Progress(
-        SpinnerColumn(style="bright_magenta"),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(bar_width=30, style="bright_cyan", complete_style="bright_green"),
-        TaskProgressColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task("[bold]PPA Deploy[/bold]", total=total_steps)
-
-        # ── Step 1–3: Retrain + Convert + Promote ─────────────────────────
-        if retrain:
-            current += 1
-            step_heading(current, total_steps, f"Retraining LSTM ({horizon})")
-            progress.update(task, description=f"[bold]Step {current}:[/bold] Retraining LSTM")
-
-            if not os.path.exists(csv):
-                error(f"Training CSV not found: {csv}")
-                raise typer.Exit(1)
-
-            try:
-                from ppa.model.train import train_model
-
-                result = train_model(
-                    csv_path=csv,
-                    lookback=lookback,
-                    epochs=epochs,
-                    target_col=horizon,
-                    output_dir=artifacts_dir,
-                    early_stopping_patience=patience,
-                )
-                if result is None:
-                    error("Training failed")
-                    raise typer.Exit(1)
-                success(f"Training complete — Val MAE: {result['metrics']['val_mae']:.4f}")
-            except ImportError:
-                warn("Cannot import ppa.model.train — falling back to subprocess")
-                run_cmd(
-                    [
-                        "python",
-                        "-m",
-                        "ppa.model.train",
-                        "--csv",
-                        csv,
-                        "--lookback",
-                        str(lookback),
-                        "--epochs",
-                        str(epochs),
-                        "--target",
-                        horizon,
-                        "--output-dir",
-                        artifacts_dir,
-                        "--patience",
-                        str(patience),
-                    ],
-                    title="Training LSTM",
-                )
-
-            progress.advance(task)
-
-            # Convert
-            current += 1
-            step_heading(current, total_steps, "Converting Keras → TFLite")
-            progress.update(task, description=f"[bold]Step {current}:[/bold] Converting model")
-            keras_model = os.path.join(artifacts_dir, f"ppa_model_{horizon}.keras")
-            tflite_out = os.path.join(artifacts_dir, "ppa_model.tflite")
-
-            try:
-                from ppa.model.convert import convert_model
-
-                conv = convert_model(model_path=keras_model, output_path=tflite_out)
-                if conv:
-                    success(f"Converted → {tflite_out} ({conv['size_kb']:.1f} KB)")
-                else:
-                    error("Conversion failed")
-                    raise typer.Exit(1)
-            except ImportError:
-                warn("Cannot import ppa.model.convert — falling back to subprocess")
-                run_cmd(
-                    [
-                        "python",
-                        "-m",
-                        "ppa.model.convert",
-                        "--model",
-                        keras_model,
-                        "--output",
-                        tflite_out,
-                    ],
-                    title="Converting to TFLite",
-                )
-
-            progress.advance(task)
-
-            # Promote
-            current += 1
-            step_heading(current, total_steps, "Promoting artifacts")
-            progress.update(task, description=f"[bold]Step {current}:[/bold] Promoting artifacts")
-            os.makedirs(champion_dir, exist_ok=True)
-            import shutil
-
-            shutil.copy2(tflite_out, os.path.join(champion_dir, "ppa_model.tflite"))
-            for src_suffix, dst_name in [
-                (f"scaler_{horizon}.pkl", "scaler.pkl"),
-                (f"target_scaler_{horizon}.pkl", "target_scaler.pkl"),
-            ]:
-                src = os.path.join(artifacts_dir, src_suffix)
-                if os.path.exists(src):
-                    shutil.copy2(src, os.path.join(champion_dir, dst_name))
-            success("Artifacts promoted to champions")
-            progress.advance(task)
-
-    # ── Verify champion dir ───────────────────────────────────────────
-    if not os.path.isdir(champion_dir):
-        error(
-            f"Champion dir not found: {champion_dir}\nRun with --retrain or train manually first."
-        )
-        raise typer.Exit(1)
-
-    # ── Step: Handle HPA ──────────────────────────────────────────────
-    current += 1
-    step_heading(current, total_steps, "Checking HPA")
-    progress.update(task, description=f"[bold]Step {current}:[/bold] Checking HPA")
-
-    hpa_result = kubectl("get", "hpa", app_name, namespace=DEFAULT_NAMESPACE, check=False)
-    if hpa_result.returncode == 0:
-        warn(f"HPA '{app_name}' is active — may conflict with PPA")
-        if delete_hpa is None:
-            delete_hpa = Confirm.ask("  Delete HPA now?", default=False, console=console)
-        if delete_hpa:
-            kubectl("delete", "hpa", app_name, namespace=DEFAULT_NAMESPACE)
-            success("HPA deleted")
-        else:
-            warn("Keeping HPA — PPA and HPA will both run")
-    else:
-        success(f"No HPA found for '{app_name}'")
-    progress.advance(task)
-
-    # ── Step: Scale down operator ─────────────────────────────────────
-    current += 1
-    step_heading(current, total_steps, "Scaling down existing operator")
-    progress.update(task, description=f"[bold]Step {current}:[/bold] Scaling down operator")
-
-    op_result = kubectl(
-        "get", "deployment", "ppa-operator", namespace=DEFAULT_NAMESPACE, check=False
-    )
-    if op_result.returncode == 0:
-        kubectl(
-            "scale",
-            "deployment",
-            "ppa-operator",
-            "--replicas=0",
-            namespace=DEFAULT_NAMESPACE,
-        )
-        success("Operator scaled to 0")
-    else:
-        success("No existing operator deployment")
-    progress.advance(task)
-
-    # ── Step: Build Docker image ──────────────────────────────────────
-    current += 1
-    if not skip_build:
-        step_heading(current, total_steps, "Building ppa-operator:latest")
-        progress.update(task, description=f"[bold]Step {current}:[/bold] Building operator image")
-        docker_env = {**os.environ, **get_minikube_docker_env()}
-        run_cmd(
-            [
-                "docker",
-                "build",
-                "-t",
-                "ppa-operator:latest",
-                "-f",
-                str(PROJECT_DIR / "operator" / "Dockerfile"),
-                str(PROJECT_DIR),
-            ],
-            title="Building ppa-operator Docker image",
-            env=docker_env,
-        )
-        success("Image built: ppa-operator:latest")
-    else:
-        step_heading(current, total_steps, "Skipping image build")
-        progress.update(task, description=f"[bold]Step {current}:[/bold] Skipping image build")
-    progress.advance(task)
-
-    # ── Step: Apply CRD + RBAC ────────────────────────────────────────
-    current += 1
-    step_heading(current, total_steps, "Applying CRD + RBAC + Deployment")
-    progress.update(task, description=f"[bold]Step {current}:[/bold] Deploying operator")
-    kubectl("apply", "-f", str(DEPLOY_DIR / "crd.yaml"))
-    kubectl("apply", "-f", str(DEPLOY_DIR / "rbac.yaml"))
-    kubectl("apply", "-f", str(DEPLOY_DIR / "operator-deployment.yaml"))
-
-    info("Waiting for operator rollout...")
-    run_cmd(
-        [
-            "kubectl",
-            "rollout",
-            "status",
-            "deployment/ppa-operator",
-            f"--namespace={DEFAULT_NAMESPACE}",
-            "--timeout=120s",
-        ],
-        title="Operator rollout",
-    )
-    success("Operator deployment rolled out")
-    progress.advance(task)
-
-    # ── Step: Apply CR ────────────────────────────────────────────────
-    current += 1
-    step_heading(current, total_steps, "Applying PredictiveAutoscaler CR")
-    progress.update(task, description=f"[bold]Step {current}:[/bold] Applying CR")
-    kubectl("apply", "-f", str(DEPLOY_DIR / "predictiveautoscaler.yaml"))
-    success("CR applied")
-    progress.advance(task)
-
-    # ── Summary ───────────────────────────────────────────────────────
-    console.print()
-    console.print(
-        Panel(
-            "[success]Deployment Complete ✓[/success]",
-            border_style="green",
-            padding=(1, 4),
-        )
-    )
-
-    # Show CRs
-    cr_result = kubectl("get", "ppa", namespace=DEFAULT_NAMESPACE, check=False)
-    if cr_result.returncode == 0 and cr_result.stdout.strip():
-        console.print(cr_result.stdout)
-
-    warmup_min = lookback // 2
-    warn(f"Warmup: ~{warmup_min} minutes ({lookback} × 30s steps)")
-
-    # ── Tail logs ─────────────────────────────────────────────────────
-    if not no_watch:
-        console.print()
-        info("Tailing operator logs — Ctrl+C to exit")
-        time.sleep(3)
-        try:
-            # Stream logs with cross-platform filtering (no grep needed)
-            import re
-            import subprocess as _sp
-
-            pattern = re.compile(
-                r"Predicted|Scaling|Patched|Warming|ERROR|WARN|champion|model",
-                re.IGNORECASE,
-            )
-            proc = _sp.Popen(
-                [
-                    "kubectl",
-                    "logs",
-                    "-l",
-                    "app=ppa-operator",
-                    "-n",
-                    DEFAULT_NAMESPACE,
-                    "-f",
-                    "--tail=50",
-                ],
-                stdout=_sp.PIPE,
-                stderr=_sp.PIPE,
-                text=True,
-                bufsize=1,  # Line buffered
-            )
-
-            for line in proc.stdout or []:
-                if pattern.search(line):
-                    console.print(line.rstrip())
-
-            proc.wait()
-        except KeyboardInterrupt:
-            success("Log tailing stopped")
