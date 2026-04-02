@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any
 
 import kopf
 from prometheus_client import Counter, Gauge
@@ -112,7 +113,7 @@ class CRState:
     predictor: Predictor
     stable_count: int = 0
     last_prediction: float = 0.0
-    last_desired: int = -1  # replica target from previous cycle (stabilisation anchor)
+    last_desired: float = -1.0  # replica target from previous cycle (stabilisation anchor)
     # FIX: Graceful degradation tracking
     last_known_good_replicas: int = 0
     last_known_good_prediction: float = 0.0
@@ -212,58 +213,53 @@ def _get_or_create_state(
     return state
 
 
-@kopf.timer(
-    "ppa.example.com",
-    "v1",
-    "predictiveautoscalers",
-    interval=TIMER_INTERVAL,
-    initial_delay=INITIAL_DELAY,
-)
-def reconcile(spec, status, meta, patch, **kwargs):
-    """Main control loop — runs every TIMER_INTERVAL seconds per CR."""
-    cr_ns = meta.get("namespace", NAMESPACE)
-    cr_name = meta.get("name", "unknown")
-    key = (cr_ns, cr_name)
+def _parse_crd_spec(
+    spec: dict[str, Any], status: dict[str, Any] | None, meta: dict[str, Any], cr_ns: str, cr_name: str
+) -> tuple[dict[str, Any], CRState]:
+    """Parse CRD spec into config and load/create CR state. Extract state management logic.
 
-    # Read CR spec with defaults
+    Returns:
+        Tuple of (config dict, CRState)
+    """
     target = spec["targetDeployment"]
     target_ns = spec.get("namespace", cr_ns)
-
-    # CR Template will expose appName and horizon directly. If missing, try fallback logic.
     target_app = spec.get("appName", target)
-    target_horizon = spec.get("horizon", "rps_t3m")  # Assume standard fallback for horizon
+    target_horizon = spec.get("horizon", "rps_t3m")
 
-    min_r = spec.get("minReplicas", DEFAULT_MIN_REPLICAS)
+    # Validate required fields
     max_r = spec.get("maxReplicas")
     if max_r is None:
         raise ValueError("maxReplicas must be set in PredictiveAutoscaler spec")
-    capacity = spec.get("capacityPerPod", DEFAULT_CAPACITY_PER_POD)
-    up_rate = spec.get("scaleUpRate", DEFAULT_SCALE_UP_RATE)
-    down_rate = spec.get("scaleDownRate", DEFAULT_SCALE_DOWN_RATE)
-    safety_factor = float(spec.get("safetyFactor", 1.10))
-    observer_mode = bool(spec.get("observerMode", False))
-    container_name = spec.get("containerName") or None
 
-    # FIX (PR#18): Support per-CR Prometheus URL for multi-region deployments
-    prom_url = spec.get("prometheusUrl") or None
+    config = {
+        "target": target,
+        "target_ns": target_ns,
+        "target_app": target_app,
+        "target_horizon": target_horizon,
+        "min_r": spec.get("minReplicas", DEFAULT_MIN_REPLICAS),
+        "max_r": max_r,
+        "capacity": spec.get("capacityPerPod", DEFAULT_CAPACITY_PER_POD),
+        "up_rate": spec.get("scaleUpRate", DEFAULT_SCALE_UP_RATE),
+        "down_rate": spec.get("scaleDownRate", DEFAULT_SCALE_DOWN_RATE),
+        "safety_factor": float(spec.get("safetyFactor", 1.10)),
+        "observer_mode": bool(spec.get("observerMode", False)),
+        "container_name": spec.get("containerName") or None,
+        "prom_url": spec.get("prometheusUrl") or None,
+    }
 
-    # FIX (PR#14): Detect multiple CRs managing the same deployment
-    # Count how many CRs are tracking this deployment
-    same_target_crs = [
-        (k, s)
-        for k, s in _cr_state.items()
-        if k != key  # Exclude current CR
-        # In production, you'd want to check the deployment target from each state
-        # For now, log a warning if multiple CRs might conflict
-    ]
+    # Detect multiple CRs managing the same deployment
+    key = (cr_ns, cr_name)
+    same_target_crs = [k for k in _cr_state.keys() if k != key]
     if len(same_target_crs) > 0 and cr_name != "single-ppa-controller":
         logger.warning(
             f"[{cr_name}] Multiple CRs detected in system. Ensure only ONE CR manages "
             f"target {target_ns}/{target} to avoid scaling oscillations."
         )
 
-    model_path, scaler_path, target_scaler_path = _resolve_paths(spec, target_app, target_horizon)
-    # FIX (PR#15): Pass persisted history from CR status for pod restart resilience
+    # Load/create CR state
+    model_path, scaler_path, target_scaler_path = _resolve_paths(
+        spec, target_app, target_horizon
+    )
     persisted_history = status.get("historySnapshot") if status else None
     state = _get_or_create_state(
         key,
@@ -273,38 +269,47 @@ def reconcile(spec, status, meta, patch, **kwargs):
         target,
         target_ns,
         max_r,
-        container_name,
-        min_r,
+        config["container_name"],
+        config["min_r"],
         persisted_history,
     )
 
-    # 1. Fetch features from Prometheus (namespace-scoped)
-    # FIX (PR#1): Pass min_r as reference_replicas for stable rps_per_replica calculation
-    # FIX (PR#4): Catch FeatureVectorException instead of silently handling NaN
-    # FIX (PR#9): Also catch PrometheusCircuitBreakerTripped for backoff logic
-    # FIX (PR#18): Pass custom Prometheus URL for multi-region support
-    # FIX (PR#1): Pass CR state for per-CR circuit breaker isolation
+    return config, state
+
+
+def _fetch_and_validate_features(
+    config: dict[str, Any], cr_name: str, cr_ns: str, state: CRState, patch: kopf.Patch, status: dict[str, Any] | None
+) -> tuple[dict[str, Any], int, bool]:
+    """Fetch features from Prometheus and handle failures. Extract feature acquisition and error handling.
+
+    Returns:
+        Tuple of (features dict, current_replicas, should_continue)
+    """
     try:
         features, current_replicas = build_feature_vector(
-            target, target_ns, min_r, max_r, container_name, prom_url, state
+            config["target"],
+            config["target_ns"],
+            config["min_r"],
+            config["max_r"],
+            config["container_name"],
+            config["prom_url"],
+            state,
         )
-        # Track successful cycle for graceful degradation
         state.last_successful_cycle = time.time()
         state.consecutive_failures = 0
         state.last_known_good_replicas = int(current_replicas)
+        return features, int(current_replicas), True
+
     except (FeatureVectorException, PrometheusCircuitBreakerTripped) as e:
-        # Feature extraction failed (Prometheus unavailable, network errors, etc.)
         state.consecutive_failures += 1
-        metric_failures = status.get("metricFailures", 0) + 1
+        metric_failures = (status.get("metricFailures", 0) if status else 0) + 1
         patch.status["metricFailures"] = metric_failures
         patch.status["lastMetricError"] = str(e)
         patch.status["lastMetricErrorTime"] = datetime.now(timezone.utc).isoformat()
 
         logger.error(f"[{cr_name}] Feature extraction failed ({metric_failures}/5): {e}")
 
-        # FIX: Graceful degradation - use fallback scaling if we have recent history
         if state.last_known_good_replicas > 0 and state.consecutive_failures <= 3:
-            # Use last known good state with slight safety margin
             fallback_replicas = state.last_known_good_replicas
             logger.warning(
                 f"[{cr_name}] Using fallback scaling: {fallback_replicas} replicas "
@@ -314,19 +319,16 @@ def reconcile(spec, status, meta, patch, **kwargs):
             patch.status["fallbackReason"] = f"Feature extraction failed: {str(e)[:100]}"
             patch.status["fallbackReplicas"] = fallback_replicas
 
-            # Apply fallback scaling
-            if not observer_mode:
+            if not config["observer_mode"]:
                 logger.info(
-                    f"[{cr_name}] FALLBACK: Scaling {target_ns}/{target} to {fallback_replicas} replicas"
+                    f"[{cr_name}] FALLBACK: Scaling {config['target_ns']}/{config['target']} "
+                    f"to {fallback_replicas} replicas"
                 )
-                scale_deployment(target, fallback_replicas, target_ns)
+                scale_deployment(config["target"], fallback_replicas, config["target_ns"])
 
-            # Don't return - continue with limited functionality
-            # But we can't predict without features, so skip prediction
-            return
+            return {}, 0, False
 
         if metric_failures >= 5:
-            # Circuit breaker: too many consecutive failures
             patch.status["circuitBreakerTripped"] = True
             ppa_circuit_breaker_tripped.labels(cr_name=cr_name, namespace=cr_ns).set(1)
             logger.critical(
@@ -336,48 +338,42 @@ def reconcile(spec, status, meta, patch, **kwargs):
         else:
             ppa_metric_failures.labels(cr_name=cr_name, namespace=cr_ns).set(metric_failures)
 
-        return
+        return {}, 0, False
 
-    # Reset metric failure counters on success
-    patch.status["metricFailures"] = 0
-    patch.status["circuitBreakerTripped"] = False
-    ppa_circuit_breaker_tripped.labels(cr_name=cr_name, namespace=cr_ns).set(0)
-    ppa_metric_failures.labels(cr_name=cr_name, namespace=cr_ns).set(0)
 
-    assert list(features.keys()) == FEATURE_COLUMNS, f"[{cr_name}] Feature vector order mismatch"
+def _update_predictor_state(
+    cr_name: str,
+    cr_ns: str,
+    config: dict[str, Any],
+    state: CRState,
+    features: dict[str, Any],
+    current: int,
+    patch: kopf.Patch,
+) -> bool:
+    """Update predictor history and check readiness. Extract model warmup logic.
 
-    logger.info(
-        f"[{cr_name}] RPS/Pod={features['rps_per_replica']:.1f}  "
-        f"P95={features['latency_p95_ms']:.1f}ms  "
-        f"CPU={features['cpu_utilization_pct']:.1f}%  "
-        f"Replicas={features['replicas_normalized']:.2f} (norm)"
-    )
-
-    # Always publish current replicas so kubectl get ppa shows something
-    current = int(current_replicas)
-    patch.status["currentReplicas"] = current
-    ppa_current_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(current)
-
-    # 2. Feed into predictor
+    Returns:
+        True if predictor is ready for prediction, False otherwise
+    """
     state.predictor.update(features)
     history_len = len(state.predictor.history)
     maxlen = state.predictor.history.maxlen
+
     ppa_warmup_progress.labels(cr_name=cr_name, namespace=cr_ns).set(
         history_len / maxlen if maxlen else 0
     )
     ppa_model_load_failed.labels(cr_name=cr_name, namespace=cr_ns).set(
         1 if state.predictor._load_failed else 0
     )
+    patch.status["currentReplicas"] = current
 
-    # FIX (PR#15): Persist history in CR status for pod restart resilience
-    # Store compact history representation (only if significant change to avoid etcd churn)
-    if history_len >= maxlen * 0.9:  # Only store when nearly full to reduce writes
+    # Persist history for pod restart resilience
+    if maxlen and history_len >= maxlen * 0.9:
         serialized = state.predictor.serialize_history()
         if serialized:
             patch.status["historySnapshot"] = {
                 "steps": len(serialized),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                # Store only the last 30 steps to save space (~5KB instead of ~10KB)
                 "data": serialized[-30:] if len(serialized) > 30 else serialized,
             }
 
@@ -389,60 +385,74 @@ def reconcile(spec, status, meta, patch, **kwargs):
             )
         else:
             logger.info(f"[{cr_name}] Warming up: {history_len}/{maxlen} steps collected")
-        return
+        return False
 
-    # 3. Predict future load
+    logger.info(
+        f"[{cr_name}] RPS/Pod={features['rps_per_replica']:.1f}  "
+        f"P95={features['latency_p95_ms']:.1f}ms  "
+        f"CPU={features['cpu_utilization_pct']:.1f}%  "
+        f"Replicas={features['replicas_normalized']:.2f} (norm)"
+    )
+    return True
+
+
+def _make_scaling_decision(
+    cr_name: str,
+    cr_ns: str,
+    config: dict[str, Any],
+    state: CRState,
+    features: dict[str, Any],
+    current: int,
+    patch: kopf.Patch,
+) -> tuple[int, bool]:
+    """Predict load, check drift, stabilize, and calculate target replicas. Extract scaling logic.
+
+    Returns:
+        Tuple of (desired_replicas, should_apply_scaling)
+    """
     predicted_load = state.predictor.predict()
     logger.info(f"[{cr_name}] Predicted load: {predicted_load:.1f} req/s")
 
-    # Always publish predicted load so status is visible
     patch.status["lastPredictedLoad"] = round(predicted_load, 2)
     ppa_predicted_load_rps.labels(cr_name=cr_name, namespace=cr_ns).set(predicted_load)
 
-    # FIX (PR#12): Track actual RPS and check for concept drift
+    # Track prediction accuracy and check for concept drift
     actual_rps = features.get("requests_per_second", 0.0)
     state.predictor.track_prediction_accuracy(predicted_load, actual_rps)
 
     drift_check = state.predictor.check_concept_drift()
-    if drift_check.get("checked"):
-        if drift_check.get("detected"):
-            ppa_concept_drift_detected.labels(cr_name=cr_name, namespace=cr_ns).set(1)
-            error_pct = drift_check.get("error_pct", 0)
-            ppa_prediction_error_pct.labels(cr_name=cr_name, namespace=cr_ns).set(error_pct)
-            severity = drift_check.get("severity", "unknown")
-            patch.status["conceptDriftDetected"] = True
-            patch.status["driftSeverity"] = severity
-            patch.status["predictionErrorPct"] = round(error_pct, 2)
-            logger.error(
-                f"[{cr_name}] CONCEPT DRIFT ({severity}): "
-                f"Prediction error {error_pct:.1f}% (threshold: 20%). "
-                f"Consider retraining the model."
+    if drift_check.get("checked") and drift_check.get("detected"):
+        error_pct = drift_check.get("error_pct", 0)
+        severity = drift_check.get("severity", "unknown")
+        ppa_concept_drift_detected.labels(cr_name=cr_name, namespace=cr_ns).set(1)
+        ppa_prediction_error_pct.labels(cr_name=cr_name, namespace=cr_ns).set(error_pct)
+        patch.status["conceptDriftDetected"] = True
+        patch.status["driftSeverity"] = severity
+        patch.status["predictionErrorPct"] = round(error_pct, 2)
+        logger.error(
+            f"[{cr_name}] CONCEPT DRIFT ({severity}): "
+            f"Prediction error {error_pct:.1f}% (threshold: 20%). "
+            f"Consider retraining the model."
+        )
+
+        retraining_check = state.predictor.should_trigger_retraining(severity, error_pct)
+        if retraining_check.get("trigger"):
+            patch.status["retrainingRecommended"] = True
+            patch.status["retrainingReason"] = retraining_check.get("reason")
+            logger.critical(
+                f"[{cr_name}] RETRAINING TRIGGERED: {retraining_check.get('reason')}. "
+                f"Please run 'ppa model retrain --app {config['target_app']} "
+                f"--horizon {config['target_horizon']}' or enable auto-retraining in CR spec."
             )
+    else:
+        ppa_concept_drift_detected.labels(cr_name=cr_name, namespace=cr_ns).set(0)
+        patch.status["conceptDriftDetected"] = False
+        patch.status["retrainingRecommended"] = False
 
-            # FIX (PR#16): Check if retraining should be triggered
-            retraining_check = state.predictor.should_trigger_retraining(severity, error_pct)
-            if retraining_check.get("trigger"):
-                patch.status["retrainingRecommended"] = True
-                patch.status["retrainingReason"] = retraining_check.get("reason")
-                logger.critical(
-                    f"[{cr_name}] RETRAINING TRIGGERED: {retraining_check.get('reason')}. "
-                    f"Please run 'ppa model retrain --app {target_app} --horizon {target_horizon}' "
-                    f"or enable auto-retraining in CR spec."
-                )
-        else:
-            ppa_concept_drift_detected.labels(cr_name=cr_name, namespace=cr_ns).set(0)
-            patch.status["conceptDriftDetected"] = False
-            # Clear retraining recommendation if drift clears
-            patch.status["retrainingRecommended"] = False
-
-    # 4. Stabilization — anchored on desired replica count, not raw prediction magnitude.
-    #    Raw RPS changes > 10% every cycle during ramps, causing the old magnitude-based
-    #    check to permanently block scaling. This version counts how many consecutive cycles
-    #    produce the same replica target, which naturally handles trending traffic.
+    # Calculate candidate replicas with safety factor
     state.last_prediction = predicted_load
-
-    # Publish inflated load and raw desired before rate-limiting
-    inflated = predicted_load * safety_factor
+    capacity = config["capacity"] if config["capacity"] is not None else DEFAULT_CAPACITY_PER_POD
+    inflated = predicted_load * config["safety_factor"]
     raw_desired = math.ceil(inflated / capacity) if capacity else current
     ppa_inflated_load_rps.labels(cr_name=cr_name, namespace=cr_ns).set(inflated)
     ppa_raw_desired_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(raw_desired)
@@ -450,49 +460,113 @@ def reconcile(spec, status, meta, patch, **kwargs):
     candidate = calculate_replicas(
         predicted_load,
         current,
-        min_r,
-        max_r,
-        capacity,
-        up_rate,
-        down_rate,
-        safety_factor,
+        config["min_r"],
+        config["max_r"],
+        config["capacity"],
+        config["up_rate"],
+        config["down_rate"],
+        config["safety_factor"],
     )
 
-    # FIX (PR#2): Use tolerance-based stabilization instead of exact match
-    # This handles natural RPS variance (±10-20%) without resetting the counter
+    # Tolerance-based stabilization
     if abs(candidate - state.last_desired) <= STABILIZATION_TOLERANCE:
         state.stable_count += 1
     else:
-        state.stable_count = 1  # start counting from 1 (this cycle counts)
-    state.last_desired = float(candidate)  # Use float for smoother comparison
+        state.stable_count = 1
+
+    state.last_desired = float(candidate)
 
     if state.stable_count < STABILIZATION_STEPS:
         logger.info(
-            f"[{cr_name}] Stabilizing: {state.stable_count}/{STABILIZATION_STEPS} (target: {candidate} replicas, tolerance: ±{STABILIZATION_TOLERANCE})"
+            f"[{cr_name}] Stabilizing: {state.stable_count}/{STABILIZATION_STEPS} "
+            f"(target: {candidate} replicas, tolerance: ±{STABILIZATION_TOLERANCE})"
         )
         patch.status["desiredReplicas"] = candidate
         ppa_desired_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(candidate)
-        return
+        return candidate, False
 
-    # 5. Apply desired replicas (candidate already computed and stabilised)
-    desired = candidate
-    ppa_desired_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(desired)
+    ppa_desired_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(candidate)
+    return candidate, True
+
+
+def _apply_scaling(
+    cr_name: str,
+    cr_ns: str,
+    config: dict[str, Any],
+    state: CRState,
+    desired: int,
+    current: int,
+    patch: kopf.Patch,
+) -> None:
+    """Apply scaling decision to deployment. Extract scaling action logic.
+
+    Args:
+        desired: Target replica count
+        current: Current replica count
+    """
+    patch.status["desiredReplicas"] = desired
 
     if desired != current:
-        if observer_mode:
+        if config["observer_mode"]:
             logger.info(
-                f"[{cr_name}] OBSERVER: would scale {target_ns}/{target}: {current} → {desired} (skipped — observerMode=true)"
+                f"[{cr_name}] OBSERVER: would scale {config['target_ns']}/{config['target']}: "
+                f"{current} → {desired} (skipped — observerMode=true)"
             )
         else:
-            logger.info(f"[{cr_name}] Scaling {target_ns}/{target}: {current} → {desired}")
-            scale_deployment(target, desired, target_ns)
+            logger.info(f"[{cr_name}] Scaling {config['target_ns']}/{config['target']}: {current} → {desired}")
+            scale_deployment(config["target"], desired, config["target_ns"])
             patch.status["lastScaleTime"] = datetime.now(timezone.utc).isoformat()
             ppa_scale_events_total.labels(cr_name=cr_name, namespace=cr_ns).inc()
             state.stable_count = 0
     else:
         logger.info(f"[{cr_name}] No scaling needed: {current} replicas is correct")
 
-    patch.status["desiredReplicas"] = desired
+
+@kopf.timer(
+    "ppa.example.com",
+    "v1",
+    "predictiveautoscalers",
+    interval=TIMER_INTERVAL,
+    initial_delay=INITIAL_DELAY,
+)
+def reconcile(spec, status, meta, patch, **kwargs):
+    """Main control loop — runs every TIMER_INTERVAL seconds per CR.
+
+    Orchestrates: CRD parsing → feature fetching → prediction → scaling decision → apply.
+    """
+    cr_ns = meta.get("namespace", NAMESPACE)
+    cr_name = meta.get("name", "unknown")
+
+    # 1. Parse CRD spec and load CR state
+    config, state = _parse_crd_spec(spec, status, meta, cr_ns, cr_name)
+
+    # 2. Fetch features from Prometheus with error handling
+    features, current, should_continue = _fetch_and_validate_features(
+        config, cr_name, cr_ns, state, patch, status
+    )
+    if not should_continue:
+        return
+
+    # Reset metric failure counters on success
+    patch.status["metricFailures"] = 0
+    patch.status["circuitBreakerTripped"] = False
+    ppa_circuit_breaker_tripped.labels(cr_name=cr_name, namespace=cr_ns).set(0)
+    ppa_metric_failures.labels(cr_name=cr_name, namespace=cr_ns).set(0)
+
+    assert list(features.keys()) == FEATURE_COLUMNS, f"[{cr_name}] Feature vector order mismatch"
+
+    # 3. Update predictor and check readiness
+    ready = _update_predictor_state(cr_name, cr_ns, config, state, features, current, patch)
+    if not ready:
+        return
+
+    # 4. Make scaling decision
+    desired, should_apply = _make_scaling_decision(cr_name, cr_ns, config, state, features, current, patch)
+    if not should_apply:
+        return
+
+    # 5. Apply scaling
+    _apply_scaling(cr_name, cr_ns, config, state, desired, current, patch)
 
 
 @kopf.on.delete("ppa.example.com", "v1", "predictiveautoscalers")
