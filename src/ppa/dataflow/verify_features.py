@@ -5,7 +5,7 @@ from pathlib import Path
 import requests  # type: ignore[import-untyped]
 
 from ppa.common.feature_spec import QUERIED_FEATURES, TEMPORAL_FEATURES
-from ppa.dataflow.config import PROMETHEUS_URL, QUERIES, TARGET_APP
+from ppa.config import PROMETHEUS_URL, QUERIES, TARGET_APP
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:

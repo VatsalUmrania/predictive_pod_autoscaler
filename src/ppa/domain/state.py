@@ -1,0 +1,44 @@
+"""State management for per-CR persistent data.
+
+Moved from operator/main.py (Phase 2 refactoring).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from ppa.operator.predictor import Predictor
+
+
+@dataclass
+class CRState:
+    """Per-CR runtime state.
+    
+    Tracks the predictor, scaling decisions, and circuit breaker state
+    for each PredictiveAutoscaler custom resource.
+    
+    Attributes:
+        predictor: TFLite model + scaler + history for this CR
+        stable_count: Reconciliation cycles with stable replica count
+        last_prediction: Last predicted load value
+        last_desired: Last desired replica count (for stabilization)
+        last_known_good_replicas: Last successful scaling decision
+        last_known_good_prediction: Last successful prediction
+        consecutive_failures: Consecutive reconciliation failures
+        last_successful_cycle: Timestamp of last successful cycle
+        prom_failures: Consecutive Prometheus failures (circuit breaker)
+        prom_last_failure_time: Timestamp of last Prometheus failure
+    """
+
+    predictor: Predictor
+    stable_count: int = 0
+    last_prediction: float = 0.0
+    last_desired: float = -1.0  # Replica target from previous cycle (stabilization anchor)
+    # Graceful degradation tracking
+    last_known_good_replicas: int = 0
+    last_known_good_prediction: float = 0.0
+    consecutive_failures: int = 0
+    last_successful_cycle: float = 0.0
+    # Per-CR circuit breaker state (PR#11)
+    prom_failures: int = 0
+    prom_last_failure_time: float = 0.0

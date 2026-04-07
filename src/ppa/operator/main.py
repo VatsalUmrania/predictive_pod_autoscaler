@@ -6,7 +6,6 @@ import math
 import os
 import threading
 import time
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
@@ -29,12 +28,13 @@ from ppa.config import (
     TIMER_INTERVAL,
     FeatureVectorException,
 )
+from ppa.domain import CRState, calculate_replicas
 from ppa.operator.features import (
     PrometheusCircuitBreakerTripped,
     build_feature_vector,
 )
 from ppa.operator.predictor import Predictor
-from ppa.operator.scaler import calculate_replicas, scale_deployment
+from ppa.operator.scaler import scale_deployment
 
 # ---------------------------------------------------------------------------
 # Prometheus metrics — labelled by cr_name + namespace for multi-CR support
@@ -104,24 +104,6 @@ _start_health_server()
 # Start Prometheus metrics endpoint on port 9100 (separate from healthz on 8080)
 _prom_start_http_server(9100)
 logging.getLogger("ppa.operator").info("Prometheus metrics endpoint listening on :9100/metrics")
-
-
-@dataclass
-class CRState:
-    """Per-CR runtime state."""
-
-    predictor: Predictor
-    stable_count: int = 0
-    last_prediction: float = 0.0
-    last_desired: float = -1.0  # replica target from previous cycle (stabilisation anchor)
-    # FIX: Graceful degradation tracking
-    last_known_good_replicas: int = 0
-    last_known_good_prediction: float = 0.0
-    consecutive_failures: int = 0
-    last_successful_cycle: float = 0.0
-    # FIX (PR#1): Per-CR circuit breaker state (moved from module-level globals)
-    prom_failures: int = 0
-    prom_last_failure_time: float = 0.0
 
 
 # Registry keyed by (cr_namespace, cr_name) to avoid cross-namespace collisions.

@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ppa.common.feature_spec import QUERIED_FEATURES
+
 # ── Global config singleton ──────────────────────────────────────────────────
 _global_config: Config | None = None
 
@@ -129,15 +131,19 @@ class PrometheusConfig:
     """Prometheus connection configuration."""
 
     url: str = "http://prometheus:9090"
-    timeout: int = 2
-    failure_threshold: int = 10
+    timeout_seconds: int = 2
+    query_resolution_seconds: int = 30
+    circuit_breaker_threshold: int = 10
+    circuit_breaker_rest_seconds: int = 60
 
     @classmethod
     def from_env(cls) -> PrometheusConfig:
         return cls(
             url=os.getenv("PROMETHEUS_URL", "http://prometheus:9090"),
-            timeout=int(os.getenv("PROM_TIMEOUT", "2")),
-            failure_threshold=int(os.getenv("PPA_PROM_FAILURE_THRESHOLD", "10")),
+            timeout_seconds=int(os.getenv("PROMETHEUS_TIMEOUT", "2")),
+            query_resolution_seconds=int(os.getenv("QUERY_RESOLUTION_SECONDS", "30")),
+            circuit_breaker_threshold=int(os.getenv("CIRCUIT_BREAKER_THRESHOLD", "10")),
+            circuit_breaker_rest_seconds=int(os.getenv("CIRCUIT_BREAKER_REST_SECONDS", "60")),
         )
 
 
@@ -152,6 +158,8 @@ class OperatorConfig:
     stabilization_tolerance: float = 0.5
     lookback_steps: int = 60
     log_level: str = "INFO"
+    health_port: int = 8080
+    metrics_port: int = 9100
 
     @classmethod
     def from_env(cls) -> OperatorConfig:
@@ -163,6 +171,8 @@ class OperatorConfig:
             stabilization_tolerance=float(os.getenv("PPA_STABILIZATION_TOLERANCE", "0.5")),
             lookback_steps=int(os.getenv("PPA_LOOKBACK_STEPS", "60")),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
+            health_port=int(os.getenv("HEALTH_PORT", "8080")),
+            metrics_port=int(os.getenv("METRICS_PORT", "9100")),
         )
 
 
@@ -379,6 +389,29 @@ def get_banner() -> str:
     return f"[bold cyan]PPA[/] [bold blue]v{__version__}[/] [dim]• Predictive Pod Autoscaler[/]"
 
 
+# ── Dataflow query helpers ───────────────────────────────────────────────────
+# Build Prometheus queries for dataflow/training data collection
+# NOTE: These are moved from dataflow/config.py (Phase 1 consolidation)
+
+def _build_dataflow_queries() -> dict:
+    """Build Prometheus queries for dataflow using centralized config values."""
+    from ppa.common.promql import build_queries as build_ppa_queries
+
+    target_app = os.getenv("TARGET_APP", "test-app")
+    namespace = os.getenv("NAMESPACE", "default")
+    container_name = os.getenv("CONTAINER_NAME", "test-app")
+
+    return build_ppa_queries(target_app, namespace, container_name)
+
+
+# Build queries once at import time (matches dataflow/config.py behavior)
+QUERIES = _build_dataflow_queries()
+REQUIRED_QUERY_FEATURES = list(QUERIED_FEATURES)
+
+# Dataflow-specific constants for backward compatibility
+TARGET_APP = os.getenv("TARGET_APP", "test-app")
+
+
 __all__ = [
     # Singleton functions
     "get_config",
@@ -400,6 +433,10 @@ __all__ = [
     # Theme
     "PPA_THEME",
     "get_banner",
+    # Dataflow queries and constants (Phase 1 consolidation)
+    "QUERIES",
+    "REQUIRED_QUERY_FEATURES",
+    "TARGET_APP",
     # Module-level constants
     "PROMETHEUS_PORT",
     "PROMETHEUS_URL",

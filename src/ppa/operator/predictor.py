@@ -21,6 +21,8 @@ if str(ROOT_DIR) not in sys.path:
 
 logger = logging.getLogger("ppa.predictor")
 
+__all__ = ["Predictor"]
+
 
 class Predictor:
     """Per-CR predictor: loads model + scaler from given paths."""

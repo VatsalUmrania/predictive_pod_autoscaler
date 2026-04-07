@@ -17,7 +17,7 @@ import requests  # type: ignore[import-untyped]
 
 from ppa.common.constants import CAPACITY_PER_POD, GAP_THRESHOLD_MINUTES
 from ppa.common.feature_spec import FEATURE_COLUMNS, QUERIED_FEATURES, TARGET_COLUMNS
-from ppa.dataflow.config import (
+from ppa.config import (
     CONTAINER_NAME,
     NAMESPACE,
     PROMETHEUS_URL,
