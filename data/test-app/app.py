@@ -12,7 +12,7 @@ from prometheus_client import (
     start_http_server,
 )
 
-# ── Metrics ─────────────────────────────────────────────────
+#  Metrics
 REQUEST_COUNT = Counter(
     "http_requests_total",
     "Total HTTP requests",

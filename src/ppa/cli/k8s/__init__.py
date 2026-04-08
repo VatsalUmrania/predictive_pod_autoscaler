@@ -1,9 +1,23 @@
-"""Kubernetes helpers for PPA CLI."""
+"""Kubernetes helpers — re-exported from ppa.cli.utilities.kubernetes for backward compatibility.
 
-from .client import get_apps_v1, get_client, get_core_v1
-from .kubectl import cp, exec_cmd, mkdir, validate_cluster
-from .pod import create_loader_pod, delete_pod, unique_pod_name, wait_for_ready
-from .pvc import ensure_exists
+DEPRECATED: Import directly from ppa.cli.utilities.kubernetes instead:
+    from ppa.cli.utilities.kubernetes import get_client, cp, exec_cmd, mkdir
+"""
+
+from ppa.cli.utilities.kubernetes import (
+    cp,
+    create_loader_pod,
+    delete_pod,
+    ensure_exists,
+    exec_cmd,
+    get_apps_v1,
+    get_client,
+    get_core_v1,
+    mkdir,
+    unique_pod_name,
+    validate_cluster,
+    wait_for_ready,
+)
 
 __all__ = [
     "get_client",

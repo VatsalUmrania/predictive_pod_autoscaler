@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from ppa.common.feature_spec import QUERIED_FEATURES
 
-# ── Global config singleton ──────────────────────────────────────────────────
+# Global config singleton 
 _global_config: Config | None = None
 
 
@@ -41,7 +41,7 @@ def reset_config() -> None:
     _global_config = None
 
 
-# ── Paths (module-level constants for convenience) ────────────────────────────
+#  Paths (module-level constants for convenience)
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 SESSION_FILE = PROJECT_DIR / ".ppa_session"
 
@@ -55,7 +55,7 @@ SCRIPTS_DIR = PROJECT_DIR / "scripts"
 TESTS_DIR = PROJECT_DIR / "tests"
 
 
-# ── Network ports ─────────────────────────────────────────────────────────────
+# Network ports
 PROMETHEUS_PORT = int(os.getenv("PROMETHEUS_PORT", "9090"))
 GRAFANA_PORT = int(os.getenv("GRAFANA_PORT", "3000"))
 APP_PORT = int(os.getenv("APP_PORT", "8080"))
@@ -73,7 +73,7 @@ def get_prometheus_url(cr_spec_url: str | None = None) -> str:
     return PROMETHEUS_URL
 
 
-# ── Minikube defaults ────────────────────────────────────────────────────────
+# Minikube defaults
 MINIKUBE_CPUS = int(os.getenv("MINIKUBE_CPUS", "4"))
 MINIKUBE_MEMORY = int(os.getenv("MINIKUBE_MEMORY", "8192"))
 MINIKUBE_DISK_SIZE = os.getenv("MINIKUBE_DISK_SIZE", "20g")
@@ -94,11 +94,9 @@ def get_minikube_driver() -> str:
         return "docker"
     return ""
 
-
 MINIKUBE_DRIVER = get_minikube_driver()
 
-
-# ── Default values ────────────────────────────────────────────────────────────
+# Default values
 DEFAULT_APP_NAME = os.getenv("PPA_DEFAULT_APP_NAME", "test-app")
 DEFAULT_NAMESPACE = os.getenv("PPA_NAMESPACE", os.getenv("NAMESPACE", "default"))
 DEFAULT_HORIZON = os.getenv("PPA_DEFAULT_HORIZON", "rps_t10m")
@@ -108,7 +106,7 @@ DEFAULT_EPOCHS = int(os.getenv("PPA_EPOCHS", "50"))
 NAMESPACE = "default"
 CONTAINER_NAME = "test-app"
 
-# ── Operator defaults (flat constants for backward compat) ────────────────────
+# Operator defaults (flat constants for backward compat)
 TIMER_INTERVAL = 30
 INITIAL_DELAY = 60
 STABILIZATION_STEPS = 2
@@ -122,9 +120,7 @@ DEFAULT_SCALE_UP_RATE = 2.0
 DEFAULT_SCALE_DOWN_RATE = 0.5
 DEFAULT_MODEL_DIR = "/models"
 
-
-# ── Dataclass configs ─────────────────────────────────────────────────────────
-
+#  Dataclass configs
 
 @dataclass
 class PrometheusConfig:
@@ -293,9 +289,7 @@ class PathsConfig:
             return cls(project_dir=Path(project_dir_str))
         return cls()
 
-
-# ── Root configuration ───────────────────────────────────────────────────────
-
+# Root configuration 
 
 @dataclass
 class Config:
@@ -342,21 +336,17 @@ class Config:
             paths=PathsConfig.from_env(),
         )
 
-
-# ── Exception classes ────────────────────────────────────────────────────────
-
+# Exception classes
 
 class FeatureVectorError(Exception):
     """Raised when feature extraction fails (Prometheus unavailable, network issues, etc.)."""
 
     pass
 
-
 # Backward compatibility alias
 FeatureVectorException = FeatureVectorError
 
-
-# ── Rich theme ───────────────────────────────────────────────────────────────
+#  Rich theme
 
 if TYPE_CHECKING:
     from rich.theme import Theme
@@ -389,7 +379,7 @@ def get_banner() -> str:
     return f"[bold cyan]PPA[/] [bold blue]v{__version__}[/] [dim]• Predictive Pod Autoscaler[/]"
 
 
-# ── Dataflow query helpers ───────────────────────────────────────────────────
+# Dataflow query helpers
 # Build Prometheus queries for dataflow/training data collection
 # NOTE: These are moved from dataflow/config.py (Phase 1 consolidation)
 

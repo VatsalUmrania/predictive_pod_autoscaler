@@ -9,7 +9,7 @@ import yaml
 
 from ppa.cli.core.errors import ConfigError
 
-# ── Config paths ─────────────────────────────────────────────────────────────
+# Config paths
 
 
 def get_cli_config_dir() -> Path:
@@ -24,7 +24,7 @@ def get_cli_config_path() -> Path:
     return get_cli_config_dir() / "cli.yaml"
 
 
-# ── Config dataclass ────────────────────────────────────────────────────────
+# Config dataclass
 
 
 @dataclass
@@ -61,7 +61,7 @@ class CLIConfig:
         return asdict(self)
 
 
-# ── Config I/O ───────────────────────────────────────────────────────────────
+# Config I/O
 
 
 def load_cli_config(path: Path | None = None) -> CLIConfig:

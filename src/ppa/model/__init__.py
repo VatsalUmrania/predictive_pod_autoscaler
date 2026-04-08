@@ -6,6 +6,8 @@ Use: pip install tensorflow
 
 try:
     from ppa.model.convert import convert_model
+    from ppa.model.deployment import patch_predictiveautoscaler_paths
+    from ppa.model.model_qualifier import load_json, should_promote
     from ppa.model.train import (
         LOOKBACK_STEPS,
         create_dataset_from_segments,
@@ -18,6 +20,9 @@ except ImportError:
     create_dataset_from_segments = None  # type: ignore[assignment]
     LOOKBACK_STEPS = None  # type: ignore[assignment]
     convert_model = None  # type: ignore[assignment]
+    should_promote = None  # type: ignore[assignment]
+    load_json = None  # type: ignore[assignment]
+    patch_predictiveautoscaler_paths = None  # type: ignore[assignment]
     _TENSORFLOW_AVAILABLE = False
 
 try:
@@ -48,4 +53,7 @@ __all__ = [
     "compute_scaling_stats",
     "rps_to_replicas",
     "convert_model",
+    "should_promote",
+    "load_json",
+    "patch_predictiveautoscaler_paths",
 ]

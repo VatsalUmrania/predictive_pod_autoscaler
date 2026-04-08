@@ -74,9 +74,7 @@ def print_command_help(
             console.print(f"  • {tip}", style="dim")
         console.print()
 
-
-# ── Command-specific guides ──────────────────────────────────────────────────
-
+#  Command-specific guides 
 
 def help_startup() -> None:
     """Help for 'ppa startup' command."""
@@ -330,9 +328,7 @@ def help_operator() -> None:
         ],
     )
 
-
-# ── Help command dispatcher ──────────────────────────────────────────────────
-
+# Help command dispatcher
 
 COMMAND_HELP_MAP = {
     "startup": help_startup,

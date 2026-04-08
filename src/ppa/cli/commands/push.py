@@ -10,7 +10,7 @@ from pathlib import Path
 
 import typer
 
-from ppa.cli.k8s import (
+from ppa.cli.utilities.kubernetes import (
     cp,
     create_loader_pod,
     delete_pod,

@@ -17,7 +17,9 @@ from pathlib import Path
 
 from ppa.common.feature_spec import TARGET_COLUMNS
 from ppa.model.convert import convert_model
+from ppa.model.deployment import patch_predictiveautoscaler_paths
 from ppa.model.evaluate import evaluate_model
+from ppa.model.model_qualifier import load_json as _load_json, should_promote
 from ppa.model.train import LOOKBACK_STEPS, train_model
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -25,58 +27,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 
-def _load_json(path: str) -> dict[str, object] | None:
-    if not path or not os.path.exists(path):
-        return None
-    with open(path) as f:
-        return json.load(f)  # type: ignore[no-any-return]
-
-
-def should_promote(
-    champion_metrics: dict | None,
-    challenger_metrics: dict,
-    metric: str = "smape",
-    gate_threshold: float = 35.0,
-    min_relative_improvement: float = 0.02,
-    max_underprov_regression: float = 1.0,
-) -> tuple[bool, str]:
-    """Decide if challenger should replace champion.
-
-    Rules:
-      1) challenger metric must pass gate_threshold
-      2) if no champion exists -> promote (bootstrap)
-      3) challenger must improve metric by min_relative_improvement
-      4) challenger must not worsen ppa_under_prov_pct beyond max_underprov_regression
-    """
-    challenger_metric = float(challenger_metrics.get(metric, float("inf")))
-    if challenger_metric > gate_threshold:
-        return (
-            False,
-            f"challenger failed gate: {metric}={challenger_metric:.2f} > {gate_threshold:.2f}",
-        )
-
-    if champion_metrics is None:
-        return True, "no champion found (bootstrap promotion)"
-
-    champion_metric = float(champion_metrics.get(metric, float("inf")))
-    rel_improve = (champion_metric - challenger_metric) / max(abs(champion_metric), 1e-9)
-    if rel_improve < min_relative_improvement:
-        return False, (
-            f"insufficient improvement: {metric} {champion_metric:.2f} -> {challenger_metric:.2f} "
-            f"({rel_improve * 100:.2f}% < {min_relative_improvement * 100:.2f}%)"
-        )
-
-    champion_under = float(champion_metrics.get("ppa_under_prov_pct", 0.0))
-    challenger_under = float(challenger_metrics.get("ppa_under_prov_pct", 0.0))
-    if (challenger_under - champion_under) > max_underprov_regression:
-        return False, (
-            f"under-provisioning regression too high: {champion_under:.2f}% -> {challenger_under:.2f}%"
-        )
-
-    return True, (
-        f"better {metric}: {champion_metric:.2f} -> {challenger_metric:.2f} "
-        f"and under-provisioning acceptable"
-    )
+# These functions are now in model_qualifier.py and deployment.py
 
 
 def promote_artifacts(
@@ -119,45 +70,8 @@ def promote_artifacts(
     }
 
 
-def patch_predictiveautoscaler_paths(
-    cr_name: str,
-    cr_namespace: str,
-    model_path: str,
-    scaler_path: str,
-    target_scaler_path: str | None,
-) -> tuple[bool, str]:
-    """Patch PredictiveAutoscaler spec paths via kubectl."""
-    spec = {
-        "modelPath": model_path,
-        "scalerPath": scaler_path,
-    }
-    if target_scaler_path:
-        spec["targetScalerPath"] = target_scaler_path
 
-    patch_payload = json.dumps({"spec": spec})
-    cmd = [
-        "kubectl",
-        "-n",
-        cr_namespace,
-        "patch",
-        "predictiveautoscaler",
-        cr_name,
-        "--type",
-        "merge",
-        "-p",
-        patch_payload,
-    ]
-
-    try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        return True, result.stdout.strip() or "patched"
-    except FileNotFoundError:
-        return False, "kubectl not found"
-    except subprocess.CalledProcessError as exc:
-        stderr = (exc.stderr or "").strip()
-        stdout = (exc.stdout or "").strip()
-        return False, stderr or stdout or f"kubectl patch failed: code {exc.returncode}"
-
+# patch_predictiveautoscaler_paths is now in deployment.py
 
 def run_pipeline(
     app_name: str,

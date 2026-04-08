@@ -1,10 +1,8 @@
-"""PPA CLI core infrastructure — re-exported from ppa.cli.utilities for backward compatibility.
+"""CLI utilities: error handling, progress tracking, validation, and K8s integration.
 
-DEPRECATED: Import directly from ppa.cli.utilities instead:
-    from ppa.cli.utilities import Progress, PPAError, validate_kubernetes_connection
+Consolidates all CLI helper modules in one place for easier navigation and imports.
 """
 
-from ppa.cli.core.config import CLIConfig, load_cli_config, save_cli_config
 from ppa.cli.utilities.errors import (
     ConfigError,
     KubernetesError,
@@ -25,21 +23,18 @@ from ppa.cli.utilities.validators import (
 
 __all__ = [
     "PPAError",
-    "ValidationError",
     "ConfigError",
     "KubernetesError",
     "PrometheusError",
-    "validate_app_name",
-    "validate_namespace",
-    "validate_horizon",
-    "validate_filepath",
-    "validate_kubernetes_connection",
-    "validate_prometheus_connection",
-    "CLIConfig",
-    "load_cli_config",
-    "save_cli_config",
-    "suggest_fix",
-    "format_error_with_suggestion",
+    "ValidationError",
     "Progress",
     "spinner",
+    "format_error_with_suggestion",
+    "suggest_fix",
+    "validate_app_name",
+    "validate_filepath",
+    "validate_horizon",
+    "validate_kubernetes_connection",
+    "validate_namespace",
+    "validate_prometheus_connection",
 ]
