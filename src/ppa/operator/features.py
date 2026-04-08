@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import cast
 
 import numpy as np
-import requests  # type: ignore[import-untyped]
+import requests
 
 from ppa.common.feature_spec import FEATURE_COLUMNS
 from ppa.common.promql import build_fallback_queries, build_queries
@@ -43,7 +43,7 @@ if str(ROOT_DIR) not in sys.path:
 logger = logging.getLogger("ppa.features")
 
 
-def _validate_critical_metrics(values: dict) -> None:
+def _validate_critical_metrics(values: dict[str, float | None]) -> None:
     """Validate that critical metrics are available (not None).
 
     Raises FeatureVectorException if cpu/memory utilization or critical features missing.
@@ -76,10 +76,10 @@ def _validate_critical_metrics(values: dict) -> None:
 
 
 def _normalize_metrics(
-    values: dict,
+    values: dict[str, float | None],
     reference_replicas: int,
     max_replicas: int,
-) -> dict:
+) -> dict[str, float | None]:
     """Normalize metrics for LSTM input.
 
     Converts RPS to per-replica and normalizes replica count to [0,1].
@@ -92,20 +92,21 @@ def _normalize_metrics(
     Returns:
         Updated values dict with normalized metrics
     """
-    rps = values.get("requests_per_second", 0.0)  # type: ignore[assignment]
-    if math.isnan(rps):  # type: ignore[arg-type]
+    rps_value = values.get("requests_per_second", 0.0)
+    rps = rps_value if rps_value is not None else 0.0
+    if math.isnan(rps):
         rps = 0.0
 
     # FIX: Use reference_replicas (stable) instead of current_replicas (volatile)
     # This ensures the feature has consistent meaning across scale events
     stable_ref = max(reference_replicas, 1)  # Clamp to 1 to avoid division by zero
-    values["rps_per_replica"] = rps / stable_ref  # type: ignore[operator]
-    values["replicas_normalized"] = values["current_replicas"] / float(max_replicas)  # type: ignore[operator]
+    values["rps_per_replica"] = rps / stable_ref
+    values["replicas_normalized"] = values["current_replicas"] / float(max_replicas)
 
     return values
 
 
-def _add_temporal_features(values: dict) -> dict:
+def _add_temporal_features(values: dict[str, float | None]) -> dict[str, float | None]:
     """Add time-based features for seasonality.
 
     Computes sin/cos of hour and day-of-week for cyclic encoding.
@@ -219,7 +220,10 @@ def build_feature_vector(
         if v is None and k not in critical_features:
             values[k] = float("nan")
 
-    current_replicas = values.get("current_replicas", float("nan"))  # type: ignore[assignment]
+    current_replicas_value = values.get("current_replicas")
+    current_replicas: float = (
+        current_replicas_value if isinstance(current_replicas_value, float) else float("nan")
+    )
 
     # Step 4: Normalize metrics for LSTM
     values = _normalize_metrics(values, reference_replicas, max_replicas)
@@ -234,7 +238,7 @@ def build_feature_vector(
     if oob:
         logger.info(f"Clipped {len(oob)} out-of-bounds features")
 
-    return final_features, float(current_replicas)  # type: ignore[arg-type]
+    return final_features, current_replicas
 
 
 def prom_range_query(query: str, step_seconds: int = 30, hours: int = 1) -> dict[float, float]:
@@ -298,26 +302,27 @@ def build_historical_features(
         if feature_name in ["cpu_acceleration", "rps_acceleration"]:
             continue  # Skip acceleration (derived later)
 
-        ts_data = prom_range_query(query, step_seconds=step_seconds, hours=int(max(hours, 1)))  # type: ignore[arg-type]
+        hours_int = int(max(hours, 1.0))
+        ts_data = prom_range_query(query, step_seconds=step_seconds, hours=hours_int)
         if not ts_data and feature_name == "cpu_utilization_pct":
             logger.warning("No CPU limits, trying fallback cpu_core_percent")
             ts_data = prom_range_query(
                 fallbacks["cpu_core_percent"],
                 step_seconds=step_seconds,
-                hours=int(max(hours, 1)),  # type: ignore[arg-type]
+                hours=hours_int,
             )
         if not ts_data and feature_name == "memory_utilization_pct":
             logger.warning("No memory limits, trying fallback memory_usage_bytes")
             ts_data = prom_range_query(
                 fallbacks["memory_usage_bytes"],
                 step_seconds=step_seconds,
-                hours=int(max(hours, 1)),  # type: ignore[arg-type]
+                hours=hours_int,
             )
 
         metric_timeseries[feature_name] = ts_data
 
     # Align all timeseries to the same set of timestamps (use rps_per_second as anchor, or any queried metric)
-    all_timestamps: set[float] = set()  # type: ignore[var-annotated]
+    all_timestamps: set[float] = set()
     for ts_data in metric_timeseries.values():
         all_timestamps.update(ts_data.keys())
 

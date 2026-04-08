@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 from datetime import datetime
+from typing import cast
 
 from rich.console import Console
 from rich.panel import Panel
@@ -164,7 +165,7 @@ def wait_for_pods(label: str, namespace: str = "default", timeout: int = 120) ->
 
 def query_prometheus(query: str, url: str = PROMETHEUS_URL) -> str | None:
     """Run an instant query against Prometheus. Returns the scalar value or None."""
-    import requests  # type: ignore[import-untyped]
+    import requests
 
     try:
         resp = requests.get(
@@ -235,7 +236,8 @@ def save_session(pids: dict[str, int]) -> None:
         if "pids" not in data:
             data["pids"] = {}
 
-        data["pids"].update(pids)  # type: ignore[attr-defined,index]
+        pids_dict = cast(dict[str, object], data["pids"])
+        pids_dict.update(pids)
 
         with open(SESSION_FILE, "w") as f:
             json.dump(data, f, indent=2)
@@ -249,7 +251,7 @@ def load_session() -> dict[str, object]:
         return {}
     try:
         with open(SESSION_FILE) as f:
-            data = json.load(f)
+            data = cast(dict[str, object], json.load(f))
 
         # Migration: if data is a flat dict of PIDs, move to "pids" key
         if data and "pids" not in data:
@@ -258,7 +260,7 @@ def load_session() -> dict[str, object]:
             meta = {k: v for k, v in data.items() if k in ["updated_at", "start_time"]}
             data = {"pids": pids, **meta}
 
-        return data  # type: ignore[no-any-return]
+        return data
     except Exception:
         return {}
 
@@ -266,13 +268,13 @@ def load_session() -> dict[str, object]:
 def cleanup_session() -> None:
     """Kill all tracked PIDs and remove session file."""
     session = load_session()
-    pids = session.get("pids", {})  # type: ignore[attr-defined]
+    pids = cast(dict[str, int], session.get("pids", {}))
     if not pids:
         info("No active PPA session found.")
         return
 
     heading("Cleaning up PPA Session")
-    for name, pid in pids.items():  # type: ignore[attr-defined]
+    for name, pid in pids.items():
         try:
             if sys.platform == "win32":
                 result = subprocess.run(

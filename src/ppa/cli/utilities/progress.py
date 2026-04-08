@@ -58,12 +58,12 @@ class Progress:
                 self._task_id,
                 advance=advance,
                 description=description or self.description,
-            )  # type: ignore
+            )
 
     def set_total(self, total: float) -> None:
         """Set total steps (useful after creating with indeterminate progress)."""
         if self._progress and self._task_id is not None:
-            self._progress.update(self._task_id, total=total)  # type: ignore
+            self._progress.update(self._task_id, total=total)
 
 # Spinner context manager
 

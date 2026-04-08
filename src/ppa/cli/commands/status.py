@@ -51,7 +51,7 @@ def _check_pod_status(label: str, namespace: str = DEFAULT_NAMESPACE) -> tuple[b
 
 def _check_port(port: int) -> bool:
     """Check if a local port is responding."""
-    import requests  # type: ignore[import-untyped]
+    import requests
 
     try:
         requests.get(f"http://localhost:{port}", timeout=0.5)
@@ -201,9 +201,6 @@ def status(ctx: typer.Context) -> None:
     console.print(crs)
 
     # Summary logic (remain same but more compact)
-    mk_running = (
-        "[success]✓[/success]" in infra.renderable.columns[1]._cells[0]  # type: ignore[union-attr,index]
-    )  # Very crude check, maybe keep original logic
     # Re-run quick checks for summary
     mk_running = run_cmd_silent(["minikube", "status"], check=False).returncode == 0
     prom_ok = prometheus_ready()

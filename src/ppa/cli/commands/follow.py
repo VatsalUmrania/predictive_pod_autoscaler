@@ -26,7 +26,7 @@ app = typer.Typer(rich_markup_mode="rich", invoke_without_command=True)
 
 
 def _check_port(port: int) -> bool:
-    import requests  # type: ignore[import-untyped]
+    import requests
 
     try:
         requests.get(f"http://localhost:{port}", timeout=0.5)

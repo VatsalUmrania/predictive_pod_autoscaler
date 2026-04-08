@@ -2,7 +2,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import requests  # type: ignore[import-untyped]
+import requests
 
 from ppa.common.feature_spec import QUERIED_FEATURES, TEMPORAL_FEATURES
 from ppa.config import PROMETHEUS_URL, QUERIES, TARGET_APP

@@ -8,9 +8,14 @@ import time
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import joblib
 import numpy as np
+
+if TYPE_CHECKING:
+    import ai_edge_litert as tflite
+    from sklearn.preprocessing import StandardScaler
 
 from ppa.common.feature_spec import FEATURE_COLUMNS, NUM_FEATURES
 from ppa.config import LOOKBACK_STEPS
@@ -32,11 +37,11 @@ class Predictor:
         self.scaler_path = scaler_path
         self.target_scaler_path = target_scaler_path
         self.history: deque = deque(maxlen=LOOKBACK_STEPS)
-        self.interpreter: object | None = None  # type: ignore[assignment]
-        self.scaler: object | None = None  # type: ignore[assignment]
-        self.target_scaler: object | None = None  # type: ignore[assignment]
-        self.input_details: object | None = None  # type: ignore[assignment]
-        self.output_details: object | None = None  # type: ignore[assignment]
+        self.interpreter: tflite.Interpreter | None = None
+        self.scaler: StandardScaler | None = None
+        self.target_scaler: StandardScaler | None = None
+        self.input_details: list[dict[str, int]] | None = None
+        self.output_details: list[dict[str, int]] | None = None
         self._load_failed = False
         # FIX (PR#10): Add exponential backoff for model reload failures
         self._load_failures = 0
@@ -238,25 +243,25 @@ class Predictor:
             return 0.0
 
         window = np.array(self.history, dtype=np.float32)[-self.lookback :]
-        scaled = self.scaler.transform(window)  # type: ignore[union-attr]
+        scaled = self.scaler.transform(window)
         input_data = scaled.reshape(1, self.lookback, NUM_FEATURES).astype(np.float32)
 
         # FIX (PR#13): Track inference latency
         start_time = time.time()
-        self.interpreter.set_tensor(self.input_details[0]["index"], input_data)  # type: ignore[union-attr,index]
-        self.interpreter.invoke()  # type: ignore[union-attr]
+        self.interpreter.set_tensor(self.input_details[0]["index"], input_data)
+        self.interpreter.invoke()
         inference_time = (time.time() - start_time) * 1000  # Convert to milliseconds
 
         if inference_time > 100:  # >100ms is concerning
             logger.warning(f"Slow inference: {inference_time:.1f}ms (expected <100ms)")
 
-        output = self.interpreter.get_tensor(self.output_details[0]["index"])  # type: ignore[union-attr,index]
+        output = self.interpreter.get_tensor(self.output_details[0]["index"])
 
         predicted_scaled = float(output[0][0])
 
         # Inverse-transform model output using target scaler
         if self.target_scaler is not None:
-            result = self.target_scaler.inverse_transform(np.array([[predicted_scaled]]))  # type: ignore[attr-defined]
+            result = self.target_scaler.inverse_transform(np.array([[predicted_scaled]]))
             predicted_rps = result[0, 0]
         else:
             # Legacy fallback: model was trained without target scaling

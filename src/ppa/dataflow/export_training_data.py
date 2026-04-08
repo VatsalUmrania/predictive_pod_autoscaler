@@ -9,11 +9,11 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
-import requests  # type: ignore[import-untyped]
+import requests
 
 from ppa.common.constants import CAPACITY_PER_POD, GAP_THRESHOLD_MINUTES
 from ppa.common.feature_spec import FEATURE_COLUMNS, QUERIED_FEATURES, TARGET_COLUMNS
@@ -68,7 +68,7 @@ def _align_query_window(
     return aligned_start, aligned_end
 
 
-def _fetch_chunk(query: str, start: datetime, end: datetime, step: str) -> list:
+def _fetch_chunk(query: str, start: datetime, end: datetime, step: str) -> list[dict[str, Any]]:
     """Fetch a single time range chunk from Prometheus. Returns raw values list."""
     params: dict[str, str | float] = {
         "query": query,
@@ -88,7 +88,7 @@ def _fetch_chunk(query: str, start: datetime, end: datetime, step: str) -> list:
     data = payload.get("data", {}).get("result", [])
     if not data:
         return []
-    return data[0]["values"]  # type: ignore[no-any-return]
+    return data[0].get("values", [])
 
 
 def _align_series_to_expected_index(
@@ -460,14 +460,15 @@ def print_dataset_health(health: dict[str, object]) -> None:
     print(f"Segments         : {health['segment_count']}")
     if health["max_gap"]:
         print(f"Max time gap     : {health['max_gap']}")
-    if health["date_range"]["start"]:  # type: ignore[index]
+    date_range = cast(dict[str, object], health.get("date_range", {}))
+    if date_range and date_range.get("start"):
         print(
-            f"Date range       : {health['date_range']['start']} -> {health['date_range']['end']}"  # type: ignore[index]
+            f"Date range       : {date_range['start']} -> {date_range['end']}"
         )
-    missing_required = health.get("missing_required_values", {})  # type: ignore[index,arg-type]
+    missing_required = cast(dict[str, object], health.get("missing_required_values", {}))
     if missing_required:
         print("Missing required :")
-        for feature_name, count in sorted(missing_required.items()):  # type: ignore[index,attr-defined]
+        for feature_name, count in sorted(missing_required.items()):
             print(f"  - {feature_name}: {count}")
     print(f"{'=' * 50}")
 

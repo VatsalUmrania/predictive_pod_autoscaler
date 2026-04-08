@@ -5,7 +5,7 @@ Handles decision-making for model promotion from experimental to production.
 
 import json
 import os
-from typing import Any
+from typing import Any, cast
 
 
 def load_json(path: str) -> dict[str, object] | None:
@@ -13,7 +13,7 @@ def load_json(path: str) -> dict[str, object] | None:
     if not path or not os.path.exists(path):
         return None
     with open(path) as f:
-        return json.load(f)  # type: ignore[no-any-return]
+        return cast(dict[str, object], json.load(f))
 
 
 def should_promote(

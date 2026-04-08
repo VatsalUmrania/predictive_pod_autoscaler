@@ -13,6 +13,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import cast
 
 import joblib
 import keras as _keras
@@ -82,7 +83,7 @@ def compute_rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 def rps_to_replicas(rps: np.ndarray, capacity: float, min_r: int, max_r: int) -> np.ndarray:
     """Convert RPS values to replica counts (ceil division, clamped)."""
     replicas = np.ceil(rps / capacity).astype(int)
-    return np.clip(replicas, min_r, max_r)  # type: ignore[no-any-return]
+    return cast(np.ndarray, np.clip(replicas, min_r, max_r))
 
 
 def compute_scaling_stats(

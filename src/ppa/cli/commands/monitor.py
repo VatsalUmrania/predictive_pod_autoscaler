@@ -10,6 +10,7 @@ import os
 import tempfile
 import time
 from datetime import datetime
+from typing import cast
 
 import typer
 from rich.align import Align
@@ -81,7 +82,7 @@ def _get_predicted_rps_from_logs() -> str:
             parts = line.split("Predicted load:")
             if len(parts) > 1:
                 try:
-                    return parts[1].strip().split()[0]  # type: ignore[no-any-return]
+                    return cast(str, parts[1].strip().split()[0])
                 except (IndexError, ValueError):
                     pass
     return "?"

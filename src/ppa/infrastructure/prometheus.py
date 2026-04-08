@@ -13,7 +13,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 
-import requests  # type: ignore[import-untyped]
+import requests
 
 from ppa.config import PROM_FAILURE_THRESHOLD, PROMETHEUS_URL, FeatureVectorError
 
@@ -109,8 +109,10 @@ def _get_circuit_breaker(cr_state: object | None) -> tuple[int, float]:
         PrometheusCircuitBreakerError: Raised when circuit is open
         PR#11: Circuit breaker design doc
     """
-    if cr_state is not None and hasattr(cr_state, 'prom_failures'):
-        return cr_state.prom_failures, cr_state.prom_last_failure_time  # type: ignore[attr-defined]
+    # Use duck typing: if cr_state has the required attributes, use it
+    # This supports both CRState and test mocks with the same attributes
+    if cr_state is not None and hasattr(cr_state, 'prom_failures') and hasattr(cr_state, 'prom_last_failure_time'):
+        return cr_state.prom_failures, cr_state.prom_last_failure_time  # type: ignore[union-attr]
     return _prom_consecutive_failures, _prom_last_failure_time
 
 
@@ -141,11 +143,15 @@ def _set_circuit_breaker(cr_state: object | None, failures: int, last_time: floa
     See Also:
         _get_circuit_breaker: Retrieve circuit breaker state
     """
-    if cr_state is not None and hasattr(cr_state, 'prom_failures'):
-        cr_state.prom_failures = failures  # type: ignore[attr-defined]
-        cr_state.prom_last_failure_time = last_time  # type: ignore[attr-defined]
+    global _prom_consecutive_failures, _prom_last_failure_time
+    
+    # Use duck typing: if cr_state has the required attributes, use it
+    # This supports both CRState and test mocks with the same attributes
+    if cr_state is not None and hasattr(cr_state, 'prom_failures') and hasattr(cr_state, 'prom_last_failure_time'):
+        cr_state.prom_failures = failures  # type: ignore[union-attr]
+        cr_state.prom_last_failure_time = last_time  # type: ignore[union-attr]
     else:
-        global _prom_consecutive_failures, _prom_last_failure_time
+        # Fallback to module-level state for backward compatibility
         _prom_consecutive_failures = failures
         _prom_last_failure_time = last_time
 

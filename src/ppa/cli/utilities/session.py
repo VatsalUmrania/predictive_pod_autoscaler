@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from rich.console import Console
 from rich.progress import (
@@ -62,7 +62,8 @@ def save_session(pids: dict[str, int]) -> None:
         if "pids" not in data:
             data["pids"] = {}
 
-        data["pids"].update(pids)
+        pids_dict = cast(dict[str, object], data["pids"])
+        pids_dict.update(pids)
 
         with open(SESSION_FILE, "w") as f:
             json.dump(data, f, indent=2)
@@ -90,7 +91,7 @@ def load_session() -> dict[str, object]:
         return {}
     try:
         with open(SESSION_FILE) as f:
-            data = json.load(f)
+            data = cast(dict[str, object], json.load(f))
 
         # Migration: if data is a flat dict of PIDs, move to "pids" key
         if data and "pids" not in data:
@@ -99,7 +100,7 @@ def load_session() -> dict[str, object]:
             meta = {k: v for k, v in data.items() if k in ["updated_at", "start_time"]}
             data = {"pids": pids, **meta}
 
-        return data  # type: ignore[no-any-return]
+        return data
     except Exception:
         return {}
 
@@ -119,14 +120,14 @@ def cleanup_session() -> None:
         [success] Stopped grafana
     """
     session = load_session()
-    pids = session.get("pids", {})
+    pids = cast(dict[str, int], session.get("pids", {}))
     if not pids:
         info("No active PPA session found.")
         return
 
     heading("Cleaning up PPA Session")
     non_existent_pids = set()
-    for name, pid in pids.items():  # type: ignore[attr-defined] # noqa: PERF203
+    for name, pid in pids.items():  # noqa: PERF203
         try:
             if sys.platform == "win32":
                 result = subprocess.run(
@@ -203,7 +204,7 @@ def get_live_progress_callback(
 
     cons = console_instance or console
 
-    class LiveProgressCallback(keras.callbacks.Callback):  # type: ignore[misc]
+    class LiveProgressCallback(keras.callbacks.Callback):
         def __init__(self) -> None:
             super().__init__()
             self.live = None
@@ -213,20 +214,20 @@ def get_live_progress_callback(
             self.latest_metrics = {}
             self.current_epoch = None
 
-        def on_train_begin(self, logs=None):  # type: ignore[no-untyped-def] # noqa: ARG002
+        def on_train_begin(self, logs=None):  # noqa: ARG002
             """Handle training start event."""
             # Get total epochs and steps per epoch from Keras params
             self.total_epochs = self.params.get("epochs", 1)
             self.total_steps = self.params.get("steps", 1)
 
-        def on_epoch_begin(self, epoch, logs=None):  # type: ignore[no-untyped-def] # noqa: ARG002
+        def on_epoch_begin(self, epoch, logs=None):  # noqa: ARG002
             """Handle epoch start event."""
             self.current_epoch = epoch + 1
 
-            class BlockBarColumn(ProgressColumn):  # type: ignore[name-defined,misc]
+            class BlockBarColumn(ProgressColumn):
                 """Custom progress column with block characters."""
 
-                def render(self, task):  # type: ignore[no-untyped-def]
+                def render(self, task):
                     """Render block-style progress bar."""
                     completed = int((task.percentage or 0) / 100 * 40)
                     remaining = 40 - completed
@@ -260,7 +261,7 @@ def get_live_progress_callback(
             )
             self.live.start()
 
-        def on_batch_end(self, batch, logs=None):  # type: ignore[no-untyped-def]
+        def on_batch_end(self, batch, logs=None):
             """Handle batch end event."""
             logs = logs or {}
             loss = logs.get('loss', 0.0)
@@ -277,7 +278,7 @@ def get_live_progress_callback(
             if self.progress:
                 self.progress.update(self.task_id, completed=steps_done)
 
-        def on_epoch_end(self, epoch, logs=None):  # type: ignore[no-untyped-def]
+        def on_epoch_end(self, epoch, logs=None):
             """Handle epoch end event."""
             if self.live:
                 from contextlib import suppress
