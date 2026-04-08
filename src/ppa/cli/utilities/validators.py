@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ppa.cli.core.errors import KubernetesError, PrometheusError, ValidationError
+from ppa.cli.utilities.errors import KubernetesError, PrometheusError, ValidationError
 
 # Regex patterns
 

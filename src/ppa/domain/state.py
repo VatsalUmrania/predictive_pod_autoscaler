@@ -6,8 +6,10 @@ Moved from operator/main.py (Phase 2 refactoring).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from ppa.operator.predictor import Predictor
+if TYPE_CHECKING:
+    from ppa.operator.predictor import Predictor
 
 
 @dataclass
@@ -30,7 +32,7 @@ class CRState:
         prom_last_failure_time: Timestamp of last Prometheus failure
     """
 
-    predictor: Predictor
+    predictor: "Predictor"
     stable_count: int = 0
     last_prediction: float = 0.0
     last_desired: float = -1.0  # Replica target from previous cycle (stabilization anchor)

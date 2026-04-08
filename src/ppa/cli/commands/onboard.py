@@ -52,7 +52,7 @@ def onboard(
     output_dir = DEPLOY_DIR / "generated-manifests" / app_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Config banner ─────────────────────────────────────────────────
+    # Config banner
     config_table = Table(show_header=False, border_style="bright_magenta", padding=(0, 2))
     config_table.add_column("Key", style="info")
     config_table.add_column("Value")
@@ -74,7 +74,7 @@ def onboard(
         )
     )
 
-    # ── Generate manifests ────────────────────────────────────────────
+    # Generate manifests
     horizons = [
         ("rps_t3m", True, "Observer"),
         ("rps_t5m", True, "Observer"),
@@ -125,7 +125,7 @@ def onboard(
     console.print()
     console.print(results_table)
 
-    # ── Apply manifests ───────────────────────────────────────────────
+    # Apply manifests
     if not dry_run:
         console.print()
         info("Applying manifests...")

@@ -13,7 +13,6 @@ from ppa.cli.utils import console
 
 # Progress wrapper
 
-
 class Progress:
     """Wrapper around Rich progress with PPA theming."""
 
@@ -66,9 +65,7 @@ class Progress:
         if self._progress and self._task_id is not None:
             self._progress.update(self._task_id, total=total)  # type: ignore
 
-
 # Spinner context manager
-
 
 @contextmanager
 def spinner(text: str = "Working") -> Generator[None, None, None]:

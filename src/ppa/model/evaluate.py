@@ -43,9 +43,7 @@ def asymmetric_huber(y_true, y_pred):  # noqa: F811
     huber = tf.where(abs_err <= delta, 0.5 * tf.square(error), delta * (abs_err - 0.5 * delta))
     return tf.reduce_mean(weight * huber)
 
-
-# ── Metric helpers ──────────────────────────────────────────────────────────
-
+# Metric helpers
 
 def compute_mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     """Mean Absolute Percentage Error (%), ignoring near-zero actuals."""
@@ -79,9 +77,7 @@ def compute_mae(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 def compute_rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
 
-
-# ── HPA comparison helpers ──────────────────────────────────────────────────
-
+# HPA comparison helpers 
 
 def rps_to_replicas(rps: np.ndarray, capacity: float, min_r: int, max_r: int) -> np.ndarray:
     """Convert RPS values to replica counts (ceil division, clamped)."""
@@ -110,9 +106,7 @@ def compute_scaling_stats(
         f"{label}_wasted_capacity_avg": float(np.mean(np.maximum(over, 0))),
     }
 
-
-# ── Plotting ────────────────────────────────────────────────────────────────
-
+# Plotting
 
 def _load_pyplot():
     """Return matplotlib.pyplot configured for headless use, or None if unavailable."""
@@ -198,9 +192,7 @@ def plot_ppa_vs_hpa(
     print(f"  Plot saved → {output_path}")
     return True
 
-
-# ── Main evaluation ────────────────────────────────────────────────────────
-
+# Main evaluation
 
 def evaluate_model(
     model_path: str,

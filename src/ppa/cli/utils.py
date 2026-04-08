@@ -16,11 +16,10 @@ from rich.table import Table
 
 from ppa.config import PPA_THEME, PROMETHEUS_URL, SESSION_FILE
 
-# ── Singleton Console ────────────────────────────────────────────────────────
+# Singleton Console
 console = Console(theme=PPA_THEME, highlight=False)
 
-
-# ── Styled output helpers ────────────────────────────────────────────────────
+# Styled output helpers
 
 
 def success(msg: str) -> None:
@@ -54,9 +53,7 @@ def step_heading(step_num: int, total: int, title: str) -> None:
         )
     )
 
-
-# ── Subprocess helpers ───────────────────────────────────────────────────────
-
+# Subprocess helpers
 
 def run_cmd(
     cmd: list[str] | str,
@@ -163,9 +160,7 @@ def wait_for_pods(label: str, namespace: str = "default", timeout: int = 120) ->
     warn("Timeout — check pods manually")
     return False
 
-
-# ── Prometheus helpers ───────────────────────────────────────────────────────
-
+# Prometheus helpers
 
 def query_prometheus(query: str, url: str = PROMETHEUS_URL) -> str | None:
     """Run an instant query against Prometheus. Returns the scalar value or None."""
@@ -197,9 +192,7 @@ def prometheus_ready(url: str = PROMETHEUS_URL) -> bool:
     except Exception:
         return False
 
-
-# ── Table builder helper ─────────────────────────────────────────────────────
-
+# Table builder helper
 
 def build_kv_table(
     title: str, data: dict[str, str], key_style: str = "info", val_style: str = ""
@@ -229,9 +222,7 @@ def get_minikube_docker_env() -> dict[str, str]:
             env_vars[key.strip()] = value.strip().strip('"').strip("'")
     return env_vars
 
-
-# ── Session Management ───────────────────────────────────────────────────────
-
+# Session Management
 
 def save_session(pids: dict[str, int]) -> None:
     """Save background process PIDs and metadata to session file."""

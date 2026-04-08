@@ -9,9 +9,7 @@ from __future__ import annotations
 import typer
 
 from ppa.cli.core.config import CLIConfig, load_cli_config
-from ppa.cli.core.errors import PPAError
-from ppa.cli.core.progress import Progress, spinner
-from ppa.cli.core.suggestions import format_error_with_suggestion
+from ppa.cli.utilities import PPAError, Progress, spinner, format_error_with_suggestion
 from ppa.cli.utils import console, error, info, success, warn
 
 
@@ -56,7 +54,7 @@ class BaseCommand:
         """Pre-flight validation hook. Override in subclasses."""
         pass
 
-    # ── Output helpers ──────────────────────────────────────────────────────
+    # Output helpers
 
     def success(self, msg: str) -> None:
         """Print success message."""
@@ -83,11 +81,11 @@ class BaseCommand:
         """Print info message."""
         info(msg)
 
-    # ── Validation helpers ──────────────────────────────────────────────────
+    # Validation helpers
 
     def validate_kubernetes(self) -> None:
         """Validate kubectl can connect to cluster."""
-        from ppa.cli.core.validators import validate_kubernetes_connection
+        from ppa.cli.utilities import validate_kubernetes_connection
 
         try:
             with spinner("Checking Kubernetes connectivity..."):
@@ -99,7 +97,7 @@ class BaseCommand:
 
     def validate_prometheus(self) -> None:
         """Validate Prometheus is accessible."""
-        from ppa.cli.core.validators import validate_prometheus_connection
+        from ppa.cli.utilities import validate_prometheus_connection
 
         try:
             with spinner("Checking Prometheus connectivity..."):
@@ -109,7 +107,7 @@ class BaseCommand:
             self.error(f"Prometheus validation failed: {e}")
             raise
 
-    # ── Progress helpers ────────────────────────────────────────────────────
+    # Progress helpers
 
     def progress(self, description: str = "Working", total: float | None = None) -> Progress:
         """Create progress tracker.
@@ -141,7 +139,7 @@ class BaseCommand:
         """
         return spinner(text)
 
-    # ── Error handling ──────────────────────────────────────────────────────
+    # Error handling
 
     def handle_error(self, exc: Exception, user_input: str | None = None) -> None:
         """Handle error with optional suggestion.

@@ -40,7 +40,7 @@ from ppa.config import (
     PROMETHEUS_PORT,
 )
 
-# ── Security constants ───────────────────────────────────────────────────────
+# Security constants
 GIT_CLONE_TIMEOUT = 120
 
 GIT_URL_PATTERN = re.compile(
@@ -53,7 +53,7 @@ SHELL_INJECTION_CHARS = {';', '|', '&', '$', '`', '\n', '\x00'}
 # Global to store app_path between steps
 _app_path: Path | None = None
 
-# ── Validation ───────────────────────────────────────────────────────────────
+# Validation
 
 
 def validate_git_url(url: str) -> bool:
@@ -122,7 +122,7 @@ def get_app_path(app_arg: str | None) -> Path | None:
     return app_path
 
 
-# ── Step metadata ────────────────────────────────────────────────────────────
+# Step metadata
 
 
 def get_step_2_description() -> str:
@@ -145,7 +145,7 @@ STEPS: list[tuple[int, str, str | Callable[[], str]]] = [
 ]
 
 
-# ── Step implementations ─────────────────────────────────────────────────────
+# Step implementations
 
 
 def step_1_prerequisites() -> None:
@@ -402,7 +402,7 @@ def step_11_chaos() -> None:
     success("Chaos profiling started (runs in background)")
 
 
-# ── Step registry ────────────────────────────────────────────────────────────
+# Step registry
 
 STEP_FUNCS: dict[int, Callable[[], None]] = {
     1: step_1_prerequisites,

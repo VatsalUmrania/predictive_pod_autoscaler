@@ -6,7 +6,7 @@ from ppa.cli.startup import print_startup_screen
 from ppa.cli.utils import console
 from ppa.config import get_banner
 
-# ── Root app ─────────────────────────────────────────────────────────────────
+#  Root app
 app = typer.Typer(
     name="ppa",
     help="[bold blue]Predictive Pod Autoscaler (PPA)[/] • Intelligent Kubernetes Scaling.",
@@ -16,9 +16,7 @@ app = typer.Typer(
     add_completion=True,
 )
 
-
-# ── Callbacks ────────────────────────────────────────────────────────────────
-
+#  Callbacks 
 
 def _version_callback(value: bool) -> None:
     if value:
@@ -86,8 +84,7 @@ def guide_cmd(
 
     print_help_for_command(command)
 
-
-# ── Subcommand groups ────────────────────────────────────────────────────────
+# Subcommand groups
 # Each command module creates its own Typer app; we import and register them here.
 
 from ppa.cli.commands.data import app as data_app  # noqa: E402
