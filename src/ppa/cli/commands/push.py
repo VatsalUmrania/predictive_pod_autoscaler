@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import signal
 import sys
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -34,6 +36,8 @@ from ppa.config import CHAMPION_DIR, PROJECT_DIR, TRAINING_DATA_DIR
 
 app = typer.Typer(rich_markup_mode="rich")
 
+logger = logging.getLogger(__name__)
+
 PVC_NAME = os.getenv("PPA_MODELS_PVC", "ppa-models")
 IMAGE = os.getenv("PPA_LOADER_IMAGE", "python:3.11-slim")
 
@@ -59,6 +63,83 @@ class PushResult:
     horizons_pushed: list[str] = field(default_factory=list)
     horizons_skipped: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+
+
+def _resolve_source_artifacts(
+    app_name: str, horizon: str
+) -> tuple[Path | None, Path | None, str | None]:
+    """Resolve model and metadata artifacts from champion or pipeline output directories."""
+    source_roots = [
+        (
+            CHAMPION_DIR / app_name / horizon,
+            "champion",
+            [
+                CHAMPION_DIR / app_name / horizon / "ppa_model_metadata.json",
+                CHAMPION_DIR / app_name / horizon / f"ppa_model_{horizon}_metadata.json",
+                PROJECT_DIR / "model" / "artifacts" / f"ppa_model_{horizon}_metadata.json",
+                PROJECT_DIR / "model" / "artifacts" / "ppa_model_metadata.json",
+                PROJECT_DIR / "data" / "artifacts" / f"ppa_model_{horizon}_metadata.json",
+                PROJECT_DIR / "data" / "artifacts" / "ppa_model_metadata.json",
+            ],
+        ),
+        (
+            PROJECT_DIR / "model" / "artifacts",
+            "model/artifacts",
+            [
+                PROJECT_DIR / "model" / "artifacts" / f"ppa_model_{horizon}_metadata.json",
+                PROJECT_DIR / "model" / "artifacts" / "ppa_model_metadata.json",
+                PROJECT_DIR / "data" / "artifacts" / f"ppa_model_{horizon}_metadata.json",
+                PROJECT_DIR / "data" / "artifacts" / "ppa_model_metadata.json",
+            ],
+        ),
+        (
+            PROJECT_DIR / "data" / "artifacts",
+            "data/artifacts",
+            [
+                PROJECT_DIR / "data" / "artifacts" / f"ppa_model_{horizon}_metadata.json",
+                PROJECT_DIR / "data" / "artifacts" / "ppa_model_metadata.json",
+            ],
+        ),
+    ]
+
+    for root_dir, source_label, metadata_candidates in source_roots:
+        model_candidates = [
+            root_dir / "ppa_model.tflite",
+            root_dir / f"ppa_model_{horizon}.tflite",
+        ]
+
+        model_path = next((candidate for candidate in model_candidates if candidate.exists()), None)
+        if model_path is None:
+            continue
+
+        # FIX (PR#17): Validate model file format before pushing
+        if not _validate_tflite_model(model_path):
+            warn(f"Skipping {horizon}: model file invalid TFLite format")
+            continue
+
+        metadata_path = next(
+            (candidate for candidate in metadata_candidates if candidate.exists()), None
+        )
+        return model_path, metadata_path, source_label
+
+    return None, None, None
+
+
+def _validate_tflite_model(model_path: Path) -> bool:
+    """
+    Validate that a file is a valid TFLite model.
+
+    Returns True if valid, False otherwise.
+    """
+    try:
+        with open(model_path, "rb") as f:
+            # TFLite files have "TFL3" at offset 4
+            f.seek(4)
+            magic = f.read(4)
+            return magic == b"TFL3"
+    except Exception as e:
+        logger.warning(f"Failed to validate model {model_path}: {e}")
+        return False
 
 
 def push_models(
@@ -90,9 +171,11 @@ def push_models(
     info(f"PVC: {pvc_name}")
 
     for h in horizons:
-        model_file = CHAMPION_DIR / app_name / h / "ppa_model.tflite"
-        if model_file.exists():
+        model_file, _, source_label = _resolve_source_artifacts(app_name, h)
+        if model_file is not None:
             result.horizons_pushed.append(h)
+            if source_label:
+                info(f"Using {source_label} artifacts for {h}")
         else:
             result.horizons_skipped.append(h)
             warn(f"Skipping {h}: no model")
@@ -163,17 +246,40 @@ def push_models(
         cp(str(regen_script), f"{namespace}/{pod_name}:/tmp/regenerate.py")
         info("Regeneration script copied")
 
-        remote_dirs = [f"/models/{app_name}/{h}" for h in result.horizons_pushed]
+        remote_dirs = [f"/models/{h}" for h in result.horizons_pushed]
         mkdir(pod_path, *remote_dirs)
         info("Directories created")
 
         for h in result.horizons_pushed:
-            model_file = CHAMPION_DIR / app_name / h / "ppa_model.tflite"
+            model_file, metadata_file, _ = _resolve_source_artifacts(app_name, h)
+            if model_file is None:
+                warn(f"Skipping {h}: no source artifact found during push")
+                continue
+
+            local_dir = CHAMPION_DIR / app_name / h
+            local_dir.mkdir(parents=True, exist_ok=True)
+
+            if model_file != local_dir / "ppa_model.tflite":
+                shutil.copy2(model_file, local_dir / "ppa_model.tflite")
+
             cp(
-                str(model_file),
-                f"{namespace}/{pod_name}:/models/{app_name}/{h}/ppa_model.tflite",
+                str(local_dir / "ppa_model.tflite"),
+                f"{namespace}/{pod_name}:/models/{h}/ppa_model.tflite",
             )
             info(f"Copied {h}/ppa_model.tflite")
+
+            if metadata_file is not None:
+                canonical_metadata = local_dir / "ppa_model_metadata.json"
+                if metadata_file != canonical_metadata:
+                    shutil.copy2(metadata_file, canonical_metadata)
+
+                cp(
+                    str(canonical_metadata),
+                    f"{namespace}/{pod_name}:/models/{h}/ppa_model_metadata.json",
+                )
+                info(f"Copied {h}/ppa_model_metadata.json")
+            else:
+                warn(f"Skipping {h}: no metadata found")
 
         cp(data_csv, f"{namespace}/{pod_name}:/tmp/training_data.csv")
         info("Training data copied")
@@ -206,7 +312,7 @@ def push_models(
 
             for fname in ["scaler.pkl", "target_scaler.pkl"]:
                 cp(
-                    f"{namespace}/{pod_name}:/models/{app_name}/{h}/{fname}",
+                    f"{namespace}/{pod_name}:/models/{h}/{fname}",
                     str(local_dir / fname),
                 )
 
