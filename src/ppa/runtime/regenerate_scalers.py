@@ -57,12 +57,19 @@ def regenerate_all(app_name: str, horizons: list[str], csv_path: str) -> dict:
 
 def _regenerate_single(app_name: str, horizon: str, df: pd.DataFrame) -> bool:
     """Regenerate scalers for a single horizon."""
-    base_dir = Path(f"/models/{app_name}/{horizon}")
-
+    # Try both directory structures:
+    # 1. Old: /models/app_name/horizon/
+    # 2. New (from push.py): /models/horizon/
+    base_dir = Path(f"/models/{horizon}")
     tflite = base_dir / "ppa_model.tflite"
+
     if not tflite.exists():
-        log.warning(f"Skipping {horizon}: no .tflite")
-        return False
+        # Try old structure
+        base_dir = Path(f"/models/{app_name}/{horizon}")
+        tflite = base_dir / f"ppa_model_{horizon}.tflite"
+        if not tflite.exists():
+            log.warning(f"Skipping {horizon}: no .tflite found at {base_dir}")
+            return False
 
     base_dir.mkdir(parents=True, exist_ok=True)
 
@@ -83,6 +90,7 @@ def _regenerate_single(app_name: str, horizon: str, df: pd.DataFrame) -> bool:
         target_scaler = MinMaxScaler()
         target_scaler.fit(df_clean[[horizon]].values)
 
+        # Save with consistent names (scaler.pkl, target_scaler.pkl)
         joblib.dump(scaler, base_dir / "scaler.pkl", protocol=2)
         joblib.dump(target_scaler, base_dir / "target_scaler.pkl", protocol=2)
 
