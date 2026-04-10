@@ -19,6 +19,11 @@ if TYPE_CHECKING:
 
 from ppa.common.feature_spec import FEATURE_COLUMNS, NUM_FEATURES
 from ppa.config import LOOKBACK_STEPS
+from ppa.operator.diagnostics import (
+    check_tflite_runtime,
+    validate_model_files,
+    diagnose_model_load_issue,
+)
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -135,83 +140,95 @@ class Predictor:
             # FIX (PR#7): Load and validate metadata before loading model
             self._load_and_validate_metadata()
 
-            # Try lightweight ai-edge-litert first, then tensorflow.lite, then tflite_runtime
+            # Try lightweight LiteRT first, then tensorflow.lite, then tflite_runtime.
             interpreter_loaded = False
+            loader_attempts = []
             for loader_name, loader_fn in [
                 (
                     "ai_edge_litert",
-                    lambda: (
-                        __import__(
-                            "ai_edge_litert.interpreter", fromlist=["Interpreter"]
-                        ).Interpreter
-                    ),
+                    lambda: _load_ai_edge_litert_interpreter(),
                 ),
                 ("tensorflow.lite", lambda: __import__("tensorflow").lite.Interpreter),
                 (
                     "tflite_runtime",
-                    lambda: (
-                        __import__(
-                            "tflite_runtime.interpreter", fromlist=["Interpreter"]
-                        ).Interpreter
+                    lambda: getattr(
+                        __import__("tflite_runtime.interpreter", fromlist=["Interpreter"]),
+                        "Interpreter",
                     ),
                 ),
             ]:
                 try:
                     interpreter_class = loader_fn()
+                    logger.debug(
+                        f"Attempting to load model via {loader_name} with path: {self.model_path}"
+                    )
                     self.interpreter = interpreter_class(model_path=self.model_path)
                     self.interpreter.allocate_tensors()
                     logger.info(f"Model loaded via {loader_name}")
                     interpreter_loaded = True
                     break
                 except Exception as exc:
-                    logger.debug(f"{loader_name} failed: {exc}")
+                    error_msg = f"{loader_name}: {type(exc).__name__}: {str(exc)}"
+                    loader_attempts.append(error_msg)
+                    logger.debug(error_msg)
                     continue
 
             if not interpreter_loaded:
-                raise RuntimeError(
-                    "No TFLite runtime found (tried ai_edge_litert, tensorflow.lite, tflite_runtime)"
-                )
+                detailed_errors = "\n  ".join(loader_attempts)
+                # FIX (PR#20): Run comprehensive diagnostics on first load failure
+                if self._load_failures == 1:
+                    logger.warning("First load failure detected - running diagnostics...")
+                    try:
+                        diagnostic_report = diagnose_model_load_issue(
+                            self.model_path, self.scaler_path, self.target_scaler_path
+                        )
+                        logger.error(f"Diagnostic Report: {diagnostic_report}")
+                    except Exception as diag_exc:
+                        logger.warning(f"Diagnostics failed: {diag_exc}")
 
+                raise RuntimeError(f"No TFLite runtime found. Attempted:\n  {detailed_errors}")
+
+            # Load scaler
+            try:
+                logger.debug(f"Loading scaler from: {self.scaler_path}")
+                self.scaler = joblib.load(self.scaler_path)
+                logger.info(f"Scaler loaded: {self.scaler_path}")
+            except Exception as e:
+                logger.warning(f"Failed to load scaler: {e}")
+                import traceback
+
+                logger.warning(f"Scaler traceback: {traceback.format_exc()}")
+                self.scaler = None
+
+            # Load target scaler (optional)
+            if self.target_scaler_path:
+                try:
+                    logger.debug(f"Loading target scaler from: {self.target_scaler_path}")
+                    self.target_scaler = joblib.load(self.target_scaler_path)
+                    logger.info(f"Target scaler loaded: {self.target_scaler_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to load target scaler: {e}")
+                    import traceback
+
+                    logger.warning(f"Target scaler traceback: {traceback.format_exc()}")
+                    self.target_scaler = None
+
+            # Get input and output tensor details
+            logger.debug("Getting tensor details...")
             self.input_details = self.interpreter.get_input_details()
             self.output_details = self.interpreter.get_output_details()
+            logger.info("All components loaded successfully")
 
-            # Detect lookback from input tensor shape: (batch, lookback, features)
-            input_shape = self.input_details[0]["shape"]
-            self.lookback = input_shape[1]
-            logger.info(f"Detected model lookback: {self.lookback}")
+        except Exception as e:
+            import traceback
 
-            # Re-initialize history with the detected lookback
-            self.history = deque(maxlen=self.lookback)
-
-            self.scaler = joblib.load(self.scaler_path)
-
-            # Target scaler: inverse-transforms model output [0,1] → raw RPS
-            self.target_scaler = None
-            if self.target_scaler_path:
-                self.target_scaler = joblib.load(self.target_scaler_path)
-                logger.info(f"Loaded target scaler from {self.target_scaler_path}")
-
-            logger.info(f"Loaded model from {self.model_path}, scaler from {self.scaler_path}")
-            self._load_failed = False
-            self._load_failures = 0  # Reset on success
-        except Exception as exc:
-            logger.error(f"Failed to load model/scaler: {exc}")
+            logger.error(f"Failed to load model/scaler: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            self._load_failed = True
+            self._load_failures += 1
             self.interpreter = None
             self.scaler = None
             self.target_scaler = None
-            self._load_failed = True
-            self._load_failures += 1
-            if self._load_failures > 10:
-                logger.critical(f"Model failed to load {self._load_failures} times, giving up")
-
-    def paths_match(
-        self, model_path: str, scaler_path: str, target_scaler_path: str | None = None
-    ) -> bool:
-        return (
-            self.model_path == model_path
-            and self.scaler_path == scaler_path
-            and self.target_scaler_path == target_scaler_path
-        )
 
     def copy_history(self) -> list:
         """Return a copy of current history for preservation during model upgrade (PR#5)."""
@@ -441,3 +458,16 @@ class Predictor:
         self._retraining_triggered = False
         self._severe_drift_start_time = None
         logger.info("Retraining flag reset - monitoring resumed")
+
+
+def _load_ai_edge_litert_interpreter():
+    """Load the LiteRT interpreter from the most common import locations."""
+    try:
+        from ai_edge_litert.interpreter import Interpreter
+
+        return Interpreter
+    except Exception:
+        # Fallback: try direct import
+        from ai_edge_litert import Interpreter
+
+        return Interpreter
