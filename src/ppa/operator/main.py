@@ -14,13 +14,13 @@ import kopf
 from prometheus_client import Counter, Gauge
 from prometheus_client import start_http_server as _prom_start_http_server
 
-from ppa.common.feature_spec import FEATURE_COLUMNS
 from ppa.config import (
     DEFAULT_CAPACITY_PER_POD,
     DEFAULT_MIN_REPLICAS,
     DEFAULT_MODEL_DIR,
     DEFAULT_SCALE_DOWN_RATE,
     DEFAULT_SCALE_UP_RATE,
+    FEATURE_COLUMNS,
     INITIAL_DELAY,
     NAMESPACE,
     STABILIZATION_STEPS,
@@ -111,20 +111,55 @@ _cr_state: dict[tuple[str, str], CRState] = {}
 
 
 def _resolve_paths(spec: dict, target_app: str, target_horizon: str) -> tuple[str, str, str | None]:
-    """Compute model + scaler + target_scaler paths from CRD spec, falling back to convention."""
+    """Compute model + scaler + target_scaler paths from CRD spec, falling back to convention.
+
+    Tries multiple path structures for backward compatibility:
+    1. New structure: /models/{horizon}/ppa_model.tflite
+    2. Old structure: /models/{app_name}/{horizon}/ppa_model.tflite
+    """
     model_dir = DEFAULT_MODEL_DIR
-    model_path = spec.get("modelPath") or os.path.join(
-        model_dir, target_app, target_horizon, "ppa_model.tflite"
-    )
-    scaler_path = spec.get("scalerPath") or os.path.join(
-        model_dir, target_app, target_horizon, "scaler.pkl"
-    )
-    # Target scaler is optional (backward compat with models trained without it)
-    target_scaler_path = spec.get("targetScalerPath") or os.path.join(
+
+    # Try new structure first
+    new_model_path = os.path.join(model_dir, target_horizon, "ppa_model.tflite")
+    new_scaler_path = os.path.join(model_dir, target_horizon, "scaler.pkl")
+    new_target_scaler_path = os.path.join(model_dir, target_horizon, "target_scaler.pkl")
+
+    # Try old structure
+    old_model_path = os.path.join(model_dir, target_app, target_horizon, "ppa_model.tflite")
+    old_scaler_path = os.path.join(model_dir, target_app, target_horizon, "scaler.pkl")
+    old_target_scaler_path = os.path.join(
         model_dir, target_app, target_horizon, "target_scaler.pkl"
     )
+
+    # Check spec overrides first
+    if spec.get("modelPath"):
+        model_path = spec["modelPath"]
+        scaler_path = spec.get("scalerPath") or os.path.join(
+            os.path.dirname(model_path), "scaler.pkl"
+        )
+        target_scaler_path = spec.get("targetScalerPath") or os.path.join(
+            os.path.dirname(model_path), "target_scaler.pkl"
+        )
+    # Then check new structure
+    elif os.path.exists(new_model_path):
+        model_path = new_model_path
+        scaler_path = new_scaler_path
+        target_scaler_path = new_target_scaler_path
+    # Then check old structure
+    elif os.path.exists(old_model_path):
+        model_path = old_model_path
+        scaler_path = old_scaler_path
+        target_scaler_path = old_target_scaler_path
+    # Default to new structure (will fail gracefully at load time)
+    else:
+        model_path = new_model_path
+        scaler_path = new_scaler_path
+        target_scaler_path = new_target_scaler_path
+
+    # Target scaler is optional (backward compat with models trained without it)
     if not os.path.exists(target_scaler_path):
         target_scaler_path = None
+
     return model_path, scaler_path, target_scaler_path
 
 
@@ -133,6 +168,7 @@ def _get_or_create_state(
     model_path: str,
     scaler_path: str,
     target_scaler_path: str | None = None,
+    config: dict[str, Any] | None = None,
     target_app: str = "",
     target_ns: str = "",
     max_r: int = 1,
@@ -148,6 +184,7 @@ def _get_or_create_state(
     """
     existing = _cr_state.get(key)
     if existing and existing.predictor.paths_match(model_path, scaler_path, target_scaler_path):
+        existing.observer_mode = bool((config or {}).get("observer_mode", False))
         return existing
 
     if existing:
@@ -166,12 +203,16 @@ def _get_or_create_state(
 
         # Update state in-place (don't create new CRState)
         existing.predictor = new_predictor
+        existing.observer_mode = bool((config or {}).get("observer_mode", False))
 
         logger.info(f"Restored {history_len}/{60} history steps to new model")
         return existing
 
     # First time: create new state
-    state = CRState(predictor=Predictor(model_path, scaler_path, target_scaler_path))
+    state = CRState(
+        predictor=Predictor(model_path, scaler_path, target_scaler_path),
+        observer_mode=bool((config or {}).get("observer_mode", False)),
+    )
 
     # FIX (PR#15): Restore history from CR status if available (pod restart resilience)
     if persisted_history and persisted_history.get("data"):
@@ -196,7 +237,11 @@ def _get_or_create_state(
 
 
 def _parse_crd_spec(
-    spec: dict[str, Any], status: dict[str, Any] | None, meta: dict[str, Any], cr_ns: str, cr_name: str
+    spec: dict[str, Any],
+    status: dict[str, Any] | None,
+    meta: dict[str, Any],
+    cr_ns: str,
+    cr_name: str,
 ) -> tuple[dict[str, Any], CRState]:
     """Parse CRD spec into config and load/create CR state. Extract state management logic.
 
@@ -231,23 +276,26 @@ def _parse_crd_spec(
 
     # Detect multiple CRs managing the same deployment
     key = (cr_ns, cr_name)
-    same_target_crs = [k for k in _cr_state.keys() if k != key]
-    if len(same_target_crs) > 0 and cr_name != "single-ppa-controller":
+    active_peer_crs = [k for k, state in _cr_state.items() if k != key and not state.observer_mode]
+    if (
+        len(active_peer_crs) > 0
+        and cr_name != "single-ppa-controller"
+        and not config["observer_mode"]
+    ):
         logger.warning(
             f"[{cr_name}] Multiple CRs detected in system. Ensure only ONE CR manages "
             f"target {target_ns}/{target} to avoid scaling oscillations."
         )
 
     # Load/create CR state
-    model_path, scaler_path, target_scaler_path = _resolve_paths(
-        spec, target_app, target_horizon
-    )
+    model_path, scaler_path, target_scaler_path = _resolve_paths(spec, target_app, target_horizon)
     persisted_history = status.get("historySnapshot") if status else None
     state = _get_or_create_state(
         key,
         model_path,
         scaler_path,
         target_scaler_path,
+        config,
         target,
         target_ns,
         max_r,
@@ -260,7 +308,12 @@ def _parse_crd_spec(
 
 
 def _fetch_and_validate_features(
-    config: dict[str, Any], cr_name: str, cr_ns: str, state: CRState, patch: kopf.Patch, status: dict[str, Any] | None
+    config: dict[str, Any],
+    cr_name: str,
+    cr_ns: str,
+    state: CRState,
+    patch: kopf.Patch,
+    status: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], int, bool]:
     """Fetch features from Prometheus and handle failures. Extract feature acquisition and error handling.
 
@@ -495,7 +548,9 @@ def _apply_scaling(
                 f"{current} → {desired} (skipped — observerMode=true)"
             )
         else:
-            logger.info(f"[{cr_name}] Scaling {config['target_ns']}/{config['target']}: {current} → {desired}")
+            logger.info(
+                f"[{cr_name}] Scaling {config['target_ns']}/{config['target']}: {current} → {desired}"
+            )
             scale_deployment(config["target"], desired, config["target_ns"])
             patch.status["lastScaleTime"] = datetime.now(timezone.utc).isoformat()
             ppa_scale_events_total.labels(cr_name=cr_name, namespace=cr_ns).inc()
@@ -543,7 +598,9 @@ def reconcile(spec, status, meta, patch, **kwargs):
         return
 
     # 4. Make scaling decision
-    desired, should_apply = _make_scaling_decision(cr_name, cr_ns, config, state, features, current, patch)
+    desired, should_apply = _make_scaling_decision(
+        cr_name, cr_ns, config, state, features, current, patch
+    )
     if not should_apply:
         return
 
