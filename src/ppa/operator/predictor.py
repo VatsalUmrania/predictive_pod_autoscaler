@@ -136,10 +136,16 @@ class Predictor:
                 return  # Don't retry yet, still in backoff period
 
         self._last_load_attempt = time.time()
+
+        # GRANULAR ERROR TRACKING: Track which step fails
+        load_step = "initialization"
         try:
+            load_step = "metadata_validation"
             # FIX (PR#7): Load and validate metadata before loading model
             self._load_and_validate_metadata()
+            logger.info(f"✓ {load_step} succeeded")
 
+            load_step = "interpreter_load"
             # Try lightweight LiteRT first, then tensorflow.lite, then tflite_runtime.
             interpreter_loaded = False
             loader_attempts = []
@@ -163,8 +169,9 @@ class Predictor:
                         f"Attempting to load model via {loader_name} with path: {self.model_path}"
                     )
                     self.interpreter = interpreter_class(model_path=self.model_path)
+                    logger.debug(f"Interpreter instantiated via {loader_name}")
                     self.interpreter.allocate_tensors()
-                    logger.info(f"Model loaded via {loader_name}")
+                    logger.info(f"✓ {load_step} succeeded via {loader_name}")
                     interpreter_loaded = True
                     break
                 except Exception as exc:
@@ -189,10 +196,11 @@ class Predictor:
                 raise RuntimeError(f"No TFLite runtime found. Attempted:\n  {detailed_errors}")
 
             # Load scaler
+            load_step = "scaler_load"
             try:
                 logger.debug(f"Loading scaler from: {self.scaler_path}")
                 self.scaler = joblib.load(self.scaler_path)
-                logger.info(f"Scaler loaded: {self.scaler_path}")
+                logger.info(f"✓ {load_step} succeeded: {self.scaler_path}")
             except Exception as e:
                 logger.warning(f"Failed to load scaler: {e}")
                 import traceback
@@ -201,11 +209,12 @@ class Predictor:
                 self.scaler = None
 
             # Load target scaler (optional)
+            load_step = "target_scaler_load"
             if self.target_scaler_path:
                 try:
                     logger.debug(f"Loading target scaler from: {self.target_scaler_path}")
                     self.target_scaler = joblib.load(self.target_scaler_path)
-                    logger.info(f"Target scaler loaded: {self.target_scaler_path}")
+                    logger.info(f"✓ {load_step} succeeded: {self.target_scaler_path}")
                 except Exception as e:
                     logger.warning(f"Failed to load target scaler: {e}")
                     import traceback
@@ -214,21 +223,43 @@ class Predictor:
                     self.target_scaler = None
 
             # Get input and output tensor details
+            load_step = "tensor_details"
             logger.debug("Getting tensor details...")
-            self.input_details = self.interpreter.get_input_details()
-            self.output_details = self.interpreter.get_output_details()
+            try:
+                self.input_details = self.interpreter.get_input_details()
+                logger.debug(f"Input details retrieved: {len(self.input_details)} tensors")
+                self.output_details = self.interpreter.get_output_details()
+                logger.debug(f"Output details retrieved: {len(self.output_details)} tensors")
+                logger.info(f"✓ {load_step} succeeded")
+            except Exception as e:
+                logger.error(f"Failed to get tensor details: {e}")
+                import traceback
+
+                logger.error(f"Tensor details traceback: {traceback.format_exc()}")
+                raise
+
             logger.info("All components loaded successfully")
 
         except Exception as e:
             import traceback
 
-            logger.error(f"Failed to load model/scaler: {e}")
+            logger.error(f"Failed at step '{load_step}': {e}")
             logger.error(f"Traceback: {traceback.format_exc()}")
             self._load_failed = True
             self._load_failures += 1
             self.interpreter = None
             self.scaler = None
             self.target_scaler = None
+
+    def paths_match(
+        self, model_path: str, scaler_path: str, target_scaler_path: str | None = None
+    ) -> bool:
+        """Check if model paths match current paths (used to detect model upgrades)."""
+        return (
+            self.model_path == model_path
+            and self.scaler_path == scaler_path
+            and self.target_scaler_path == target_scaler_path
+        )
 
     def copy_history(self) -> list:
         """Return a copy of current history for preservation during model upgrade (PR#5)."""
