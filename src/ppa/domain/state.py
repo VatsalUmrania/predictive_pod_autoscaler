@@ -15,10 +15,10 @@ if TYPE_CHECKING:
 @dataclass
 class CRState:
     """Per-CR runtime state.
-    
+
     Tracks the predictor, scaling decisions, and circuit breaker state
     for each PredictiveAutoscaler custom resource.
-    
+
     Attributes:
         predictor: TFLite model + scaler + history for this CR
         observer_mode: Whether this CR is shadow-only and must not scale
@@ -46,3 +46,13 @@ class CRState:
     # Per-CR circuit breaker state (PR#11)
     prom_failures: int = 0
     prom_last_failure_time: float = 0.0
+    # Phase 3: Artifact loading and state observability
+    artifact_load_failures: int = (
+        0  # Consecutive artifact availability failures (resets on success)
+    )
+    using_legacy_artifacts: bool = (
+        False  # Flag to track when legacy paths are in use (sticky on upgrade)
+    )
+    predictor_missing_logged: bool = (
+        False  # Prevent log spam when predictor is None (transition-based)
+    )

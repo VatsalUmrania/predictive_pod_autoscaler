@@ -145,26 +145,63 @@ _cr_state: dict[tuple[str, str], CRState] = {}
 _cr_state_lock = threading.Lock()
 
 
-def _resolve_paths(spec: dict, target_app: str, target_horizon: str) -> tuple[str, str, str | None]:
-    """Compute model + scaler + target_scaler paths from CRD spec, falling back to convention.
+def _resolve_paths(
+    spec: dict, target_app: str, target_horizon: str
+) -> tuple[str, str, str | None, bool, bool]:
+    """Resolve model/scaler/target paths with proper priority and legacy fallback.
+
+    Priority order (highest first):
+    1. CR spec override (user intent always wins)
+    2. Canonical path (preferred default: ppa_model.tflite, scaler.pkl)
+    3. Legacy fallback (backward compat: ppa_model_{horizon}.tflite, scaler_{horizon}.pkl)
+    4. Missing (retry will handle)
 
     ⚠️ RESOLVES ONLY - validation happens in _get_or_create_state().
-    This keeps reconciliation loop clean (no validation failures per cycle).
+
+    Returns:
+        (model_path, scaler_path, target_scaler_path, used_legacy: bool, is_override: bool)
     """
     model_dir = DEFAULT_MODEL_DIR
-    model_path = spec.get("modelPath") or os.path.join(
-        model_dir, target_app, target_horizon, "ppa_model.tflite"
+
+    # 1️⃣ CR SPEC OVERRIDE - highest priority (user intent always wins)
+    if spec.get("modelPath") and spec.get("scalerPath"):
+        model_path = spec.get("modelPath")
+        scaler_path = spec.get("scalerPath")
+        target_scaler_path = spec.get("targetScalerPath")
+        if target_scaler_path and not os.path.exists(target_scaler_path):
+            target_scaler_path = None
+        # User-provided paths: used_legacy=False, is_override=True
+        return model_path, scaler_path, target_scaler_path, False, True
+
+    # 2️⃣ CANONICAL paths (preferred defaults)
+    canonical_model = os.path.join(model_dir, target_app, target_horizon, "ppa_model.tflite")
+    canonical_scaler = os.path.join(model_dir, target_app, target_horizon, "scaler.pkl")
+    canonical_target = os.path.join(model_dir, target_app, target_horizon, "target_scaler.pkl")
+
+    if os.path.exists(canonical_model) and os.path.exists(canonical_scaler):
+        target_scaler_path = canonical_target if os.path.exists(canonical_target) else None
+        # Canonical paths: used_legacy=False, is_override=False
+        return canonical_model, canonical_scaler, target_scaler_path, False, False
+
+    # 3️⃣ LEGACY FALLBACK (all-or-nothing check - never mix canonical + legacy)
+    legacy_model = os.path.join(
+        model_dir, target_app, target_horizon, f"ppa_model_{target_horizon}.tflite"
     )
-    scaler_path = spec.get("scalerPath") or os.path.join(
-        model_dir, target_app, target_horizon, "scaler.pkl"
+    legacy_scaler = os.path.join(
+        model_dir, target_app, target_horizon, f"scaler_{target_horizon}.pkl"
     )
-    # Target scaler is optional (backward compat with models trained without it)
-    target_scaler_path = spec.get("targetScalerPath") or os.path.join(
-        model_dir, target_app, target_horizon, "target_scaler.pkl"
+    legacy_target = os.path.join(
+        model_dir, target_app, target_horizon, f"target_scaler_{target_horizon}.pkl"
     )
-    if not os.path.exists(target_scaler_path):
-        target_scaler_path = None
-    return model_path, scaler_path, target_scaler_path
+
+    if os.path.exists(legacy_model) and os.path.exists(legacy_scaler):
+        target_scaler_path = legacy_target if os.path.exists(legacy_target) else None
+        # Legacy paths: used_legacy=True, is_override=False
+        return legacy_model, legacy_scaler, target_scaler_path, True, False
+
+    # 4️⃣ MISSING - return canonical path (retry will handle the error)
+    # Missing: used_legacy=False, is_override=False
+    return canonical_model, canonical_scaler, None, False, False
 
 
 def _validate_artifact_paths(
@@ -218,12 +255,14 @@ def _get_or_create_state(
     FIX (PR#3): Prefill is SKIPPED to avoid scaler distribution mismatch.
     FIX (PR#5): History is PRESERVED when model is upgraded (new paths), preventing 30-min blindness.
     FIX (PR#15): Restore history from CR status on pod restart.
+    FIX (Phase 3): Full function lock (Issue 2) + try-catch on Predictor creation (Issue 17)
 
-    Thread-safe: protected by _cr_state_lock for concurrent reconciliation cycles.
+    Thread-safe: protected by _cr_state_lock for entire function (sole lock owner).
 
     Returns:
         Tuple of (CRState, upgrade_info dict with keys: upgraded, failed_to_upgrade, reason)
     """
+    # SOLE LOCK OWNER: wrap entire function body (Issue 2)
     with _cr_state_lock:
         existing = _cr_state.get(key)
         if (
@@ -274,8 +313,22 @@ def _get_or_create_state(
             old_history = existing.predictor.copy_history()
             history_len = len(old_history)
 
-            # Create new predictor with upgraded model
-            new_predictor = Predictor(model_path, scaler_path, target_scaler_path)
+            # Issue 17: Try-catch around Predictor creation (file exists but corrupted/unreadable)
+            try:
+                new_predictor = Predictor(model_path, scaler_path, target_scaler_path)
+            except Exception as e:
+                logger.error(
+                    f"[{key}] Predictor load FAILED despite file existence check: {e}\n"
+                    f"  Model: {model_path}\n"
+                    f"  Scaler: {scaler_path}\n"
+                    f"  Possible causes: file corruption, wrong format, permissions, NFS stale metadata"
+                )
+                # Keep old predictor, signal upgrade failure
+                return existing, {
+                    "upgraded": False,
+                    "failed_to_upgrade": True,
+                    "reason": f"Predictor load failed: {str(e)[:100]}",
+                }
 
             # Restore history into new predictor
             new_predictor.restore_history(old_history)
@@ -309,8 +362,19 @@ def _get_or_create_state(
             f"  Target: {target_scaler_path or '(optional, not found)'}"
         )
 
+        # Issue 17: Try-catch around first-time Predictor creation
+        try:
+            predictor = Predictor(model_path, scaler_path, target_scaler_path)
+        except Exception as e:
+            logger.error(
+                f"[{key}] First-time predictor load FAILED despite validation: {e}\n"
+                f"  Model: {model_path}\n"
+                f"  Scaler: {scaler_path}"
+            )
+            raise
+
         state = CRState(
-            predictor=Predictor(model_path, scaler_path, target_scaler_path),
+            predictor=predictor,
             observer_mode=bool((config or {}).get("observer_mode", False)),
         )
 
@@ -393,8 +457,152 @@ def _parse_crd_spec(
             f"target {target_ns}/{target} to avoid scaling oscillations."
         )
 
-    # Load/create CR state
-    model_path, scaler_path, target_scaler_path = _resolve_paths(spec, target_app, target_horizon)
+    # STEP 1: Resolve paths (spec override > canonical > legacy > missing)
+    model_path, scaler_path, target_scaler_path, used_legacy, is_override = _resolve_paths(
+        spec, target_app, target_horizon
+    )
+
+    # STEP 2: Get or initialize state (double-check locking - Issue 12)
+    existing = _cr_state.get(key)
+
+    if existing is None:
+        with _cr_state_lock:
+            # Check AGAIN inside lock (another thread may have created it)
+            existing = _cr_state.get(key)
+            if existing is None:
+                # Safe to create: we're the only thread doing this now
+                existing = CRState(
+                    predictor=None,
+                    observer_mode=False,
+                    stable_count=0,
+                    last_prediction=0.0,
+                    last_desired=-1.0,
+                    last_known_good_replicas=0,
+                    last_known_good_prediction=0.0,
+                    consecutive_failures=0,
+                    last_successful_cycle=0.0,
+                    prom_failures=0,
+                    prom_last_failure_time=0.0,
+                )
+                existing.artifact_load_failures = 0
+                existing.using_legacy_artifacts = False
+                existing.predictor_missing_logged = False
+
+                _cr_state[key] = existing
+                logger.info(f"[{cr_name}] Initialized new CR state")
+
+    # STEP 3: Apply legacy flag transitions (locked + stable - Issues 14, 16)
+    if used_legacy and not existing.using_legacy_artifacts:
+        with _cr_state_lock:
+            existing.using_legacy_artifacts = True
+        if patch.status.get("usingLegacyArtifacts") != True:
+            patch.status["usingLegacyArtifacts"] = True
+            logger.warning(
+                f"[{cr_name}] Using legacy artifact paths. "
+                f"Consider updating CR spec to use canonical paths."
+            )
+
+    elif (
+        existing.using_legacy_artifacts
+        and not used_legacy
+        and os.path.exists(model_path)
+        and os.path.exists(scaler_path)
+    ):
+        with _cr_state_lock:
+            existing.using_legacy_artifacts = False
+        if patch.status.get("usingLegacyArtifacts") != False:
+            patch.status["usingLegacyArtifacts"] = False
+            logger.info(f"[{cr_name}] Switched to canonical artifact paths")
+
+    # STEP 4: Check existence & retry logic (locked, all-or-nothing - Issues 4, 14, 17, 18, 19)
+    missing_paths = []
+    if not os.path.exists(model_path):
+        missing_paths.append(f"Model: {model_path}")
+    if not os.path.exists(scaler_path):
+        missing_paths.append(f"Scaler: {scaler_path}")
+
+    if missing_paths:
+        # Increment counter UNDER LOCK (Issue 14)
+        with _cr_state_lock:
+            existing.artifact_load_failures += 1
+            failures = existing.artifact_load_failures
+
+        if failures < 3:
+            # Retry window: log but don't fail
+            missing_str = ", ".join(missing_paths)
+            if is_override:
+                logger.warning(
+                    f"[{cr_name}] CR-specified paths not ready (attempt {failures}/3). "
+                    f"Check configuration:\n  {missing_str}\n"
+                    f"Will retry..."
+                )
+            else:
+                logger.warning(
+                    f"[{cr_name}] Artifact not ready (attempt {failures}/3). "
+                    f"Missing: {missing_str}. Will retry..."
+                )
+            return config, existing
+        else:
+            # After 3 failures: signal failure with error classification (Issues 18, 19)
+            missing_str = ", ".join(missing_paths)
+            error_msg = f"Missing after {failures} retries: {missing_str}"
+            error_type = "USER_CONFIG" if is_override else "SYSTEM_DELAY"
+
+            # Update status (idempotent - Issue 15)
+            if patch.status.get("artifactLoadFailed") != True:
+                patch.status["artifactLoadFailed"] = True
+                patch.status["artifactLoadError"] = error_msg
+                patch.status["artifactLoadErrorType"] = error_type
+
+            # Periodic escalation logging (Issue 18)
+            if failures == 3:
+                # First-time failure log
+                if is_override:
+                    logger.error(
+                        f"[{cr_name}] ARTIFACT LOAD FAILED (CR override misconfigured): "
+                        f"{failures} retries exhausted.\n"
+                        f"  {missing_str}\n"
+                        f"Action: Verify CR spec paths are correct."
+                    )
+                else:
+                    logger.error(
+                        f"[{cr_name}] ARTIFACT LOAD FAILED: {failures} retries exhausted. "
+                        f"Missing: {missing_str}. Continuing with null predictor (scaling disabled)."
+                    )
+            elif failures % 10 == 0:
+                # Periodic re-escalation every 10 failures (Issue 18)
+                logger.error(
+                    f"[{cr_name}] STILL FAILING after {failures} attempts (status=artifactLoadFailed). "
+                    f"Artifacts remain unavailable. "
+                    f"Type: {error_type}. "
+                    f"Action: {'Fix CR spec' if is_override else 'Investigate cluster state, PVC, artifact job'}"
+                )
+            else:
+                # Ensure errorType is always set (idempotent - Issue 15)
+                if patch.status.get("artifactLoadErrorType") != error_type:
+                    patch.status["artifactLoadErrorType"] = error_type
+
+            return config, existing
+
+    # Paths exist: reset counter and clear failure state (locked - Issue 14, idempotent - Issue 15)
+    with _cr_state_lock:
+        if existing.artifact_load_failures > 0:
+            existing.artifact_load_failures = 0
+            should_clear_failure = True
+        else:
+            should_clear_failure = False
+
+    if should_clear_failure:
+        logger.info(f"[{cr_name}] Artifacts recovered (counter reset)")
+
+        # Clear all failure-related status fields (Issue 10, 15)
+        if patch.status.get("artifactLoadFailed") == True:
+            patch.status["artifactLoadFailed"] = False
+            patch.status["artifactLoadError"] = None
+            patch.status["artifactLoadErrorType"] = None
+            logger.info(f"[{cr_name}] Cleared artifact failure signal")
+
+    # STEP 5: Call _get_or_create_state (paths validated, paths exist)
     persisted_history = status.get("historySnapshot") if status else None
     state, upgrade_info = _get_or_create_state(
         key,
@@ -410,19 +618,25 @@ def _parse_crd_spec(
         persisted_history,
     )
 
-    # Update CR status with upgrade signals
+    # STEP 6: Re-fetch state (fresh reference after lock release in _get_or_create_state)
+    state = _cr_state.get(key)
+
+    # Handle upgrade_info (idempotent status updates - Issue 15)
     if upgrade_info["failed_to_upgrade"]:
-        patch.status["modelUpgradeFailed"] = True
-        patch.status["modelUpgradeFailureReason"] = upgrade_info["reason"]
-        logger.warning(
-            f"[{cr_name}] Model upgrade failed - running on old model. Reason: {upgrade_info['reason']}"
-        )
+        if patch.status.get("modelUpgradeFailed") != True:
+            patch.status["modelUpgradeFailed"] = True
+            patch.status["modelUpgradeFailureReason"] = upgrade_info["reason"]
+            logger.warning(
+                f"[{cr_name}] Model upgrade failed - running on old model. "
+                f"Reason: {upgrade_info['reason']}"
+            )
     elif upgrade_info["upgraded"]:
-        patch.status["modelUpgradeFailed"] = False
-        patch.status["modelUpgradeFailureReason"] = None
-        logger.info(f"[{cr_name}] Model upgraded successfully")
+        if patch.status.get("modelUpgradeFailed") != False:
+            patch.status["modelUpgradeFailed"] = False
+            patch.status["modelUpgradeFailureReason"] = None
+            logger.info(f"[{cr_name}] Model upgraded successfully")
     else:
-        # Only clear upgrade failure if this is first initialization
+        # Only set if not already in status (idempotent - Issue 15)
         if "modelUpgradeFailed" not in (status or {}):
             patch.status["modelUpgradeFailed"] = False
 
@@ -512,6 +726,16 @@ def _update_predictor_state(
     Returns:
         True if predictor is ready for prediction, False otherwise
     """
+    # Guard: If predictor not ready (e.g., during artifact retry), return early
+    if state.predictor is None:
+        if not state.predictor_missing_logged:
+            logger.warning(
+                f"[{cr_name}] Predictor not available yet. Waiting for artifacts to load..."
+            )
+            state.predictor_missing_logged = True
+        patch.status["currentReplicas"] = current
+        return False
+
     state.predictor.update(features)
     history_len = len(state.predictor.history)
     maxlen = state.predictor.history.maxlen
@@ -544,6 +768,9 @@ def _update_predictor_state(
             logger.info(f"[{cr_name}] Warming up: {history_len}/{maxlen} steps collected")
         return False
 
+    # Reset transition flag when predictor becomes ready
+    state.predictor_missing_logged = False
+
     logger.info(
         f"[{cr_name}] RPS/Pod={features['rps_per_replica']:.1f}  "
         f"P95={features['latency_p95_ms']:.1f}ms  "
@@ -567,6 +794,11 @@ def _make_scaling_decision(
     Returns:
         Tuple of (desired_replicas, should_apply_scaling)
     """
+    # Guard: If predictor not ready, skip scaling (quietly with debug level)
+    if state.predictor is None:
+        logger.debug(f"[{cr_name}] Skipping scaling (predictor not ready yet)")
+        return current, False
+
     predicted_load = state.predictor.predict()
     logger.info(f"[{cr_name}] Predicted load: {predicted_load:.1f} req/s")
 
