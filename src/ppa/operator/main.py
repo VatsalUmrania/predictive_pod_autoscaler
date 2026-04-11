@@ -148,11 +148,15 @@ def _get_or_create_state(
     FIX (PR#15): Restore history from CR status on pod restart.
     """
     existing = _cr_state.get(key)
-    if existing and existing.predictor.paths_match(model_path, scaler_path, target_scaler_path):
+    if (
+        existing
+        and existing.predictor
+        and existing.predictor.paths_match(model_path, scaler_path, target_scaler_path)
+    ):
         existing.observer_mode = bool((config or {}).get("observer_mode", False))
         return existing
 
-    if existing:
+    if existing and existing.predictor:
         # Model upgraded: preserve history, reload interpreter only (PR#5 fix)
         logger.info(f"Model upgraded for {key}, reloading interpreter (preserving history)...")
 
