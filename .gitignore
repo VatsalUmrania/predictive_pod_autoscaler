@@ -4,6 +4,8 @@ __pycache__/
 .env
 venv/
 *.health.json
+Agents.md
+
 .gemini/
 model/artifacts/
 !model/artifacts/.gitkeep
@@ -236,3 +238,4 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+AGENTS.md

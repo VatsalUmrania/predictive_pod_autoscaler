@@ -56,3 +56,5 @@ class CRState:
     predictor_missing_logged: bool = (
         False  # Prevent log spam when predictor is None (transition-based)
     )
+    deprecation_logged: bool = False  # Log deprecated CR fields once only
+    target_scaler_missing_logged: bool = False  # Log missing target_scaler once only

@@ -14,6 +14,3 @@ spec:
   scaleDownRate: 1.0
   safetyFactor: 1.15
   observerMode: true
-  modelPath: "/models/test-app/rps_t5m/ppa_model.tflite"
-  scalerPath: "/models/test-app/rps_t5m/scaler.pkl"
-  targetScalerPath: "/models/test-app/rps_t5m/target_scaler.pkl"
