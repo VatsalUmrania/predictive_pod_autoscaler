@@ -53,8 +53,26 @@ def promote_artifacts(
     eval_summary_path: str,
     champion_dir: str,
 ) -> dict:
-    """Copy winning challenger artifacts into champion/<app_name>/<target>/ canonical names."""
+    """Copy winning challenger artifacts into champion/<app_name>/<target>/ canonical names.
+
+    CRITICAL: champion_dir must be the ROOT directory (e.g., /data/champions)
+    NOT a namespaced subpath. Namespace is NOT included in artifact paths.
+
+    This ensures:
+    - Single source of truth for each model
+    - No namespace leakage into filenames
+    - Operator contract: /models/<app>/<horizon>/ppa_model.tflite
+    """
     target_dir = os.path.join(champion_dir, app_name, target)
+
+    # GUARD: Prevent namespace leakage into artifact paths
+    assert "default" not in target_dir and "kube-system" not in target_dir, (
+        f"Namespace detected in artifact path (FORBIDDEN):\n"
+        f"  {target_dir}\n"
+        f"Expected: {champion_dir}/{app_name}/{target}/\n"
+        f"champion_dir must be root only (no namespace), e.g., /data/champions"
+    )
+
     os.makedirs(target_dir, exist_ok=True)
 
     dst_model = os.path.join(target_dir, "ppa_model.tflite")
@@ -90,8 +108,8 @@ def promote_artifacts(
     }
 
 
-
 # patch_predictiveautoscaler_paths is now in deployment.py
+
 
 def run_pipeline(
     app_name: str,
@@ -142,15 +160,17 @@ def run_pipeline(
         )
 
         if result_dict is None:
-            results.append({
-                "target": target,
-                "status": "TRAIN_FAILED",
-                "mape": None,
-                "mae": None,
-                "rmse": None,
-                "size_kb": None,
-                "passed": False,
-            })
+            results.append(
+                {
+                    "target": target,
+                    "status": "TRAIN_FAILED",
+                    "mape": None,
+                    "mae": None,
+                    "rmse": None,
+                    "size_kb": None,
+                    "passed": False,
+                }
+            )
             continue
 
         # Check promotion if enabled
@@ -171,10 +191,13 @@ def run_pipeline(
             promotion_decision = None
             promotion_reason = None
 
-        results.append(result_dict | {
-            "promotion": promotion_decision,
-            "promotion_reason": promotion_reason,
-        })
+        results.append(
+            result_dict
+            | {
+                "promotion": promotion_decision,
+                "promotion_reason": promotion_reason,
+            }
+        )
 
     # Print summary
     _print_pipeline_summary(results)
@@ -255,7 +278,9 @@ def _train_and_evaluate_model(
     status = "PASS" if passed else f"WARN_{gate_metric.upper()}"
 
     if not passed:
-        print(f"\n  ⚠  Quality gate: {gate_metric.upper()} {gate_value:.2f}% > {quality_gate}% threshold")
+        print(
+            f"\n  ⚠  Quality gate: {gate_metric.upper()} {gate_value:.2f}% > {quality_gate}% threshold"
+        )
 
     return {
         "target": target,

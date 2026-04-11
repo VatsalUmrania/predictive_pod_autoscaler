@@ -99,6 +99,38 @@ def _start_health_server(port: int = 8080):
     logger.info(f"Health endpoint listening on :{port}/healthz")
 
 
+def _ensure_model_directory_ready(max_retries: int = 5) -> None:
+    """Soft guard: wait for model directory to exist before processing CRs.
+
+    Used at operator startup to handle Kubernetes volume mount delays.
+    Does not crash operator - logs clearly for debugging.
+    """
+    model_dir = DEFAULT_MODEL_DIR
+
+    for attempt in range(max_retries):
+        if os.path.exists(model_dir):
+            logger.info(f"✓ Model directory ready: {model_dir}")
+            return
+
+        if attempt < max_retries - 1:
+            wait_seconds = 2**attempt  # Exponential backoff: 1s, 2s, 4s, 8s, 16s
+            logger.warning(
+                f"Model directory not found (attempt {attempt + 1}/{max_retries}): {model_dir}\n"
+                f"Retrying in {wait_seconds}s..."
+            )
+            time.sleep(wait_seconds)
+        else:
+            logger.error(
+                f"Model directory still not found after {max_retries} retries: {model_dir}\n"
+                f"Check: 1) PPA_MODEL_DIR environment variable\n"
+                f"       2) /models volume mount in Kubernetes\n"
+                f"       3) Pod startup order (volume mount may be delayed)\n"
+                f"Operator will continue, but CR reconciliation will fail until directory appears."
+            )
+            # Don't crash - let Kopf handle retries on first CR processing
+            return
+
+
 _start_health_server()
 
 # Start Prometheus metrics endpoint on port 9100 (separate from healthz on 8080)
@@ -111,7 +143,11 @@ _cr_state: dict[tuple[str, str], CRState] = {}
 
 
 def _resolve_paths(spec: dict, target_app: str, target_horizon: str) -> tuple[str, str, str | None]:
-    """Compute model + scaler + target_scaler paths from CRD spec, falling back to convention."""
+    """Compute model + scaler + target_scaler paths from CRD spec, falling back to convention.
+
+    ⚠️ RESOLVES ONLY - validation happens in _get_or_create_state().
+    This keeps reconciliation loop clean (no validation failures per cycle).
+    """
     model_dir = DEFAULT_MODEL_DIR
     model_path = spec.get("modelPath") or os.path.join(
         model_dir, target_app, target_horizon, "ppa_model.tflite"
@@ -126,6 +162,39 @@ def _resolve_paths(spec: dict, target_app: str, target_horizon: str) -> tuple[st
     if not os.path.exists(target_scaler_path):
         target_scaler_path = None
     return model_path, scaler_path, target_scaler_path
+
+
+def _validate_artifact_paths(
+    model_path: str,
+    scaler_path: str,
+    target_scaler_path: str | None,
+    target_app: str,
+    target_horizon: str,
+    model_dir: str,
+) -> None:
+    """Validate artifact paths exist. Raises RuntimeError if ANY missing.
+
+    Called ONCE on first load or path change, not every reconciliation cycle.
+    """
+    missing = []
+
+    if not os.path.exists(model_path):
+        missing.append(f"Model: {model_path}")
+    if not os.path.exists(scaler_path):
+        missing.append(f"Scaler: {scaler_path}")
+    if target_scaler_path and not os.path.exists(target_scaler_path):
+        missing.append(f"Target scaler: {target_scaler_path}")
+
+    if missing:
+        raise RuntimeError(
+            f"Missing model artifacts for {target_app}/{target_horizon}:\n"
+            + "\n".join(f"  ❌ {path}" for path in missing)
+            + f"\nExpected directory structure:\n"
+            + f"  {model_dir}/{target_app}/{target_horizon}/\n"
+            + f"    ├─ ppa_model.tflite\n"
+            + f"    ├─ scaler.pkl\n"
+            + f"    └─ target_scaler.pkl (optional)"
+        )
 
 
 def _get_or_create_state(
@@ -160,6 +229,31 @@ def _get_or_create_state(
         # Model upgraded: preserve history, reload interpreter only (PR#5 fix)
         logger.info(f"Model upgraded for {key}, reloading interpreter (preserving history)...")
 
+        # Validate new paths BEFORE creating new predictor
+        try:
+            _validate_artifact_paths(
+                model_path,
+                scaler_path,
+                target_scaler_path,
+                target_app,
+                target_horizon,
+                DEFAULT_MODEL_DIR,
+            )
+        except RuntimeError as e:
+            # PRODUCTION-SAFE: Don't break working system on upgrade failure
+            # Keep old predictor running, log error clearly
+            logger.error(f"[{key}] Model upgrade failed - keeping old model active: {e}")
+            existing.observer_mode = bool((config or {}).get("observer_mode", False))
+            return existing
+
+        # Log successful new paths (INFO level - this is a change)
+        logger.info(
+            f"[{key}] Resolved upgraded paths:\n"
+            f"  Model:  {model_path}\n"
+            f"  Scaler: {scaler_path}\n"
+            f"  Target: {target_scaler_path or '(optional, not found)'}"
+        )
+
         # Snapshot history before creating new predictor
         old_history = existing.predictor.copy_history()
         history_len = len(old_history)
@@ -177,7 +271,28 @@ def _get_or_create_state(
         logger.info(f"Restored {history_len}/{60} history steps to new model")
         return existing
 
-    # First time: create new state
+    # First time: VALIDATE BEFORE creating new state (fail hard on missing artifacts)
+    try:
+        _validate_artifact_paths(
+            model_path,
+            scaler_path,
+            target_scaler_path,
+            target_app,
+            target_horizon,
+            DEFAULT_MODEL_DIR,
+        )
+    except RuntimeError as e:
+        logger.error(f"[{key}] {e}")
+        raise  # Fail immediately - operator will retry at appropriate interval
+
+    # Log successful paths (INFO level - this is a new state)
+    logger.info(
+        f"[{key}] Resolved paths:\n"
+        f"  Model:  {model_path}\n"
+        f"  Scaler: {scaler_path}\n"
+        f"  Target: {target_scaler_path or '(optional, not found)'}"
+    )
+
     state = CRState(
         predictor=Predictor(model_path, scaler_path, target_scaler_path),
         observer_mode=bool((config or {}).get("observer_mode", False)),
@@ -526,6 +641,18 @@ def _apply_scaling(
             state.stable_count = 0
     else:
         logger.info(f"[{cr_name}] No scaling needed: {current} replicas is correct")
+
+
+@kopf.on.startup()
+def startup(logger_: kopf.Logger, **kwargs):
+    """Operator startup hook - runs once when operator pod starts."""
+    logger.info("=" * 80)
+    logger.info("PPA Operator starting up")
+    logger.info(f"DEFAULT_MODEL_DIR: {DEFAULT_MODEL_DIR}")
+    logger.info("=" * 80)
+
+    # Check model directory is accessible
+    _ensure_model_directory_ready()
 
 
 @kopf.timer(

@@ -66,7 +66,9 @@ class DeployCommand(BaseCommand):
             dry_run: Show planned steps without executing
         """
         artifacts_dir = str(ARTIFACTS_DIR)
-        champion_dir = str(CHAMPION_DIR / app_name / namespace / horizon)
+        # CRITICAL: champion_dir must be ROOT, not namespaced
+        # Namespace is NOT included in artifact storage (operator contract)
+        champion_dir = str(CHAMPION_DIR)
 
         # Display plan
         self._show_plan(app_name, horizon, retrain, skip_build, csv, dry_run)

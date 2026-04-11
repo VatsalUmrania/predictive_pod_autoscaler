@@ -40,7 +40,7 @@ TEMPORAL_FEATURES = [
 
 FEATURE_COLUMNS = QUERIED_FEATURES + TEMPORAL_FEATURES
 
-# Global config singleton 
+# Global config singleton
 _global_config: Config | None = None
 
 
@@ -117,6 +117,7 @@ def get_minikube_driver() -> str:
         return "docker"
     return ""
 
+
 MINIKUBE_DRIVER = get_minikube_driver()
 
 # Default values
@@ -141,9 +142,10 @@ DEFAULT_MIN_REPLICAS = 2
 DEFAULT_MAX_REPLICAS = 20
 DEFAULT_SCALE_UP_RATE = 2.0
 DEFAULT_SCALE_DOWN_RATE = 0.5
-DEFAULT_MODEL_DIR = "/models"
+DEFAULT_MODEL_DIR = os.getenv("PPA_MODEL_DIR", "/models")
 
 #  Dataclass configs
+
 
 @dataclass
 class PrometheusConfig:
@@ -312,7 +314,9 @@ class PathsConfig:
             return cls(project_dir=Path(project_dir_str))
         return cls()
 
-# Root configuration 
+
+# Root configuration
+
 
 @dataclass
 class Config:
@@ -359,12 +363,15 @@ class Config:
             paths=PathsConfig.from_env(),
         )
 
+
 # Exception classes
+
 
 class FeatureVectorError(Exception):
     """Raised when feature extraction fails (Prometheus unavailable, network issues, etc.)."""
 
     pass
+
 
 # Backward compatibility alias
 FeatureVectorException = FeatureVectorError
@@ -405,6 +412,7 @@ def get_banner() -> str:
 # Dataflow query helpers
 # Build Prometheus queries for dataflow/training data collection
 # NOTE: These are moved from dataflow/config.py (Phase 1 consolidation)
+
 
 def _build_dataflow_queries() -> dict:
     """Build Prometheus queries for dataflow using centralized config values."""
