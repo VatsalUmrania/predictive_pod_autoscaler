@@ -18,7 +18,7 @@ rules:
   # PredictiveAutoscaler CRs (our custom resource)
   - apiGroups: ["ppa.example.com"]
     resources: ["predictiveautoscalers"]
-    verbs: ["list", "get", "watch", "patch", "update"]
+    verbs: ["create", "list", "get", "watch", "patch", "update"]
   
   - apiGroups: ["ppa.example.com"]
     resources: ["predictiveautoscalers/status"]

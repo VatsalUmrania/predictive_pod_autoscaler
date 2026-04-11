@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from string import Template
 
 import typer
 from rich.panel import Panel
@@ -91,15 +92,15 @@ def onboard(
     results_table.add_column("File", style="dim")
 
     env_vars = {
-        "$APP_NAME": app_name,
-        "$TARGET_DEPLOYMENT": target,
-        "$NAMESPACE": namespace,
-        "$MIN_REPLICAS": str(min_replicas),
-        "$MAX_REPLICAS": str(max_replicas),
-        "$RPS_CAPACITY": str(rps_capacity),
-        "$SAFETY_FACTOR": str(safety_factor),
-        "$SCALE_UP_RATE": str(scale_up_rate),
-        "$SCALE_DOWN_RATE": str(scale_down_rate),
+        "APP_NAME": app_name,
+        "TARGET_DEPLOYMENT": target,
+        "NAMESPACE": namespace,
+        "MIN_REPLICAS": str(min_replicas),
+        "MAX_REPLICAS": str(max_replicas),
+        "RPS_CAPACITY": str(rps_capacity),
+        "SAFETY_FACTOR": str(safety_factor),
+        "SCALE_UP_RATE": str(scale_up_rate),
+        "SCALE_DOWN_RATE": str(scale_down_rate),
     }
 
     generated_files: list[Path] = []
@@ -108,14 +109,12 @@ def onboard(
         horizon_clean = horizon.replace("_", "-")
         vars_with_horizon = {
             **env_vars,
-            "$HORIZON": horizon,
-            "$HORIZON_CLEAN": horizon_clean,
-            "$OBSERVER_MODE": "true" if observer else "false",
+            "HORIZON": horizon,
+            "HORIZON_CLEAN": horizon_clean,
+            "OBSERVER_MODE": "true" if observer else "false",
         }
 
-        rendered = template
-        for var, val in vars_with_horizon.items():
-            rendered = rendered.replace(var, val)
+        rendered = Template(template).substitute(**vars_with_horizon)
 
         out_file = output_dir / f"ppa-{horizon}.yaml"
         out_file.write_text(rendered)

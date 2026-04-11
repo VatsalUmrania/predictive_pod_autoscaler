@@ -31,6 +31,7 @@ from ppa.config import (
     DEFAULT_NAMESPACE,
     DEPLOY_DIR,
     GRAFANA_PORT,
+    METRICS_PORT,
     MINIKUBE_CPUS,
     MINIKUBE_DISK_SIZE,
     MINIKUBE_DRIVER,
@@ -316,16 +317,24 @@ def step_5_test_app(ctx: typer.Context | None = None) -> None:
         title="Building test-app image",
     )
 
+    # Check for deployment method: kustomize dir or deployment.yaml
     kustomize_path = app_path / "kustomize"
-    if not kustomize_path.exists():
-        error(f"Kustomization not found at {kustomize_path}")
-        raise typer.Exit(1)
+    deployment_yaml = app_path / "deployment.yaml"
 
-    run_cmd(
-        ["kubectl", "apply", "-k", "."],
-        cwd=str(kustomize_path),
-        title="Deploying test-app with Kustomize",
-    )
+    if kustomize_path.exists():
+        run_cmd(
+            ["kubectl", "apply", "-k", "."],
+            cwd=str(kustomize_path),
+            title="Deploying test-app with Kustomize",
+        )
+    elif deployment_yaml.exists():
+        run_cmd(
+            ["kubectl", "apply", "-f", str(deployment_yaml)],
+            title="Deploying test-app with deployment.yaml",
+        )
+    else:
+        error(f"No deployment method found (kustomize/ or deployment.yaml required at {app_path})")
+        raise typer.Exit(1)
 
     wait_for_pods(f"app={DEFAULT_APP_NAME}", DEFAULT_NAMESPACE)
     success("Test app deployed")
@@ -334,7 +343,7 @@ def step_5_test_app(ctx: typer.Context | None = None) -> None:
 def step_6_traffic_gen() -> None:
     """Deploy Locust traffic generator."""
     run_cmd(
-        ["kubectl", "apply", "-f", str(DEPLOY_DIR / "locust.yaml")],
+        ["kubectl", "apply", "-f", str(DEPLOY_DIR / "traffic-gen-deployment.yaml")],
         title="Deploying Locust traffic generator",
     )
     wait_for_pods("app=locust", DEFAULT_NAMESPACE)
@@ -342,7 +351,7 @@ def step_6_traffic_gen() -> None:
 
 
 def step_7_port_forwards() -> None:
-    """Start port forwards for Prometheus, Grafana, test-app."""
+    """Start port forwards for Prometheus, Grafana, test-app, and test-app metrics."""
     info("Starting port forwards (background)...")
 
     commands = [
@@ -357,14 +366,25 @@ def step_7_port_forwards() -> None:
             "Grafana",
         ),
         (
-            ["kubectl", "port-forward", f"svc/{DEFAULT_APP_NAME}", f"{APP_PORT}:8080"],
+            ["kubectl", "port-forward", f"svc/{DEFAULT_APP_NAME}", f"{APP_PORT}:80"],
             APP_PORT,
             "Test App",
         ),
+        (
+            ["kubectl", "port-forward", f"svc/{DEFAULT_APP_NAME}", f"{METRICS_PORT}:9091"],
+            METRICS_PORT,
+            "Test App Metrics",
+        ),
     ]
 
+    # Start port-forwards as detached background processes (survive parent exit)
     for cmd, port, name in commands:
-        run_cmd_silent(cmd, check=False)
+        subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            preexec_fn=os.setsid,  # Detach from parent process group (Unix only)
+        )
         success(f"{name} port-forward started (→ {port})")
 
 
@@ -389,7 +409,7 @@ def step_9_verify_features() -> None:
 def step_10_cronjob() -> None:
     """Deploy hourly data collection CronJob."""
     run_cmd(
-        ["kubectl", "apply", "-f", str(DEPLOY_DIR / "data-cronjob.yaml")],
+        ["kubectl", "apply", "-f", str(DEPLOY_DIR / "cronjob-data-collector.yaml")],
         title="Deploying data collection CronJob",
     )
     success("Data CronJob deployed")

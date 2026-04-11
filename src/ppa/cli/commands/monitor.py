@@ -52,39 +52,59 @@ def _color_metric(value: str | None, suffix: str = "") -> str:
 
 def _get_ppa_status() -> dict:
     """Get PPA CR status fields."""
+    # Try to get PPA CR (will be empty until deployed)
     result = run_cmd_silent(
         ["kubectl", "get", "ppa", "test-app-ppa", "-o", "jsonpath={.status}"],
         check=False,
     )
-    if result.returncode != 0 or not result.stdout.strip():
-        return {"desired": "?", "current": "?", "predicted_load": "?"}
-    try:
-        data = json.loads(result.stdout)
-        return {
-            "desired": str(data.get("desiredReplicas", "?")),
-            "current": str(data.get("currentReplicas", "?")),
-            "predicted_load": str(data.get("lastPredictedLoad", "?")),
-        }
-    except (json.JSONDecodeError, KeyError):
-        return {"desired": "?", "current": "?", "predicted_load": "?"}
+    if result.returncode == 0 and result.stdout.strip():
+        try:
+            data = json.loads(result.stdout)
+            return {
+                "desired": str(data.get("desiredReplicas", "?")),
+                "current": str(data.get("currentReplicas", "?")),
+                "predicted_load": str(data.get("lastPredictedLoad", "?")),
+            }
+        except (json.JSONDecodeError, KeyError):
+            pass
+    
+    # Fallback: get metrics from operator Prometheus metrics
+    predicted_load = query_prometheus('ppa_predicted_load_rps{cr_name="test-app-ppa"}') or "?"
+    desired = query_prometheus('ppa_desired_replicas{cr_name="test-app-ppa"}') or "?"
+    current = query_prometheus('ppa_current_replicas{cr_name="test-app-ppa"}') or "?"
+    return {"desired": desired, "current": current, "predicted_load": predicted_load}
 
 
 def _get_predicted_rps_from_logs() -> str:
-    """Get latest predicted RPS from operator logs."""
+    """Get latest predicted RPS from operator logs or Prometheus metrics."""
+    # First try operator Prometheus metrics (most reliable)
+    pred_rps = query_prometheus('ppa_predicted_load_rps{cr_name="test-app-ppa"}')
+    if pred_rps and pred_rps != "?":
+        return pred_rps
+    
+    # Fallback: search operator logs for predicted load entries
     result = run_cmd_silent(
-        ["kubectl", "logs", "deployment/ppa-operator", "--tail=30"],
+        ["kubectl", "logs", "deployment/ppa-operator", "-n", "default", "--tail=50"],
         check=False,
     )
-    if result.returncode != 0:
-        return "?"
-    for line in reversed(result.stdout.splitlines()):
-        if "Predicted load:" in line:
-            parts = line.split("Predicted load:")
-            if len(parts) > 1:
-                try:
-                    return cast(str, parts[1].strip().split()[0])
-                except (IndexError, ValueError):
-                    pass
+    if result.returncode == 0:
+        for line in reversed(result.stdout.splitlines()):
+            # Try various log formats:
+            # "predicted_load" or "Predicted load:" or "prediction:" or "load:" variations
+            if any(kw in line.lower() for kw in ["predicted", "prediction", "load"]):
+                # Extract number after colon or equals
+                for sep in [":", "="]:
+                    if sep in line:
+                        parts = line.split(sep)
+                        for part in parts[1:]:
+                            # Try to extract first number found
+                            for token in part.split():
+                                try:
+                                    val = float(token.rstrip(',;}])'))
+                                    if 0 < val < 10000:  # Reasonable RPS range
+                                        return str(round(val, 2))
+                                except ValueError:
+                                    pass
     return "?"
 
 
@@ -168,27 +188,44 @@ def _build_scaling_panel() -> Panel:
 
 def _build_metrics_panel() -> Panel:
     """Section 2: Real-time metrics from Prometheus."""
+    # Try multiple query variations to handle different metric names
     rps = (
         query_prometheus('sum(rate(http_requests_total{pod=~"test-app.*"}[1m]))')
+        or query_prometheus('sum(rate(http_request_total{pod=~"test-app.*"}[1m]))')
+        or query_prometheus('sum(http_requests_total{pod=~"test-app.*"}) / 60')
         or "N/A"
     )
+    
     rps_per = (
         query_prometheus(
             'sum(rate(http_requests_total{pod=~"test-app.*"}[1m]))'
-            '/sum(kube_deployment_status_replicas_ready{deployment="test-app",namespace="default"})'
+            ' / sum(kube_deployment_status_replicas_ready{deployment="test-app",namespace="default"})'
+        )
+        or query_prometheus(
+            'sum(rate(http_request_total{pod=~"test-app.*"}[1m]))'
+            ' / sum(kube_deployment_status_replicas_ready{deployment="test-app",namespace="default"})'
         )
         or "N/A"
     )
+    
     cpu = (
         query_prometheus(
             'sum(rate(container_cpu_usage_seconds_total{pod=~"test-app.*"}[1m]))'
-            '/sum(kube_pod_container_resource_limits{resource="cpu",pod=~"test-app.*"})*100'
+            ' / sum(kube_pod_container_resource_limits{resource="cpu",pod=~"test-app.*"}) * 100'
+        )
+        or query_prometheus(
+            'sum(rate(container_cpu_usage_seconds_total{pod=~"test-app.*"}[1m]))'
+            ' / 1 * 100'  # Fallback: raw CPU usage rate
         )
         or "N/A"
     )
+    
     p95 = (
         query_prometheus(
-            'histogram_quantile(0.95,sum(rate(http_request_duration_seconds_bucket{pod=~"test-app.*"}[1m]))by(le))*1000'
+            'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{pod=~"test-app.*"}[1m])) by (le)) * 1000'
+        )
+        or query_prometheus(
+            'histogram_quantile(0.95, sum(rate(http_requests_duration_seconds_bucket{pod=~"test-app.*"}[1m])) by (le)) * 1000'
         )
         or "N/A"
     )

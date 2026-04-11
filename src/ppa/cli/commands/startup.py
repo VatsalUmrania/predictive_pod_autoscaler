@@ -8,6 +8,7 @@ from __future__ import annotations
 import typer
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
+from ppa.cli.commands import startup_steps
 from ppa.cli.commands.base import BaseCommand
 from ppa.cli.commands.startup_steps import (
     STEP_FUNCS,
@@ -46,7 +47,8 @@ class StartupCommand(BaseCommand):
             raise typer.Exit()
 
         # Validate and resolve app path
-        get_app_path(app_arg)
+        app_path = get_app_path(app_arg)
+        startup_steps._app_path = app_path
 
         # Show startup plan
         steps_to_run = [step] if step else list(range(1, 12))

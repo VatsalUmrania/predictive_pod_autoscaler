@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 import typer
@@ -92,6 +93,17 @@ def _apply_manifest(path: Path, namespace: str, label: str) -> None:
         raise typer.Exit(result.returncode)
 
 
+def _deployment_exists(namespace: str) -> bool:
+    """Return True when the operator deployment already exists."""
+    result = subprocess.run(
+        ["kubectl", "get", "deployment", "ppa-operator", f"--namespace={namespace}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
 @app.callback(invoke_without_command=True)
 def operator(
     ctx: typer.Context,
@@ -152,6 +164,7 @@ def deploy_cmd(
 
     info(f"Namespace: {namespace}")
     info(f"Image: {image}")
+    deployment_existed = _deployment_exists(namespace)
 
     _apply_manifest(DEPLOY_DIR / "rbac.yaml", namespace, "rbac.yaml")
     success("Applied: rbac.yaml")
@@ -159,12 +172,42 @@ def deploy_cmd(
     _apply_manifest(DEPLOY_DIR / "operator-deployment.yaml", namespace, "operator-deployment.yaml")
     success("Applied: operator-deployment.yaml")
 
+    run_cmd(
+        [
+            "kubectl",
+            "set",
+            "image",
+            "deployment/ppa-operator",
+            f"operator={image}",
+            f"--namespace={namespace}",
+        ],
+        title="Setting operator image",
+    )
+    success(f"Configured deployment image: {image}")
+
     servicemonitor_path = DEPLOY_DIR / "operator-servicemonitor.yaml"
     if servicemonitor_path.exists():
         _apply_manifest(servicemonitor_path, namespace, "operator-servicemonitor.yaml")
         success("Applied: operator-servicemonitor.yaml")
     else:
         warn("Manifest not found: operator-servicemonitor.yaml")
+
+    if deployment_existed:
+        restart_ts = datetime.now(timezone.utc).isoformat()
+        info("Restarting operator pods to pick up the rebuilt image")
+        run_cmd(
+            [
+                "kubectl",
+                "annotate",
+                "deployment/ppa-operator",
+                f"kubectl.kubernetes.io/restartedAt={restart_ts}",
+                "--overwrite",
+                f"--namespace={namespace}",
+            ],
+            title="Triggering operator rollout",
+        )
+    else:
+        info("Operator deployment created")
 
     info("Waiting for rollout...")
     run_cmd(

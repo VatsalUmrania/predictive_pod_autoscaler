@@ -26,6 +26,7 @@ from ppa.config import (
     DEFAULT_EPOCHS,
     DEFAULT_HORIZON,
     DEFAULT_LOOKBACK,
+    DEFAULT_NAMESPACE,
 )
 
 app = typer.Typer(rich_markup_mode="rich", invoke_without_command=True)
@@ -37,6 +38,7 @@ class DeployCommand(BaseCommand):
     def run(
         self,
         app_name: str = DEFAULT_APP_NAME,
+        namespace: str = DEFAULT_NAMESPACE,
         retrain: bool = False,
         horizon: str = DEFAULT_HORIZON,
         csv: str = DEFAULT_CSV,
@@ -64,7 +66,7 @@ class DeployCommand(BaseCommand):
             dry_run: Show planned steps without executing
         """
         artifacts_dir = str(ARTIFACTS_DIR)
-        champion_dir = str(CHAMPION_DIR / app_name / horizon)
+        champion_dir = str(CHAMPION_DIR / app_name / namespace / horizon)
 
         # Display plan
         self._show_plan(app_name, horizon, retrain, skip_build, csv, dry_run)
@@ -75,6 +77,7 @@ class DeployCommand(BaseCommand):
         # Execute deployment
         self._execute_deployment(
             app_name=app_name,
+            namespace=namespace,
             retrain=retrain,
             horizon=horizon,
             csv=csv,
@@ -140,6 +143,7 @@ class DeployCommand(BaseCommand):
     def _execute_deployment(
         self,
         app_name: str,
+        namespace: str,
         retrain: bool,
         horizon: str,
         csv: str,
@@ -172,6 +176,7 @@ class DeployCommand(BaseCommand):
                     current=current,
                     total_steps=total_steps,
                     app_name=app_name,
+                    namespace=namespace,
                     csv=csv,
                     horizon=horizon,
                     lookback=lookback,
@@ -216,6 +221,7 @@ def deploy(
     app_name: str = typer.Option(
         DEFAULT_APP_NAME, "--app-name", "-a", help="Target application name."
     ),
+    namespace: str = typer.Option(DEFAULT_NAMESPACE, "--namespace", "-n", help="Target namespace."),
     retrain: bool = typer.Option(False, "--retrain", "-r", help="Retrain LSTM before deploying."),
     horizon: str = typer.Option(
         DEFAULT_HORIZON, "--horizon", help="Prediction horizon target column."
@@ -250,6 +256,7 @@ def deploy(
     cmd = DeployCommand()
     cmd.run(
         app_name=app_name,
+        namespace=namespace,
         retrain=retrain,
         horizon=horizon,
         csv=csv,

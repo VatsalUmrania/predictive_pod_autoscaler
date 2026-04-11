@@ -1,0 +1,213 @@
+================================================================================
+PREDICTIVE POD AUTOSCALER - MODEL SYSTEM EXPLORATION COMPLETE
+================================================================================
+
+INVESTIGATION SUMMARY
+=====================
+
+Explored the PPA codebase to understand:
+1. How models are uploaded/promoted to the operator
+2. Where model files are stored and referenced
+3. The model loading code causing "No TFLite runtime found" error
+4. Current deployment and model promotion workflow
+
+KEY FINDINGS
+============
+
+1. MODEL PROMOTION FLOW (3 Stages)
+   ├─ LOCAL TRAINING: Train Keras → Convert to TFLite → Stored in data/artifacts/
+   ├─ PROMOTION: Copy to data/champions/ (canonical location)
+   └─ DEPLOYMENT: Push to Kubernetes PVC via loader pod at /models/{app}/{horizon}/
+
+2. STORAGE LOCATIONS
+   Development:  data/artifacts/{app}/{namespace}/{horizon}/
+   Promotion:    data/champions/{app}/{namespace}/{horizon}/
+   Runtime:      /models/{app}/{horizon}/ (on K8s PVC)
+
+3. HOW OPERATOR LOADS MODELS
+   ├─ Reads CRD spec for modelPath, scalerPath, targetScalerPath
+   ├─ Falls back to convention: /models/{app}/{horizon}/ppa_model.tflite
+   ├─ Creates Predictor(model_path, scaler_path, target_scaler_path)
+   ├─ Attempts to load TFLite interpreter
+   │  ├─ Try 1: ai_edge_litert.Interpreter
+   │  ├─ Try 2: tensorflow.lite.Interpreter (NOT INSTALLED)
+   │  └─ Try 3: tflite_runtime.Interpreter (NOT INSTALLED)
+   └─ Raises RuntimeError if all fail
+
+4. ROOT CAUSE OF "NO TFLITE RUNTIME FOUND"
+   ├─ requirements.operator.txt only lists: ai-edge-litert==2.1.3
+   ├─ If ai_edge_litert binary unavailable for platform → operator dies
+   ├─ No fallback: tensorflow and tflite-runtime not in requirements
+   ├─ Operator Dockerfile only installs what's in requirements.operator.txt
+   └─ CRITICAL GAP: Missing fallback TFLite runtime
+
+5. COMPLETE PIPELINE
+   Step 1: ppa model train
+           Output: ppa_model_{horizon}.keras, scaler.pkl, target_scaler.pkl
+   
+   Step 2: ppa model convert
+           Output: ppa_model_{horizon}.tflite, ppa_model_metadata.json
+   
+   Step 3: ppa model push
+           ├─ Create loader pod in K8s
+           ├─ Copy model + training CSV to pod
+           ├─ Run regenerate_scalers.py INSIDE pod (pickle compatibility)
+           ├─ Copy regenerated scalers back
+           └─ Result: /models/{app}/{horizon}/ populated
+   
+   Step 4: Operator reads CRD and loads model
+           ├─ Predictor.__init__() calls _try_load()
+           ├─ Validates metadata.json
+           ├─ Loads scalers
+           └─ Ready to make predictions
+
+CRITICAL GAPS
+=============
+
+1. INCOMPLETE TFLITE RUNTIME COVERAGE (SEVERITY: CRITICAL)
+   - Only ai_edge_litert in requirements
+   - tensorflow.lite and tflite-runtime missing
+   - Platform-specific binary issues with ai_edge_litert
+   
+   FIX: Add tflite-runtime>=2.14.0 to requirements.operator.txt
+
+2. NO GRACEFUL DEGRADATION (SEVERITY: HIGH)
+   - predictor.py:166-169 raises RuntimeError immediately
+   - No fallback to observer mode or retry logic
+   - Operator becomes useless on TFLite load failure
+   
+   FIX: Add graceful degradation + better error messaging
+
+3. MISSING LOADER DOCKERFILE TEMPLATE (SEVERITY: MEDIUM)
+   - src/ppa/cli/commands/push.py:170-194 references non-existent Dockerfile
+   - Falls back to python:3.11-slim which may lack dependencies
+   
+   FIX: Create src/ppa/loader/Dockerfile template
+
+4. NO MODEL VALIDATION AT UPLOAD TIME (SEVERITY: LOW)
+   - ppa model push just copies files without verification
+   - Doesn't check if model is valid TFLite or loadable
+   
+   FIX: Add validation step in push command
+
+5. UNDOCUMENTED PATH CONVENTIONS (SEVERITY: LOW)
+   - Default: /models/{app}/{horizon}/ppa_model.tflite
+   - Unclear behavior with special characters, case sensitivity, etc.
+   
+   FIX: Document in CRD and configuration
+
+KEY FILES IDENTIFIED
+====================
+
+Core Model Loading:
+  - src/ppa/operator/predictor.py → Where error originates (line 166-169)
+  - src/ppa/operator/main.py → Orchestrates CR → Predictor (line 113-128)
+  - src/ppa/operator/Dockerfile → Needs TFLite runtime
+
+Model Promotion:
+  - src/ppa/model/pipeline.py → Train → Convert → Promote workflow
+  - src/ppa/cli/commands/push.py → Copy to PVC
+  - src/ppa/runtime/regenerate_scalers.py → Fix pickle compatibility
+
+Configuration:
+  - src/ppa/config.py → DEFAULT_MODEL_DIR = "/models"
+  - src/ppa/model/artifacts.py → Path helpers
+  - deploy/crd.yaml → Model path spec fields
+  - deploy/operator-deployment.yaml → PVC mounting
+
+WORKFLOW DETAILS
+================
+
+TRAINING & PROMOTION:
+  1. ppa model train --csv data/training-data/training_data_v2.csv
+     → data/artifacts/test-app/default/rps_t3m/ppa_model_{horizon}.keras
+  
+  2. ppa model convert --app-name test-app --target rps_t3m
+     → data/artifacts/test-app/default/rps_t3m/ppa_model_{horizon}.tflite
+  
+  3. Manually copy or auto-promote to:
+     → data/champions/test-app/default/rps_t3m/ppa_model.tflite
+  
+  4. ppa model push --app-name test-app --horizon rps_t3m
+     → /models/test-app/rps_t3m/ppa_model.tflite (via loader pod)
+
+OPERATOR LOADING:
+  1. K8s mounts PVC at /models (read-only)
+  2. CRD specifies or implies paths
+  3. Operator reads CRD
+  4. Creates Predictor(model_path, scaler_path, target_scaler_path)
+  5. Predictor._try_load() attempts TFLite import
+  6. IF SUCCESS: Model ready for predictions
+     IF FAILURE: Error logged, operator degraded
+
+SPECIAL FEATURES
+================
+
+PR#5 - History Preservation on Model Upgrade:
+  When model path changes, old model's history (30 min of data)
+  is preserved in new model → avoids warmup period
+
+PR#7/PR#8 - Metadata Validation:
+  Checks feature_columns match to catch train/serve schema mismatches
+
+PR#10 - Exponential Backoff:
+  On load failure: retry with backoff (2^n seconds, capped at 5 min)
+
+PR#12 - Concept Drift Detection:
+  Tracks prediction vs actual RPS to detect model degradation
+
+PR#15 - History Serialization:
+  Stores history in CR status for pod restart resilience
+
+IMMEDIATE ACTIONS REQUIRED
+===========================
+
+1. ADD TFLITE-RUNTIME TO requirements.operator.txt
+   - File: requirements.operator.txt
+   - Add: tflite-runtime>=2.14.0
+   - Rebuild operator image
+   - Test in environment
+
+2. CREATE LOADER DOCKERFILE TEMPLATE
+   - Create: src/ppa/loader/Dockerfile
+   - Install pandas, numpy, scikit-learn, joblib
+   - Used by push.py for model validation
+
+3. ADD PRE-FLIGHT CHECKS
+   - Document available runtimes in logs
+   - Clear error messages on startup
+   - Consider graceful degradation mode
+
+DELIVERABLES CREATED
+====================
+
+1. MODEL_SYSTEM_ANALYSIS.md (This repo)
+   - Complete architecture breakdown
+   - 8 detailed sections covering all aspects
+   - Root cause analysis
+   - Recommended fixes with code examples
+
+2. QUICK_REFERENCE.md (This repo)
+   - Quick reference for debugging
+   - Key files and their purposes
+   - Step-by-step workflows
+   - Debugging checklist
+   - Testing procedures
+
+3. This Executive Summary
+
+NEXT STEPS
+==========
+
+Recommended PR scope:
+1. Add tflite-runtime to requirements.operator.txt
+2. Create src/ppa/loader/Dockerfile template
+3. Improve error messaging in predictor.py
+4. Add pre-upload model validation in push.py
+5. Document path conventions in CRD
+
+All analysis files saved to project root:
+- MODEL_SYSTEM_ANALYSIS.md (comprehensive)
+- QUICK_REFERENCE.md (for debugging)
+
+================================================================================

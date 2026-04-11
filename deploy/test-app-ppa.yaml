@@ -1,0 +1,19 @@
+apiVersion: ppa.example.com/v1
+kind: PredictiveAutoscaler
+metadata:
+  name: test-app-ppa
+  namespace: default
+spec:
+  targetDeployment: "test-app"
+  appName: "test-app"
+  horizon: "10m"
+  minReplicas: 2
+  maxReplicas: 10
+  capacityPerPod: 100
+  scaleUpRate: 2.0
+  scaleDownRate: 0.5
+  safetyFactor: 1.2
+  observerMode: false
+  modelPath: "/models/test-app/10m/ppa_model.tflite"
+  scalerPath: "/models/test-app/10m/scaler.pkl"
+  targetScalerPath: "/models/test-app/10m/target_scaler.pkl"

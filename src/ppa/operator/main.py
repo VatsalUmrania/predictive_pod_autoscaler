@@ -111,55 +111,20 @@ _cr_state: dict[tuple[str, str], CRState] = {}
 
 
 def _resolve_paths(spec: dict, target_app: str, target_horizon: str) -> tuple[str, str, str | None]:
-    """Compute model + scaler + target_scaler paths from CRD spec, falling back to convention.
-
-    Tries multiple path structures for backward compatibility:
-    1. New structure: /models/{horizon}/ppa_model.tflite
-    2. Old structure: /models/{app_name}/{horizon}/ppa_model.tflite
-    """
+    """Compute model + scaler + target_scaler paths from CRD spec, falling back to convention."""
     model_dir = DEFAULT_MODEL_DIR
-
-    # Try new structure first
-    new_model_path = os.path.join(model_dir, target_horizon, "ppa_model.tflite")
-    new_scaler_path = os.path.join(model_dir, target_horizon, "scaler.pkl")
-    new_target_scaler_path = os.path.join(model_dir, target_horizon, "target_scaler.pkl")
-
-    # Try old structure
-    old_model_path = os.path.join(model_dir, target_app, target_horizon, "ppa_model.tflite")
-    old_scaler_path = os.path.join(model_dir, target_app, target_horizon, "scaler.pkl")
-    old_target_scaler_path = os.path.join(
+    model_path = spec.get("modelPath") or os.path.join(
+        model_dir, target_app, target_horizon, "ppa_model.tflite"
+    )
+    scaler_path = spec.get("scalerPath") or os.path.join(
+        model_dir, target_app, target_horizon, "scaler.pkl"
+    )
+    # Target scaler is optional (backward compat with models trained without it)
+    target_scaler_path = spec.get("targetScalerPath") or os.path.join(
         model_dir, target_app, target_horizon, "target_scaler.pkl"
     )
-
-    # Check spec overrides first
-    if spec.get("modelPath"):
-        model_path = spec["modelPath"]
-        scaler_path = spec.get("scalerPath") or os.path.join(
-            os.path.dirname(model_path), "scaler.pkl"
-        )
-        target_scaler_path = spec.get("targetScalerPath") or os.path.join(
-            os.path.dirname(model_path), "target_scaler.pkl"
-        )
-    # Then check new structure
-    elif os.path.exists(new_model_path):
-        model_path = new_model_path
-        scaler_path = new_scaler_path
-        target_scaler_path = new_target_scaler_path
-    # Then check old structure
-    elif os.path.exists(old_model_path):
-        model_path = old_model_path
-        scaler_path = old_scaler_path
-        target_scaler_path = old_target_scaler_path
-    # Default to new structure (will fail gracefully at load time)
-    else:
-        model_path = new_model_path
-        scaler_path = new_scaler_path
-        target_scaler_path = new_target_scaler_path
-
-    # Target scaler is optional (backward compat with models trained without it)
     if not os.path.exists(target_scaler_path):
         target_scaler_path = None
-
     return model_path, scaler_path, target_scaler_path
 
 

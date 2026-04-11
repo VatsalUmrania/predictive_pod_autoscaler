@@ -1,19 +1,25 @@
-FROM python:3.13-slim
+# Single-stage lightweight operator image
+FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    gcc \
-    g++ \
-    gfortran \
-    libopenblas-dev \
-    liblapack-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Copy lightweight operator requirements
+COPY requirements.operator.txt .
 
-COPY requirements.txt requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies (pre-built wheels available for all packages)
+RUN pip install --no-cache-dir -r requirements.operator.txt && rm requirements.operator.txt
 
-COPY src/ppa/ src/ppa/
+# Copy entire ppa module to /app
+COPY src/ppa/ ./ppa/
 
-CMD ["kopf", "run", "src/ppa/operator/main.py", "--standalone"]
+# Set Python environment
+ENV PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# Health check for Kubernetes
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import kopf; import sys; sys.exit(0)" || exit 1
+
+# Start operator
+CMD ["kopf", "run", "ppa/operator/main.py", "--standalone"]

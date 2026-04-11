@@ -15,7 +15,30 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ppa.common.feature_spec import QUERIED_FEATURES
+# Feature schema (v2 - normalized universal features)
+# Requires: CPU + memory limits set on target deployment
+# Requires: Istio sidecar or /metrics HTTP endpoint
+QUERIED_FEATURES = [
+    "rps_per_replica",
+    "cpu_utilization_pct",
+    "memory_utilization_pct",
+    "latency_p95_ms",
+    "active_connections",
+    "error_rate",
+    "cpu_acceleration",
+    "rps_acceleration",
+    "replicas_normalized",
+]
+
+TEMPORAL_FEATURES = [
+    "hour_sin",
+    "hour_cos",
+    "dow_sin",
+    "dow_cos",
+    "is_weekend",
+]
+
+FEATURE_COLUMNS = QUERIED_FEATURES + TEMPORAL_FEATURES
 
 # Global config singleton 
 _global_config: Config | None = None

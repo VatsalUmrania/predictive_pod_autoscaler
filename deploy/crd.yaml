@@ -3,18 +3,31 @@ kind: CustomResourceDefinition
 metadata:
   name: predictiveautoscalers.ppa.example.com
 spec:
+  scope: Namespaced
   group: ppa.example.com
+  names:
+    kind: PredictiveAutoscaler
+    plural: predictiveautoscalers
+    singular: predictiveautoscaler
+    shortNames:
+    - ppa
   versions:
   - name: v1
     served: true
     storage: true
+    subresources:
+      status: {}
+      scale:
+        specReplicasPath: .spec.maxReplicas
+        statusReplicasPath: .status.currentReplicas
     schema:
       openAPIV3Schema:
         type: object
+        x-kubernetes-preserve-unknown-fields: true
         properties:
           spec:
             type: object
-            required: ["targetDeployment"]
+            x-kubernetes-preserve-unknown-fields: true
             properties:
               targetDeployment:
                 type: string
@@ -26,62 +39,43 @@ spec:
               minReplicas:
                 type: integer
                 default: 2
-                minimum: 1
               maxReplicas:
                 type: integer
                 default: 20
-                minimum: 1
               capacityPerPod:
                 type: integer
                 default: 80
-                description: Max requests/second each pod can handle
               appName:
                 type: string
-                description: "Name of the logical application (used for model namespaces)"
               horizon:
                 type: string
-                description: "Prediction horizon identifier (e.g. rps_t3m)"
               modelPath:
                 type: string
                 default: ""
-                description: "Path to TFLite model file (empty = auto /models/{appName}/{horizon}/ppa_model.tflite)"
               scalerPath:
                 type: string
                 default: ""
-                description: "Path to sklearn scaler file (empty = auto /models/{appName}/{horizon}/scaler.pkl)"
               scaleUpRate:
                 type: number
                 default: 2.0
-                description: Max scale-up multiplier per cycle
               scaleDownRate:
                 type: number
                 default: 0.7
-                description: Max scale-down multiplier per cycle (0.7 = allow shedding 30% of pods per cycle)
               safetyFactor:
                 type: number
-                default: 1.10
-                minimum: 1.0
-                description: >-
-                  Multiplicative headroom applied to the predicted RPS before
-                  replica conversion (e.g. 1.10 = +10%). Scales with traffic
-                  unlike a fixed pod buffer, keeping the model unbiased.
+                default: 1.1
               targetScalerPath:
                 type: string
                 default: ""
-                description: "Path to target scaler file (empty = auto /models/{appName}/{horizon}/target_scaler.pkl)"
               containerName:
                 type: string
                 default: ""
-                description: "Container name for PromQL queries (empty = all containers)"
               observerMode:
                 type: boolean
                 default: false
-                description: >-
-                  If true, the operator computes and publishes predicted replicas
-                  but never calls scale_deployment. Safe for shadow-running t3m/t5m
-                  alongside the active t10m scaler without replica conflicts.
           status:
             type: object
+            x-kubernetes-preserve-unknown-fields: true
             properties:
               lastPredictedLoad:
                 type: number
@@ -93,15 +87,36 @@ spec:
                 type: string
               consecutiveSkips:
                 type: integer
-    subresources:
-      status: {}
+              historySnapshot:
+                type: object
+              conceptDriftDetected:
+                type: boolean
+              driftSeverity:
+                type: string
+              predictionErrorPct:
+                type: number
+              retrainingRecommended:
+                type: boolean
+              retrainingReason:
+                type: string
+              circuitBreakerTripped:
+                type: boolean
+              fallbackScaling:
+                type: boolean
+              fallbackReason:
+                type: string
+              fallbackReplicas:
+                type: integer
+              metricFailures:
+                type: integer
+              lastMetricError:
+                type: string
+              lastMetricErrorTime:
+                type: string
     additionalPrinterColumns:
     - name: Target
       type: string
       jsonPath: .spec.targetDeployment
-    - name: Namespace
-      type: string
-      jsonPath: .spec.namespace
     - name: Current
       type: integer
       jsonPath: .status.currentReplicas
@@ -114,10 +129,3 @@ spec:
     - name: Skips
       type: integer
       jsonPath: .status.consecutiveSkips
-  scope: Namespaced
-  names:
-    plural: predictiveautoscalers
-    singular: predictiveautoscaler
-    kind: PredictiveAutoscaler
-    shortNames:
-    - ppa

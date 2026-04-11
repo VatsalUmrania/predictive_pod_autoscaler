@@ -12,14 +12,44 @@ from typing import TYPE_CHECKING
 import typer
 
 from ppa.cli.utils import error, info, run_cmd, step_heading, success, warn
+from ppa.model.artifacts import champion_dir as structured_champion_dir
 from ppa.config import (
     CHAMPION_DIR,
     DEFAULT_NAMESPACE,
     DEPLOY_DIR,
+    PROJECT_DIR,
 )
 
 if TYPE_CHECKING:
     from rich.progress import Progress, TaskID
+
+
+def _resolve_metadata_source(artifacts_dir: Path) -> Path | None:
+    """Find the metadata file produced during conversion."""
+    candidates = [
+        artifacts_dir / "ppa_model_metadata.json",
+        artifacts_dir / "model_metadata.json",
+    ]
+    candidates.extend(sorted(artifacts_dir.glob("*_metadata.json")))
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return None
+
+
+def _artifact_paths(
+    artifacts_dir: Path, app_name: str, namespace: str, horizon: str
+) -> dict[str, Path]:
+    """Return the expected artifact paths for a trained horizon."""
+    base_dir = artifacts_dir / app_name / namespace / horizon
+    return {
+        "model": base_dir / f"ppa_model_{horizon}.keras",
+        "tflite": base_dir / f"ppa_model_{horizon}.tflite",
+        "scaler": base_dir / f"scaler_{horizon}.pkl",
+        "target_scaler": base_dir / f"target_scaler_{horizon}.pkl",
+    }
 
 
 def retrain_lstm(
@@ -28,6 +58,7 @@ def retrain_lstm(
     current: int,
     total_steps: int,
     app_name: str,
+    namespace: str,
     csv: str,
     horizon: str,
     lookback: int,
@@ -36,6 +67,9 @@ def retrain_lstm(
     artifacts_dir: str,
 ) -> int:
     """Stage 1-3: Retrain, convert, and promote LSTM models."""
+    artifacts_path = Path(artifacts_dir)
+    paths = _artifact_paths(artifacts_path, app_name, namespace, horizon)
+
     # Step 1: Retrain
     current += 1
     step_heading(current, total_steps, f"Retraining LSTM ({horizon})")
@@ -53,6 +87,8 @@ def retrain_lstm(
             lookback=lookback,
             epochs=epochs,
             target_col=horizon,
+            app_name=app_name,
+            namespace=namespace,
             output_dir=artifacts_dir,
             early_stopping_patience=patience,
         )
@@ -75,6 +111,10 @@ def retrain_lstm(
                 str(epochs),
                 "--target",
                 horizon,
+                "--app-name",
+                app_name,
+                "--namespace",
+                namespace,
                 "--output-dir",
                 artifacts_dir,
                 "--patience",
@@ -90,22 +130,19 @@ def retrain_lstm(
     step_heading(current, total_steps, "Convert → TFLite (with int8 quantization)")
     progress.update(task, description=f"[bold]Step {current}:[/bold] Converting to TFLite")
 
+    if not paths["model"].exists():
+        error(f"Keras model not found: {paths['model']}")
+        raise typer.Exit(1)
+
     try:
         from ppa.model.convert import convert_model
 
-        model_path = Path(artifacts_dir) / "model.keras"
-        tflite_path = Path(artifacts_dir) / "model.tflite"
-
-        if not model_path.exists():
-            error(f"Keras model not found: {model_path}")
-            raise typer.Exit(1)
-
         convert_model(
-            model_path=str(model_path),
-            output_path=str(tflite_path),
+            model_path=str(paths["model"]),
+            output_path=str(paths["tflite"]),
             quantize=True,
         )
-        success(f"Converted to TFLite: {tflite_path}")
+        success(f"Converted to TFLite: {paths['tflite']}")
     except (ImportError, AttributeError, TypeError):
         warn("Cannot convert model directly — using subprocess")
         run_cmd(
@@ -113,11 +150,10 @@ def retrain_lstm(
                 "python",
                 "-m",
                 "ppa.model.convert",
-                "--keras",
-                str(Path(artifacts_dir) / "model.keras"),
-                "--tflite",
-                str(Path(artifacts_dir) / "model.tflite"),
-                "--quantize",
+                "--model",
+                str(paths["model"]),
+                "--output",
+                str(paths["tflite"]),
             ],
             title="Converting model to TFLite",
         )
@@ -129,16 +165,30 @@ def retrain_lstm(
     step_heading(current, total_steps, "Promote artifacts → champion")
     progress.update(task, description=f"[bold]Step {current}:[/bold] Promoting artifacts")
 
-    champion_dir = CHAMPION_DIR / app_name / horizon
+    champion_dir = structured_champion_dir(app_name, namespace, horizon, CHAMPION_DIR)
     champion_dir.mkdir(parents=True, exist_ok=True)
 
-    for filename in ["model.tflite", "model.keras", "scaler.pkl"]:
-        src = Path(artifacts_dir) / filename
+    metadata_source = _resolve_metadata_source(Path(artifacts_dir))
+
+    promoted_files = [
+        (paths["tflite"], champion_dir / "ppa_model.tflite"),
+        (paths["model"], champion_dir / "ppa_model.keras"),
+        (paths["scaler"], champion_dir / "scaler.pkl"),
+        (paths["target_scaler"], champion_dir / "target_scaler.pkl"),
+    ]
+
+    for src, dst in promoted_files:
         if src.exists():
             import shutil
 
-            shutil.copy2(src, champion_dir / filename)
-            success(f"Promoted {filename}")
+            shutil.copy2(src, dst)
+            success(f"Promoted {dst.name}")
+
+    if metadata_source is not None:
+        import shutil
+
+        shutil.copy2(metadata_source, champion_dir / f"ppa_model_{horizon}_metadata.json")
+        success(f"Promoted ppa_model_{horizon}_metadata.json")
 
     progress.advance(task)
     return current
@@ -204,7 +254,15 @@ def build_and_deploy(
         progress.update(task, description=f"[bold]Step {current}:[/bold] Build Docker")
 
         run_cmd(
-            ["docker", "build", "-t", "ppa-operator:latest", str(DEPLOY_DIR)],
+            [
+                "docker",
+                "build",
+                "-t",
+                "ppa-operator:latest",
+                "-f",
+                str(PROJECT_DIR / "src" / "ppa" / "operator" / "Dockerfile"),
+                str(PROJECT_DIR),
+            ],
             title="Building operator image",
         )
         success("Built ppa-operator:latest")
@@ -226,7 +284,7 @@ def build_and_deploy(
     progress.update(task, description=f"[bold]Step {current}:[/bold] Deploy operator")
 
     run_cmd(
-        ["kubectl", "apply", "-f", str(DEPLOY_DIR / "operator.yaml")],
+        ["kubectl", "apply", "-f", str(DEPLOY_DIR / "operator-deployment.yaml")],
         title="Deploying operator",
     )
     success("Operator deployed")

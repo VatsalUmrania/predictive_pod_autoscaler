@@ -10,9 +10,9 @@ spec:
   minReplicas: 2
   maxReplicas: 20
   capacityPerPod: 80
-  modelPath: /models/rps_t3m/ppa_model.tflite
-  scalerPath: /models/rps_t3m/scaler.pkl
-  targetScalerPath: /models/rps_t3m/target_scaler.pkl
+  modelPath: /models/rps_t3m/ppa_model_rps_t3m.tflite
+  scalerPath: /models/rps_t3m/scaler_rps_t3m.pkl
+  targetScalerPath: /models/rps_t3m/target_scaler_rps_t3m.pkl
   scaleUpRate: 2.0
   scaleDownRate: 0.7
   safetyFactor: 1.10
@@ -30,9 +30,9 @@ spec:
   minReplicas: 2
   maxReplicas: 20
   capacityPerPod: 80
-  modelPath: /models/rps_t5m/ppa_model.tflite
-  scalerPath: /models/rps_t5m/scaler.pkl
-  targetScalerPath: /models/rps_t5m/target_scaler.pkl
+  modelPath: /models/rps_t5m/ppa_model_rps_t5m.tflite
+  scalerPath: /models/rps_t5m/scaler_rps_t5m.pkl
+  targetScalerPath: /models/rps_t5m/target_scaler_rps_t5m.pkl
   scaleUpRate: 2.0
   scaleDownRate: 0.7
   safetyFactor: 1.10
@@ -50,9 +50,9 @@ spec:
   minReplicas: 2
   maxReplicas: 20
   capacityPerPod: 80
-  modelPath: /models/rps_t10m/ppa_model.tflite
-  scalerPath: /models/rps_t10m/scaler.pkl
-  targetScalerPath: /models/rps_t10m/target_scaler.pkl
+  modelPath: /models/rps_t10m/ppa_model_rps_t10m.tflite
+  scalerPath: /models/rps_t10m/scaler_rps_t10m.pkl
+  targetScalerPath: /models/rps_t10m/target_scaler_rps_t10m.pkl
   scaleUpRate: 2.0
   scaleDownRate: 0.7
   safetyFactor: 1.10

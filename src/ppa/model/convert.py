@@ -3,9 +3,12 @@ import argparse
 import datetime
 import json
 import os
+from pathlib import Path
 
 import numpy as np
 import tensorflow as tf
+
+from ppa.model.artifacts import artifact_dir, keras_model_path, tflite_model_path
 
 
 def evaluate_model_accuracy(model, eval_data=None):
@@ -187,9 +190,22 @@ def convert_model(
     return result
 
 
+def structured_convert(
+    app_name: str, namespace: str, target: str, root_dir: str = "data/artifacts"
+):
+    """Convert a structured trained model for one app/namespace/target."""
+    root = Path(root_dir)
+    model_path = keras_model_path(app_name, namespace, target, root)
+    output_path = tflite_model_path(app_name, namespace, target, root)
+    return convert_model(str(model_path), True, str(output_path))
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert Keras model to TFLite")
-    parser.add_argument("--model", type=str, default="data/artifacts/ppa_model.keras")
+    parser.add_argument("--app-name", type=str, default="test-app")
+    parser.add_argument("--namespace", type=str, default="default")
+    parser.add_argument("--target", type=str, default="rps_t10m")
+    parser.add_argument("--root-dir", type=str, default="data/artifacts")
     parser.add_argument(
         "--output",
         type=str,
@@ -199,4 +215,8 @@ if __name__ == "__main__":
     parser.add_argument("--no-quantize", action="store_true")
     args = parser.parse_args()
 
-    convert_model(args.model, not args.no_quantize, args.output)
+    model_path = keras_model_path(args.app_name, args.namespace, args.target, Path(args.root_dir))
+    output_path = args.output or str(
+        tflite_model_path(args.app_name, args.namespace, args.target, Path(args.root_dir))
+    )
+    convert_model(str(model_path), not args.no_quantize, output_path)

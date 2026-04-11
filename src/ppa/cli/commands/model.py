@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import typer
 from rich.panel import Panel
@@ -17,7 +18,9 @@ from ppa.config import (
     DEFAULT_EPOCHS,
     DEFAULT_HORIZON,
     DEFAULT_LOOKBACK,
+    DEFAULT_NAMESPACE,
 )
+from ppa.model.artifacts import artifact_dir, keras_model_path, tflite_model_path
 
 app = typer.Typer(rich_markup_mode="rich")
 
@@ -25,6 +28,8 @@ app = typer.Typer(rich_markup_mode="rich")
 @app.command("train")
 def model_train(
     csv: str = typer.Option(DEFAULT_CSV, "--csv", help="Path to training CSV."),
+    app_name: str = typer.Option(DEFAULT_APP_NAME, "--app-name", "-a", help="App name."),
+    namespace: str = typer.Option(DEFAULT_NAMESPACE, "--namespace", "-n", help="Namespace."),
     target: str = typer.Option(
         DEFAULT_HORIZON, "--target", help="Target column (rps_t3m, rps_t5m, rps_t10m)."
     ),
@@ -72,6 +77,8 @@ def model_train(
                 lookback=lookback,
                 epochs=epochs,
                 target_col=target,
+                app_name=app_name,
+                namespace=namespace,
                 test_split=test_split,
                 output_dir=output_dir,
                 target_floor=target_floor,
@@ -211,6 +218,7 @@ def model_pipeline(
     app_name: str = typer.Option(
         DEFAULT_APP_NAME, "--app-name", "-a", help="Target application name."
     ),
+    namespace: str = typer.Option(DEFAULT_NAMESPACE, "--namespace", "-n", help="Target namespace."),
     csv: str = typer.Option(DEFAULT_CSV, "--csv", help="Path to training CSV."),
     horizons: str = typer.Option(
         "rps_t3m,rps_t5m,rps_t10m", "--horizons", help="Comma-separated targets."
@@ -248,6 +256,7 @@ def model_pipeline(
 
         exit_code = run_pipeline(
             app_name=app_name,
+            namespace=namespace,
             csv_path=csv,
             horizons=horizon_list,
             epochs=epochs,
@@ -282,7 +291,10 @@ def model_pipeline(
 
 @app.command("convert")
 def model_convert(
-    model_path: str = typer.Option(..., "--model", help="Path to .keras model file."),
+    app_name: str = typer.Option(DEFAULT_APP_NAME, "--app-name", "-a", help="App name."),
+    namespace: str = typer.Option(DEFAULT_NAMESPACE, "--namespace", "-n", help="Namespace."),
+    target: str = typer.Option(DEFAULT_HORIZON, "--target", help="Target column."),
+    root_dir: str = typer.Option(str(ARTIFACTS_DIR), "--root-dir", help="Artifact root dir."),
     output: str | None = typer.Option(None, "--output", help="Output .tflite path."),
     no_quantize: bool = typer.Option(False, "--no-quantize", help="Skip quantization."),
 ) -> None:
@@ -294,11 +306,14 @@ def model_convert(
     try:
         from ppa.model.convert import convert_model
 
+        model_path = keras_model_path(app_name, namespace, target, Path(root_dir))
+        output_path = output or str(tflite_model_path(app_name, namespace, target, Path(root_dir)))
+
         with console.status("[info]Converting model...[/info]", spinner="dots"):
             result = convert_model(
-                model_path=model_path,
+                model_path=str(model_path),
                 quantize=not no_quantize,
-                output_path=output,
+                output_path=output_path,
             )
 
         if result:

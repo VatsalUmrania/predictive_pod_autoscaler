@@ -1,0 +1,82 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+dist/
+build/
+
+# Testing & linting
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Git & version control
+.git/
+.github/
+.gitignore
+.gitattributes
+
+# IDE & tools
+.vscode/
+.agents/
+.claude/
+.codex
+.opencode.json
+.agent/
+.idea/
+*.swp
+*.swo
+*~
+
+# Large data files (don't need in operator image)
+data/
+model/
+*.log
+prediction_validation.log
+ppa-diagnostics.json
+skills-lock.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation (not needed in runtime image)
+docs/
+*.md
+
+# Test files (not needed in runtime image)
+tests/
+scripts/
+Makefile
+setup.py
+pyproject.toml
+
+# Config files (not needed in runtime image)
+.env
+.env.local
+requirements.txt
+
+# Documentation
+docs/
+README.md
+LICENSE
+MIGRATION.md
+PHASE_1_COMPLETION.md
+future_vision.md
+
+# Scripts and demos
+scripts/
+tests/
+
+# Other
+*.env
+.env
+Makefile

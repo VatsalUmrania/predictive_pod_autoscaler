@@ -21,6 +21,7 @@ class CRState:
     
     Attributes:
         predictor: TFLite model + scaler + history for this CR
+        observer_mode: Whether this CR is shadow-only and must not scale
         stable_count: Reconciliation cycles with stable replica count
         last_prediction: Last predicted load value
         last_desired: Last desired replica count (for stabilization)
@@ -33,6 +34,7 @@ class CRState:
     """
 
     predictor: "Predictor"
+    observer_mode: bool = False
     stable_count: int = 0
     last_prediction: float = 0.0
     last_desired: float = -1.0  # Replica target from previous cycle (stabilization anchor)

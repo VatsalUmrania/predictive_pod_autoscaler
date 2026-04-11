@@ -13,6 +13,7 @@ from keras import layers
 from sklearn.preprocessing import MinMaxScaler
 
 from ppa.common.feature_spec import FEATURE_COLUMNS, TARGET_COLUMNS
+from ppa.model.artifacts import artifact_dir, keras_model_path, scaler_path, target_scaler_path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -76,6 +77,8 @@ def train_model(
     lookback=LOOKBACK_STEPS,
     epochs=50,
     target_col=DEFAULT_TARGET,
+    app_name="test-app",
+    namespace="default",
     test_split=0.1,
     output_dir="data/artifacts",
     target_floor=5.0,
@@ -171,16 +174,17 @@ def train_model(
         ],
     )
 
-    # Save artifacts with horizon-specific names
-    os.makedirs(output_dir, exist_ok=True)
-    model_path = os.path.join(output_dir, f"ppa_model_{target_col}.keras")
-    scaler_path = os.path.join(output_dir, f"scaler_{target_col}.pkl")
-    target_scaler_path = os.path.join(output_dir, f"target_scaler_{target_col}.pkl")
-    meta_path = os.path.join(output_dir, f"split_meta_{target_col}.json")
+    # Save artifacts with structured app/namespace/target names
+    out_dir = artifact_dir(app_name, namespace, target_col, Path(output_dir))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    model_path = keras_model_path(app_name, namespace, target_col, Path(output_dir))
+    scaler_file = scaler_path(app_name, namespace, target_col, Path(output_dir))
+    target_scaler_file = target_scaler_path(app_name, namespace, target_col, Path(output_dir))
+    meta_path = out_dir / f"split_meta_{target_col}.json"
 
     model.save(model_path)
-    joblib.dump(scaler, scaler_path)
-    joblib.dump(target_scaler, target_scaler_path)
+    joblib.dump(scaler, scaler_file)
+    joblib.dump(target_scaler, target_scaler_file)
 
     # Save split metadata so evaluate.py can reproduce the exact test set
     split_meta = {
@@ -198,8 +202,8 @@ def train_model(
         json.dump(split_meta, f, indent=2)
 
     print(f"Saved model          → {model_path}")
-    print(f"Saved feature scaler → {scaler_path}")
-    print(f"Saved target scaler  → {target_scaler_path}")
+    print(f"Saved feature scaler → {scaler_file}")
+    print(f"Saved target scaler  → {target_scaler_file}")
     print(f"Saved meta           → {meta_path}")
 
     # Compute final metrics on validation set
@@ -218,8 +222,8 @@ def train_model(
         "metrics": metrics,
         "artifact_paths": {
             "model": model_path,
-            "scaler": scaler_path,
-            "target_scaler": target_scaler_path,
+            "scaler": scaler_file,
+            "target_scaler": target_scaler_file,
             "meta": meta_path,
         },
     }
@@ -227,6 +231,8 @@ def train_model(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train LSTM model for a target horizon")
+    parser.add_argument("--app-name", type=str, default="test-app")
+    parser.add_argument("--namespace", type=str, default="default")
     parser.add_argument("--csv", type=str, default="data/training-data/training_data_v2.csv")
     parser.add_argument("--lookback", type=int, default=LOOKBACK_STEPS)
     parser.add_argument("--epochs", type=int, default=50)
@@ -258,6 +264,8 @@ if __name__ == "__main__":
         lookback=args.lookback,
         epochs=args.epochs,
         target_col=args.target,
+        app_name=args.app_name,
+        namespace=args.namespace,
         test_split=args.test_split,
         output_dir=args.output_dir,
         target_floor=args.target_floor,

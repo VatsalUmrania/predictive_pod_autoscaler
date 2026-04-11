@@ -27,6 +27,22 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 
+def _resolve_metadata_path(model_path: str) -> Path | None:
+    """Resolve the metadata JSON that belongs to a converted model artifact."""
+    model_file = Path(model_path)
+    candidates = [
+        model_file.with_name("ppa_model_metadata.json"),
+        model_file.with_name(f"{model_file.stem}_metadata.json"),
+    ]
+    candidates.extend(sorted(model_file.parent.glob("*_metadata.json")))
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return None
+
+
 # These functions are now in model_qualifier.py and deployment.py
 
 
@@ -51,6 +67,10 @@ def promote_artifacts(
     if challenger_paths.get("target_scaler") and os.path.exists(challenger_paths["target_scaler"]):
         shutil.copy2(challenger_paths["target_scaler"], dst_target_scaler)
     shutil.copy2(eval_summary_path, dst_summary)
+
+    metadata_path = _resolve_metadata_path(challenger_paths["tflite"])
+    if metadata_path is not None:
+        shutil.copy2(metadata_path, os.path.join(target_dir, "ppa_model_metadata.json"))
 
     # Copy evaluation plots produced by evaluate.py into the champion folder
     artifacts_dir = os.path.dirname(eval_summary_path)

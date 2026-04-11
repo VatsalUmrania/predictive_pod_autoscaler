@@ -1,19 +1,19 @@
 apiVersion: ppa.example.com/v1
 kind: PredictiveAutoscaler
 metadata:
-  name: ${APP_NAME}-ppa-${HORIZON_CLEAN}
-  namespace: ${NAMESPACE}
+  name: test-app-ppa-rps-t10m
+  namespace: default
 spec:
-  targetDeployment: "${TARGET_DEPLOYMENT}"
-  appName: "${APP_NAME}"
-  horizon: "${HORIZON}"
-  minReplicas: ${MIN_REPLICAS}
-  maxReplicas: ${MAX_REPLICAS}
-  capacityPerPod: ${RPS_CAPACITY}
-  scaleUpRate: ${SCALE_UP_RATE}
-  scaleDownRate: ${SCALE_DOWN_RATE}
-  safetyFactor: ${SAFETY_FACTOR}
-  observerMode: ${OBSERVER_MODE}
-  modelPath: "/models/${APP_NAME}/${HORIZON}/ppa_model.tflite"
-  scalerPath: "/models/${APP_NAME}/${HORIZON}/scaler.pkl"
-  targetScalerPath: "/models/${APP_NAME}/${HORIZON}/target_scaler.pkl"
+  targetDeployment: "test-app"
+  appName: "test-app"
+  horizon: "rps_t10m"
+  minReplicas: 1
+  maxReplicas: 10
+  capacityPerPod: 20
+  scaleUpRate: 2.0
+  scaleDownRate: 1.0
+  safetyFactor: 1.15
+  observerMode: false
+  modelPath: "/models/test-app/rps_t10m/ppa_model_rps_t10m.tflite"
+  scalerPath: "/models/test-app/rps_t10m/scaler_rps_t10m.pkl"
+  targetScalerPath: "/models/test-app/rps_t10m/target_scaler_rps_t10m.pkl"
