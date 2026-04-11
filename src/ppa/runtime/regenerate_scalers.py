@@ -58,15 +58,15 @@ def regenerate_all(app_name: str, horizons: list[str], csv_path: str) -> dict:
 def _regenerate_single(app_name: str, horizon: str, df: pd.DataFrame) -> bool:
     """Regenerate scalers for a single horizon."""
     # Try both directory structures:
-    # 1. Old: /models/app_name/horizon/
-    # 2. New (from push.py): /models/horizon/
+    # 1. Canonical: /models/{app_name}/{horizon}/ppa_model.tflite
+    # 2. Legacy: /models/{horizon}/ppa_model.tflite
     base_dir = Path(f"/models/{horizon}")
     tflite = base_dir / "ppa_model.tflite"
 
     if not tflite.exists():
-        # Try old structure
+        # Try canonical structure
         base_dir = Path(f"/models/{app_name}/{horizon}")
-        tflite = base_dir / f"ppa_model_{horizon}.tflite"
+        tflite = base_dir / "ppa_model.tflite"
         if not tflite.exists():
             log.warning(f"Skipping {horizon}: no .tflite found at {base_dir}")
             return False

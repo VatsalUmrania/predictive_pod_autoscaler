@@ -20,24 +20,29 @@ def champion_dir(app_name: str, namespace: str, target: str, root: Path = CHAMPI
 def keras_model_path(
     app_name: str, namespace: str, target: str, root: Path = ARTIFACTS_DIR
 ) -> Path:
-    return artifact_dir(app_name, namespace, target, root) / f"ppa_model_{target}.keras"
+    """Return canonical path to Keras model (no horizon suffix in filename)."""
+    return artifact_dir(app_name, namespace, target, root) / "ppa_model.keras"
 
 
 def tflite_model_path(
     app_name: str, namespace: str, target: str, root: Path = ARTIFACTS_DIR
 ) -> Path:
-    return artifact_dir(app_name, namespace, target, root) / f"ppa_model_{target}.tflite"
+    """Return canonical path to TFLite model (no horizon suffix in filename)."""
+    return artifact_dir(app_name, namespace, target, root) / "ppa_model.tflite"
 
 
 def scaler_path(app_name: str, namespace: str, target: str, root: Path = ARTIFACTS_DIR) -> Path:
-    return artifact_dir(app_name, namespace, target, root) / f"scaler_{target}.pkl"
+    """Return canonical path to scaler (no horizon suffix in filename)."""
+    return artifact_dir(app_name, namespace, target, root) / "scaler.pkl"
 
 
 def target_scaler_path(
     app_name: str, namespace: str, target: str, root: Path = ARTIFACTS_DIR
 ) -> Path:
-    return artifact_dir(app_name, namespace, target, root) / f"target_scaler_{target}.pkl"
+    """Return canonical path to target scaler (no horizon suffix in filename)."""
+    return artifact_dir(app_name, namespace, target, root) / "target_scaler.pkl"
 
 
 def metadata_path(app_name: str, namespace: str, target: str, root: Path = ARTIFACTS_DIR) -> Path:
-    return artifact_dir(app_name, namespace, target, root) / f"ppa_model_{target}_metadata.json"
+    """Return canonical path to model metadata (no horizon suffix in filename)."""
+    return artifact_dir(app_name, namespace, target, root) / "ppa_model_metadata.json"

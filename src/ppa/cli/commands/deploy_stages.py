@@ -42,13 +42,21 @@ def _resolve_metadata_source(artifacts_dir: Path) -> Path | None:
 def _artifact_paths(
     artifacts_dir: Path, app_name: str, namespace: str, horizon: str
 ) -> dict[str, Path]:
-    """Return the expected artifact paths for a trained horizon."""
+    """Return the expected artifact paths for a trained horizon.
+
+    CANONICAL path structure (no horizon suffix in filenames):
+    - base_dir/{app_name}/{namespace}/{horizon}/
+      ├─ ppa_model.tflite          (NOT ppa_model_{horizon}.tflite)
+      ├─ ppa_model.keras           (NOT ppa_model_{horizon}.keras)
+      ├─ scaler.pkl                (NOT scaler_{horizon}.pkl)
+      └─ target_scaler.pkl         (NOT target_scaler_{horizon}.pkl)
+    """
     base_dir = artifacts_dir / app_name / namespace / horizon
     return {
-        "model": base_dir / f"ppa_model_{horizon}.keras",
-        "tflite": base_dir / f"ppa_model_{horizon}.tflite",
-        "scaler": base_dir / f"scaler_{horizon}.pkl",
-        "target_scaler": base_dir / f"target_scaler_{horizon}.pkl",
+        "model": base_dir / "ppa_model.keras",
+        "tflite": base_dir / "ppa_model.tflite",
+        "scaler": base_dir / "scaler.pkl",
+        "target_scaler": base_dir / "target_scaler.pkl",
     }
 
 
@@ -187,8 +195,8 @@ def retrain_lstm(
     if metadata_source is not None:
         import shutil
 
-        shutil.copy2(metadata_source, champion_dir / f"ppa_model_{horizon}_metadata.json")
-        success(f"Promoted ppa_model_{horizon}_metadata.json")
+        shutil.copy2(metadata_source, champion_dir / "ppa_model_metadata.json")
+        success(f"Promoted ppa_model_metadata.json")
 
     progress.advance(task)
     return current

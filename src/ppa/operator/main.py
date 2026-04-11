@@ -100,10 +100,11 @@ def _start_health_server(port: int = 8080):
 
 
 def _ensure_model_directory_ready(max_retries: int = 5) -> None:
-    """Soft guard: wait for model directory to exist before processing CRs.
+    """Startup guard: wait for model directory to exist before processing CRs.
 
     Used at operator startup to handle Kubernetes volume mount delays.
-    Does not crash operator - logs clearly for debugging.
+    FATAL after retries: raises RuntimeError if directory never appears.
+    This ensures K8s knows operator failed to start and can restart the pod.
     """
     model_dir = DEFAULT_MODEL_DIR
 
@@ -120,15 +121,15 @@ def _ensure_model_directory_ready(max_retries: int = 5) -> None:
             )
             time.sleep(wait_seconds)
         else:
-            logger.error(
+            error_msg = (
                 f"Model directory still not found after {max_retries} retries: {model_dir}\n"
                 f"Check: 1) PPA_MODEL_DIR environment variable\n"
                 f"       2) /models volume mount in Kubernetes\n"
                 f"       3) Pod startup order (volume mount may be delayed)\n"
-                f"Operator will continue, but CR reconciliation will fail until directory appears."
+                f"This is a FATAL error - operator cannot start."
             )
-            # Don't crash - let Kopf handle retries on first CR processing
-            return
+            logger.critical(error_msg)
+            raise RuntimeError(error_msg)
 
 
 _start_health_server()
@@ -139,7 +140,9 @@ logging.getLogger("ppa.operator").info("Prometheus metrics endpoint listening on
 
 
 # Registry keyed by (cr_namespace, cr_name) to avoid cross-namespace collisions.
+# Thread-safe: protected by _cr_state_lock for concurrent reconciliation cycles
 _cr_state: dict[tuple[str, str], CRState] = {}
+_cr_state_lock = threading.Lock()
 
 
 def _resolve_paths(spec: dict, target_app: str, target_horizon: str) -> tuple[str, str, str | None]:
@@ -209,27 +212,82 @@ def _get_or_create_state(
     container_name: str | None = None,
     min_r: int = 1,
     persisted_history: dict | None = None,
-) -> CRState:
+) -> tuple[CRState, dict[str, Any]]:
     """Lazy-init or reload CRState if model paths changed.
 
     FIX (PR#3): Prefill is SKIPPED to avoid scaler distribution mismatch.
     FIX (PR#5): History is PRESERVED when model is upgraded (new paths), preventing 30-min blindness.
     FIX (PR#15): Restore history from CR status on pod restart.
+
+    Thread-safe: protected by _cr_state_lock for concurrent reconciliation cycles.
+
+    Returns:
+        Tuple of (CRState, upgrade_info dict with keys: upgraded, failed_to_upgrade, reason)
     """
-    existing = _cr_state.get(key)
-    if (
-        existing
-        and existing.predictor
-        and existing.predictor.paths_match(model_path, scaler_path, target_scaler_path)
-    ):
-        existing.observer_mode = bool((config or {}).get("observer_mode", False))
-        return existing
+    with _cr_state_lock:
+        existing = _cr_state.get(key)
+        if (
+            existing
+            and existing.predictor
+            and existing.predictor.paths_match(model_path, scaler_path, target_scaler_path)
+        ):
+            existing.observer_mode = bool((config or {}).get("observer_mode", False))
+            return existing, {"upgraded": False, "failed_to_upgrade": False, "reason": None}
 
-    if existing and existing.predictor:
-        # Model upgraded: preserve history, reload interpreter only (PR#5 fix)
-        logger.info(f"Model upgraded for {key}, reloading interpreter (preserving history)...")
+        if existing and existing.predictor:
+            # Model upgraded: preserve history, reload interpreter only (PR#5 fix)
+            logger.info(f"Model upgraded for {key}, reloading interpreter (preserving history)...")
 
-        # Validate new paths BEFORE creating new predictor
+            # Validate new paths BEFORE creating new predictor
+            try:
+                _validate_artifact_paths(
+                    model_path,
+                    scaler_path,
+                    target_scaler_path,
+                    target_app,
+                    target_horizon,
+                    DEFAULT_MODEL_DIR,
+                )
+            except RuntimeError as e:
+                # PRODUCTION-SAFE: Don't break working system on upgrade failure
+                # Keep old predictor running, log error clearly, signal upgrade failure
+                error_msg = str(e)
+                logger.error(
+                    f"[{key}] Model upgrade FAILED - keeping old model active: {error_msg}"
+                )
+                existing.observer_mode = bool((config or {}).get("observer_mode", False))
+                return existing, {
+                    "upgraded": False,
+                    "failed_to_upgrade": True,
+                    "reason": error_msg[:200],
+                }
+
+            # Log successful new paths (INFO level - this is a change)
+            logger.info(
+                f"[{key}] Resolved upgraded paths:\n"
+                f"  Model:  {model_path}\n"
+                f"  Scaler: {scaler_path}\n"
+                f"  Target: {target_scaler_path or '(optional, not found)'}"
+            )
+
+            # Snapshot history before creating new predictor
+            old_history = existing.predictor.copy_history()
+            history_len = len(old_history)
+
+            # Create new predictor with upgraded model
+            new_predictor = Predictor(model_path, scaler_path, target_scaler_path)
+
+            # Restore history into new predictor
+            new_predictor.restore_history(old_history)
+
+            # Update state in-place (don't create new CRState)
+            existing.predictor = new_predictor
+            existing.observer_mode = bool((config or {}).get("observer_mode", False))
+
+            logger.info(f"Restored {history_len}/{60} history steps to new model")
+            return existing, {"upgraded": True, "failed_to_upgrade": False, "reason": None}
+
+        # First time: VALIDATE BEFORE creating new state (fail hard on missing artifacts)
         try:
             _validate_artifact_paths(
                 model_path,
@@ -240,84 +298,44 @@ def _get_or_create_state(
                 DEFAULT_MODEL_DIR,
             )
         except RuntimeError as e:
-            # PRODUCTION-SAFE: Don't break working system on upgrade failure
-            # Keep old predictor running, log error clearly
-            logger.error(f"[{key}] Model upgrade failed - keeping old model active: {e}")
-            existing.observer_mode = bool((config or {}).get("observer_mode", False))
-            return existing
+            logger.error(f"[{key}] {e}")
+            raise  # Fail immediately - operator will retry at appropriate interval
 
-        # Log successful new paths (INFO level - this is a change)
+        # Log successful paths (INFO level - this is a new state)
         logger.info(
-            f"[{key}] Resolved upgraded paths:\n"
+            f"[{key}] Resolved paths:\n"
             f"  Model:  {model_path}\n"
             f"  Scaler: {scaler_path}\n"
             f"  Target: {target_scaler_path or '(optional, not found)'}"
         )
 
-        # Snapshot history before creating new predictor
-        old_history = existing.predictor.copy_history()
-        history_len = len(old_history)
-
-        # Create new predictor with upgraded model
-        new_predictor = Predictor(model_path, scaler_path, target_scaler_path)
-
-        # Restore history into new predictor
-        new_predictor.restore_history(old_history)
-
-        # Update state in-place (don't create new CRState)
-        existing.predictor = new_predictor
-        existing.observer_mode = bool((config or {}).get("observer_mode", False))
-
-        logger.info(f"Restored {history_len}/{60} history steps to new model")
-        return existing
-
-    # First time: VALIDATE BEFORE creating new state (fail hard on missing artifacts)
-    try:
-        _validate_artifact_paths(
-            model_path,
-            scaler_path,
-            target_scaler_path,
-            target_app,
-            target_horizon,
-            DEFAULT_MODEL_DIR,
-        )
-    except RuntimeError as e:
-        logger.error(f"[{key}] {e}")
-        raise  # Fail immediately - operator will retry at appropriate interval
-
-    # Log successful paths (INFO level - this is a new state)
-    logger.info(
-        f"[{key}] Resolved paths:\n"
-        f"  Model:  {model_path}\n"
-        f"  Scaler: {scaler_path}\n"
-        f"  Target: {target_scaler_path or '(optional, not found)'}"
-    )
-
-    state = CRState(
-        predictor=Predictor(model_path, scaler_path, target_scaler_path),
-        observer_mode=bool((config or {}).get("observer_mode", False)),
-    )
-
-    # FIX (PR#15): Restore history from CR status if available (pod restart resilience)
-    if persisted_history and persisted_history.get("data"):
-        try:
-            history_data = persisted_history["data"]
-            restored = state.predictor.deserialize_history(history_data)
-            if restored:
-                logger.info(
-                    f"[{key}] Restored {len(history_data)} history steps from CR status (PR#15)"
-                )
-            else:
-                logger.warning(f"[{key}] Failed to restore history from CR status, starting fresh")
-        except Exception as exc:
-            logger.warning(f"[{key}] Error restoring history: {exc}, starting fresh")
-    else:
-        logger.info(
-            f"[{key}] Skipping prefill to avoid scaler distribution mismatch (cold-start: ~30 min warmup)"
+        state = CRState(
+            predictor=Predictor(model_path, scaler_path, target_scaler_path),
+            observer_mode=bool((config or {}).get("observer_mode", False)),
         )
 
-    _cr_state[key] = state
-    return state
+        # FIX (PR#15): Restore history from CR status if available (pod restart resilience)
+        if persisted_history and persisted_history.get("data"):
+            try:
+                history_data = persisted_history["data"]
+                restored = state.predictor.deserialize_history(history_data)
+                if restored:
+                    logger.info(
+                        f"[{key}] Restored {len(history_data)} history steps from CR status (PR#15)"
+                    )
+                else:
+                    logger.warning(
+                        f"[{key}] Failed to restore history from CR status, starting fresh"
+                    )
+            except Exception as exc:
+                logger.warning(f"[{key}] Error restoring history: {exc}, starting fresh")
+        else:
+            logger.info(
+                f"[{key}] Skipping prefill to avoid scaler distribution mismatch (cold-start: ~30 min warmup)"
+            )
+
+        _cr_state[key] = state
+        return state, {"upgraded": False, "failed_to_upgrade": False, "reason": None}
 
 
 def _parse_crd_spec(
@@ -326,6 +344,7 @@ def _parse_crd_spec(
     meta: dict[str, Any],
     cr_ns: str,
     cr_name: str,
+    patch: kopf.Patch,
 ) -> tuple[dict[str, Any], CRState]:
     """Parse CRD spec into config and load/create CR state. Extract state management logic.
 
@@ -358,9 +377,12 @@ def _parse_crd_spec(
         "prom_url": spec.get("prometheusUrl") or None,
     }
 
-    # Detect multiple CRs managing the same deployment
+    # Detect multiple CRs managing the same deployment (thread-safe check)
     key = (cr_ns, cr_name)
-    active_peer_crs = [k for k, state in _cr_state.items() if k != key and not state.observer_mode]
+    with _cr_state_lock:
+        active_peer_crs = [
+            k for k, state in _cr_state.items() if k != key and not state.observer_mode
+        ]
     if (
         len(active_peer_crs) > 0
         and cr_name != "single-ppa-controller"
@@ -374,7 +396,7 @@ def _parse_crd_spec(
     # Load/create CR state
     model_path, scaler_path, target_scaler_path = _resolve_paths(spec, target_app, target_horizon)
     persisted_history = status.get("historySnapshot") if status else None
-    state = _get_or_create_state(
+    state, upgrade_info = _get_or_create_state(
         key,
         model_path,
         scaler_path,
@@ -387,6 +409,22 @@ def _parse_crd_spec(
         config["min_r"],
         persisted_history,
     )
+
+    # Update CR status with upgrade signals
+    if upgrade_info["failed_to_upgrade"]:
+        patch.status["modelUpgradeFailed"] = True
+        patch.status["modelUpgradeFailureReason"] = upgrade_info["reason"]
+        logger.warning(
+            f"[{cr_name}] Model upgrade failed - running on old model. Reason: {upgrade_info['reason']}"
+        )
+    elif upgrade_info["upgraded"]:
+        patch.status["modelUpgradeFailed"] = False
+        patch.status["modelUpgradeFailureReason"] = None
+        logger.info(f"[{cr_name}] Model upgraded successfully")
+    else:
+        # Only clear upgrade failure if this is first initialization
+        if "modelUpgradeFailed" not in (status or {}):
+            patch.status["modelUpgradeFailed"] = False
 
     return config, state
 
@@ -666,48 +704,73 @@ def reconcile(spec, status, meta, patch, **kwargs):
     """Main control loop — runs every TIMER_INTERVAL seconds per CR.
 
     Orchestrates: CRD parsing → feature fetching → prediction → scaling decision → apply.
+    CR-level error isolation: any exception in one CR doesn't affect others.
     """
     cr_ns = meta.get("namespace", NAMESPACE)
     cr_name = meta.get("name", "unknown")
 
-    # 1. Parse CRD spec and load CR state
-    config, state = _parse_crd_spec(spec, status, meta, cr_ns, cr_name)
-
-    # 2. Fetch features from Prometheus with error handling
-    features, current, should_continue = _fetch_and_validate_features(
-        config, cr_name, cr_ns, state, patch, status
-    )
-    if not should_continue:
+    try:
+        # 1. Parse CRD spec and load CR state
+        config, state = _parse_crd_spec(spec, status, meta, cr_ns, cr_name, patch)
+    except Exception as e:
+        # CR-level isolation: log error, mark CR as failed, don't crash operator
+        logger.error(f"[{cr_name}] CR reconciliation FAILED: {e}")
+        patch.status["lastError"] = str(e)[:500]
+        patch.status["lastErrorTime"] = datetime.now(timezone.utc).isoformat()
+        patch.status["reconciliationFailed"] = True
         return
 
-    # Reset metric failure counters on success
-    patch.status["metricFailures"] = 0
-    patch.status["circuitBreakerTripped"] = False
-    ppa_circuit_breaker_tripped.labels(cr_name=cr_name, namespace=cr_ns).set(0)
-    ppa_metric_failures.labels(cr_name=cr_name, namespace=cr_ns).set(0)
+    try:
+        # 2. Fetch features from Prometheus with error handling
+        features, current, should_continue = _fetch_and_validate_features(
+            config, cr_name, cr_ns, state, patch, status
+        )
+        if not should_continue:
+            return
 
-    assert list(features.keys()) == FEATURE_COLUMNS, f"[{cr_name}] Feature vector order mismatch"
+        # Reset metric failure counters on success
+        patch.status["metricFailures"] = 0
+        patch.status["circuitBreakerTripped"] = False
+        ppa_circuit_breaker_tripped.labels(cr_name=cr_name, namespace=cr_ns).set(0)
+        ppa_metric_failures.labels(cr_name=cr_name, namespace=cr_ns).set(0)
 
-    # 3. Update predictor and check readiness
-    ready = _update_predictor_state(cr_name, cr_ns, config, state, features, current, patch)
-    if not ready:
-        return
+        assert list(features.keys()) == FEATURE_COLUMNS, (
+            f"[{cr_name}] Feature vector order mismatch"
+        )
 
-    # 4. Make scaling decision
-    desired, should_apply = _make_scaling_decision(
-        cr_name, cr_ns, config, state, features, current, patch
-    )
-    if not should_apply:
-        return
+        # 3. Update predictor and check readiness
+        ready = _update_predictor_state(cr_name, cr_ns, config, state, features, current, patch)
+        if not ready:
+            return
 
-    # 5. Apply scaling
-    _apply_scaling(cr_name, cr_ns, config, state, desired, current, patch)
+        # 4. Make scaling decision
+        desired, should_apply = _make_scaling_decision(
+            cr_name, cr_ns, config, state, features, current, patch
+        )
+        if not should_apply:
+            return
+
+        # 5. Apply scaling
+        _apply_scaling(cr_name, cr_ns, config, state, desired, current, patch)
+
+        # Clear any previous error state on success
+        patch.status["reconciliationFailed"] = False
+        patch.status["lastError"] = None
+
+    except Exception as e:
+        # Reconciliation logic failed - log clearly and mark CR
+        logger.error(f"[{cr_name}] Reconciliation cycle error: {e}", exc_info=True)
+        patch.status["lastError"] = f"Reconciliation error: {str(e)[:400]}"
+        patch.status["lastErrorTime"] = datetime.now(timezone.utc).isoformat()
+        patch.status["reconciliationFailed"] = True
+        # Don't re-raise - let operator continue with other CRs
 
 
 @kopf.on.delete("ppa.example.com", "v1", "predictiveautoscalers")
 def on_delete(meta, **kwargs):
-    """Clean up per-CR state when a CR is deleted."""
+    """Clean up per-CR state when a CR is deleted (thread-safe)."""
     key = (meta.get("namespace", NAMESPACE), meta.get("name", "unknown"))
-    removed = _cr_state.pop(key, None)
+    with _cr_state_lock:
+        removed = _cr_state.pop(key, None)
     if removed:
         logger.info(f"Cleaned up state for {key}")

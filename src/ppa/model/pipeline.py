@@ -266,8 +266,8 @@ def _train_and_evaluate_model(
     gate_value = eval_result.get(gate_metric, eval_result["mape"])
     passed = gate_value <= quality_gate
 
-    # Stage 3: Convert
-    tflite_path = os.path.join(output_dir, f"ppa_model_{target}.tflite")
+    # Stage 3: Convert (canonical filename: no horizon suffix)
+    tflite_path = os.path.join(output_dir, "ppa_model.tflite")
     conv_result = convert_model(
         model_path=paths["model"],
         quantize=quantize,
