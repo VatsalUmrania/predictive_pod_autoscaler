@@ -1,0 +1,184 @@
+# NEXUS Development Stack
+# ========================
+# Complete observability + event bus dev environment.
+#
+# Services:
+#   nats        — NATS JetStream (event bus)
+#   otel        — OpenTelemetry Collector (receives all signals, routes to backends)
+#   prometheus  — Metrics storage + querying
+#   loki        — Log aggregation
+#   tempo       — Distributed trace storage
+#   grafana     — Unified dashboards (datasources pre-provisioned)
+#
+# Usage:
+#   cd deploy/nexus
+#   docker compose -f docker-compose.dev.yaml up -d
+#   open http://localhost:3000  (Grafana, admin/nexus_admin)
+#   open http://localhost:8222  (NATS monitoring)
+#   open http://localhost:9090  (Prometheus)
+
+services:
+
+  # ── NATS JetStream ──────────────────────────────────────────────────────────
+  nats:
+    image: nats:2.10-alpine
+    container_name: nexus-nats
+    command:
+      - "--js"                          # Enable JetStream
+      - "--sd=/data"                    # JetStream data directory
+      - "--http_port=8222"              # Monitoring endpoint
+      - "--name=nexus-nats"
+      - "--log_time=true"
+    ports:
+      - "4222:4222"                     # NATS client connections
+      - "8222:8222"                     # NATS monitoring UI
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── OpenTelemetry Collector ─────────────────────────────────────────────────
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.100.0
+    container_name: nexus-otel
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "4317:4317"                     # OTLP gRPC (agents → collector)
+      - "4318:4318"                     # OTLP HTTP (agents → collector)
+      - "8888:8888"                     # Collector self-metrics (scraped by Prometheus)
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_started
+      tempo:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── Prometheus ──────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: nexus-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-remote-write-receiver"   # Accept push from OTel Collector
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Loki (log aggregation) ──────────────────────────────────────────────────
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: nexus-loki
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki_data:/loki
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3100/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ── Tempo (distributed tracing) ─────────────────────────────────────────────
+  tempo:
+    image: grafana/tempo:2.4.2
+    container_name: nexus-tempo
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    ports:
+      - "3200:3200"                     # Tempo HTTP API (queried by Grafana)
+      - "4317"                          # OTLP gRPC (internal, not exposed)
+    volumes:
+      - ./tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    restart: unless-stopped
+
+  # ── Grafana ─────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: nexus-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=nexus_admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── OPA (Open Policy Agent) ─────────────────────────────────────────────────
+  opa:
+    image: openpolicyagent/opa:0.64.1
+    container_name: nexus-opa
+    command:
+      - "run"
+      - "--server"
+      - "--log-level=info"
+      - "--log-format=json"
+      - "--addr=0.0.0.0:8181"
+      - "/policies"
+    ports:
+      - "8181:8181"                     # OPA REST API
+    volumes:
+      - ../opa:/policies:ro             # nexus_policies.rego
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8181/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Redis (cooldown store) ───────────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: nexus-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"                     # CooldownStore client connections
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  nats_data:
+  prometheus_data:
+  loki_data:
+  tempo_data:
+  grafana_data:
+
+networks:
+  default:
+    name: nexus-dev

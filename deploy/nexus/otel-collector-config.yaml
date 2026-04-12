@@ -1,0 +1,149 @@
+# OpenTelemetry Collector Configuration for NEXUS
+# ================================================
+# Routes all telemetry signals from domain agents to their storage backends.
+#
+# Receivers:
+#   otlp          — All NEXUS agents push metrics/logs/traces here
+#   prometheus    — Scrape existing PPA operator metrics + test-app
+#
+# Processors:
+#   memory_limiter — Prevent OOM if agents burst
+#   batch          — Buffer before sending to storage (reduces write pressure)
+#   resource       — Inject service.namespace=nexus on all signals
+#
+# Exporters:
+#   prometheusremotewrite  — Push metrics to Prometheus
+#   loki                   — Push logs to Loki
+#   otlp/tempo             — Push traces to Tempo
+#   logging                — Stdout (debug, disable in prod)
+
+receivers:
+  # Accept OTLP from all NEXUS agents (Python SDK default ports)
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+        cors:
+          allowed_origins: ["*"]
+
+  # Scrape existing PPA operator + test-app + NATS self-metrics
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: "ppa-operator"
+          scrape_interval: 15s
+          static_configs:
+            - targets: ["host.docker.internal:8080"]  # PPA operator metrics
+              labels:
+                component: "ppa-operator"
+
+        - job_name: "test-app"
+          scrape_interval: 15s
+          static_configs:
+            - targets: ["host.docker.internal:9091"]  # test-app /metrics
+              labels:
+                component: "test-app"
+
+        - job_name: "nats"
+          scrape_interval: 15s
+          static_configs:
+            - targets: ["nats:8222"]
+              labels:
+                component: "nats"
+
+        - job_name: "otel-collector"
+          scrape_interval: 30s
+          static_configs:
+            - targets: ["localhost:8888"]
+              labels:
+                component: "otel-collector"
+
+processors:
+  # Prevent OOM if agent signals burst unexpectedly
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+  # Batch signals before writing to reduce I/O pressure
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+
+  # Inject consistent resource attributes on all signals
+  resource:
+    attributes:
+      - action: upsert
+        key: service.namespace
+        value: nexus
+      - action: upsert
+        key: deployment.environment
+        value: development
+
+exporters:
+  # Metrics → Prometheus (via remote write receiver)
+  prometheusremotewrite:
+    endpoint: "http://prometheus:9090/api/v1/write"
+    tls:
+      insecure: true
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_elapsed_time: 60s
+
+  # Logs → Loki
+  loki:
+    endpoint: "http://loki:3100/loki/api/v1/push"
+    tls:
+      insecure: true
+    labels:
+      resource:
+        - service.name
+        - service.namespace
+        - agent           # NEXUS agent name (nginx, k8s, metrics, etc.)
+      attributes:
+        - level
+        - signal_type
+
+  # Traces → Tempo
+  otlp/tempo:
+    endpoint: "tempo:4317"
+    tls:
+      insecure: true
+
+  # Debug stdout (remove in production)
+  debug:
+    verbosity: basic
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  pprof:
+    endpoint: 0.0.0.0:1777
+
+service:
+  extensions: [health_check, pprof]
+
+  pipelines:
+    # ── Metrics pipeline ────────────────────────────────────────────────────
+    metrics:
+      receivers:  [otlp, prometheus]
+      processors: [memory_limiter, batch, resource]
+      exporters:  [prometheusremotewrite, debug]
+
+    # ── Logs pipeline ────────────────────────────────────────────────────────
+    logs:
+      receivers:  [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters:  [loki, debug]
+
+    # ── Traces pipeline ──────────────────────────────────────────────────────
+    traces:
+      receivers:  [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters:  [otlp/tempo, debug]

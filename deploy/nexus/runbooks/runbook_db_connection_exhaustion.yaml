@@ -1,0 +1,78 @@
+runbook:
+  id: "runbook_db_connection_exhaustion_v1"
+  version: "1.0.0"
+  description: >
+    Respond to database connection pool exhaustion by annotating affected
+    services for throttling and alerting the team to shift reads to a
+    read-replica and investigate slow/blocking queries.
+
+    Phase 1 limitations (no Orchestrator yet):
+    - Actual endpoint throttling via NGINX requires NginxAgent (Phase 2)
+    - Actual read-replica shift requires DB-aware action executor (Phase 3)
+    - This runbook covers: alert + annotate + escalate only
+
+    When the Orchestrator is live (Phase 4), this runbook will be upgraded
+    to: throttle endpoint via NGINX API → shift reads → recommend index.
+  failure_class: "db_saturation"
+  healing_level: 2   # L2 — bounded mitigation
+
+  trigger:
+    signal_types:
+      - "db_connection_exhaustion"
+      - "db_lock_contention"
+      - "slow_query_detected"
+    severity_minimum: "critical"
+
+  pre_checks:
+    # Confirm DB connection utilization is actually critical before acting
+    - type: "event_field"
+      field: "utilization_pct"
+      operator: "gte"
+      value: 80.0
+
+  actions:
+    - type: "emit_alert"
+      description: "Immediate alert with DB saturation context."
+      abort_on_failure: false
+      params:
+        message: >
+          DB CONNECTION POOL > 80% EXHAUSTED detected by NEXUS DBAgent.
+          Immediate action required:
+          1. Check for blocking or long-running queries (see event context)
+          2. Consider shifting read traffic to read-replica
+          3. Consider increasing connection pool limit (verify infra can support)
+          NEXUS has annotated affected workloads. Throttling pending NginxAgent (Phase 2).
+
+    - type: "patch_annotation"
+      description: "Flag the affected deployment workload so operators can identify it quickly."
+      abort_on_failure: false
+      params:
+        annotations:
+          "nexus.io/db-pressure":        "critical"
+          "nexus.io/db-engine":          "{{ db_engine }}"
+          "nexus.io/action-recommended": "throttle-endpoint-shift-reads"
+          "nexus.io/healing-action":      "db_saturation_alert_and_annotate"
+
+  post_checks:
+    # Check if connection utilization has decreased (may happen naturally
+    # once blocking queries timeout or operator intervenes)
+    - metric_query: >
+        pg_stat_activity_count
+        / pg_settings_max_connections
+      operator: "lt"
+      threshold: 0.75
+      window_seconds: 60
+      timeout_seconds: 300
+
+  rollback_if_post_check_fails: false   # No infra rollback at L2 for this runbook
+  rollback_actions:
+    - type: "emit_alert"
+      params:
+        message: >
+          DB connection exhaustion persists after 5 minutes.
+          No automated throttling applied (requires NginxAgent — Phase 2).
+          ESCALATING: manual read-replica shift and connection pool review required.
+          Consider emergency connection pool bump or shedding non-critical workloads.
+
+  cooldown_seconds: 300
+  blast_radius: "single_database"
