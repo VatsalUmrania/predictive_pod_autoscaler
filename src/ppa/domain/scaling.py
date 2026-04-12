@@ -113,7 +113,7 @@ def calculate_replicas_old(
     safety_factor: float = 1.10,
 ) -> int:
     """Old implementation (buggy) - kept for testing comparison.
-    
+
     DEPRECATED: Use calculate_replicas() instead. This is only for regression testing.
     """
     inflated = predicted_load * safety_factor

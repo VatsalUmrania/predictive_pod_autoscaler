@@ -12,13 +12,13 @@ from typing import TYPE_CHECKING
 import typer
 
 from ppa.cli.utils import error, info, run_cmd, step_heading, success, warn
-from ppa.model.artifacts import champion_dir as structured_champion_dir
 from ppa.config import (
     CHAMPION_DIR,
     DEFAULT_NAMESPACE,
     DEPLOY_DIR,
     PROJECT_DIR,
 )
+from ppa.model.artifacts import champion_dir as structured_champion_dir
 
 if TYPE_CHECKING:
     from rich.progress import Progress, TaskID
@@ -196,7 +196,7 @@ def retrain_lstm(
         import shutil
 
         shutil.copy2(metadata_source, champion_dir / "ppa_model_metadata.json")
-        success(f"Promoted ppa_model_metadata.json")
+        success("Promoted ppa_model_metadata.json")
 
     progress.advance(task)
     return current

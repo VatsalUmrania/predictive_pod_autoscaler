@@ -13,17 +13,17 @@ Architecture:
 """
 
 from ppa.infrastructure.kubernetes import (
-    scale_deployment,
     get_apps_v1,
     init_k8s_client,
+    scale_deployment,
 )
 from ppa.infrastructure.prometheus import (
     PrometheusCircuitBreakerError,
     PrometheusCircuitBreakerTripped,
+    get_current_prometheus_url,
     prom_query,
     prom_query_parallel,
     set_prometheus_url,
-    get_current_prometheus_url,
 )
 
 __all__ = [

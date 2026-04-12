@@ -8,10 +8,8 @@ Usage:
 """
 
 import argparse
-import json
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -19,7 +17,8 @@ from ppa.common.feature_spec import TARGET_COLUMNS
 from ppa.model.convert import convert_model
 from ppa.model.deployment import patch_predictiveautoscaler_paths
 from ppa.model.evaluate import evaluate_model
-from ppa.model.model_qualifier import load_json as _load_json, should_promote
+from ppa.model.model_qualifier import load_json as _load_json
+from ppa.model.model_qualifier import should_promote
 from ppa.model.train import LOOKBACK_STEPS, train_model
 
 ROOT_DIR = Path(__file__).resolve().parents[1]

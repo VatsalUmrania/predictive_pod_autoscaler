@@ -1,4 +1,11 @@
-"""Shared Rich helpers — console, spinners, styled output, subprocess wrappers."""
+"""Shared Rich helpers — console, spinners, styled output, subprocess wrappers.
+
+Output conventions follow PPA CLI spec Section 8:
+- 2-space indent for all status lines
+- ✓ (green) = success, ✗ (red) = failure, ⚠ (yellow) = warning
+- Every command prints a next_step() line on success
+- Every error prints error_block() with cause + fix
+"""
 
 from __future__ import annotations
 
@@ -12,7 +19,6 @@ from datetime import datetime
 from typing import cast
 
 from rich.console import Console
-from rich.panel import Panel
 from rich.table import Table
 
 from ppa.config import PPA_THEME, PROMETHEUS_URL, SESSION_FILE
@@ -20,39 +26,78 @@ from ppa.config import PPA_THEME, PROMETHEUS_URL, SESSION_FILE
 # Singleton Console
 console = Console(theme=PPA_THEME, highlight=False)
 
-# Styled output helpers
-
+# Styled output helpers (spec Section 8)
 
 def success(msg: str) -> None:
-    console.print(f"  [success]✓[/success] {msg}")
+    """Print success message with green checkmark."""
+    console.print(f"  [bold green]✓[/]  {msg}")
 
 
 def warn(msg: str) -> None:
-    console.print(f"  [warning]⚠[/warning] {msg}")
+    """Print warning message with yellow triangle."""
+    console.print(f"  [bold yellow]⚠[/]  {msg}")
 
 
 def error(msg: str) -> None:
-    console.print(f"  [error]✗[/error] {msg}")
+    """Print error message with red cross."""
+    console.print(f"  [bold red]✗[/]  {msg}")
 
 
 def info(msg: str) -> None:
-    console.print(f"  [info]ℹ[/info] {msg}")
+    """Print neutral info message in cyan."""
+    console.print(f"  [cyan]{msg}[/]")
+
+
+def muted(msg: str) -> None:
+    """Print secondary/dim info."""
+    console.print(f"  [dim]{msg}[/]")
+
+
+def next_step(cmd: str, description: str = "") -> None:
+    """Print the mandatory 'Next:' line at the end of every successful command."""
+    console.print()
+    desc_part = f"  [dim]# {description}[/]" if description else ""
+    console.print(f"  Next:  [bold green]{cmd}[/]{desc_part}")
+
+
+def error_block(title: str, cause: str, fix: str, **extra: str) -> None:
+    """Print a structured error with cause and fix command.
+
+    Every error is actionable — no dead ends (spec Section 7).
+
+    Args:
+        title: One-line failure summary
+        cause: Why it failed (1-2 lines)
+        fix: Exact command to run next
+        **extra: Optional key-value pairs (e.g., Expected, Got)
+    """
+    console.print()
+    console.print(f"  [bold red]✗[/]  {title}")
+    console.print()
+    for key, value in extra.items():
+        console.print(f"     {key:<10} {value}")
+    if extra:
+        console.print()
+    console.print(f"     Cause   {cause}")
+    console.print(f"     Fix     [bold]{fix}[/]")
+
+
+def phase_header(phase_num: int, total: int, title: str) -> None:
+    """Print a phase header for multi-phase commands like `ppa run`."""
+    console.print()
+    console.print(f"  [bold]Phase {phase_num} / {total}[/]   {title}")
 
 
 def heading(title: str) -> None:
+    """Print a section heading rule."""
     console.print()
     console.rule(f"[heading]{title}[/heading]", style="info")
 
 
 def step_heading(step_num: int, total: int, title: str) -> None:
+    """Print a numbered step heading for init/startup sequences."""
     console.print()
-    console.print(
-        Panel(
-            f"[step]STEP {step_num}/{total}[/step]  [bold]{title}[/bold]",
-            border_style="step",
-            padding=(0, 2),
-        )
-    )
+    console.print(f"  [bold]Step {step_num}/{total}[/]   {title}")
 
 # Subprocess helpers
 

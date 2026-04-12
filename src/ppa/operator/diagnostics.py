@@ -3,7 +3,6 @@
 import logging
 import sys
 from pathlib import Path
-from typing import Optional, Dict, List
 
 logger = logging.getLogger("ppa.diagnostics")
 
@@ -15,7 +14,7 @@ __all__ = [
 ]
 
 
-def get_platform_info() -> Dict[str, str]:
+def get_platform_info() -> dict[str, str]:
     """Get platform and Python runtime information."""
     import platform
 
@@ -27,13 +26,23 @@ def get_platform_info() -> Dict[str, str]:
     }
 
 
-def check_tflite_runtime() -> Dict[str, Optional[str]]:
+def check_tflite_runtime(include_tensorflow: bool = False) -> dict[str, str | None]:
     """
     Check which TFLite runtimes are available and working.
 
     Returns dict with keys: ai_edge_litert, tensorflow, tflite_runtime
     Values are version strings if available, None if not found, or error message if broken.
     """
+    if include_tensorflow:
+        try:
+            import tensorflow as tf
+
+            logger.info(f"tensorflow: {tf.__version__}")
+        except ImportError:
+            logger.debug("tensorflow not found (expected - adds 500MB)")
+        except Exception as e:
+            logger.warning(f"tensorflow import failed: {e}")
+
     results = {}
 
     # Check ai_edge_litert
@@ -79,8 +88,8 @@ def check_tflite_runtime() -> Dict[str, Optional[str]]:
 
 
 def validate_model_files(
-    model_path: str, scaler_path: str, target_scaler_path: Optional[str] = None
-) -> Dict[str, object]:
+    model_path: str, scaler_path: str, target_scaler_path: str | None = None
+) -> dict[str, object]:
     """
     Validate model and scaler files exist and are accessible.
 
@@ -124,7 +133,7 @@ def validate_model_files(
     return results
 
 
-def validate_model_format(model_path: str) -> Dict[str, object]:
+def validate_model_format(model_path: str) -> dict[str, object]:
     """
     Validate that the model file is a valid TFLite format.
 
@@ -148,7 +157,7 @@ def validate_model_format(model_path: str) -> Dict[str, object]:
             if magic == b"TFL3":
                 result["valid_magic"] = True
                 result["reason"] = "Valid TFLite model format"
-                logger.info(f"Model format: TFLite (valid)")
+                logger.info("Model format: TFLite (valid)")
             else:
                 result["reason"] = f"Invalid magic bytes: {magic!r} (expected b'TFL3')"
                 logger.warning(f"Model format: {result['reason']}")
@@ -162,8 +171,8 @@ def validate_model_format(model_path: str) -> Dict[str, object]:
 def diagnose_model_load_issue(
     model_path: str,
     scaler_path: str,
-    target_scaler_path: Optional[str] = None,
-) -> Dict[str, object]:
+    target_scaler_path: str | None = None,
+) -> dict[str, object]:
     """
     Comprehensive diagnostic report for model loading issues.
 
@@ -173,7 +182,7 @@ def diagnose_model_load_issue(
 
     report = {
         "platform": get_platform_info(),
-        "runtime": check_tflite_runtime(),
+        "runtime": check_tflite_runtime(include_tensorflow=False),
         "files": validate_model_files(model_path, scaler_path, target_scaler_path),
         "format": validate_model_format(model_path),
         "recommendations": [],
@@ -203,7 +212,7 @@ def diagnose_model_load_issue(
         )
     elif not files["model"]["valid_magic"]:
         report["recommendations"].append(
-            f"ERROR: Model file is not valid TFLite format. File may be corrupted."
+            "ERROR: Model file is not valid TFLite format. File may be corrupted."
         )
 
     if not files["scaler"]["exists"]:
@@ -228,7 +237,7 @@ def diagnose_model_load_issue(
     return report
 
 
-def print_diagnostics(report: Dict[str, object]) -> None:
+def print_diagnostics(report: dict[str, object]) -> None:
     """Pretty-print diagnostics report to logger."""
     logger.info("=" * 70)
     logger.info("MODEL LOAD DIAGNOSTICS REPORT")

@@ -6,7 +6,6 @@ import math
 import os
 import threading
 import time
-from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
@@ -177,10 +176,9 @@ def _resolve_paths(
 
     # 🚫 DEPRECATED: CR spec overrides (log once only)
     # Check if deprecated fields are set - they should be ignored
-    is_override = False
     if spec.get("modelPath") or spec.get("scalerPath"):
         # This will be logged once in the caller via state flag
-        is_override = True
+        pass
 
     # ✅ NEW: Read from versioned current symlink
     if not os.path.exists(base):
@@ -225,11 +223,11 @@ def _validate_artifact_paths(
         raise RuntimeError(
             f"Missing model artifacts for {target_app}/{target_horizon}:\n"
             + "\n".join(f"  ❌ {path}" for path in missing)
-            + f"\nExpected directory structure:\n"
+            + "\nExpected directory structure:\n"
             + f"  {model_dir}/{target_app}/{target_horizon}/\n"
-            + f"    ├─ ppa_model.tflite\n"
-            + f"    ├─ scaler.pkl\n"
-            + f"    └─ target_scaler.pkl (optional)"
+            + "    ├─ ppa_model.tflite\n"
+            + "    ├─ scaler.pkl\n"
+            + "    └─ target_scaler.pkl (optional)"
         )
 
 
@@ -520,7 +518,7 @@ def _parse_crd_spec(
     if used_legacy and not existing.using_legacy_artifacts:
         with _cr_state_lock:
             existing.using_legacy_artifacts = True
-        if patch.status.get("usingLegacyArtifacts") != True:
+        if not patch.status.get("usingLegacyArtifacts"):
             patch.status["usingLegacyArtifacts"] = True
             logger.warning(
                 f"[{cr_name}] Using legacy artifact paths. "
@@ -535,7 +533,7 @@ def _parse_crd_spec(
     ):
         with _cr_state_lock:
             existing.using_legacy_artifacts = False
-        if patch.status.get("usingLegacyArtifacts") != False:
+        if patch.status.get("usingLegacyArtifacts"):
             patch.status["usingLegacyArtifacts"] = False
             logger.info(f"[{cr_name}] Switched to canonical artifact paths")
 
@@ -583,7 +581,7 @@ def _parse_crd_spec(
             error_type = "USER_CONFIG" if is_override else "SYSTEM_DELAY"
 
             # Update status (idempotent - Issue 15)
-            if patch.status.get("artifactLoadFailed") != True:
+            if not patch.status.get("artifactLoadFailed"):
                 patch.status["artifactLoadFailed"] = True
                 patch.status["artifactLoadError"] = error_msg
                 patch.status["artifactLoadErrorType"] = error_type
@@ -630,7 +628,7 @@ def _parse_crd_spec(
         logger.info(f"[{cr_name}] Artifacts recovered (counter reset)")
 
         # Clear all failure-related status fields (Issue 10, 15)
-        if patch.status.get("artifactLoadFailed") == True:
+        if patch.status.get("artifactLoadFailed"):
             patch.status["artifactLoadFailed"] = False
             patch.status["artifactLoadError"] = None
             patch.status["artifactLoadErrorType"] = None
@@ -658,7 +656,7 @@ def _parse_crd_spec(
 
     # Handle upgrade_info (idempotent status updates - Issue 15)
     if upgrade_info["failed_to_upgrade"]:
-        if patch.status.get("modelUpgradeFailed") != True:
+        if not patch.status.get("modelUpgradeFailed"):
             patch.status["modelUpgradeFailed"] = True
             patch.status["modelUpgradeFailureReason"] = upgrade_info["reason"]
             logger.warning(
@@ -666,7 +664,7 @@ def _parse_crd_spec(
                 f"Reason: {upgrade_info['reason']}"
             )
     elif upgrade_info["upgraded"]:
-        if patch.status.get("modelUpgradeFailed") != False:
+        if patch.status.get("modelUpgradeFailed"):
             patch.status["modelUpgradeFailed"] = False
             patch.status["modelUpgradeFailureReason"] = None
             logger.info(f"[{cr_name}] Model upgraded successfully")

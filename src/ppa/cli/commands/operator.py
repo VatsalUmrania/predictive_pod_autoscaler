@@ -166,6 +166,9 @@ def deploy_cmd(
     info(f"Image: {image}")
     deployment_existed = _deployment_exists(namespace)
 
+    _apply_manifest(DEPLOY_DIR / "crd.yaml", "default", "crd.yaml")
+    success("Applied: crd.yaml")
+
     _apply_manifest(DEPLOY_DIR / "rbac.yaml", namespace, "rbac.yaml")
     success("Applied: rbac.yaml")
 

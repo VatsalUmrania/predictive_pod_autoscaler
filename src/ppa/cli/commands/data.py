@@ -143,17 +143,20 @@ def data_validate(
         raise typer.Exit(1) from e
 
 
-@app.command("health")
-def data_health(
+@app.command("inspect")
+def data_inspect(
     csv: str = typer.Option(DEFAULT_CSV, "--csv", help="Path to training CSV."),
 ) -> None:
     """
     [bold]Show dataset health report[/] as a styled table.
     """
-    heading("Dataset Health")
+    console.print()
+    console.print("  [bold]Dataset Health[/]")
+    console.print()
 
     if not os.path.exists(csv):
-        error(f"CSV not found: {csv}")
+        from ppa.cli.utils import error_block
+        error_block("CSV not found", cause=f"File does not exist: {csv}", fix="ppa data export")
         raise typer.Exit(1)
 
     # Check for .health.json sidecar
@@ -174,17 +177,19 @@ def data_health(
             health = build_dataset_health(df)
             _show_health_table(health)
         except Exception as e:
-            error(f"Cannot build health report: {e}")
+            from ppa.cli.utils import error_block
+            error_block("Cannot build health report", cause=str(e), fix="ppa data validate")
             raise typer.Exit(1) from e
 
 
 def _show_health_table(health: dict) -> None:
     table = Table(
-        title="[bold bright_cyan]Dataset Health Report[/]",
-        border_style="bright_cyan",
+        title="[bold]Dataset Details[/]",
+        border_style="dim",
         header_style="bold",
+        padding=(0, 2),
     )
-    table.add_column("Metric", style="info", min_width=20)
+    table.add_column("Metric", style="cyan", min_width=20)
     table.add_column("Value", justify="right")
 
     table.add_row("Total rows", str(health.get("rows", "?")))

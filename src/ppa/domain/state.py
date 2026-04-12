@@ -33,7 +33,7 @@ class CRState:
         prom_last_failure_time: Timestamp of last Prometheus failure
     """
 
-    predictor: "Predictor"
+    predictor: Predictor
     observer_mode: bool = False
     stable_count: int = 0
     last_prediction: float = 0.0

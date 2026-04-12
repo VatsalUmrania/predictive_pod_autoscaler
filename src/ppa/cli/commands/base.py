@@ -9,7 +9,7 @@ from __future__ import annotations
 import typer
 
 from ppa.cli.core.config import CLIConfig, load_cli_config
-from ppa.cli.utilities import PPAError, Progress, spinner, format_error_with_suggestion
+from ppa.cli.utilities import PPAError, Progress, format_error_with_suggestion, spinner
 from ppa.cli.utils import console, error, info, success, warn
 
 

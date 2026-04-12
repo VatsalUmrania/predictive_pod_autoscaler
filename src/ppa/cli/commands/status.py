@@ -21,6 +21,7 @@ from ppa.config import (
 )
 
 app = typer.Typer(rich_markup_mode="rich", invoke_without_command=True)
+status_app = app
 
 
 def _status_icon(ok: bool) -> str:
@@ -176,10 +177,10 @@ def status(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand is not None:
         return
 
-    from cli.config import get_banner
+    from ppa.config import get_banner
 
     console.print(get_banner())
-    console.print("\n[bold]Cluster Status Summary[/]")
+    console.print("\n  [bold]System Status[/]")
 
     # Build components
     infra = _build_infra_panel()
@@ -207,8 +208,8 @@ def status(ctx: typer.Context) -> None:
 
     console.print()
     if mk_running and prom_ok:
-        console.print("[success]✓[/success] Cluster is healthy")
+        console.print("  [bold green]✓[/]  Cluster is healthy")
     elif mk_running:
-        console.print("[warning]⚠[/warning] Cluster is running but Prometheus is not reachable")
+        console.print("  [bold yellow]⚠[/]  Cluster is running but Prometheus is not reachable")
     else:
-        console.print("[error]✗[/error] Minikube is not running")
+        console.print("  [bold red]✗[/]  Minikube is not running")

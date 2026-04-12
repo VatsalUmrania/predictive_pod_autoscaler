@@ -20,8 +20,6 @@ if TYPE_CHECKING:
 from ppa.common.feature_spec import FEATURE_COLUMNS, NUM_FEATURES
 from ppa.config import LOOKBACK_STEPS
 from ppa.operator.diagnostics import (
-    check_tflite_runtime,
-    validate_model_files,
     diagnose_model_load_issue,
 )
 
@@ -157,10 +155,7 @@ class Predictor:
                 ("tensorflow.lite", lambda: __import__("tensorflow").lite.Interpreter),
                 (
                     "tflite_runtime",
-                    lambda: getattr(
-                        __import__("tflite_runtime.interpreter", fromlist=["Interpreter"]),
-                        "Interpreter",
-                    ),
+                    lambda: __import__("tflite_runtime.interpreter", fromlist=["Interpreter"]).Interpreter,
                 ),
             ]:
                 try:

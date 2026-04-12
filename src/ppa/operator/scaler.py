@@ -13,15 +13,10 @@ This module is responsible for:
 # Re-export domain scaling functions for backward compatibility
 from ppa.domain.scaling import calculate_replicas, calculate_replicas_fixed, calculate_replicas_old
 
-# Import infrastructure adapters
-from ppa.infrastructure.kubernetes import scale_deployment as _scale_deployment_impl
-
 # Private re-exports for backward compatibility with old private function names
 # (in case any internal code still uses these)
-from ppa.infrastructure.kubernetes import (
-    get_apps_v1 as _get_apps_v1,
-    init_k8s_client as _init_k8s_client,
-)
+# Import infrastructure adapters
+from ppa.infrastructure.kubernetes import scale_deployment as _scale_deployment_impl
 
 
 def scale_deployment(deployment: str, replicas: int, namespace: str = "default") -> bool:

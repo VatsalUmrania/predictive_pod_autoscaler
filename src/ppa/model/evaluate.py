@@ -78,7 +78,7 @@ def compute_mae(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 def compute_rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
 
-# HPA comparison helpers 
+# HPA comparison helpers
 
 def rps_to_replicas(rps: np.ndarray, capacity: float, min_r: int, max_r: int) -> np.ndarray:
     """Convert RPS values to replica counts (ceil division, clamped)."""

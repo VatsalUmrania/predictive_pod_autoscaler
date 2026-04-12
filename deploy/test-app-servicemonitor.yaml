@@ -8,6 +8,6 @@ spec:
     matchLabels:
       app: test-app
   endpoints:
-  - port: metrics
-    interval: 30s
-    path: /metrics
+    - port: metrics
+      interval: 30s
+      path: /metrics

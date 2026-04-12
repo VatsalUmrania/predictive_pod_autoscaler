@@ -114,7 +114,7 @@ def step_heading(step_num: int, total: int, title: str) -> None:
     console.print()
     console.print(f"  [step][{step_num}/{total}][/step] [heading]{title}[/heading]")
 
-# Subprocess Helpers 
+# Subprocess Helpers
 
 def run_cmd(
     cmd: list[str] | str,
