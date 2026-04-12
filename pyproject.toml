@@ -56,6 +56,8 @@ nexus = [
     "pyyaml>=6.0",
     # Cooldown store Redis backend
     "redis[hiredis]>=5.0.0",
+    # Gemini LLM for RCA Engine (Reasoning Plane)
+    "google-generativeai>=0.8.0",
     # Already in base: pydantic, kubernetes, requests, python-json-logger
 ]
 dev = [
