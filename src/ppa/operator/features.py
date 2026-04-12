@@ -19,7 +19,7 @@ from ppa.config import (
     TIMER_INTERVAL,
     FeatureVectorError,
 )
-from ppa.domain import FEATURE_BOUNDS, validate_feature_bounds
+from ppa.domain import validate_feature_bounds
 from ppa.operator.prometheus import (
     PrometheusCircuitBreakerError,
     PrometheusCircuitBreakerTripped,

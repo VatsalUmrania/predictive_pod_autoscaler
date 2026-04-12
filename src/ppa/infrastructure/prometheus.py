@@ -144,7 +144,7 @@ def _set_circuit_breaker(cr_state: object | None, failures: int, last_time: floa
         _get_circuit_breaker: Retrieve circuit breaker state
     """
     global _prom_consecutive_failures, _prom_last_failure_time
-    
+
     # Use duck typing: if cr_state has the required attributes, use it
     # This supports both CRState and test mocks with the same attributes
     if cr_state is not None and hasattr(cr_state, 'prom_failures') and hasattr(cr_state, 'prom_last_failure_time'):

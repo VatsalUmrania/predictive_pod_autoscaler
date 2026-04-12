@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from difflib import get_close_matches
 
-# Suggestion database 
+# Suggestion database
 
 COMMON_TYPOS = {
     "startp": "startup",

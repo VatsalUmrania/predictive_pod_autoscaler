@@ -1,118 +1,36 @@
-"""ppa model — ML model commands (train, evaluate, pipeline, convert)."""
+"""ppa model — ML model commands (evaluate, convert, push).
+
+Training is now a top-level command: `ppa train`.
+Full pipeline is now: `ppa run`.
+"""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import typer
-from rich.panel import Panel
 from rich.table import Table
 
 from ppa.cli.utils import console, error, heading, success
 from ppa.config import (
     ARTIFACTS_DIR,
-    CHAMPION_DIR,
     DEFAULT_APP_NAME,
     DEFAULT_CSV,
-    DEFAULT_EPOCHS,
     DEFAULT_HORIZON,
-    DEFAULT_LOOKBACK,
     DEFAULT_NAMESPACE,
 )
-from ppa.model.artifacts import artifact_dir, keras_model_path, tflite_model_path
+from ppa.model.artifacts import keras_model_path, tflite_model_path
 
 app = typer.Typer(rich_markup_mode="rich")
 
 
-@app.command("train")
-def model_train(
-    csv: str = typer.Option(DEFAULT_CSV, "--csv", help="Path to training CSV."),
-    app_name: str = typer.Option(DEFAULT_APP_NAME, "--app-name", "-a", help="App name."),
-    namespace: str = typer.Option(DEFAULT_NAMESPACE, "--namespace", "-n", help="Namespace."),
-    target: str = typer.Option(
-        DEFAULT_HORIZON, "--target", help="Target column (rps_t3m, rps_t5m, rps_t10m)."
-    ),
-    epochs: int = typer.Option(DEFAULT_EPOCHS, "--epochs", help="Max training epochs."),
-    lookback: int = typer.Option(DEFAULT_LOOKBACK, "--lookback", help="Lookback window steps."),
-    patience: int = typer.Option(15, "--patience", help="Early stopping patience."),
-    test_split: float = typer.Option(0.1, "--test-split", help="Test set fraction."),
-    output_dir: str = typer.Option(
-        str(ARTIFACTS_DIR), "--output-dir", help="Output directory for artifacts."
-    ),
-    target_floor: float = typer.Option(5.0, "--target-floor", help="Minimum target RPS floor."),
-) -> None:
-    """
-    [bold]Train[/] an LSTM model for a prediction horizon.
+@app.command("train", hidden=True, deprecated=True)
+def model_train() -> None:
+    """Deprecated — use `ppa train` instead."""
+    from ppa.cli.utils import warn
 
-    Directly invokes the training pipeline with Rich progress.
-    """
-    heading(f"Train LSTM — {target}")
-
-    if not os.path.exists(csv):
-        error(f"CSV not found: {csv}")
-        raise typer.Exit(1)
-
-    # Show config
-    config = Table(show_header=False, border_style="bright_magenta", padding=(0, 1))
-    config.add_column("Key", style="info")
-    config.add_column("Value")
-    for k, v in {
-        "Target": target,
-        "CSV": csv,
-        "Epochs": str(epochs),
-        "Lookback": str(lookback),
-        "Patience": str(patience),
-    }.items():
-        config.add_row(k, v)
-    console.print(config)
-    console.print()
-
-    try:
-        from ppa.model.train import train_model
-
-        with console.status("[info]Training in progress...[/info]", spinner="dots"):
-            result = train_model(
-                csv_path=csv,
-                lookback=lookback,
-                epochs=epochs,
-                target_col=target,
-                app_name=app_name,
-                namespace=namespace,
-                test_split=test_split,
-                output_dir=output_dir,
-                target_floor=target_floor,
-                early_stopping_patience=patience,
-            )
-
-        if result is None:
-            error("Training failed")
-            raise typer.Exit(1)
-
-        # Results panel
-        metrics = result["metrics"]
-        paths = result["artifact_paths"]
-
-        results_table = Table(
-            title="[bold]Training Results[/]", border_style="green", header_style="bold"
-        )
-        results_table.add_column("Metric", style="bold")
-        results_table.add_column("Value", justify="right")
-
-        results_table.add_row("Val Loss", f"{metrics['val_loss']:.6f}")
-        results_table.add_row("Val MAE", f"{metrics['val_mae']:.4f}")
-        results_table.add_row("Epochs Run", str(metrics["epochs_run"]))
-
-        console.print()
-        console.print(results_table)
-        console.print()
-
-        for label, path in paths.items():
-            success(f"{label}: {path}")
-
-    except ImportError as e:
-        error(f"Cannot import model.train: {e}")
-        raise typer.Exit(1) from e
+    warn("ppa model train is deprecated.  Use: ppa train")
+    raise typer.Exit()
 
 
 @app.command("evaluate")
@@ -213,80 +131,13 @@ def model_evaluate(
         raise typer.Exit(1) from e
 
 
-@app.command("pipeline")
-def model_pipeline(
-    app_name: str = typer.Option(
-        DEFAULT_APP_NAME, "--app-name", "-a", help="Target application name."
-    ),
-    namespace: str = typer.Option(DEFAULT_NAMESPACE, "--namespace", "-n", help="Target namespace."),
-    csv: str = typer.Option(DEFAULT_CSV, "--csv", help="Path to training CSV."),
-    horizons: str = typer.Option(
-        "rps_t3m,rps_t5m,rps_t10m", "--horizons", help="Comma-separated targets."
-    ),
-    epochs: int = typer.Option(DEFAULT_EPOCHS, "--epochs", help="Training epochs."),
-    quality_gate: float = typer.Option(25.0, "--quality-gate", help="Gate threshold (%)."),
-    gate_metric: str = typer.Option("smape", "--gate-metric", help="Metric for quality gate."),
-    patience: int = typer.Option(15, "--patience", help="Early stopping patience."),
-    promote: bool = typer.Option(
-        False, "--promote-if-better", help="Auto-promote if challenger beats champion."
-    ),
-) -> None:
-    """
-    [bold]Full pipeline[/] — train → evaluate → convert for all horizons.
+@app.command("pipeline", hidden=True, deprecated=True)
+def model_pipeline() -> None:
+    """Deprecated — use `ppa run` instead."""
+    from ppa.cli.utils import warn
 
-    Runs the complete ML pipeline with quality gates and optional promotion.
-    """
-    heading("ML Pipeline")
-
-    horizon_list = [h.strip() for h in horizons.split(",")]
-
-    config_table = Table(show_header=False, border_style="bright_magenta", padding=(0, 1))
-    config_table.add_column("Key", style="info")
-    config_table.add_column("Value")
-    config_table.add_row("App", app_name)
-    config_table.add_row("Horizons", ", ".join(horizon_list))
-    config_table.add_row("Epochs", str(epochs))
-    config_table.add_row("Quality gate", f"{gate_metric} ≤ {quality_gate}%")
-    config_table.add_row("Auto-promote", str(promote))
-    console.print(config_table)
-    console.print()
-
-    try:
-        from ppa.model.pipeline import run_pipeline
-
-        exit_code = run_pipeline(
-            app_name=app_name,
-            namespace=namespace,
-            csv_path=csv,
-            horizons=horizon_list,
-            epochs=epochs,
-            quality_gate=quality_gate,
-            gate_metric=gate_metric,
-            patience=patience,
-            promote_if_better=promote,
-            champion_dir=str(CHAMPION_DIR) if promote else None,
-        )
-
-        if exit_code == 0:
-            console.print(
-                Panel(
-                    "[success]Pipeline complete — all horizons passed[/success]",
-                    border_style="green",
-                )
-            )
-        else:
-            console.print(
-                Panel(
-                    "[warning]Pipeline complete — some horizons failed quality gate[/warning]",
-                    border_style="yellow",
-                )
-            )
-
-        raise typer.Exit(exit_code)
-
-    except ImportError as e:
-        error(f"Cannot import model.pipeline: {e}")
-        raise typer.Exit(1) from e
+    warn("ppa model pipeline is deprecated.  Use: ppa run")
+    raise typer.Exit()
 
 
 @app.command("convert")

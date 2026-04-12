@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 
-from ppa.model.artifacts import artifact_dir, keras_model_path, tflite_model_path
+from ppa.model.artifacts import keras_model_path, tflite_model_path
 
 
 def evaluate_model_accuracy(model, eval_data=None):
