@@ -58,3 +58,9 @@ class CRState:
     )
     deprecation_logged: bool = False  # Log deprecated CR fields once only
     target_scaler_missing_logged: bool = False  # Log missing target_scaler once only
+    # Target deployment key ("namespace/name") used for multi-CR conflict detection.
+    # Populated immediately when the CR state is created so peer CRs can check whether
+    # they share the same managed deployment (the only case that causes oscillations).
+    target_deployment: str = ""
+    # Suppress repeated multiple-CR warnings — log once per operator restart.
+    conflict_logged: bool = False

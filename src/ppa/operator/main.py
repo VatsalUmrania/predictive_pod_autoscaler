@@ -160,42 +160,66 @@ _cr_state_lock = threading.Lock()
 def _resolve_paths(
     spec: dict, target_app: str, target_horizon: str
 ) -> tuple[str | None, str | None, str | None, bool, bool]:
-    """Resolve model/scaler/target paths from /models/{app}/{horizon}/current/.
+    """Resolve model/scaler/target paths. Supports two directory layouts.
 
-    NEW ARCHITECTURE (v2):
-    - Always reads from /models/{app}/{horizon}/current/ (versioned + symlink)
-    - CR spec fields (modelPath, scalerPath, targetScalerPath) are DEPRECATED
-      and will be ignored with a warning on first use
+    Layout 1 — structured (preferred, v2 architecture):
+        /models/{app}/{horizon}/current/ppa_model.tflite
+        /models/{app}/{horizon}/current/scaler.pkl
+        /models/{app}/{horizon}/current/target_scaler.pkl   (optional)
+
+    Layout 2 — flat (legacy upload-pod produces this):
+        /models/{horizon}/ppa_model.tflite
+        /models/{horizon}/scaler.pkl
+        /models/{horizon}/target_scaler.pkl   (optional)
+
+    The structured layout is tried first. If not present, the flat layout is
+    tried as a fallback. This allows the operator to work with both layouts
+    during a migration period.
+
+    To migrate from flat → structured, create the directory and symlink:
+        mkdir -p /models/{app}/{horizon}/v1
+        cp /models/{horizon}/* /models/{app}/{horizon}/v1/
+        ln -sfn /models/{app}/{horizon}/v1 /models/{app}/{horizon}/current
+
+    CR spec fields (modelPath, scalerPath, targetScalerPath) are DEPRECATED
+    and are ignored — the caller logs a one-time warning via the state flag.
 
     Returns:
         (model_path, scaler_path, target_scaler_path, used_legacy: bool, is_override: bool)
-        Returns (None, None, None, False, False) if base not ready
+        Returns (None, None, None, False, False) if neither layout is ready.
     """
     model_dir = DEFAULT_MODEL_DIR
-    base = os.path.join(model_dir, target_app, target_horizon, "current")
 
-    # 🚫 DEPRECATED: CR spec overrides (log once only)
-    # Check if deprecated fields are set - they should be ignored
-    if spec.get("modelPath") or spec.get("scalerPath"):
-        # This will be logged once in the caller via state flag
-        pass
+    # Layout 1: /models/{app}/{horizon}/current/  (structured, preferred)
+    structured_base = os.path.join(model_dir, target_app, target_horizon, "current")
+    if os.path.exists(structured_base):
+        model_path = os.path.join(structured_base, "ppa_model.tflite")
+        scaler_path = os.path.join(structured_base, "scaler.pkl")
+        target_scaler_path = os.path.join(structured_base, "target_scaler.pkl")
+        if not os.path.exists(target_scaler_path):
+            target_scaler_path = None
+        logger.debug(f"Resolved artifacts via structured layout: {structured_base}")
+        return model_path, scaler_path, target_scaler_path, False, False
 
-    # ✅ NEW: Read from versioned current symlink
-    if not os.path.exists(base):
-        # Base path not ready - return None for graceful retry
-        logger.debug(f"Model base not ready: {base}")
-        return None, None, None, False, False
+    # Layout 2: /models/{horizon}/  (flat, produced by current upload-pod)
+    flat_base = os.path.join(model_dir, target_horizon)
+    if os.path.exists(flat_base):
+        model_path = os.path.join(flat_base, "ppa_model.tflite")
+        scaler_path = os.path.join(flat_base, "scaler.pkl")
+        target_scaler_path = os.path.join(flat_base, "target_scaler.pkl")
+        if not os.path.exists(target_scaler_path):
+            target_scaler_path = None
+        logger.debug(
+            f"Resolved artifacts via flat layout: {flat_base} "
+            f"(migrate to {structured_base} for versioned upgrades)"
+        )
+        return model_path, scaler_path, target_scaler_path, False, False
 
-    model_path = os.path.join(base, "ppa_model.tflite")
-    scaler_path = os.path.join(base, "scaler.pkl")
-    target_scaler_path = os.path.join(base, "target_scaler.pkl")
-
-    # target_scaler is optional - set to None if missing
-    if not os.path.exists(target_scaler_path):
-        target_scaler_path = None
-
-    # used_legacy=False because we're using versioned paths, is_override=False because we ignore CR
-    return model_path, scaler_path, target_scaler_path, False, False
+    logger.debug(
+        f"No model artifacts found for {target_app}/{target_horizon}. "
+        f"Tried: {structured_base}  and  {flat_base}"
+    )
+    return None, None, None, False, False
 
 
 def _validate_artifact_paths(
@@ -435,21 +459,36 @@ def _parse_crd_spec(
         "prom_url": spec.get("prometheusUrl") or None,
     }
 
-    # Detect multiple CRs managing the same deployment (thread-safe check)
+    # Detect multiple CRs managing the SAME deployment (thread-safe check)
+    # Only warn when another non-observer CR targets the same namespace/deployment pair.
+    # Checking all peer CRs regardless of their target caused false positives when
+    # multiple CRs manage *different* deployments (a perfectly valid use-case).
     key = (cr_ns, cr_name)
+
+    # Initialize state early enough for conflict_logged access below
+    _existing_pre = _cr_state.get(key)
+
     with _cr_state_lock:
-        active_peer_crs = [
-            k for k, state in _cr_state.items() if k != key and not state.observer_mode
+        peer_target_crs = [
+            k
+            for k, s in _cr_state.items()
+            if k != key
+            and not s.observer_mode
+            and getattr(s, "target_deployment", None) == f"{target_ns}/{target}"
         ]
-    if (
-        len(active_peer_crs) > 0
-        and cr_name != "single-ppa-controller"
-        and not config["observer_mode"]
-    ):
-        logger.warning(
-            f"[{cr_name}] Multiple CRs detected in system. Ensure only ONE CR manages "
-            f"target {target_ns}/{target} to avoid scaling oscillations."
-        )
+    if peer_target_crs and not config["observer_mode"]:
+        # Log once on first detection; suppress repeats to avoid flooding logs every cycle.
+        conflict_logged = getattr(_existing_pre, "conflict_logged", False)
+        if not conflict_logged:
+            logger.warning(
+                f"[{cr_name}] Multiple CRs detected managing the same target "
+                f"{target_ns}/{target}. Ensure only ONE active CR manages this deployment "
+                f"to avoid scaling oscillations. "
+                f"Set observerMode: true on all but one CR. "
+                f"Conflicting CRs: {peer_target_crs}"
+            )
+            if _existing_pre is not None:
+                _existing_pre.conflict_logged = True
 
     # STEP 1: Resolve paths (spec override > canonical > legacy > missing)
     model_path, scaler_path, target_scaler_path, used_legacy, is_override = _resolve_paths(
@@ -483,6 +522,8 @@ def _parse_crd_spec(
                 existing.predictor_missing_logged = False
                 existing.deprecation_logged = False
                 existing.target_scaler_missing_logged = False
+                existing.target_deployment = f"{target_ns}/{target}"
+                existing.conflict_logged = False  # Only warn on first detection
 
                 _cr_state[key] = existing
                 logger.info(f"[{cr_name}] Initialized new CR state")
@@ -505,14 +546,19 @@ def _parse_crd_spec(
 
         if failures < 3:
             logger.debug(f"[{cr_name}] Artifacts not ready (base missing). Will retry...")
-            return config, existing
-        else:
-            if failures == 3:
-                logger.error(
-                    f"[{cr_name}] Artifacts unavailable after {failures} attempts. "
-                    f"Check /models/{target_app}/{config['target_horizon']}/current/ symlink."
-                )
-            return config, existing
+        elif failures == 3:
+            logger.error(
+                f"[{cr_name}] Artifacts unavailable after {failures} attempts. "
+                f"Check /models/{target_app}/{config['target_horizon']}/current/ symlink. "
+                f"Run 'ppa model train --app {target_app} --horizon {config['target_horizon']}' "
+                f"to generate artifacts."
+            )
+        elif failures % 10 == 0:
+            logger.error(
+                f"[{cr_name}] Still no artifacts after {failures} attempts. "
+                f"/models/{target_app}/{config['target_horizon']}/current/ symlink missing."
+            )
+        return config, existing
 
     # STEP 3: Apply legacy flag transitions (locked + stable - Issues 14, 16)
     if used_legacy and not existing.using_legacy_artifacts:

@@ -16,7 +16,7 @@ spec:
       containers:
       - name: traffic-gen
         image: locustio/locust:2.43.3
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Never
         command:
         - locust
         - -f

@@ -45,11 +45,11 @@ from ppa.config import (
 GIT_CLONE_TIMEOUT = 120
 
 GIT_URL_PATTERN = re.compile(
-    r'^(https?://|git@)[\w\-._~:/?#\[\]@!$&\'()*+,;=%.]+$',
+    r"^(https?://|git@)[\w\-._~:/?#\[\]@!$&\'()*+,;=%.]+$",
     re.IGNORECASE,
 )
 
-SHELL_INJECTION_CHARS = {';', '|', '&', '$', '`', '\n', '\x00'}
+SHELL_INJECTION_CHARS = {";", "|", "&", "$", "`", "\n", "\x00"}
 
 # Global to store app_path between steps
 _app_path: Path | None = None
@@ -71,7 +71,7 @@ def validate_git_url(url: str) -> bool:
     if not GIT_URL_PATTERN.match(url):
         return False
 
-    if url.startswith(('file://', 'ftp://', 'telnet://')):
+    if url.startswith(("file://", "ftp://", "telnet://")):
         return False
 
     return True
@@ -82,7 +82,7 @@ def get_app_path(app_arg: str | None) -> Path | None:
     if not app_arg:
         return None
 
-    if app_arg.startswith(('file://', 'ftp://', 'telnet://', 'ldap://')):
+    if app_arg.startswith(("file://", "ftp://", "telnet://", "ldap://")):
         raise ValueError(f"Invalid git URL: {app_arg}")
 
     if app_arg.startswith(("http", "git@")):
@@ -342,6 +342,24 @@ def step_5_test_app(ctx: typer.Context | None = None) -> None:
 
 def step_6_traffic_gen() -> None:
     """Deploy Locust traffic generator."""
+    # Pull locust image into minikube's Docker daemon to avoid Docker Hub issues
+    minikube_env = get_minikube_docker_env()
+    if minikube_env:
+        run_cmd(
+            ["docker", "pull", "locustio/locust:2.43.3"],
+            env={**minikube_env},
+            title="Pulling locust image into minikube",
+        )
+        success("Locust image available in minikube")
+    else:
+        warn("Could not load minikube docker env - will try to pull from Docker Hub")
+
+    # Apply locustfile ConfigMap
+    run_cmd(
+        ["kubectl", "apply", "-f", str(DEPLOY_DIR / "locustfile-configmap.yaml")],
+        title="Applying locustfile ConfigMap",
+    )
+
     run_cmd(
         ["kubectl", "apply", "-f", str(DEPLOY_DIR / "traffic-gen-deployment.yaml")],
         title="Deploying Locust traffic generator",
@@ -356,12 +374,26 @@ def step_7_port_forwards() -> None:
 
     commands = [
         (
-            ["kubectl", "port-forward", "-n", "monitoring", "svc/prometheus-operated", f"{PROMETHEUS_PORT}:9090"],
+            [
+                "kubectl",
+                "port-forward",
+                "-n",
+                "monitoring",
+                "svc/prometheus-operated",
+                f"{PROMETHEUS_PORT}:9090",
+            ],
             PROMETHEUS_PORT,
             "Prometheus",
         ),
         (
-            ["kubectl", "port-forward", "-n", "monitoring", "svc/prometheus-grafana", f"{GRAFANA_PORT}:80"],
+            [
+                "kubectl",
+                "port-forward",
+                "-n",
+                "monitoring",
+                "svc/prometheus-grafana",
+                f"{GRAFANA_PORT}:80",
+            ],
             GRAFANA_PORT,
             "Grafana",
         ),
@@ -408,6 +440,27 @@ def step_9_verify_features() -> None:
 
 def step_10_cronjob() -> None:
     """Deploy hourly data collection CronJob."""
+    # Build ppa-data-collector image into minikube
+    minikube_env = get_minikube_docker_env()
+    if minikube_env:
+        dataflow_dockerfile = PROJECT_DIR / "src" / "ppa" / "dataflow" / "Dockerfile"
+        run_cmd(
+            [
+                "docker",
+                "build",
+                "-t",
+                "ppa-data-collector:latest",
+                "-f",
+                str(dataflow_dockerfile),
+                str(PROJECT_DIR),
+            ],
+            env={**minikube_env},
+            title="Building ppa-data-collector image",
+        )
+        success("ppa-data-collector image available in minikube")
+    else:
+        warn("Could not load minikube docker env")
+
     run_cmd(
         ["kubectl", "apply", "-f", str(DEPLOY_DIR / "cronjob-data-collector.yaml")],
         title="Deploying data collection CronJob",

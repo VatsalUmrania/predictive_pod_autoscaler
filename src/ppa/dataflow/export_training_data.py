@@ -329,6 +329,13 @@ def build_feature_dataframe(
 
     fallbacks = build_fallback_queries(app_name, NAMESPACE, CONTAINER_NAME)
 
+    optional_features = {
+        "active_connections",
+        "cpu_utilization_pct",
+        "error_rate",
+        "memory_utilization_pct",
+        "requests_per_second",
+    }
     for feature_name, query in dynamic_queries.items():
         if feature_name in ["cpu_acceleration", "rps_acceleration"]:
             continue
@@ -367,6 +374,10 @@ def build_feature_dataframe(
                 feature_name,
             )
         else:
+            if feature_name in optional_features:
+                print(f"Warning: optional metric {feature_name} not found in Prometheus; skipping.")
+                # skip optional metrics instead of failing the run
+                continue
             missing_features.append(feature_name)
 
     if missing_features:
@@ -379,7 +390,9 @@ def build_feature_dataframe(
     if "requests_per_second" in df.columns and "current_replicas" in df.columns:
         df["rps_per_replica"] = df["requests_per_second"] / df["current_replicas"].clip(lower=1)
     if "current_replicas" in df.columns:
-        df["replicas_normalized"] = df["current_replicas"] / float(os.getenv("DATA_COLLECTION_MAX_REPLICAS", "20"))
+        df["replicas_normalized"] = df["current_replicas"] / float(
+            os.getenv("DATA_COLLECTION_MAX_REPLICAS", "20")
+        )
     if "cpu_utilization_pct" in df.columns:
         df["cpu_acceleration"] = df["cpu_utilization_pct"].diff()
     if "rps_per_replica" in df.columns:
@@ -462,9 +475,7 @@ def print_dataset_health(health: dict[str, object]) -> None:
         print(f"Max time gap     : {health['max_gap']}")
     date_range = cast(dict[str, object], health.get("date_range", {}))
     if date_range and date_range.get("start"):
-        print(
-            f"Date range       : {date_range['start']} -> {date_range['end']}"
-        )
+        print(f"Date range       : {date_range['start']} -> {date_range['end']}")
     missing_required = cast(dict[str, object], health.get("missing_required_values", {}))
     if missing_required:
         print("Missing required :")
