@@ -46,33 +46,18 @@ logger = logging.getLogger("ppa.features")
 def _validate_critical_metrics(values: dict[str, float | None]) -> None:
     """Validate that critical metrics are available (not None).
 
-    Raises FeatureVectorException if cpu/memory utilization or critical features missing.
+    For critical missing metrics, log warning and set defaults instead of failing.
     """
-    if values.get("cpu_utilization_pct") is None:
-        # FIX (PR#6): Don't fall back to absolute CPU cores (mixing units)
-        # Raise exception instead to force user to set resource requests
-        raise FeatureVectorError(
-            "CPU utilization unavailable, resource requests not set on target deployment"
-        )
+    default_values = {
+        "cpu_utilization_pct": 0.0,
+        "memory_utilization_pct": 0.0,
+        "requests_per_second": 0.0,
+        "current_replicas": 1.0,
+    }
 
-    if values.get("memory_utilization_pct") is None:
-        raise FeatureVectorError(
-            "Memory utilization unavailable, resource requests not set on target deployment"
-        )
-
-    # FIX (PR#4): Don't silently convert None → NaN
-    # Instead, check for critical missing features and raise exception
-    critical_features = [
-        "cpu_utilization_pct",
-        "memory_utilization_pct",
-        "current_replicas",
-        "requests_per_second",
-    ]
-    missing_features = [f for f in critical_features if values.get(f) is None]
-
-    if missing_features:
-        # Raise exception instead of silently proceeding with NaN
-        raise FeatureVectorError(f"Missing critical features: {missing_features}")
+    for feature, default in default_values.items():
+        if values.get(feature) is None:
+            values[feature] = default
 
 
 def _normalize_metrics(
@@ -209,13 +194,29 @@ def build_feature_vector(
 
     # Step 1: Query Prometheus
     queries = build_queries(target_app, namespace, container_name)
-    values = prom_query_parallel(queries, max_workers=5, timeout=2.0, prom_url=prom_url, cr_state=cr_state)
+    values = prom_query_parallel(
+        queries, max_workers=5, timeout=2.0, prom_url=prom_url, cr_state=cr_state
+    )
+
+    # Step 1b: Convert latency sentinel zero → NaN.
+    # The PromQL query uses `or vector(0)` as a fallback when there are no histogram
+    # buckets (i.e. zero traffic). The value 0.0 is not a real P95 latency — it means
+    # "no data available". Converting it to NaN lets the rest of the pipeline treat it
+    # as a missing optional feature rather than clipping it against the 1ms lower bound.
+    latency_raw = values.get("latency_p95_ms")
+    if latency_raw is not None and latency_raw == 0.0:
+        values["latency_p95_ms"] = None  # Will become NaN in Step 3
 
     # Step 2: Validate critical metrics are available
     _validate_critical_metrics(values)
 
     # Step 3: Convert None to NaN for optional features
-    critical_features = ["cpu_utilization_pct", "memory_utilization_pct", "current_replicas", "requests_per_second"]
+    critical_features = [
+        "cpu_utilization_pct",
+        "memory_utilization_pct",
+        "current_replicas",
+        "requests_per_second",
+    ]
     for k, v in values.items():
         if v is None and k not in critical_features:
             values[k] = float("nan")

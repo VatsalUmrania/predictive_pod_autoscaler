@@ -98,7 +98,6 @@ def train_cmd(
                 app_name=app_name,
                 namespace=DEFAULT_NAMESPACE,
                 test_split=0.1,
-                output_dir=None,
                 target_floor=5.0,
                 early_stopping_patience=patience,
             )

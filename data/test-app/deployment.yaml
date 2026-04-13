@@ -1,12 +1,13 @@
 # data/test-app/deployment.yaml
 # Deployment + Service + PodMonitor for test-app
 # Enables Prometheus scraping of /metrics on port 9091
+# Note: Deploy to 'monitoring' namespace to ensure kubelet metrics are scraped
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: test-app
-  namespace: default
+  namespace: monitoring
   labels:
     app: test-app
 spec:
@@ -22,7 +23,7 @@ spec:
       containers:
         - name: test-app
           image: test-app:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Never
           ports:
             - name: http
               containerPort: 8080

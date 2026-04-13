@@ -14,10 +14,10 @@ logger = logging.getLogger("ppa.domain.feature_validation")
 # Based on training data ranges plus tolerance for real-world variance
 # Moved from operator/features.py (PR#11: Feature bounds validation)
 FEATURE_BOUNDS = {
-    "rps_per_replica": (0.01, 100),  # Per-pod RPS from 0.01 to 100
+    "rps_per_replica": (0.0, 100),  # Per-pod RPS; 0 is valid when app is idle
     "cpu_utilization_pct": (0, 150),  # CPU 0-150% (allow some overshoot)
     "memory_utilization_pct": (0, 150),  # Memory 0-150% (allow some overshoot)
-    "latency_p95_ms": (1, 10000),  # P95 latency 1-10000 ms
+    "latency_p95_ms": (1, 10000),  # P95 latency 1-10000 ms; 0 means no-data (NaN-converted upstream)
     "active_connections": (0, 100000),  # Connections bounded
     "error_rate": (0, 1),  # Error rate 0-100%
     "cpu_acceleration": (-100, 100),  # CPU change clamped
@@ -43,10 +43,10 @@ def validate_feature_bounds(features: dict) -> tuple[dict[str, float | None], li
     for debugging. Invalid features are clipped to bounds and warnings recorded.
 
     Feature Bounds (from PR#11):
-        rps_per_replica: [0.01, 100] RPS/pod
+        rps_per_replica: [0, 100] RPS/pod (0 allowed for idle apps)
         cpu_utilization_pct: [0, 150] %
         memory_utilization_pct: [0, 150] %
-        latency_p95_ms: [1, 10000] ms
+        latency_p95_ms: [1, 10000] ms (0 is a PromQL sentinel, converted to NaN upstream)
         error_rate: [0, 1] (0-100%)
         Acceleration metrics: [-100, 100]
         Time features: [-1, 1] (sin/cos of hour/dow)
