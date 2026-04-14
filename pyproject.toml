@@ -58,6 +58,12 @@ nexus = [
     "redis[hiredis]>=5.0.0",
     # Gemini LLM for RCA Engine (Reasoning Plane)
     "google-generativeai>=0.8.0",
+    # Phase 7: Observability + CLI
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
+    "prometheus-client>=0.20.0",
+    "click>=8.1.0",
+    "rich>=13.7.0",
     # Already in base: pydantic, kubernetes, requests, python-json-logger
 ]
 dev = [
@@ -79,7 +85,8 @@ all = [
 ]
 
 [project.scripts]
-ppa = "ppa.cli.__main__:main"
+ppa   = "ppa.cli.__main__:main"
+nexus = "nexus.cli.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

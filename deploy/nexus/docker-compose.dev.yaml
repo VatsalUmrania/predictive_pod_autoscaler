@@ -8,14 +8,18 @@
 #   prometheus  — Metrics storage + querying
 #   loki        — Log aggregation
 #   tempo       — Distributed trace storage
-#   grafana     — Unified dashboards (datasources pre-provisioned)
+#   grafana     — Unified dashboards (datasources + NEXUS dashboard pre-provisioned)
+#   opa         — Open Policy Agent (governance policies)
+#   redis       — Cooldown store (Phase 3)
+#   nexus-api   — Status API + /metrics (Phase 7)
 #
 # Usage:
 #   cd deploy/nexus
 #   docker compose -f docker-compose.dev.yaml up -d
-#   open http://localhost:3000  (Grafana, admin/nexus_admin)
-#   open http://localhost:8222  (NATS monitoring)
-#   open http://localhost:9090  (Prometheus)
+#   open http://localhost:3000        (Grafana, admin/nexus_admin)
+#   open http://localhost:8080/docs   (NEXUS Status API)
+#   open http://localhost:8222        (NATS monitoring)
+#   open http://localhost:9090        (Prometheus)
 
 services:
 
@@ -172,12 +176,42 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # ── NEXUS Status API (Phase 7 — observability) ───────────────────────────────
+  nexus-api:
+    image: python:3.12-slim
+    container_name: nexus-api
+    working_dir: /app
+    entrypoint: >
+      sh -c "pip install -q fastapi uvicorn prometheus-client httpx pydantic &&
+             uvicorn nexus.observability.status_api:app
+               --host 0.0.0.0 --port 8080 --log-level info"
+    volumes:
+      - ../../src:/app            # Mount project source
+      - nexus_data:/data          # Persistent audit + knowledge DBs
+    ports:
+      - "8080:8080"               # Status API + /metrics
+    environment:
+      - PYTHONPATH=/app
+      - NEXUS_AUDIT_DB_PATH=/data/nexus_audit.db
+      - NEXUS_KNOWLEDGE_DB_PATH=/data/nexus_knowledge.db
+      - NEXUS_GEMINI_API_KEY=${NEXUS_GEMINI_API_KEY:-}
+    depends_on:
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
 volumes:
   nats_data:
   prometheus_data:
   loki_data:
   tempo_data:
   grafana_data:
+  nexus_data:      # Audit trail + KnowledgeBase SQLite DBs
 
 networks:
   default:
