@@ -11,14 +11,17 @@ Score bands (align with ActionLadder healing levels):
     ≥ 0.85    → L3 allowed (kubectl_rollout_undo, webhook) — or human approval
 
 Calibration factors (Phase 4):
-    1. LLM raw confidence       (weight 0.50)
-    2. Signal agreement score   (weight 0.30)
+    1. LLM raw confidence       (weight 0.55)
+    2. Signal agreement score   (weight 0.35)
     3. Failure class adjustment (additive ± 0.05—0.20)
     4. Deploy-proximity bonus   (+ 0.05 if deploy correlated with bad_deploy)
 
-Phase 6 (Learning Plane) will add:
+Phase 6 (Learning Plane) — now integrated:
     5. Historical runbook success rate from AuditTrail
-       (boosts runbooks that have consistently healed similar incidents)
+       Applied as an additive delta AFTER all other factors, capped at ±0.05.
+       Runbooks with consistently high success rates get a positive boost;
+       unreliable runbooks get a penalty.
+       Updated by FeedbackLoop.set_historical_boosts() every N minutes.
 
 Design decision:
     We bias toward conservative scores. It is better to under-heal and escalate
@@ -30,7 +33,7 @@ Design decision:
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Dict, Optional
 
 from nexus.reasoning.incident_cluster import IncidentCluster
 from nexus.reasoning.rca_engine import RCAResult
@@ -88,6 +91,10 @@ class ConfidenceScorer:
         self._w_class_adj = class_adj_weight
         self._bias        = conservative_bias
 
+        # Phase 6: historical boosts injected by FeedbackLoop
+        # runbook_id → delta (range ±0.05 from KnowledgeBase)
+        self._historical_boosts: Dict[str, float] = {}
+
     def score(
         self,
         cluster:    IncidentCluster,
@@ -105,7 +112,9 @@ class ConfidenceScorer:
         if rca_result.source == "rule_based":
             # Rule-based scores are pre-calibrated — apply only conservative bias
             raw = rca_result.confidence - self._bias
-            return max(0.0, min(1.0, raw))
+            # Add historical boost for rule-based too (delta is small, ±0.05)
+            boost = self._historical_boosts.get(rca_result.runbook_id or "", 0.0)
+            return max(0.0, min(1.0, raw + boost))
 
         # Gemini — blend multiple signals
         llm_conf  = rca_result.confidence
@@ -126,6 +135,10 @@ class ConfidenceScorer:
         if cluster.has_deploy_event and rca_result.failure_class == "bad_deploy":
             blended += 0.05
 
+        # Phase 6: historical boost from Learning Plane (±0.05, capped)
+        hist_boost = self._historical_boosts.get(rca_result.runbook_id or "", 0.0)
+        blended   += hist_boost
+
         # Conservative bias
         blended -= self._bias
 
@@ -141,10 +154,28 @@ class ConfidenceScorer:
             f"[ConfidenceScorer] "
             f"llm={llm_conf:.2f} agreement={agreement:.2f} "
             f"class_adj={class_adj_raw:+.2f} "
+            f"hist_boost={hist_boost:+.3f} "
             f"deploy_bonus={'+0.05' if cluster.has_deploy_event and rca_result.failure_class == 'bad_deploy' else '0'} "
             f"→ final={final:.2f}"
         )
         return final
+
+    def set_historical_boosts(self, boosts: Dict[str, float]) -> None:
+        """
+        Update the historical boost map from the Learning Plane.
+        Called by FeedbackLoop every N minutes after the KnowledgeBase is updated.
+
+        Args:
+            boosts: Mapping of runbook_id → delta (from KnowledgeBase.get_all_adjustments()).
+        """
+        self._historical_boosts = dict(boosts)
+        logger.info(
+            f"[ConfidenceScorer] Historical boosts updated — "
+            f"{len(boosts)} runbook(s): "
+            + ", ".join(
+                f"{k}={v:+.3f}" for k, v in sorted(boosts.items(), key=lambda x: -abs(x[1]))
+            )[:200]
+        )
 
     def gate(self, confidence: float) -> int:
         """
