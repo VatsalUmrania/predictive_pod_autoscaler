@@ -427,7 +427,12 @@ def _build_dataflow_queries() -> dict:
 
 # Build queries once at import time (matches dataflow/config.py behavior)
 QUERIES = _build_dataflow_queries()
-REQUIRED_QUERY_FEATURES = list(QUERIED_FEATURES)
+
+# Only features that MUST be present (non-null) in every row for training to proceed.
+# Derived columns (rps_per_replica, cpu/rps_acceleration, replicas_normalized) and
+# optional metrics (requests_per_second, cpu/memory_utilization_pct, active_connections,
+# error_rate) are intentionally excluded — they are filled or skipped gracefully.
+REQUIRED_QUERY_FEATURES = ["latency_p95_ms", "current_replicas"]
 
 # Dataflow-specific constants for backward compatibility
 TARGET_APP = os.getenv("TARGET_APP", "test-app")

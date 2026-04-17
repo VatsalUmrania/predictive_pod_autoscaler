@@ -70,6 +70,8 @@ def _align_query_window(
 
 def _fetch_chunk(query: str, start: datetime, end: datetime, step: str) -> list[dict[str, Any]]:
     """Fetch a single time range chunk from Prometheus. Returns raw values list."""
+    from typing import cast
+
     params: dict[str, str | float] = {
         "query": query,
         "start": start.timestamp(),
@@ -88,7 +90,7 @@ def _fetch_chunk(query: str, start: datetime, end: datetime, step: str) -> list[
     data = payload.get("data", {}).get("result", [])
     if not data:
         return []
-    return data[0].get("values", [])
+    return cast(list[dict[str, Any]], data[0].get("values", []))
 
 
 def _align_series_to_expected_index(
@@ -249,23 +251,45 @@ def drop_rows_missing_required_features(
 
 
 def add_prediction_targets(df: pd.DataFrame) -> pd.DataFrame:
-    """Build future targets within continuous segments only."""
+    """Build future targets within continuous segments only.
+
+    When requests_per_second is unavailable (all-NaN), replica targets are derived
+    directly from current_replicas shifted forward. RPS targets remain NaN.
+    """
     df = df.sort_index()
     seg_ids = _detect_segments(df)
     parts = []
 
+    rps_available = "requests_per_second" in df.columns and not df["requests_per_second"].isna().all()
+    replicas_available = "current_replicas" in df.columns and not df["current_replicas"].isna().all()
+
     for _seg_id, seg in df.groupby(seg_ids):
-        base = seg["requests_per_second"]
         seg = seg.copy()
-        seg["rps_t3m"] = base.reindex(seg.index + pd.Timedelta(minutes=3)).to_numpy()
-        seg["rps_t5m"] = base.reindex(seg.index + pd.Timedelta(minutes=5)).to_numpy()
-        seg["rps_t10m"] = base.reindex(seg.index + pd.Timedelta(minutes=10)).to_numpy()
 
-        seg["replicas_t3m"] = np.ceil(seg["rps_t3m"] / CAPACITY_PER_POD).clip(lower=2, upper=20)
-        seg["replicas_t5m"] = np.ceil(seg["rps_t5m"] / CAPACITY_PER_POD).clip(lower=2, upper=20)
-        seg["replicas_t10m"] = np.ceil(seg["rps_t10m"] / CAPACITY_PER_POD).clip(lower=2, upper=20)
+        if rps_available:
+            base = seg["requests_per_second"]
+            seg["rps_t3m"] = base.reindex(seg.index + pd.Timedelta(minutes=3)).to_numpy()
+            seg["rps_t5m"] = base.reindex(seg.index + pd.Timedelta(minutes=5)).to_numpy()
+            seg["rps_t10m"] = base.reindex(seg.index + pd.Timedelta(minutes=10)).to_numpy()
+            seg["replicas_t3m"] = np.ceil(seg["rps_t3m"] / CAPACITY_PER_POD).clip(lower=2, upper=20)
+            seg["replicas_t5m"] = np.ceil(seg["rps_t5m"] / CAPACITY_PER_POD).clip(lower=2, upper=20)
+            seg["replicas_t10m"] = np.ceil(seg["rps_t10m"] / CAPACITY_PER_POD).clip(lower=2, upper=20)
+            valid = seg.dropna(subset=["rps_t3m", "rps_t5m", "rps_t10m"])
+        elif replicas_available:
+            # Fallback: derive replica targets directly from observed replica counts.
+            # RPS targets stay NaN; only replica targets are populated.
+            replicas = seg["current_replicas"]
+            seg["rps_t3m"] = np.nan
+            seg["rps_t5m"] = np.nan
+            seg["rps_t10m"] = np.nan
+            seg["replicas_t3m"] = replicas.reindex(seg.index + pd.Timedelta(minutes=3)).clip(lower=2, upper=20).to_numpy()
+            seg["replicas_t5m"] = replicas.reindex(seg.index + pd.Timedelta(minutes=5)).clip(lower=2, upper=20).to_numpy()
+            seg["replicas_t10m"] = replicas.reindex(seg.index + pd.Timedelta(minutes=10)).clip(lower=2, upper=20).to_numpy()
+            valid = seg.dropna(subset=["replicas_t3m", "replicas_t5m", "replicas_t10m"])
+        else:
+            # Neither RPS nor replicas — skip segment entirely
+            continue
 
-        valid = seg.dropna(subset=["rps_t3m", "rps_t5m", "rps_t10m"])
         if not valid.empty:
             parts.append(valid)
 
@@ -290,7 +314,12 @@ def prepare_dataset(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, object]]:
     )
 
     if df.empty:
-        raise RuntimeError("No rows remain after enforcing required feature completeness.")
+        missing = [f for f in REQUIRED_QUERY_FEATURES if f not in df.columns or df[f].isna().all()]
+        raise RuntimeError(
+            f"No rows remain after enforcing required feature completeness. "
+            f"These required features were fully missing: {missing or 'none — all rows had partial NaNs'}. "
+            f"Ensure latency_p95_ms and current_replicas are available in Prometheus for the target app."
+        )
 
     df = add_temporal_features(df)
     df = add_prediction_targets(df)
@@ -375,10 +404,15 @@ def build_feature_dataframe(
             )
         else:
             if feature_name in optional_features:
-                print(f"Warning: optional metric {feature_name} not found in Prometheus; skipping.")
-                # skip optional metrics instead of failing the run
-                continue
-            missing_features.append(feature_name)
+                print(f"Warning: optional metric {feature_name} not found in Prometheus; filling with NaN.")
+                # Insert a NaN column so derived features that depend on this column
+                # (e.g. rps_per_replica, cpu_acceleration) still get computed as NaN
+                # instead of being silently absent from the DataFrame.
+                feature_series[feature_name] = pd.Series(
+                    np.nan, index=expected_index, dtype=float
+                )
+            else:
+                missing_features.append(feature_name)
 
     if missing_features:
         raise RuntimeError(
@@ -411,6 +445,15 @@ def build_feature_dataframe(
         "memory_usage_bytes",
     ]
     prepared.drop(columns=[c for c in cols_to_drop if c in prepared.columns], inplace=True)
+
+    # CRITICAL FIX: Reorder columns to FEATURE_COLUMNS order
+    # This ensures consistency between training data and online predictions
+    feature_cols_present = [c for c in FEATURE_COLUMNS if c in prepared.columns]
+    target_cols_present = [c for c in TARGET_COLUMNS if c in prepared.columns]
+    other_cols = [c for c in prepared.columns if c not in feature_cols_present + target_cols_present]
+
+    col_order = feature_cols_present + target_cols_present + other_cols
+    prepared = prepared[col_order]
 
     quality_stats["missing_features"] = missing_features
     return prepared, quality_stats

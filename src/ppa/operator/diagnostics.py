@@ -3,8 +3,34 @@
 import logging
 import sys
 from pathlib import Path
+from typing import Any, TypedDict, cast
 
 logger = logging.getLogger("ppa.diagnostics")
+
+
+class FileValidationResult(TypedDict, total=False):
+    """Type for individual file validation results."""
+    path: str
+    exists: bool
+    is_file: bool
+    size_bytes: int | None
+    readable: bool
+    reason: str
+
+class ModelFormatResult(TypedDict, total=False):
+    """Type for model format validation results."""
+    path: str
+    valid_magic: bool
+    reason: str | None
+
+class DiagnosticsReport(TypedDict, total=False):
+    """Type for comprehensive diagnostics report."""
+
+    platform: dict[str, str]
+    runtime: dict[str, str | None]
+    files: dict[str, Any]  # Complex nested structure
+    format: ModelFormatResult
+    recommendations: list[str]
 
 __all__ = [
     "check_tflite_runtime",
@@ -89,7 +115,7 @@ def check_tflite_runtime(include_tensorflow: bool = False) -> dict[str, str | No
 
 def validate_model_files(
     model_path: str, scaler_path: str, target_scaler_path: str | None = None
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """
     Validate model and scaler files exist and are accessible.
 
@@ -133,7 +159,7 @@ def validate_model_files(
     return results
 
 
-def validate_model_format(model_path: str) -> dict[str, object]:
+def validate_model_format(model_path: str) -> dict[str, Any]:
     """
     Validate that the model file is a valid TFLite format.
 
@@ -172,7 +198,7 @@ def diagnose_model_load_issue(
     model_path: str,
     scaler_path: str,
     target_scaler_path: str | None = None,
-) -> dict[str, object]:
+) -> DiagnosticsReport:
     """
     Comprehensive diagnostic report for model loading issues.
 
@@ -180,20 +206,23 @@ def diagnose_model_load_issue(
     """
     logger.info("Starting comprehensive model load diagnostics...")
 
-    report = {
-        "platform": get_platform_info(),
-        "runtime": check_tflite_runtime(include_tensorflow=False),
-        "files": validate_model_files(model_path, scaler_path, target_scaler_path),
-        "format": validate_model_format(model_path),
+    platform_info = get_platform_info()
+    runtime_info = check_tflite_runtime(include_tensorflow=False)
+    files_info = validate_model_files(model_path, scaler_path, target_scaler_path)
+    format_info: ModelFormatResult = cast(ModelFormatResult, validate_model_format(model_path))
+
+    report: DiagnosticsReport = {
+        "platform": platform_info,
+        "runtime": runtime_info,
+        "files": files_info,
+        "format": format_info,
         "recommendations": [],
     }
 
     # Generate recommendations based on findings
-    runtime = report["runtime"]
-
     # Check if any runtime is available
     available_runtimes = [
-        k for k, v in runtime.items() if v is not None and not v.startswith("ERROR")
+        k for k, v in runtime_info.items() if v is not None and not v.startswith("ERROR")
     ]
     if not available_runtimes:
         report["recommendations"].append(
@@ -205,29 +234,28 @@ def diagnose_model_load_issue(
         )
 
     # Check file issues
-    files = report["files"]
-    if not files["model"]["exists"]:
+    if not files_info["model"].get("exists"):
         report["recommendations"].append(
-            f"CRITICAL: Model file not found at {files['model']['path']}"
+            f"CRITICAL: Model file not found at {files_info['model'].get('path')}"
         )
-    elif not files["model"]["valid_magic"]:
+    elif not files_info["model"].get("valid_magic"):
         report["recommendations"].append(
             "ERROR: Model file is not valid TFLite format. File may be corrupted."
         )
 
-    if not files["scaler"]["exists"]:
+    if not files_info["scaler"].get("exists"):
         report["recommendations"].append(
-            f"CRITICAL: Scaler file not found at {files['scaler']['path']}"
+            f"CRITICAL: Scaler file not found at {files_info['scaler'].get('path')}"
         )
 
-    if target_scaler_path and not files["target_scaler"]["exists"]:
+    if target_scaler_path and not files_info["target_scaler"].get("exists"):
         report["recommendations"].append(
-            f"WARNING: Target scaler file not found at {files['target_scaler']['path']} "
+            f"WARNING: Target scaler file not found at {files_info['target_scaler'].get('path')} "
             f"(optional, but recommended)"
         )
 
     # Check for broken runtime implementations
-    for runtime_name, status in runtime.items():
+    for runtime_name, status in runtime_info.items():
         if isinstance(status, str) and status.startswith("ERROR"):
             report["recommendations"].append(f"ERROR: {runtime_name} import failed: {status}")
 
@@ -237,7 +265,7 @@ def diagnose_model_load_issue(
     return report
 
 
-def print_diagnostics(report: dict[str, object]) -> None:
+def print_diagnostics(report: DiagnosticsReport) -> None:
     """Pretty-print diagnostics report to logger."""
     logger.info("=" * 70)
     logger.info("MODEL LOAD DIAGNOSTICS REPORT")
@@ -266,9 +294,8 @@ def print_diagnostics(report: dict[str, object]) -> None:
         logger.info(f"    status: {info.get('reason', 'Unknown')}")
 
     logger.info("\n[FORMAT]")
-    fmt = report["format"]
-    logger.info(f"  valid_magic: {fmt.get('valid_magic', False)}")
-    logger.info(f"  status: {fmt.get('reason', 'Unknown')}")
+    logger.info(f"  valid_magic: {report['format'].get('valid_magic', False)}")
+    logger.info(f"  status: {report['format'].get('reason', 'Unknown')}")
 
     logger.info("\n[RECOMMENDATIONS]")
     for i, rec in enumerate(report["recommendations"], 1):

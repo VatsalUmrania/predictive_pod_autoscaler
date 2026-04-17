@@ -14,7 +14,6 @@ spec:
   scaleDownRate: 1.0
   safetyFactor: 1.15
   observerMode: false
-  # modelPath / scalerPath / targetScalerPath are REMOVED (deprecated).
-  # Artifacts are resolved automatically from:
-  #   Layout 1 (preferred): /models/test-app/rps_t10m/current/
-  #   Layout 2 (fallback):  /models/rps_t10m/
+  modelPath: "/models/test-app/rps_t10m/ppa_model_rps_t10m.tflite"
+  scalerPath: "/models/test-app/rps_t10m/scaler_rps_t10m.pkl"
+  targetScalerPath: "/models/test-app/rps_t10m/target_scaler_rps_t10m.pkl"

@@ -10,7 +10,6 @@ import os
 import tempfile
 import time
 from datetime import datetime
-from typing import cast
 
 import typer
 from rich.align import Align
@@ -67,7 +66,7 @@ def _get_ppa_status() -> dict:
             }
         except (json.JSONDecodeError, KeyError):
             pass
-    
+
     # Fallback: get metrics from operator Prometheus metrics
     predicted_load = query_prometheus('ppa_predicted_load_rps{cr_name="test-app-ppa"}') or "?"
     desired = query_prometheus('ppa_desired_replicas{cr_name="test-app-ppa"}') or "?"
@@ -81,7 +80,7 @@ def _get_predicted_rps_from_logs() -> str:
     pred_rps = query_prometheus('ppa_predicted_load_rps{cr_name="test-app-ppa"}')
     if pred_rps and pred_rps != "?":
         return pred_rps
-    
+
     # Fallback: search operator logs for predicted load entries
     result = run_cmd_silent(
         ["kubectl", "logs", "deployment/ppa-operator", "-n", "default", "--tail=50"],
@@ -195,7 +194,7 @@ def _build_metrics_panel() -> Panel:
         or query_prometheus('sum(http_requests_total{pod=~"test-app.*"}) / 60')
         or "N/A"
     )
-    
+
     rps_per = (
         query_prometheus(
             'sum(rate(http_requests_total{pod=~"test-app.*"}[1m]))'
@@ -207,7 +206,7 @@ def _build_metrics_panel() -> Panel:
         )
         or "N/A"
     )
-    
+
     cpu = (
         query_prometheus(
             'sum(rate(container_cpu_usage_seconds_total{pod=~"test-app.*"}[1m]))'
@@ -219,7 +218,7 @@ def _build_metrics_panel() -> Panel:
         )
         or "N/A"
     )
-    
+
     p95 = (
         query_prometheus(
             'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{pod=~"test-app.*"}[1m])) by (le)) * 1000'

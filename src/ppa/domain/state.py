@@ -20,7 +20,7 @@ class CRState:
     for each PredictiveAutoscaler custom resource.
 
     Attributes:
-        predictor: TFLite model + scaler + history for this CR
+        predictor: TFLite model + scaler + history for this CR (None during initialization)
         observer_mode: Whether this CR is shadow-only and must not scale
         stable_count: Reconciliation cycles with stable replica count
         last_prediction: Last predicted load value
@@ -33,7 +33,7 @@ class CRState:
         prom_last_failure_time: Timestamp of last Prometheus failure
     """
 
-    predictor: Predictor
+    predictor: Predictor | None
     observer_mode: bool = False
     stable_count: int = 0
     last_prediction: float = 0.0

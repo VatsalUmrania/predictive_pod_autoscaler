@@ -70,7 +70,7 @@ from ppa.cli.commands.train import train_cmd  # noqa: E402
 
 app.command("init", help="Bootstrap cluster infrastructure", rich_help_panel="LIFECYCLE")(init_cmd)
 app.command("add", help="Register an app for autoscaling", rich_help_panel="LIFECYCLE")(add_cmd)
-app.command("train", help="Train the LSTM model on Prometheus data", rich_help_panel="LIFECYCLE")(train_cmd)
+app.command("train", help="Train LSTM model(s): by default, all models: rps_t3m, rps_t5m, and rps_t10m", rich_help_panel="LIFECYCLE")(train_cmd)
 app.command("apply", help="Deploy autoscaler with the current model", rich_help_panel="LIFECYCLE")(apply_cmd)
 app.command("run", help="Full lifecycle: init → add → train → apply", rich_help_panel="LIFECYCLE")(run_cmd)
 

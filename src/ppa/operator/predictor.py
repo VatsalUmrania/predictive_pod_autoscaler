@@ -285,6 +285,13 @@ class Predictor:
         if not self.ready():
             return 0.0
 
+        # Type narrowing: guarantee non-None after ready() check
+        assert self.scaler is not None, "Scaler must be loaded after ready() check"
+        assert self.interpreter is not None, "Interpreter must be loaded after ready() check"
+        assert (
+            self.input_details is not None and self.output_details is not None
+        ), "Input/output details must be available after ready() check"
+
         window = np.array(self.history, dtype=np.float32)[-self.lookback :]
         scaled = self.scaler.transform(window)
         input_data = scaled.reshape(1, self.lookback, NUM_FEATURES).astype(np.float32)

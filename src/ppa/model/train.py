@@ -12,6 +12,7 @@ import pandas as pd
 from keras import layers
 from sklearn.preprocessing import MinMaxScaler
 
+from ppa.common.constants import CAPACITY_PER_POD
 from ppa.common.feature_spec import FEATURE_COLUMNS, TARGET_COLUMNS
 from ppa.model.artifacts import artifact_dir, keras_model_path, scaler_path, target_scaler_path
 
@@ -84,13 +85,51 @@ def train_model(
     target_floor=5.0,
     early_stopping_patience=15,
     early_stopping_min_delta=1e-4,
+    on_data_loaded=None,
+    on_model_created=None,
+    on_epoch_complete=None,
+    on_batch_complete=None,
+    on_artifacts_saved=None,
+    verbose=None,
+    suppress_info=False,
+    min_replicas=2,
+    max_replicas=20,
+    capacity=CAPACITY_PER_POD,
 ):
     """Train an LSTM model for a single target horizon.
+
+    Args:
+        csv_path: Path to training CSV
+        lookback: Lookback window steps
+        epochs: Number of training epochs
+        target_col: Target column to predict
+        app_name: Application name
+        namespace: Kubernetes namespace
+        test_split: Fraction of data for testing
+        output_dir: Directory to save artifacts
+        target_floor: Minimum value for rps_* targets
+        early_stopping_patience: Early stopping patience
+        early_stopping_min_delta: Early stopping minimum delta
+        on_data_loaded: Optional callback(rows, segments, train_size, val_size, test_size) fired after data load
+        on_model_created: Optional callback(params, trainable_params) fired after model build
+        on_epoch_complete: Optional callback(epoch, loss, val_loss, mae) fired after each epoch
+        on_batch_complete: Optional callback(batch, logs) fired after each batch
+        on_artifacts_saved: Optional callback(paths_dict) fired after artifact save
+        verbose: Keras verbosity (0=silent, 1=progress, 2=one line per epoch). If None, auto-set to 0 when callbacks provided.
+        suppress_info: Suppress informational print statements (set automatically to True when callbacks provided)
 
     Returns:
         dict with keys: model, scaler, history, metrics, artifact_paths
         or None on failure.
     """
+    # Auto-detect verbose mode: silent if callbacks provided
+    if verbose is None:
+        verbose = 0 if (on_epoch_complete or on_model_created) else 1
+
+    # Auto-suppress info when callbacks are provided
+    if suppress_info is False and (on_epoch_complete or on_model_created):
+        suppress_info = True
+
     if target_col not in TARGET_COLUMNS:
         print(f"Error: target '{target_col}' not in {TARGET_COLUMNS}")
         return None
@@ -99,11 +138,13 @@ def train_model(
         print(f"File not found: {csv_path}")
         return None
 
-    print(f"\n{'=' * 60}")
-    print(f"Training target: {target_col}")
-    print(f"{'=' * 60}")
+    if not suppress_info:
+        print(f"\n{'=' * 60}")
+        print(f"Training target: {target_col}")
+        print(f"{'=' * 60}")
 
-    print(f"Loading data from {csv_path}...")
+    if not suppress_info:
+        print(f"Loading data from {csv_path}...")
     df = pd.read_csv(csv_path, index_col="timestamp", parse_dates=True)
     df = df.dropna(subset=FEATURE_COLUMNS + [target_col])
 
@@ -114,9 +155,11 @@ def train_model(
         print("Not enough data to train. Need at least", lookback + 10, "rows.")
         return None
 
-    print(f"Total rows after cleaning: {len(df)}")
-    if "segment_id" in df.columns:
-        print(f"Found {df['segment_id'].nunique()} continuous segment(s).")
+    if not suppress_info:
+        print(f"Total rows after cleaning: {len(df)}")
+    num_segments = df["segment_id"].nunique() if "segment_id" in df.columns else 1
+    if not suppress_info and "segment_id" in df.columns:
+        print(f"Found {num_segments} continuous segment(s).")
 
     scaler = MinMaxScaler()
     scaler.fit(df[FEATURE_COLUMNS])
@@ -144,34 +187,76 @@ def train_model(
     y_train = target_scaler.fit_transform(y_train_raw.reshape(-1, 1)).flatten()
     y_val = target_scaler.transform(y_val_raw.reshape(-1, 1)).flatten()
 
-    print(f"Split sizes — train: {len(x_train)}, val: {len(x_val)}, test: {len(x_test)}")
+    if not suppress_info:
+        print(f"Split sizes — train: {len(x_train)}, val: {len(x_val)}, test: {len(x_test)}")
+
+    # Fire on_data_loaded callback
+    if on_data_loaded:
+        on_data_loaded(
+            rows=len(df),
+            segments=num_segments,
+            train_size=len(x_train),
+            val_size=len(x_val),
+            test_size=len(x_test),
+        )
 
     model = build_model(lookback, len(FEATURE_COLUMNS))
-    model.summary()
+    if verbose:
+        model.summary()
 
-    print("Training model...")
+    # Fire on_model_created callback
+    if on_model_created:
+        total_params = model.count_params()
+        trainable_params = sum(
+            np.prod(w.shape) for w in model.trainable_weights
+        )
+        on_model_created(total_params=total_params, trainable_params=trainable_params)
+
+    if not suppress_info:
+        print("Training model...")
+
+    # Custom callback for epoch completion
+    class EpochCallbackBridge(keras.callbacks.Callback):
+        def on_epoch_end(self, epoch, logs=None):
+            if on_epoch_complete and logs:
+                on_epoch_complete(
+                    epoch=epoch + 1,
+                    loss=float(logs.get("loss", 0)),
+                    val_loss=float(logs.get("val_loss", 0)),
+                    mae=float(logs.get("mae", 0)),
+                )
+
+        def on_batch_end(self, batch, logs=None):
+            if on_batch_complete and logs:
+                on_batch_complete(batch=batch + 1, logs=logs)
+
+    callbacks_list = [
+        keras.callbacks.EarlyStopping(
+            patience=early_stopping_patience,
+            min_delta=early_stopping_min_delta,
+            restore_best_weights=True,
+            verbose=1,
+        ),
+        keras.callbacks.ReduceLROnPlateau(
+            monitor="val_loss",
+            factor=0.5,
+            patience=10,
+            min_lr=1e-5,
+            min_delta=0.0005,
+            verbose=1,
+        ),
+    ]
+    if on_epoch_complete or on_batch_complete:
+        callbacks_list.append(EpochCallbackBridge())
+
     history = model.fit(
         x_train,
         y_train,
         validation_data=(x_val, y_val),
         epochs=epochs,
         batch_size=32,
-        callbacks=[
-            keras.callbacks.EarlyStopping(
-                patience=early_stopping_patience,
-                min_delta=early_stopping_min_delta,
-                restore_best_weights=True,
-                verbose=1,
-            ),
-            keras.callbacks.ReduceLROnPlateau(
-                monitor="val_loss",
-                factor=0.5,
-                patience=10,
-                min_lr=1e-5,
-                min_delta=0.0005,
-                verbose=1,
-            ),
-        ],
+        callbacks=callbacks_list,
+        verbose=verbose,
     )
 
     # Save artifacts with structured app/namespace/target names
@@ -201,18 +286,107 @@ def train_model(
     with open(meta_path, "w") as f:
         json.dump(split_meta, f, indent=2)
 
-    print(f"Saved model          → {model_path}")
-    print(f"Saved feature scaler → {scaler_file}")
-    print(f"Saved target scaler  → {target_scaler_file}")
-    print(f"Saved meta           → {meta_path}")
+    if not suppress_info:
+        print(f"Saved model          → {model_path}")
+        print(f"Saved feature scaler → {scaler_file}")
+        print(f"Saved target scaler  → {target_scaler_file}")
+        print(f"Saved meta           → {meta_path}")
+
+    # Fire on_artifacts_saved callback
+    if on_artifacts_saved:
+        on_artifacts_saved(
+            paths={
+                "model": str(model_path),
+                "scaler": str(scaler_file),
+                "target_scaler": str(target_scaler_file),
+                "meta": str(meta_path),
+            }
+        )
 
     # Compute final metrics on validation set
-    val_loss, val_mae = model.evaluate(x_val, y_val, verbose=0)
+    val_loss, val_mae_keras = model.evaluate(x_val, y_val, verbose=0)
+
+    # Get validation predictions to compute accuracy metrics
+    y_val_pred = model.predict(x_val, verbose=0)
+    y_val_pred = y_val_pred.flatten()
+
+    # Inverse transform predictions and actuals to original scale
+    y_val_actual = target_scaler.inverse_transform(y_val.reshape(-1, 1)).flatten()
+    y_val_pred_scaled = target_scaler.inverse_transform(y_val_pred.reshape(-1, 1)).flatten()
+
+# Import metric functions here to avoid circular import
+    from ppa.model.evaluate import (
+        compute_mae,
+        compute_mape,
+        compute_rmse,
+        compute_scaling_stats,
+        compute_smape,
+        rps_to_replicas,
+    )
+
+    # Compute accuracy metrics
+    mae = compute_mae(y_val_actual, y_val_pred_scaled)
+    mape = compute_mape(y_val_actual, y_val_pred_scaled)
+    smape = compute_smape(y_val_actual, y_val_pred_scaled)
+    rmse = compute_rmse(y_val_actual, y_val_pred_scaled)
+
+    # PPA vs HPA comparison on validation set
+    ppa_replicas = rps_to_replicas(y_val_pred_scaled, capacity, min_replicas, max_replicas)
+    hpa_replicas = rps_to_replicas(y_val_actual, capacity, min_replicas, max_replicas)
+    ppa_stats = compute_scaling_stats(y_val_actual, ppa_replicas, capacity, "ppa")
+    hpa_stats = compute_scaling_stats(y_val_actual, hpa_replicas, capacity, "hpa")
+
+    replica_savings = (
+        1 - ppa_stats["ppa_avg_replicas"] / max(hpa_stats["hpa_avg_replicas"], 1e-6)
+    ) * 100
+
     metrics = {
         "val_loss": float(val_loss),
-        "val_mae": float(val_mae),
+        "val_mae": float(val_mae_keras),
+        "val": {
+            "mae": round(mae, 4),
+            "mape": round(mape, 4),
+            "smape": round(smape, 4),
+            "rmse": round(rmse, 4),
+        },
+        "data": {
+            "train_size": len(x_train),
+            "val_size": len(x_val),
+            "test_size": len(x_test),
+        },
         "epochs_run": len(history.history["loss"]),
     }
+
+    # Save training metrics summary with accuracy metrics and HPA comparison
+    metrics_summary = {
+        "target": target_col,
+        "mae": round(mae, 4),
+        "mape": round(mape, 4),
+        "smape": round(smape, 4),
+        "rmse": round(rmse, 4),
+        "epochs_run": len(history.history["loss"]),
+        "train_size": len(x_train),
+        "val_size": len(x_val),
+        "test_size": len(x_test),
+        "lookback": lookback,
+        **ppa_stats,
+        **hpa_stats,
+        "replica_savings_pct": round(replica_savings, 2),
+    }
+    train_summary_path = out_dir / f"train_summary_{target_col}.json"
+    with open(train_summary_path, "w") as f:
+        json.dump(metrics_summary, f, indent=2)
+
+    if not suppress_info:
+        print(f"Saved training summary → {train_summary_path}")
+        # Print HPA vs PPA comparison table
+        print(f"\n  {'Metric':<30} {'PPA':>10} {'HPA':>10}")
+        print(f"  {'─' * 52}")
+        print(f"  {'Avg Replicas':<30} {ppa_stats['ppa_avg_replicas']:>10.2f} {hpa_stats['hpa_avg_replicas']:>10.2f}")
+        print(f"  {'Over-provisioning %':<30} {ppa_stats['ppa_over_prov_pct']:>10.1f} {hpa_stats['hpa_over_prov_pct']:>10.1f}")
+        print(f"  {'Under-provisioning %':<30} {ppa_stats['ppa_under_prov_pct']:>10.1f} {hpa_stats['hpa_under_prov_pct']:>10.1f}")
+        print(f"  {'Wasted Capacity (avg RPS)':<30} {ppa_stats['ppa_wasted_capacity_avg']:>10.1f} {hpa_stats['hpa_wasted_capacity_avg']:>10.1f}")
+        print(f"  {'Replica Savings':<30} {replica_savings:>10.1f}%")
 
     return {
         "model": model,
@@ -225,6 +399,7 @@ def train_model(
             "scaler": scaler_file,
             "target_scaler": target_scaler_file,
             "meta": meta_path,
+            "train_summary": str(train_summary_path),
         },
     }
 

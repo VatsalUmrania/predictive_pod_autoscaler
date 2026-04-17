@@ -5,8 +5,16 @@ from __future__ import annotations
 from collections.abc import Generator
 from contextlib import contextmanager
 
-from rich.progress import BarColumn, SpinnerColumn, TextColumn, TimeRemainingColumn
-from rich.progress import Progress as RichProgress
+from rich.progress import (
+    BarColumn,
+    SpinnerColumn,
+    TaskID,
+    TextColumn,
+    TimeRemainingColumn,
+)
+from rich.progress import (
+    Progress as RichProgress,
+)
 from rich.spinner import Spinner
 
 from ppa.cli.utils import console
@@ -26,7 +34,7 @@ class Progress:
         self.description = description
         self.total = total
         self._progress: RichProgress | None = None
-        self._task_id: int | None = None
+        self._task_id: TaskID | None = None
 
     def __enter__(self) -> Progress:
         """Start progress context manager."""

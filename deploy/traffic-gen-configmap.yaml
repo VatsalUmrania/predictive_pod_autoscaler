@@ -5,36 +5,60 @@ metadata:
   namespace: default
 data:
   locustfile.py: |
-    from locust import HttpUser, task, between, LoadTestShape
+    from locust import HttpUser, task, between, LoadTestShape, events
+    import logging
+    import time
     import random
+
+    logging.basicConfig(level=logging.INFO)
+    START_TIME = None
 
     class TestAppUser(HttpUser):
         wait_time = between(0.5, 2.0)
-        
+
         @task(3)
         def index(self):
             self.client.get("/")
-        
+
         @task(1)
         def health(self):
             self.client.get("/health")
 
+    @events.test_start.add_listener
+    def on_test_start(environment, **kwargs):
+        global START_TIME
+        START_TIME = time.time()
+        logging.info("traffic-gen: test started")
+
+    @events.test_stop.add_listener
+    def on_test_stop(environment, **kwargs):
+        duration = None
+        if START_TIME is not None:
+            duration = time.time() - START_TIME
+        logging.error(f"traffic-gen: test stopped unexpectedly duration={duration}")
+        logging.error("traffic_gen_exit_reason=unexpected_stop traffic_gen_run_duration=%s", duration)
+
     class StagesShape(LoadTestShape):
         """
-        A shape class which loads test in stages.
-        Starts at 10 users for 5 minutes, then ramps up to 250 users
+        Stage-based load shape. When stages finish, keep running the last (peak) stage forever.
+        Uses cumulative total_time for robust, easy-to-read logic.
         """
         stages = [
-            {"duration": 300, "users": 50, "spawn_rate": 5},
+            {"duration": 300, "users": 50,  "spawn_rate": 5},
             {"duration": 300, "users": 150, "spawn_rate": 10},
             {"duration": 600, "users": 250, "spawn_rate": 20},
-            {"duration": 300, "users": 100, "spawn_rate": 10},
+            {"duration": 300, "users": 250, "spawn_rate": 10},
         ]
 
         def tick(self):
             run_time = self.get_run_time()
+            total_time = 0
+
             for stage in self.stages:
-                if run_time < stage["duration"]:
-                    tick_data = (stage["users"], stage["spawn_rate"])
-                    return tick_data
-            return None
+                total_time += stage["duration"]
+                if run_time < total_time:
+                    return (stage["users"], stage["spawn_rate"]) 
+
+            # stay at last (peak) stage forever
+            last = self.stages[-1]
+            return (last["users"], last["spawn_rate"]) 

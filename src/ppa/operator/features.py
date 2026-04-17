@@ -17,7 +17,6 @@ from ppa.config import (
     LOOKBACK_STEPS,
     PROMETHEUS_URL,
     TIMER_INTERVAL,
-    FeatureVectorError,
 )
 from ppa.domain import validate_feature_bounds
 from ppa.operator.prometheus import (
@@ -86,7 +85,8 @@ def _normalize_metrics(
     # This ensures the feature has consistent meaning across scale events
     stable_ref = max(reference_replicas, 1)  # Clamp to 1 to avoid division by zero
     values["rps_per_replica"] = rps / stable_ref
-    values["replicas_normalized"] = values["current_replicas"] / float(max_replicas)
+    current_replicas = values.get("current_replicas") or 1.0
+    values["replicas_normalized"] = current_replicas / float(max_replicas)
 
     return values
 

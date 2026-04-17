@@ -4,10 +4,11 @@
 import logging
 import math
 import os
+import statistics
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any
+from typing import Any, cast
 
 import kopf
 from prometheus_client import Counter, Gauge
@@ -74,6 +75,50 @@ logger = logging.getLogger("ppa.operator")
 
 # Suppress kopf.objects verbose logging (patching, timers, etc.)
 logging.getLogger("kopf.objects").setLevel(logging.ERROR)
+
+
+# ---------------------------------------------------------------------------
+# Multi-model prediction registry
+# Keyed by (target_ns, target_deployment) → {horizon: predicted_replicas}
+# Populated by every CR on each reconcile cycle; the non-observer (t10m) CR
+# reads the aggregated median and applies the single scaling decision.
+# ---------------------------------------------------------------------------
+_prediction_registry: dict[tuple[str, str], dict[str, float]] = {}
+_prediction_registry_lock = threading.Lock()
+
+# TTL: predictions older than 2× timer interval are stale and must be discarded.
+_PREDICTION_TTL_SECONDS = TIMER_INTERVAL * 2
+_prediction_timestamps: dict[tuple[str, str], dict[str, float]] = {}
+
+
+def _validate_input_signals(features: dict[str, Any]) -> bool:
+    """Return False (→ skip prediction) when ALL primary signals are absent/zero.
+
+    Rule: if rps_per_replica AND cpu_utilization_pct are both ≤ 0 AND
+    latency_p95_ms is NaN/None, the feature vector carries no real signal.
+    Scaling on such a vector produces nonsensical phantom predictions.
+    """
+    rps = features.get("rps_per_replica", 0.0) or 0.0
+    cpu = features.get("cpu_utilization_pct", 0.0) or 0.0
+    lat = features.get("latency_p95_ms")
+
+    lat_is_nan = lat is None or (isinstance(lat, float) and math.isnan(lat))
+
+    if rps <= 0.0 and cpu <= 0.0 and lat_is_nan:
+        return False  # All primary signals dead
+    return True
+
+
+def _check_prediction_sanity(predicted_load: float, features: dict[str, Any]) -> bool:
+    """Return False (→ reject prediction) when predicted_load is high but inputs are near-zero.
+
+    Threshold: predicted_load > 50 req/s while rps_per_replica == 0.
+    This catches LSTM hallucinations driven entirely by temporal embeddings.
+    """
+    rps = features.get("rps_per_replica", 0.0) or 0.0
+    if predicted_load > 50.0 and rps <= 0.0:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -189,15 +234,15 @@ def _resolve_paths(
         Returns (None, None, None, False, False) if neither layout is ready.
     """
     model_dir = DEFAULT_MODEL_DIR
+    target_scaler_path: str | None = None
 
     # Layout 1: /models/{app}/{horizon}/current/  (structured, preferred)
     structured_base = os.path.join(model_dir, target_app, target_horizon, "current")
     if os.path.exists(structured_base):
         model_path = os.path.join(structured_base, "ppa_model.tflite")
         scaler_path = os.path.join(structured_base, "scaler.pkl")
-        target_scaler_path = os.path.join(structured_base, "target_scaler.pkl")
-        if not os.path.exists(target_scaler_path):
-            target_scaler_path = None
+        tsp = os.path.join(structured_base, "target_scaler.pkl")
+        target_scaler_path = tsp if os.path.exists(tsp) else None
         logger.debug(f"Resolved artifacts via structured layout: {structured_base}")
         return model_path, scaler_path, target_scaler_path, False, False
 
@@ -206,9 +251,8 @@ def _resolve_paths(
     if os.path.exists(flat_base):
         model_path = os.path.join(flat_base, "ppa_model.tflite")
         scaler_path = os.path.join(flat_base, "scaler.pkl")
-        target_scaler_path = os.path.join(flat_base, "target_scaler.pkl")
-        if not os.path.exists(target_scaler_path):
-            target_scaler_path = None
+        tsp2 = os.path.join(flat_base, "target_scaler.pkl")
+        target_scaler_path = tsp2 if os.path.exists(tsp2) else None
         logger.debug(
             f"Resolved artifacts via flat layout: {flat_base} "
             f"(migrate to {structured_base} for versioned upgrades)"
@@ -304,6 +348,7 @@ def _get_or_create_state(
                     target_scaler_path,
                     target_app,
                     target_horizon,
+                    DEFAULT_MODEL_DIR,
                 )
             except RuntimeError as e:
                 # PRODUCTION-SAFE: Don't break working system on upgrade failure
@@ -399,6 +444,7 @@ def _get_or_create_state(
         # FIX (PR#15): Restore history from CR status if available (pod restart resilience)
         if persisted_history and persisted_history.get("data"):
             try:
+                assert state.predictor is not None
                 history_data = persisted_history["data"]
                 restored = state.predictor.deserialize_history(history_data)
                 if restored:
@@ -574,7 +620,9 @@ def _parse_crd_spec(
     elif (
         existing.using_legacy_artifacts
         and not used_legacy
+        and model_path is not None
         and os.path.exists(model_path)
+        and scaler_path is not None
         and os.path.exists(scaler_path)
     ):
         with _cr_state_lock:
@@ -682,6 +730,7 @@ def _parse_crd_spec(
 
     # STEP 5: Call _get_or_create_state (paths validated, paths exist)
     # STEP 5: Call _get_or_create_state (paths validated, paths exist)
+    assert model_path is not None and scaler_path is not None, "Paths should be validated before this point"
     state, upgrade_info = _get_or_create_state(
         key,
         model_path,
@@ -698,7 +747,7 @@ def _parse_crd_spec(
     )
 
     # STEP 6: Re-fetch state (fresh reference after lock release in _get_or_create_state)
-    state = _cr_state.get(key)
+    state = cast(CRState, _cr_state.get(key))
 
     # Handle upgrade_info (idempotent status updates - Issue 15)
     if upgrade_info["failed_to_upgrade"]:
@@ -833,12 +882,23 @@ def _update_predictor_state(
     # Reset transition flag when predictor becomes ready
     state.predictor_missing_logged = False
 
+    lat = features.get("latency_p95_ms", float("nan"))
+    lat_display = f"{lat:.1f}" if isinstance(lat, float) and not math.isnan(lat) else "nan"
     logger.info(
         f"[{cr_name}] RPS/Pod={features['rps_per_replica']:.1f}  "
-        f"P95={features['latency_p95_ms']:.1f}ms  "
+        f"P95={lat_display}ms  "
         f"CPU={features['cpu_utilization_pct']:.1f}%  "
         f"Replicas={features['replicas_normalized']:.2f} (norm)"
     )
+
+    # Input validation: skip prediction entirely when all primary signals are dead.
+    if not _validate_input_signals(features):
+        logger.warning(
+            f"[{cr_name}] Skipping prediction due to invalid input signals "
+            f"(rps=0, cpu=0, latency=NaN)"
+        )
+        return False
+
     return True
 
 
@@ -865,6 +925,14 @@ def _make_scaling_decision(
     logger.info(f"[{cr_name}] Predicted load: {predicted_load:.1f} req/s")
 
     ppa_predicted_load_rps.labels(cr_name=cr_name, namespace=cr_ns).set(predicted_load)
+
+    # Prediction sanity check: reject hallucinations inconsistent with near-zero input.
+    if not _check_prediction_sanity(predicted_load, features):
+        logger.warning(
+            f"[{cr_name}] Rejecting prediction: inconsistent with input signals "
+            f"(predicted={predicted_load:.1f} req/s but rps_per_replica=0)"
+        )
+        return current, False
 
     # Track prediction accuracy and check for concept drift
     actual_rps = features.get("requests_per_second", 0.0)
@@ -911,7 +979,19 @@ def _make_scaling_decision(
         config["safety_factor"],
     )
 
-    # Tolerance-based stabilization
+    # Write this CR's prediction into the shared registry (keyed by deployment).
+    # The non-observer (active scaler) CR will read the aggregated median.
+    deploy_key = (config["target_ns"], config["target"])
+    horizon = config["target_horizon"]
+    now = time.time()
+    with _prediction_registry_lock:
+        if deploy_key not in _prediction_registry:
+            _prediction_registry[deploy_key] = {}
+            _prediction_timestamps[deploy_key] = {}
+        _prediction_registry[deploy_key][horizon] = float(candidate)
+        _prediction_timestamps[deploy_key][horizon] = now
+
+    # Tolerance-based stabilization (still per-CR — needed to correctly gate _apply_scaling)
     if abs(candidate - state.last_desired) <= STABILIZATION_TOLERANCE:
         state.stable_count += 1
     else:
@@ -926,6 +1006,51 @@ def _make_scaling_decision(
         )
         ppa_desired_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(candidate)
         return candidate, False
+
+    # --- Multi-model aggregation (active scaler only) ---
+    # Observer CRs still return (candidate, True) so _apply_scaling can log "would scale".
+    # The actual scaling below in reconcile() is guarded: observers never call scale_deployment.
+    if not config["observer_mode"]:
+        # Discard stale predictions (older than TTL) before aggregating.
+        with _prediction_registry_lock:
+            valid_predictions: list[float] = []
+            registry = _prediction_registry.get(deploy_key, {})
+            timestamps = _prediction_timestamps.get(deploy_key, {})
+            for h, val in registry.items():
+                age = now - timestamps.get(h, 0.0)
+                if age <= _PREDICTION_TTL_SECONDS:
+                    valid_predictions.append(val)
+
+        logger.info(
+            f"[{cr_name}] Model predictions this cycle: "
+            + ", ".join(
+                f"{h}={v:.1f}" for h, v in _prediction_registry.get(deploy_key, {}).items()
+            )
+        )
+
+        if len(valid_predictions) >= 2:
+            pred_max = max(valid_predictions)
+            pred_min = min(valid_predictions)
+            epsilon = 1e-6
+            ratio = pred_max / max(pred_min, epsilon)
+
+            if ratio > 5.0:
+                logger.warning(
+                    f"[{cr_name}] Skipping scaling due to model disagreement "
+                    f"(max={pred_max:.1f}, min={pred_min:.1f}, ratio={ratio:.1f}x > 5)"
+                )
+                ppa_desired_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(candidate)
+                return current, False
+
+            # All models agree: use median as the single scaling target.
+            median_replicas = int(round(statistics.median(valid_predictions)))
+            median_replicas = max(config["min_r"], min(config["max_r"], median_replicas))
+            logger.info(
+                f"[{cr_name}] Aggregated replica target (median of {len(valid_predictions)} models): "
+                f"{median_replicas}"
+            )
+            ppa_desired_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(median_replicas)
+            return median_replicas, True
 
     ppa_desired_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(candidate)
     return candidate, True
@@ -965,7 +1090,7 @@ def _apply_scaling(
 
 
 @kopf.on.startup()
-def startup(logger_: kopf.Logger = None, **kwargs):
+def startup(logger_: kopf.Logger | None = None, **kwargs):
     """Operator startup hook - runs once when operator pod starts."""
     pass
     logger.info("=" * 80)

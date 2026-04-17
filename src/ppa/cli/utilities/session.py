@@ -173,16 +173,15 @@ def make_progress() -> Progress:
     return Progress(
         SpinnerColumn(spinner_name="dots", style="brand"),
         TextColumn("[info]{task.description}[/info]"),
-        ProgressColumn(),
         TaskProgressColumn(style="metric"),
-        TimeElapsedColumn(style="dim"),
+        TimeElapsedColumn(),
         console=console,
     )
 
 
 def get_live_progress_callback(
     console_instance: Console | None = None,
-) -> type[keras.callbacks.Callback]:
+) -> keras.callbacks.Callback:
     """Return a Keras Callback that renders a Rich progress bar for training.
 
     Creates a custom Keras callback that displays training progress with Rich
@@ -211,7 +210,7 @@ def get_live_progress_callback(
             self.progress = None
             self.epoch_start = 0
             self.last_completed_epoch = None
-            self.latest_metrics = {}
+            self.latest_metrics: dict[str, float] = {}
             self.current_epoch = None
 
         def on_train_begin(self, logs=None):  # noqa: ARG002
