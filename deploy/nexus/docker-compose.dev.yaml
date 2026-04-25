@@ -180,10 +180,9 @@ services:
     image: python:3.12-slim
     container_name: nexus-api
     working_dir: /app
-    entrypoint: >
-      sh -c "pip install -q fastapi uvicorn prometheus-client httpx pydantic &&
-             uvicorn nexus.observability.status_api:app
-               --host 0.0.0.0 --port 8080 --log-level info"
+    entrypoint: ["sh", "-c"]
+    command:
+      - "pip install -q fastapi uvicorn prometheus-client httpx pydantic pyyaml aiosqlite && uvicorn nexus.observability.status_api:app --host 0.0.0.0 --port 8080 --log-level info"
     volumes:
       - ../../src:/app            # Mount project source
       - nexus_data:/data          # Persistent audit + knowledge DBs

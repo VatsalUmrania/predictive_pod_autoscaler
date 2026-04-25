@@ -485,6 +485,30 @@ class GitAgent(BaseAgent):
                 f"{len(validation['required_keys'])} keys all present"
             )
 
+        # 4. selfheal.yaml detection — auto-register app with NEXUS
+        sh_config = None
+        try:
+            from nexus.integration.selfheal_config import load_selfheal_config
+            sh_config = load_selfheal_config(self.repo_path)
+            if sh_config:
+                from nexus.integration.token_store import get_token_store
+                import asyncio
+                store = get_token_store()
+                # Register app (idempotent) and get/generate token
+                token = await store.register_app(sh_config.app, tier=sh_config.tier)
+                logger.info(
+                    f"[GitAgent] selfheal.yaml found for app='{sh_config.app}' "
+                    f"token={token[:8]}…"
+                )
+                # Cache policy in Dashboard for /developer/policy/{app}
+                try:
+                    from nexus.integration.dashboard import cache_policy
+                    cache_policy(sh_config.app, sh_config.to_dict())
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.debug(f"[GitAgent] selfheal.yaml processing skipped: {exc}")
+
         return events
 
     # ── BaseAgent interface ───────────────────────────────────────────────────

@@ -1,0 +1,105 @@
+version: "3.9"
+
+services:
+
+  # ── NATS JetStream (event bus) ────────────────────────────────────────────
+  nats:
+    image: nats:2.10-alpine
+    container_name: nexus-nats
+    command: ["-js", "-m", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Prometheus ─────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: nexus-prometheus
+    ports: ["9090:9090"]
+    volumes:
+      - ../deploy/nexus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on: [nats]
+
+  # ── Grafana ────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: nexus-grafana
+    ports: ["3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: nexus_admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ../deploy/nexus/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../deploy/nexus/grafana/nexus_dashboard.json:/var/lib/grafana/dashboards/nexus.json:ro
+    depends_on: [prometheus]
+
+  # ── NEXUS Status API (Phase 7) ─────────────────────────────────────────────
+  nexus-api:
+    build:
+      context: ..
+      dockerfile: deploy/nexus/Dockerfile.api
+    container_name: nexus-api
+    ports: ["8080:8080"]
+    environment:
+      NEXUS_AUDIT_DB_PATH: /data/nexus_audit.db
+      NEXUS_KNOWLEDGE_DB_PATH: /data/nexus_knowledge.db
+      NATS_URL: nats://nats:4222
+      NEXUS_GEMINI_API_KEY: ${NEXUS_GEMINI_API_KEY:-}
+    volumes:
+      - nexus_data:/data
+    depends_on:
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  # ── ShopDemo Backend ───────────────────────────────────────────────────────
+  shop-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: shop-demo-api
+    ports: ["8001:8001"]
+    environment:
+      NEXUS_API_URL: http://nexus-api:8080
+      DEMO_DB_PATH: /data/shop.db
+      NATS_URL: nats://nats:4222
+      SELFHEAL_TOKEN: ${SELFHEAL_TOKEN:-}
+      NEXUS_GEMINI_API_KEY: ${NEXUS_GEMINI_API_KEY:-}
+    volumes:
+      - shop_data:/data
+    depends_on:
+      nexus-api:
+        condition: service_healthy
+
+  # ── Demo Orchestrator (reasoning loop) ────────────────────────────────────
+  demo-orchestrator:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: nexus-demo-orchestrator
+    command: python -m demo_orchestrator
+    environment:
+      NATS_URL: nats://nats:4222
+      NEXUS_API_URL: http://nexus-api:8080
+      DEMO_API_URL: http://shop-backend:8001
+      NEXUS_AUDIT_DB_PATH: /data/nexus_audit.db
+      NEXUS_GEMINI_API_KEY: ${NEXUS_GEMINI_API_KEY:-}
+      SELFHEAL_TOKEN: ${SELFHEAL_TOKEN:-}
+    volumes:
+      - nexus_data:/data
+    depends_on:
+      nexus-api:
+        condition: service_healthy
+
+volumes:
+  nexus_data:
+  shop_data:

@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NEXUS Self-Healing Console</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#060610;--s1:#0f0f1a;--s2:#161625;--border:rgba(255,255,255,0.07);--text:#e0e0f0;--muted:#5a5a78;--green:#00ff88;--red:#ff4d6a;--amber:#ffaa00;--blue:#4488ff;--purple:#a78bfa}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+/* Header */
+header{display:flex;align-items:center;justify-content:space-between;padding:12px 24px;background:var(--s1);border-bottom:1px solid var(--border);flex-shrink:0}
+.logo{font-size:18px;font-weight:700;letter-spacing:-0.3px}
+.logo span{color:var(--green)}
+.hdr-right{display:flex;align-items:center;gap:16px}
+.status-pill{display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600;border:1px solid}
+.status-pill.ok{background:rgba(0,255,136,.08);border-color:rgba(0,255,136,.25);color:var(--green)}
+.status-pill.err{background:rgba(255,77,106,.08);border-color:rgba(255,77,106,.25);color:var(--red)}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor;animation:blink 2s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.token-box{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);background:var(--s2);padding:4px 10px;border-radius:6px;border:1px solid var(--border)}
+.shop-link{padding:6px 14px;border-radius:8px;background:var(--purple);color:#fff;font-size:12px;font-weight:600;text-decoration:none;transition:.2s}
+.shop-link:hover{filter:brightness(1.2)}
+/* Layout */
+.layout{display:grid;grid-template-columns:360px 1fr;gap:0;flex:1;overflow:hidden}
+/* Left panel */
+.left{background:var(--s1);border-right:1px solid var(--border);overflow-y:auto;display:flex;flex-direction:column;gap:0}
+.panel{padding:20px;border-bottom:1px solid var(--border)}
+.panel-title{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:14px}
+/* Failure buttons */
+.btn-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.fail-btn{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:12px;border-radius:10px;border:1px solid var(--border);background:var(--s2);cursor:pointer;text-align:left;transition:.2s;font-family:inherit}
+.fail-btn:hover{border-color:rgba(255,77,106,.5);background:rgba(255,77,106,.06);transform:translateY(-1px)}
+.fail-btn.active{border-color:var(--red);background:rgba(255,77,106,.12);animation:pulse-red .8s infinite alternate}
+@keyframes pulse-red{from{box-shadow:0 0 0 0 rgba(255,77,106,.2)}to{box-shadow:0 0 0 6px rgba(255,77,106,.05)}}
+.fail-btn .icon{font-size:20px}
+.fail-btn .label{font-size:12px;font-weight:600;color:var(--text)}
+.fail-btn .desc{font-size:10px;color:var(--muted);line-height:1.3}
+.heal-btn{grid-column:1/-1;background:rgba(0,255,136,.06);border-color:rgba(0,255,136,.25);color:var(--green)}
+.heal-btn:hover{background:rgba(0,255,136,.12);border-color:rgba(0,255,136,.5);transform:translateY(-1px)}
+/* Git scenarios */
+.git-grid{display:flex;flex-direction:column;gap:8px}
+.git-btn{display:flex;align-items:center;gap:10px;padding:11px 14px;border-radius:10px;border:1px solid var(--border);background:var(--s2);cursor:pointer;font-family:inherit;text-align:left;transition:.2s;width:100%}
+.git-btn:hover{border-color:rgba(68,136,255,.4);background:rgba(68,136,255,.06)}
+.git-btn .icon{font-size:18px}
+.git-btn .info .label{font-size:12px;font-weight:600;color:var(--text)}
+.git-btn .info .sub{font-size:10px;color:var(--muted)}
+/* Agent status */
+.agents-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.agent-card{padding:10px 12px;border-radius:10px;background:var(--s2);border:1px solid var(--border)}
+.agent-name{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.agent-status{font-size:11px;font-weight:600;margin-top:4px;display:flex;align-items:center;gap:4px}
+.agent-status.ok{color:var(--green)}.agent-status.warn{color:var(--amber)}.agent-status.err{color:var(--red)}.agent-status.idle{color:var(--muted)}
+/* Right panel — events */
+.right{display:flex;flex-direction:column;overflow:hidden}
+.events-header{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;border-bottom:1px solid var(--border);flex-shrink:0}
+.events-title{font-size:13px;font-weight:700}
+.clear-btn{font-size:11px;color:var(--muted);background:none;border:none;cursor:pointer;font-family:inherit}
+.clear-btn:hover{color:var(--text)}
+.event-count{font-size:12px;color:var(--muted);background:var(--s2);padding:3px 10px;border-radius:20px;border:1px solid var(--border)}
+.events-feed{flex:1;overflow-y:auto;padding:16px 24px;display:flex;flex-direction:column;gap:8px}
+.event-item{padding:12px 16px;border-radius:10px;border:1px solid var(--border);background:var(--s1);display:flex;gap:12px;animation:slide-in .3s ease}
+@keyframes slide-in{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:translateX(0)}}
+.event-item.healing{border-color:rgba(0,255,136,.3);background:rgba(0,255,136,.04)}
+.event-item.error{border-color:rgba(255,77,106,.3);background:rgba(255,77,106,.04)}
+.event-item.warning{border-color:rgba(255,170,0,.3);background:rgba(255,170,0,.04)}
+.event-item.info{border-color:rgba(68,136,255,.3);background:rgba(68,136,255,.04)}
+.event-icon{font-size:20px;flex-shrink:0;margin-top:1px}
+.event-body{flex:1;min-width:0}
+.event-top{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.event-type{font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;padding:2px 7px;border-radius:4px;background:var(--s2)}
+.event-time{font-size:11px;color:var(--muted)}
+.event-app{font-size:11px;color:var(--purple);font-weight:600}
+.event-desc{font-size:13px;color:var(--text);line-height:1.5}
+.event-meta{font-size:11px;color:var(--muted);margin-top:4px;font-family:'JetBrains Mono',monospace}
+.empty-feed{text-align:center;color:var(--muted);padding:60px 0;font-size:14px}
+/* Git result */
+.git-result{margin-top:12px;padding:12px;border-radius:10px;background:var(--s2);border:1px solid var(--border);font-size:12px;line-height:1.6;display:none}
+.git-result.show{display:block}
+.finding{padding:4px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+.finding:last-child{border:none}
+.finding .badge{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;margin-right:6px}
+.badge.crit{background:rgba(255,77,106,.2);color:var(--red)}
+.badge.warn{background:rgba(255,170,0,.2);color:var(--amber)}
+.badge.ok{background:rgba(0,255,136,.2);color:var(--green)}
+/* Scrollbar */
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:4px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">⬡ NEXUS <span>Console</span></div>
+  <div class="hdr-right">
+    <div class="status-pill ok" id="nexusStatus"><div class="dot"></div><span id="nexusStatusText">Connecting…</span></div>
+    <div class="token-box" id="tokenBox">token: checking…</div>
+    <a class="shop-link" href="shop.html" target="_blank">← ShopDemo</a>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- LEFT -->
+  <div class="left">
+
+    <!-- Failure Lab -->
+    <div class="panel">
+      <div class="panel-title">⚡ Failure Lab</div>
+      <div class="btn-grid">
+        <button class="fail-btn" id="btn-db-spike" onclick="inject('db-spike',this)">
+          <span class="icon">📊</span>
+          <span class="label">DB Query Spike</span>
+          <span class="desc">300 ORDER table reads in 3s</span>
+        </button>
+        <button class="fail-btn" id="btn-error-rate" onclick="inject('error-rate',this)">
+          <span class="icon">🔴</span>
+          <span class="label">Error Rate</span>
+          <span class="desc">All routes → 500 for 30s</span>
+        </button>
+        <button class="fail-btn" id="btn-slow-query" onclick="inject('slow-query',this)">
+          <span class="icon">🐢</span>
+          <span class="label">Slow Query</span>
+          <span class="desc">3s sleep on every DB call</span>
+        </button>
+        <button class="fail-btn" id="btn-oom" onclick="inject('oom',this)">
+          <span class="icon">💀</span>
+          <span class="label">OOM Pressure</span>
+          <span class="desc">Allocate 200MB memory block</span>
+        </button>
+        <button class="fail-btn" id="btn-missing-env" onclick="inject('missing-env',this)">
+          <span class="icon">🔑</span>
+          <span class="label">Missing ENV</span>
+          <span class="desc">Report ENV_CONTRACT_VIOLATION</span>
+        </button>
+        <button class="fail-btn" id="btn-dns-error" onclick="inject('dns-error',this)">
+          <span class="icon">🌐</span>
+          <span class="label">DNS Error</span>
+          <span class="desc">Upstream DNS failure on /products</span>
+        </button>
+        <button class="fail-btn" id="btn-bad-config" onclick="inject('bad-config',this)">
+          <span class="icon">🧨</span>
+          <span class="label">Bad Config</span>
+          <span class="desc">Config drift → invalid JSON</span>
+        </button>
+        <button class="fail-btn heal-btn" onclick="healAll()">
+          <span class="icon">✅</span>
+          <span class="label">Heal All</span>
+          <span class="desc">Reset all injected failures</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Git Push Simulator -->
+    <div class="panel">
+      <div class="panel-title">🚀 Git Push Simulator</div>
+      <div class="git-grid">
+        <button class="git-btn" onclick="simulatePush('missing-env')">
+          <span class="icon">🔑</span>
+          <div class="info"><div class="label">Push: Missing ENV</div><div class="sub">checkout.py references undeclared env vars</div></div>
+        </button>
+        <button class="git-btn" onclick="simulatePush('leaked-secret')">
+          <span class="icon">🔐</span>
+          <div class="info"><div class="label">Push: Leaked Secret</div><div class="sub">AWS key + Stripe key in config.py</div></div>
+        </button>
+        <button class="git-btn" onclick="simulatePush('bad-code')">
+          <span class="icon">💣</span>
+          <div class="info"><div class="label">Push: Bad Code</div><div class="sub">Division by zero + SQL injection risk</div></div>
+        </button>
+        <button class="git-btn" onclick="simulatePush('clean')">
+          <span class="icon">✅</span>
+          <div class="info"><div class="label">Push: Clean</div><div class="sub">All checks pass, deploy proceeds</div></div>
+        </button>
+      </div>
+      <div class="git-result" id="gitResult"></div>
+    </div>
+
+    <!-- Agent Status -->
+    <div class="panel">
+      <div class="panel-title">🤖 Agent Status</div>
+      <div class="agents-grid">
+        <div class="agent-card"><div class="agent-name">K8s Agent</div><div class="agent-status idle" id="ag-k8s">● Watching</div></div>
+        <div class="agent-card"><div class="agent-name">Git Agent</div><div class="agent-status idle" id="ag-git">● Watching</div></div>
+        <div class="agent-card"><div class="agent-name">DB Agent</div><div class="agent-status idle" id="ag-db">● Watching</div></div>
+        <div class="agent-card"><div class="agent-name">NGINX Agent</div><div class="agent-status idle" id="ag-nginx">● Watching</div></div>
+        <div class="agent-card"><div class="agent-name">Network Agent</div><div class="agent-status idle" id="ag-network">● Watching</div></div>
+        <div class="agent-card"><div class="agent-name">Orchestrator</div><div class="agent-status idle" id="ag-orch">● Ready</div></div>
+      </div>
+    </div>
+
+  </div><!-- /left -->
+
+  <!-- RIGHT — Live Events -->
+  <div class="right">
+    <div class="events-header">
+      <div style="display:flex;align-items:center;gap:12px">
+        <span class="events-title">📡 Live Event Feed</span>
+        <span class="event-count" id="eventCount">0 events</span>
+      </div>
+      <button class="clear-btn" onclick="clearFeed()">Clear</button>
+    </div>
+    <div class="events-feed" id="eventsFeed">
+      <div class="empty-feed">
+        🔭 Waiting for events…<br>
+        <span style="font-size:12px;margin-top:8px;display:block">Click a failure button or push a git scenario to see NEXUS react in real time</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SHOP = 'http://localhost:8001';
+const NEXUS = 'http://localhost:8080';
+let events = [], lastCount = 0, seenIds = new Set();
+
+// ── Failure injection ─────────────────────────────────────────────────────────
+async function inject(type, btn) {
+  if(btn) btn.classList.add('active');
+  try {
+    const r = await fetch(`${SHOP}/inject/${type}`, {method:'POST'});
+    const d = await r.json();
+    addLocalEvent({type, data: d, severity: 'error'});
+    updateAgentForFailure(type);
+    if(type==='error-rate') setTimeout(()=>{if(btn)btn.classList.remove('active')}, 30000);
+    else if(type==='slow-query'){/* toggle — stays active */}
+    else setTimeout(()=>{if(btn)btn.classList.remove('active')}, 5000);
+  } catch(e){
+    addLocalEvent({type:'inject_error', data:{message: e.message}, severity:'error'});
+  }
+}
+
+async function healAll() {
+  try {
+    const r = await fetch(`${SHOP}/inject/heal-all`, {method:'POST'});
+    const d = await r.json();
+    document.querySelectorAll('.fail-btn.active').forEach(b=>b.classList.remove('active'));
+    addLocalEvent({type:'heal_all', data:d, severity:'healing'});
+    setAgentStatus('ag-orch', 'ok', '✅ Healed');
+  } catch(e){}
+}
+
+function updateAgentForFailure(type) {
+  const map = {
+    'db-spike':    ['ag-db',      'err', '🔴 Spike'],
+    'error-rate':  ['ag-nginx',   'err', '🔴 High 5xx'],
+    'slow-query':  ['ag-db',      'warn','⚠️ Slow'],
+    'oom':         ['ag-k8s',     'err', '🔴 OOM'],
+    'missing-env': ['ag-git',     'err', '🔴 ENV fail'],
+    'dns-error':   ['ag-network', 'err', '🔴 DNS fail'],
+    'bad-config':  ['ag-git',     'warn','⚠️ Drift'],
+  };
+  const [id, cls, label] = map[type] || [];
+  if(id) setAgentStatus(id, cls, label);
+  setAgentStatus('ag-orch', 'warn', '⚠️ Analyzing');
+}
+
+function setAgentStatus(id, cls, label) {
+  const el = document.getElementById(id);
+  if(!el) return;
+  el.className = `agent-status ${cls}`;
+  el.textContent = label;
+}
+
+// ── Git push simulation ───────────────────────────────────────────────────────
+async function simulatePush(scenario) {
+  const box = document.getElementById('gitResult');
+  box.className = 'git-result show';
+  box.innerHTML = '<span style="color:var(--muted)">🔍 Running GitAgent validation…</span>';
+  setAgentStatus('ag-git', 'warn', '⚠️ Scanning');
+  try {
+    const r = await fetch(`${SHOP}/simulate/push?scenario=${scenario}`, {method:'POST'});
+    const d = await r.json();
+    renderGitResult(d);
+    addLocalEvent({type:'git_push_sim', data:d, severity: d.passed ? 'info' : 'error'});
+    setAgentStatus('ag-git', d.passed ? 'ok' : 'err', d.passed ? '✅ Clean' : '🔴 Blocked');
+    setAgentStatus('ag-orch', d.passed ? 'ok' : 'warn', d.passed ? '✅ Deploy OK' : '⚠️ Analyzing');
+  } catch(e){
+    box.innerHTML = `<span style="color:var(--red)">Error: ${e.message}</span>`;
+  }
+}
+
+function renderGitResult(d) {
+  const box = document.getElementById('gitResult');
+  let html = `<div style="font-weight:700;margin-bottom:8px;color:${d.passed?'var(--green)':'var(--red)'}">${d.summary}</div>`;
+  for(const sig of d.signals) {
+    const cls = sig.severity==='CRITICAL'?'crit':sig.severity==='WARNING'?'warn':'ok';
+    html += `<div class="finding"><span class="badge ${cls}">${sig.severity||'INFO'}</span><span style="color:var(--text)">${sig.signal}</span>`;
+    if(sig.missing_keys) html += `<span style="color:var(--muted);margin-left:6px">[${sig.missing_keys.join(', ')}]</span>`;
+    if(sig.findings) sig.findings.slice(0,2).forEach(f=>{
+      html += `<div style="margin-left:16px;color:var(--muted);font-size:10px">Line ${f.line}: ${f.label} — ${f.snippet.slice(0,60)}…</div>`;
+    });
+    if(sig.issues) sig.issues.slice(0,2).forEach(i=>{
+      html += `<div style="margin-left:16px;color:var(--amber);font-size:10px">Line ${i.line}: ${i.issue}</div>`;
+    });
+    html += '</div>';
+  }
+  box.className = 'git-result show';
+  box.innerHTML = html;
+}
+
+// ── Live event feed ───────────────────────────────────────────────────────────
+const TYPE_CONFIG = {
+  healing_completed:       {icon:'✅', sev:'healing', label:'HEALED'},
+  heal_all:                {icon:'✅', sev:'healing', label:'HEAL_ALL'},
+  route_error:             {icon:'🔴', sev:'error',   label:'ROUTE_ERR'},
+  db_query:                {icon:'📊', sev:'warning', label:'DB_QUERY'},
+  db_spike_injected:       {icon:'📊', sev:'error',   label:'DB_SPIKE'},
+  error_rate_injected:     {icon:'💥', sev:'error',   label:'ERR_RATE'},
+  slow_query_injected:     {icon:'🐢', sev:'warning', label:'SLOW_QRY'},
+  oom_injected:            {icon:'💀', sev:'error',   label:'OOM'},
+  env_contract_violation:  {icon:'🔑', sev:'error',   label:'ENV_FAIL'},
+  secret_committed:        {icon:'🔐', sev:'error',   label:'SECRET'},
+  config_drift_detected:   {icon:'🧨', sev:'warning', label:'CFG_DRIFT'},
+  dns_error_injected:      {icon:'🌐', sev:'error',   label:'DNS_ERR'},
+  deploy_event:            {icon:'🚀', sev:'info',    label:'DEPLOY'},
+  code_quality_warning:    {icon:'⚠️',  sev:'warning', label:'CODE_WARN'},
+  git_push_sim:            {icon:'🔍', sev:'info',    label:'GIT_SCAN'},
+};
+
+function addLocalEvent(e) {
+  const id = Date.now()+Math.random();
+  events.unshift({...e, id, ts: new Date().toLocaleTimeString()});
+  if(events.length>100) events.pop();
+  renderFeed();
+}
+
+function renderFeed() {
+  const feed = document.getElementById('eventsFeed');
+  document.getElementById('eventCount').textContent = `${events.length} events`;
+  if(!events.length){
+    feed.innerHTML='<div class="empty-feed">🔭 Waiting for events…<br><span style="font-size:12px;margin-top:8px;display:block">Click a failure button to begin</span></div>';
+    return;
+  }
+  feed.innerHTML = events.slice(0,50).map(e=>{
+    const cfg = TYPE_CONFIG[e.type]||{icon:'📋', sev:'info', label: e.type.toUpperCase().slice(0,12)};
+    const d = e.data||{};
+    let desc = d.message || d.description || d.summary || '';
+    let meta = '';
+    if(d.missing_keys?.length) meta = `missing: ${d.missing_keys.slice(0,3).join(', ')}`;
+    if(d.duration_ms) meta = `${d.duration_ms.toFixed(0)}ms`;
+    if(d.allocated_mb) meta = `+${d.allocated_mb}MB allocated`;
+    if(d.queries) meta = `${d.queries} queries fired`;
+    if(d.outcome) meta = `outcome: ${d.outcome}`;
+    return `<div class="event-item ${e.severity||cfg.sev}">
+      <div class="event-icon">${cfg.icon}</div>
+      <div class="event-body">
+        <div class="event-top">
+          <span class="event-type">${cfg.label}</span>
+          <span class="event-app">shop-demo</span>
+          <span class="event-time">${e.ts}</span>
+        </div>
+        ${desc?`<div class="event-desc">${desc}</div>`:''}
+        ${meta?`<div class="event-meta">${meta}</div>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function clearFeed() { events=[]; renderFeed(); }
+
+// ── Poll NEXUS for remote events ──────────────────────────────────────────────
+async function pollNexus() {
+  try {
+    const r = await fetch(`${NEXUS}/developer/incidents?n=20`);
+    if(!r.ok) throw new Error();
+    const data = await r.json();
+    let added = false;
+    for(const inc of data) {
+      const key = `${inc.timestamp}-${inc.runbook_id}-${inc.target}`;
+      if(!seenIds.has(key)) {
+        seenIds.add(key);
+        events.unshift({
+          id: key, type: 'healing_completed', severity:'healing',
+          ts: (inc.timestamp||'').slice(11,19) || new Date().toLocaleTimeString(),
+          data: { description: inc.description, outcome: inc.outcome, message: inc.description }
+        });
+        added = true;
+      }
+    }
+    if(added) renderFeed();
+    setNexusStatus(true);
+  } catch { setNexusStatus(false); }
+}
+
+async function pollStatus() {
+  try {
+    const r = await fetch(`${SHOP}/nexus/token`);
+    if(r.ok) {
+      const d = await r.json();
+      document.getElementById('tokenBox').textContent = `token: ${d.prefix||'none'}`;
+    }
+    const r2 = await fetch(`${NEXUS}/health`);
+    setNexusStatus(r2.ok);
+  } catch { setNexusStatus(false); }
+}
+
+function setNexusStatus(ok) {
+  const pill = document.getElementById('nexusStatus');
+  const txt  = document.getElementById('nexusStatusText');
+  pill.className = `status-pill ${ok?'ok':'err'}`;
+  txt.textContent = ok ? 'NEXUS Connected' : 'NEXUS Offline';
+}
+
+pollStatus();
+pollNexus();
+setInterval(pollNexus,  3000);
+setInterval(pollStatus, 10000);
+</script>
+</body>
+</html>

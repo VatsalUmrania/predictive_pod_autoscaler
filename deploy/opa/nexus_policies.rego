@@ -27,6 +27,8 @@
 
 package nexus
 
+import future.keywords.in
+
 # ── Default deny ──────────────────────────────────────────────────────────────
 
 default allow_action = false

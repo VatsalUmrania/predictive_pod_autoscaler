@@ -94,19 +94,12 @@ exporters:
       initial_interval: 5s
       max_elapsed_time: 60s
 
-  # Logs → Loki
-  loki:
-    endpoint: "http://loki:3100/loki/api/v1/push"
+  # Logs → Loki (native OTLP endpoint — Loki 3.0+ supports OTLP natively)
+  # The legacy `loki` exporter was removed in otelcol-contrib ≥0.81; use otlphttp instead.
+  otlphttp/loki:
+    endpoint: "http://loki:3100/otlp"
     tls:
       insecure: true
-    labels:
-      resource:
-        - service.name
-        - service.namespace
-        - agent           # NEXUS agent name (nginx, k8s, metrics, etc.)
-      attributes:
-        - level
-        - signal_type
 
   # Traces → Tempo
   otlp/tempo:
@@ -140,7 +133,7 @@ service:
     logs:
       receivers:  [otlp]
       processors: [memory_limiter, batch, resource]
-      exporters:  [loki, debug]
+      exporters:  [otlphttp/loki, debug]
 
     # ── Traces pipeline ──────────────────────────────────────────────────────
     traces:

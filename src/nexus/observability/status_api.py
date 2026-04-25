@@ -2,19 +2,35 @@
 NEXUS Status API
 =================
 FastAPI application exposing:
-    GET  /health                   — liveness probe
-    GET  /status                   — full system snapshot
-    GET  /metrics                  — Prometheus text format
-    GET  /rca/last?n=10            — last N RCA decisions from Orchestrator
-    GET  /runbooks/stats           — per-runbook statistics from OutcomeStore
-    GET  /prescaler                — Prescaler stats + mode
-    POST /prescaler/mode/{mode}    — change Prescaler autonomy mode
-    GET  /learning                 — FeedbackLoop status + KPIs
-    POST /learning/run             — trigger immediate feedback cycle
-    GET  /audit/tail?n=20          — last N audit records
-    GET  /knowledge                — KnowledgeBase adjustment table
-    POST /approve/{action_id}      — approve a pending human action
-    GET  /advisor                  — latest RunbookAdvisor recommendations
+    GET  /health                       — liveness probe
+    GET  /status                       — full system snapshot
+    GET  /metrics                      — Prometheus text format
+    GET  /rca/last?n=10                — last N RCA decisions
+    GET  /runbooks/stats               — per-runbook statistics
+    GET  /prescaler                    — Prescaler stats + mode
+    POST /prescaler/mode/{mode}        — change Prescaler autonomy mode
+    GET  /learning                     — FeedbackLoop status + KPIs
+    POST /learning/run                 — trigger immediate feedback cycle
+    GET  /audit/tail?n=20              — last N audit records
+    GET  /knowledge                    — KnowledgeBase adjustment table
+    POST /approve/{action_id}          — approve a pending human action
+    GET  /advisor                      — RunbookAdvisor recommendations
+
+    --- Phase 8: Developer Integration Layer ---
+    POST /apps/register                — register a new app, receive SELFHEAL_TOKEN
+    GET  /apps                         — list registered apps
+    POST /apps/{app}/rotate-token      — rotate a compromised token
+    GET  /sdk/beacon.js                — browser SDK (served as JS)
+    POST /sdk/event                    — generic SDK event
+    POST /sdk/heartbeat                — app health snapshot
+    POST /sdk/route-error              — per-route HTTP error
+    POST /sdk/query                    — DB query report
+    POST /sdk/frontend                 — browser beacon payload
+    GET  /developer/incidents          — plain-English incident feed
+    GET  /developer/predictions        — traffic forecast for apps
+    GET  /developer/policy/{app}       — resolved selfheal.yaml policy
+    PUT  /developer/policy/{app}       — runtime policy override
+    DELETE /developer/policy/{app}/overrides — clear overrides
 
 Architecture:
     All components are injected into a NexusContext at startup.
@@ -39,8 +55,22 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 
 from nexus.observability.metrics import get_metrics
+
+# Phase 8 integration routers (imported lazily to avoid circular deps)
+def _include_integration_routers(app: FastAPI) -> None:
+    try:
+        from nexus.integration.sdk_ingest import router as sdk_router
+        from nexus.integration.dashboard  import router as dev_router
+        app.include_router(sdk_router)
+        app.include_router(dev_router)
+    except ImportError as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            f"[StatusAPI] Integration routers not loaded: {exc}"
+        )
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Context container (holds all NEXUS runtime singletons)
@@ -74,12 +104,27 @@ context = NexusContext()
 # FastAPI app
 # ──────────────────────────────────────────────────────────────────────────────
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Initialize async resources (TokenStore) on startup."""
+    try:
+        from nexus.integration.token_store import get_token_store
+        store = get_token_store()
+        await store.init()
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(f"[StatusAPI] TokenStore init skipped: {exc}")
+    _include_integration_routers(app)
+    yield
+
+
 app = FastAPI(
     title       = "NEXUS Self-Healing Infrastructure",
-    description = "Status, control, and observability API for the NEXUS system",
+    description = "Status, control, and developer integration API for NEXUS",
     version     = "2.0.0",
     docs_url    = "/docs",
     redoc_url   = "/redoc",
+    lifespan    = _lifespan,
 )
 
 app.add_middleware(
