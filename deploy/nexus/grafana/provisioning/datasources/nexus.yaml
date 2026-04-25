@@ -1,0 +1,66 @@
+# Grafana Datasource Provisioning for NEXUS
+# ==========================================
+# Auto-provisions Prometheus, Loki, and Tempo as datasources
+# so Grafana is ready without any manual configuration.
+#
+# Grafana reads this on startup and upserts the datasources.
+# File location: deploy/nexus/grafana/provisioning/datasources/nexus.yaml
+
+apiVersion: 1
+
+datasources:
+  # ── Prometheus ──────────────────────────────────────────────────────────
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    url: http://prometheus:9090
+    access: proxy
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      # Link trace IDs found in Prometheus exemplars → Tempo
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
+
+  # ── Loki ────────────────────────────────────────────────────────────────
+  - name: Loki
+    type: loki
+    uid: loki
+    url: http://loki:3100
+    access: proxy
+    editable: false
+    jsonData:
+      # Extract trace IDs from log lines and link to Tempo
+      derivedFields:
+        - datasourceUid: tempo
+          matcherRegex: '(?:trace_id|traceID|traceid)=([a-fA-F0-9]+)'
+          name: TraceID
+          url: "${__value.raw}"
+
+  # ── Tempo ────────────────────────────────────────────────────────────────
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    url: http://tempo:3200
+    access: proxy
+    editable: false
+    jsonData:
+      httpMethod: GET
+      # Service graph (uses Prometheus as metric backend)
+      serviceMap:
+        datasourceUid: prometheus
+      # Link spans back to Loki logs
+      tracesToLogs:
+        datasourceUid: loki
+        tags: ["job", "instance", "pod", "namespace", "agent"]
+        mappedTags:
+          - key: service.name
+            value: job
+      # Node graph view
+      nodeGraph:
+        enabled: true
+      # TraceQL search
+      search:
+        hide: false

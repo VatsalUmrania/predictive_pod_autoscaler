@@ -1,0 +1,56 @@
+runbook:
+  id: "runbook_missing_env_key_v1"
+  version: "1.0.0"
+  description: >
+    Block a deployment and notify the team when the GitAgent or ConfigAgent
+    detects that required environment variables are absent from the deployment
+    target's Kubernetes Secrets / ConfigMaps.
+
+    This is a pure L0 action — the deployment is blocked by the GitAgent
+    pre-push hook before any pod is created. NEXUS records the event,
+    annotates the deployment (if partially deployed), and emits a structured
+    alert containing the exact list of missing keys.
+
+    Resolution is human action: add the missing keys to the vault/secret,
+    then re-trigger the deployment pipeline.
+  failure_class: "missing_env"
+  healing_level: 0   # L0 — detect + alert only (CI/CD pipeline is already blocked)
+
+  trigger:
+    signal_types:
+      - "env_contract_violation"
+      - "env_key_missing"
+      - "deploy_blocked"
+    severity_minimum: "warning"
+
+  pre_checks: []   # Always act immediately on env violations
+
+  actions:
+    - type: "emit_alert"
+      description: "Alert with full list of missing env keys and deployment context."
+      abort_on_failure: false
+      params:
+        message: >
+          DEPLOYMENT BLOCKED by NEXUS pre-deploy env contract check.
+          One or more required environment variables are missing from production Secrets.
+          See event context for the complete list of missing keys.
+          Action required: add missing keys to vault, then re-trigger deployment.
+
+    - type: "patch_annotation"
+      description: >
+        Annotate the target Deployment so dashboards and kubectl describe
+        clearly show why it was blocked.
+      abort_on_failure: false
+      params:
+        annotations:
+          "nexus.io/env-validation-failed": "true"
+          "nexus.io/blocked-by":            "nexus-config-agent"
+          "nexus.io/resolution":            "add-missing-env-keys-to-vault"
+
+  post_checks: []   # No SLO metric to check; resolution is a human action
+
+  rollback_if_post_check_fails: false
+  rollback_actions: []
+
+  cooldown_seconds: 60
+  blast_radius: "none"

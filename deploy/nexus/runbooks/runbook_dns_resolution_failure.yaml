@@ -1,0 +1,67 @@
+runbook:
+  id: "runbook_dns_resolution_failure_v1"
+  version: "1.0.0"
+  description: >
+    Flush the CoreDNS cache by restarting CoreDNS pods when a DNS resolution
+    failure is detected by the NetworkAgent's synthetic probes.
+
+    This is an L1 no-regret action because:
+    - CoreDNS pods restart within ~10 seconds and pick up a fresh cache
+    - The ReplicaSet ensures at least 1 CoreDNS pod is always available
+    - The blast radius is cluster-wide DNS, but DNS recovers within seconds
+
+    If the post-check fails (DNS still broken after CoreDNS restart), this
+    runbook escalates to human via alert — DNS issues that persist after a
+    cache flush typically indicate a ConfigMap drift or network policy problem
+    that requires L3 intervention (ConfigAgent.IAC_DRIFT path).
+  failure_class: "dns_network"
+  healing_level: 1   # L1 — no-regret (CoreDNS restart is safe and fast)
+
+  trigger:
+    signal_types:
+      - "dns_resolution_failure"
+      - "service_unreachable"
+    severity_minimum: "warning"
+
+  pre_checks:
+    # Only act if CoreDNS is actually running (else restart is meaningless)
+    - type: "prometheus_query"
+      query: "kube_pod_status_ready{namespace='kube-system', pod=~'coredns.*'}"
+      operator: "gte"
+      threshold: 1
+
+  actions:
+    - type: "emit_alert"
+      description: "Notify team before taking action on cluster DNS."
+      abort_on_failure: false
+      params:
+        message: >
+          DNS resolution failure detected by NEXUS NetworkAgent synthetic probes.
+          Flushing CoreDNS cache (restarting CoreDNS pods in kube-system).
+          Watch for recovery within 60 seconds.
+
+    - type: "flush_coredns_cache"
+      description: "Restart all coreDNS pods to flush the DNS cache."
+      abort_on_failure: true
+
+  post_checks:
+    # After flush, CoreDNS should be serving NOERROR responses again
+    - metric_query: "coredns_dns_responses_total{rcode='NOERROR'}"
+      operator: "gte"
+      threshold: 1
+      window_seconds: 60
+      timeout_seconds: 120
+
+  rollback_if_post_check_fails: true
+  rollback_actions:
+    - type: "emit_alert"
+      params:
+        message: >
+          CoreDNS cache flush DID NOT resolve DNS failure.
+          Possible root causes: CoreDNS ConfigMap drift, upstream DNS failure,
+          or network policy blocking DNS traffic.
+          ESCALATING: ConfigAgent will check for ConfigMap drift.
+          L3 action (ConfigMap revert) requires human or Orchestrator approval.
+
+  cooldown_seconds: 180
+  blast_radius: "cluster_dns"   # Wide but recovers in seconds

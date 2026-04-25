@@ -1,0 +1,57 @@
+runbook:
+  id: "runbook_pod_crashloop_v1"
+  version: "1.0.0"
+  description: >
+    Restart a pod that is in CrashLoopBackOff or has been OOMKilled.
+    Also annotates the parent Deployment with a VPA memory hint if
+    OOMKilled so the operator knows to increase the memory limit.
+  failure_class: "pod_failure"
+  healing_level: 1   # L1 — no-regret action
+
+  trigger:
+    signal_types:
+      - "pod_crashloop"
+      - "pod_oomkilled"
+    severity_minimum: "warning"
+
+  pre_checks:
+    - type: "event_field"
+      field: "restart_count"
+      operator: "gte"
+      value: 2
+
+  actions:
+    - type: "restart_pod"
+      description: "Delete the crashing pod — the ReplicaSet will immediately create a replacement."
+      abort_on_failure: true
+
+    - type: "patch_annotation"
+      description: "Mark deployment with a VPA hint if the pod was OOMKilled."
+      abort_on_failure: false
+      params:
+        annotations:
+          "nexus.io/vpa-hint":       "increase_memory_25pct"
+          "nexus.io/oomkilled":      "true"
+          "nexus.io/healing-action": "pod_restart_post_oom"
+
+    - type: "emit_alert"
+      description: "Escalate to human if restart count exceeds 5."
+      abort_on_failure: false
+      params:
+        message: >
+          Pod has restarted 5+ times. Pod restarted by NEXUS.
+          VPA hint applied (increase memory limit by 25%).
+          Manual investigation recommended if issue recurs.
+
+  post_checks:
+    - metric_query: "kube_deployment_status_replicas_ready"
+      operator: "gte"
+      threshold: 1
+      window_seconds: 60
+      timeout_seconds: 120
+
+  rollback_if_post_check_fails: false   # No meaningful rollback at L1 for pod restart
+  rollback_actions: []
+
+  cooldown_seconds: 120
+  blast_radius: "single_pod"

@@ -1,0 +1,67 @@
+runbook:
+  id: "runbook_high_error_rate_post_deploy_v1"
+  version: "1.0.0"
+  description: >
+    Detect an error rate spike that correlates with a recent deployment.
+    Halts the canary by annotating the deployment and emits an urgent alert
+    so the SRE can decide whether to trigger a full rollback (L3 action).
+    Full automatic rollback is NOT executed here — it requires Orchestrator
+    confidence > 0.85 or explicit human approval (Phase 4+).
+  failure_class: "bad_code_push"
+  healing_level: 2   # L2 — bounded mitigation (canary halt, not full rollback)
+
+  trigger:
+    signal_types:
+      - "high_error_rate"
+      - "deploy_event"
+      - "anomaly_detected"
+    severity_minimum: "warning"
+
+  pre_checks:
+    # Confirm error rate is actually elevated before acting
+    - type: "prometheus_query"
+      query: >
+        sum(rate(http_requests_total{status=~"5.."}[2m]))
+        / sum(rate(http_requests_total[2m]))
+      operator: "gt"
+      threshold: 0.05
+
+  actions:
+    - type: "emit_alert"
+      description: "Immediately notify SRE of error spike."
+      abort_on_failure: false
+      params:
+        message: >
+          ERROR RATE > 5% detected. Possible bad deploy.
+          Canary halted by NEXUS. Check recent deploy SHA in event context.
+          Awaiting Orchestrator RCA or human rollback approval.
+
+    - type: "patch_annotation"
+      description: "Mark deployment as canary-halted so CI/CD does not advance traffic split."
+      abort_on_failure: false
+      params:
+        annotations:
+          "nexus.io/canary-halted":   "true"
+          "nexus.io/halt-reason":     "high_error_rate_post_deploy"
+          "nexus.io/healing-action":  "canary_halt_pending_rca"
+
+  post_checks:
+    - metric_query: >
+        sum(rate(http_requests_total{status=~"5.."}[2m]))
+        / sum(rate(http_requests_total[2m]))
+      operator: "lt"
+      threshold: 0.02
+      window_seconds: 60
+      timeout_seconds: 180
+
+  # Rollback is L3 — escalate to Orchestrator/human rather than auto-rolling back
+  rollback_if_post_check_fails: false
+  rollback_actions:
+    - type: "emit_alert"
+      params:
+        message: >
+          Canary halt did not reduce error rate. Error rate remains > 2%.
+          ESCALATING to Orchestrator for rollback decision (L3 approval required).
+
+  cooldown_seconds: 300
+  blast_radius: "single_deployment"

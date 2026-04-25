@@ -1,0 +1,30 @@
+app: shop-demo
+tier: production
+
+critical_routes:
+  - /orders
+  - /products
+  - /checkout
+
+healing_policy:
+  auto_rollback: true
+  max_auto_actions_per_hour: 20
+  require_approval_for:
+    - database_migrations
+    - environment_variable_changes
+    - scaling_above: 5x
+  never_shed_routes:
+    - /orders
+
+predictive:
+  traffic_spike_tables:
+    - orders
+    - products
+    - users
+  pre_scale_threshold: 2.0
+
+notifications:
+  slack_webhook: ${SLACK_WEBHOOK}
+  page_sre_after: 2
+  notify_on_heal: true
+  notify_on_prescale: true

@@ -1,0 +1,31 @@
+# NEXUS Traffic Mapping Configuration
+# =====================================
+# Maps DB table names to HTTP endpoint paths.
+# Used by DBTrafficCorrelator to predict which endpoint will spike
+# based on which tables are seeing elevated query rates.
+#
+# Hot-reloadable: call correlator._mapper.reload() after editing.
+# Default fallback: /api/<table_name>
+#
+# Format:
+#   table_endpoint_map:
+#     <table_name>: <endpoint_path>
+
+table_endpoint_map:
+  # Common patterns — customise for your application schema
+  users:           /api/users
+  sessions:        /api/auth
+  products:        /api/products
+  orders:          /api/orders
+  carts:           /api/cart
+  payments:        /api/payments
+  reviews:         /api/reviews
+  search_queries:  /api/search
+  events:          /api/events
+  recommendations: /api/recommendations
+  notifications:   /api/notifications
+
+# Spike detection configuration (see DBTrafficCorrelator env vars):
+#   NEXUS_SPIKE_MULTIPLIER            = 2.5    (rate-of-change as × EWMA baseline)
+#   NEXUS_SPIKE_PREDICTION_HORIZON    = 10     (minutes ahead)
+#   NEXUS_CORRELATOR_WINDOW           = 20     (number of snapshots in EWMA window)
