@@ -128,6 +128,11 @@ def _read_incidents(n: int, app: Optional[str]) -> List[Dict[str, Any]]:
             if len(results) >= n:
                 break
         return results
+    except _sqlite3.OperationalError as _e:
+        if "no such table" in str(_e):
+            return []
+        logger.warning(f"[Dashboard] incident read failed: {_e}")
+        return []
     except Exception as _e:
         logger.warning(f"[Dashboard] incident read failed: {_e}")
         return []
