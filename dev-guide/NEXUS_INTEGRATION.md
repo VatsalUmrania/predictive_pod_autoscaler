@@ -48,12 +48,12 @@ services:
     ports:
       - "4222:4222"
     healthcheck:
-      test: ["CMD", "nats-server", "--signal", "status"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz"]
       interval: 5s
       retries: 5
 
   nexus-api:
-    image: ghcr.io/vatsalumrania/predictive_pod_autoscaler/nexus-api:latest
+    image: ghcr.io/vatsalumrania/nexus-api:latest
     ports:
       - "8080:8080"
     depends_on:
@@ -149,6 +149,8 @@ Mount or reference this file when running NEXUS (already done in Step 2 via volu
 ```bash
 pip install nexus-selfheal
 # or from PyPI equivalent: pip install ppa[sdk]
+# or install from github
+pip install "ppa[nexus] @ git+https://github.com/VatsalUmrania/predictive_pod_autoscaler.git"
 ```
 
 Add to your app startup:
