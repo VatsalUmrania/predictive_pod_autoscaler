@@ -52,6 +52,10 @@ def cache_policy(app_name: str, policy_dict: Dict[str, Any]) -> None:
     logger.info(f"[Dashboard] Policy cached for app='{app_name}'")
 
 
+# ── In-memory incident store (populated by demo orchestrator or SDK events) ───
+_incident_store: List[Dict[str, Any]] = []
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Plain-English incident description builder
 # ──────────────────────────────────────────────────────────────────────────────
@@ -149,7 +153,38 @@ async def developer_incidents(
         if len(results) >= n:
             break
 
-    return results
+    # Also merge incidents pushed directly via POST /developer/incidents
+    # (used by demo orchestrator when running without full NEXUS core AuditTrail)
+    for entry in reversed(_incident_store):
+        if app:
+            target = (entry.get("target") or "").lower()
+            if app.lower() not in target:
+                continue
+        results.append(entry)
+        if len(results) >= n:
+            break
+
+    # Sort all by timestamp descending
+    results.sort(key=lambda r: r.get("timestamp", ""), reverse=True)
+    return results[:n]
+
+
+
+@router.post("/developer/incidents", tags=["developer"])
+async def developer_post_incident(payload: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Accept an incident directly from the demo orchestrator or SDK.
+    Used when the full AuditTrail chain is not available (e.g. local dev mode).
+    """
+    import uuid
+    from datetime import datetime, timezone
+    payload.setdefault("incident_id", str(uuid.uuid4())[:8])
+    payload.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+    _incident_store.append(payload)
+    # Keep at most 200 incidents
+    if len(_incident_store) > 200:
+        _incident_store.pop(0)
+    return {"status": "ok", "incident_id": payload["incident_id"]}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -227,9 +262,45 @@ def developer_get_policy(app: str) -> Dict[str, Any]:
     """
     Return the resolved selfheal.yaml policy for an app.
     Includes any runtime overrides applied via PUT.
+
+    Falls back to reading from a mounted selfheal.yaml file at:
+      $NEXUS_SELFHEAL_YAML_PATH  (env var override)
+      /app/selfheal.yaml          (default — mounted via docker-compose volume)
     """
+    import os
+    from pathlib import Path
+
     base     = _policy_cache.get(app)
     override = _policy_overrides.get(app, {})
+
+    # ── Filesystem fallback ──────────────────────────────────────────────────
+    # Try to read from a mounted selfheal.yaml if cache is empty.
+    # This means the policy is always available as long as the file is mounted,
+    # without requiring the backend to POST the policy on startup.
+    if base is None:
+        _candidates = [
+            os.environ.get("NEXUS_SELFHEAL_YAML_PATH", ""),
+            "/app/selfheal.yaml",           # mounted by docker-compose
+            "/data/selfheal.yaml",          # alternate mount point
+        ]
+        for _path_str in _candidates:
+            if not _path_str:
+                continue
+            _p = Path(_path_str)
+            if _p.exists():
+                try:
+                    import yaml as _yaml
+                    _data = _yaml.safe_load(_p.read_text())
+                    if isinstance(_data, dict):
+                        # If app matches OR no app filter given, cache and use it
+                        _file_app = _data.get("app", app)
+                        if _file_app == app or app not in _policy_cache:
+                            cache_policy(_file_app, _data)
+                            if _file_app == app:
+                                base = _data
+                                break
+                except Exception as _e:
+                    logger.debug(f"[Dashboard] selfheal.yaml read error: {_e}")
 
     if base is None and not override:
         raise HTTPException(
@@ -238,12 +309,28 @@ def developer_get_policy(app: str) -> Dict[str, Any]:
                 f"No selfheal.yaml found for app '{app}'. "
                 "Commit a selfheal.yaml to your repo root and push to register."
             ),
+
         )
 
     result = {**(base or {}), **override}
     result["_overrides_active"] = bool(override)
     result["_app"]              = app
     return result
+
+
+@router.post("/developer/policy/{app}", tags=["developer"])
+def developer_upload_policy(app: str, policy: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Upload and cache a selfheal.yaml policy for an app.
+
+    Called by the SDK on app startup — the app reads its selfheal.yaml from disk
+    and POSTs the content here so the dashboard can display and edit it.
+
+    This is the HTTP-safe alternative to calling cache_policy() directly
+    (which only works in-process).
+    """
+    cache_policy(app, policy)
+    return {"app": app, "message": "Policy uploaded and cached.", "fields": list(policy.keys())}
 
 
 class PolicyOverride(BaseModel):

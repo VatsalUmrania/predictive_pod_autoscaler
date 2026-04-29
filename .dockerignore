@@ -50,14 +50,13 @@ Thumbs.db
 
 # Documentation (not needed in runtime image)
 docs/
-*.md
 
 # Test files (not needed in runtime image)
 tests/
 scripts/
 Makefile
 setup.py
-pyproject.toml
+# pyproject.toml intentionally NOT excluded — needed by Dockerfile.api builder stage
 
 # Config files (not needed in runtime image)
 .env

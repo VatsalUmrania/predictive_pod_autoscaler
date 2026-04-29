@@ -10,6 +10,21 @@ Usage:
     # FastAPI / Starlette (ASGI)
     SelfHeal.init(app, token=os.environ["SELFHEAL_TOKEN"])
 
+    # Django / Flask (WSGI)
+    SelfHeal.init(app, token=os.environ["SELFHEAL_TOKEN"], wsgi=True)
+
+    # DB connection pool wrapper (SQLAlchemy / psycopg2 / asyncpg)
+    engine = SelfHeal.wrapDB(create_engine(DATABASE_URL), slow_ms=200, track_tables=True)
+    pool   = SelfHeal.wrapDB(psycopg2.pool.ThreadedConnectionPool(...), slow_ms=200)
+
+    # Route annotation
+    @SelfHeal.critical(never_shed=True, fallback="queue")
+    async def process_payment(req): ...
+
+    # Query annotation
+    @SelfHeal.query(label="order_history", spike_indicator=True, cache_on_failure=True)
+    def get_orders(user_id): ...
+
     # Django / Flask (WSGI) — wraps as WSGI middleware
     SelfHeal.init(app, token=os.environ["SELFHEAL_TOKEN"], wsgi=True)
 
@@ -65,10 +80,11 @@ class _SelfHeal:
     Developer-facing SDK entry point.
 
     Methods:
-        init(app, token, ...)      — Wrap app with middleware (call at startup)
-        critical(...)              — Decorator for critical route annotation
-        query(...)                 — Decorator for DB query annotation
-        send_event(type, data)     — Manually emit a custom event
+        init(app, token, ...)               Wrap app with middleware (call at startup)
+        wrapDB(engine_or_pool, ...)         Wrap a DB engine/pool with telemetry
+        critical(...)                       Decorator for critical route annotation
+        query(...)                          Decorator for DB query annotation
+        send_event(type, data)              Manually emit a custom event
     """
 
     def __init__(self) -> None:
@@ -200,6 +216,206 @@ class _SelfHeal:
                 )
         except Exception as exc:
             logger.debug(f"[SelfHeal] send_event failed: {exc}")
+
+    def wrapDB(
+        self,
+        engine_or_pool: Any,
+        slow_ms:        int  = 200,
+        track_tables:   bool = False,
+        label:          str  = "",
+    ) -> Any:
+        """
+        Wrap a database engine or connection pool with NEXUS telemetry.
+        Equivalent to the JS SDK's SelfHeal.wrapDB().
+
+        Works with:
+            - SQLAlchemy Engine  (wraps engine.connect() and engine.execute())
+            - SQLAlchemy Session (wraps session.execute())
+            - psycopg2 pool     (wraps pool.getconn() returned connections)
+            - asyncpg Pool      (wraps pool.fetch/fetchrow/execute)
+            - Any object with a .execute() or .query() method
+
+        Args:
+            engine_or_pool:  Your DB engine/pool/session.
+            slow_ms:         Emit a slow-query event if execution exceeds this (ms).
+            track_tables:    Extract table names from SQL for spike prediction.
+            label:           Human-readable label for this DB connection.
+
+        Usage:
+            from sqlalchemy import create_engine
+            from selfheal import SelfHeal
+
+            engine = SelfHeal.wrapDB(
+                create_engine(os.environ["DATABASE_URL"]),
+                slow_ms=200,
+                track_tables=True,
+            )
+        """
+        return _DBWrapper(
+            wrapped      = engine_or_pool,
+            token        = self._token        or "",
+            nexus_url    = self._nexus_url,
+            slow_ms      = slow_ms,
+            track_tables = track_tables,
+            label        = label or type(engine_or_pool).__name__,
+        )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# _DBWrapper — transparent proxy that instruments .execute() and .query()
+# ──────────────────────────────────────────────────────────────────────────────
+
+import re as _re
+import time as _time
+import threading as _threading
+
+_SQL_TABLE_RE = _re.compile(
+    r'(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+["\' `]?(\w+)["\' `]?', _re.IGNORECASE
+)
+
+
+def _extract_tables(sql: str):
+    return list(set(m.group(1).lower() for m in _SQL_TABLE_RE.finditer(sql)))
+
+
+class _DBWrapper:
+    """
+    Transparent proxy around any DB object.
+    Intercepts .execute(), .query(), .fetch(), .fetchrow(), .fetchval()
+    and emits timing telemetry to NEXUS without changing any behaviour.
+    """
+
+    _INTERCEPT = frozenset({
+        "execute", "query", "fetch", "fetchrow", "fetchval",
+        "scalar", "scalar_one", "scalar_one_or_none",
+    })
+
+    def __init__(self, wrapped, token, nexus_url, slow_ms, track_tables, label):
+        object.__setattr__(self, "_wrapped",      wrapped)
+        object.__setattr__(self, "_token",        token)
+        object.__setattr__(self, "_nexus_url",    nexus_url)
+        object.__setattr__(self, "_slow_ms",      slow_ms)
+        object.__setattr__(self, "_track_tables", track_tables)
+        object.__setattr__(self, "_label",        label)
+
+    def __getattr__(self, name: str):
+        wrapped = object.__getattribute__(self, "_wrapped")
+        attr    = getattr(wrapped, name)
+
+        if name not in _DBWrapper._INTERCEPT or not callable(attr):
+            return attr
+
+        # Wrap the method
+        slow_ms      = object.__getattribute__(self, "_slow_ms")
+        track_tables = object.__getattribute__(self, "_track_tables")
+        token        = object.__getattribute__(self, "_token")
+        nexus_url    = object.__getattribute__(self, "_nexus_url")
+        label        = object.__getattribute__(self, "_label")
+
+        import inspect
+
+        if inspect.iscoroutinefunction(attr):
+            import asyncio
+
+            async def async_wrapper(*args, **kwargs):
+                sql   = _sql_from_args(args)
+                start = _time.monotonic()
+                try:
+                    result = await attr(*args, **kwargs)
+                    return result
+                finally:
+                    duration_ms = (_time.monotonic() - start) * 1000
+                    asyncio.create_task(
+                        _emit_query_async(
+                            sql, duration_ms, track_tables,
+                            slow_ms, token, nexus_url, label
+                        )
+                    )
+
+            return async_wrapper
+        else:
+            def sync_wrapper(*args, **kwargs):
+                sql   = _sql_from_args(args)
+                start = _time.monotonic()
+                try:
+                    result = attr(*args, **kwargs)
+                    return result
+                finally:
+                    duration_ms = (_time.monotonic() - start) * 1000
+                    _threading.Thread(
+                        target=_emit_query_sync,
+                        args=(sql, duration_ms, track_tables, slow_ms, token, nexus_url, label),
+                        daemon=True,
+                    ).start()
+
+            return sync_wrapper
+
+    # Forward attribute sets and context manager protocols to wrapped object
+    def __setattr__(self, name, value):
+        setattr(object.__getattribute__(self, "_wrapped"), name, value)
+
+    def __enter__(self):
+        return object.__getattribute__(self, "_wrapped").__enter__()
+
+    def __exit__(self, *args):
+        return object.__getattribute__(self, "_wrapped").__exit__(*args)
+
+    async def __aenter__(self):
+        return await object.__getattribute__(self, "_wrapped").__aenter__()
+
+    async def __aexit__(self, *args):
+        return await object.__getattribute__(self, "_wrapped").__aexit__(*args)
+
+
+def _sql_from_args(args) -> str:
+    """Extract SQL string from the first positional argument."""
+    if not args:
+        return ""
+    first = args[0]
+    if isinstance(first, str):
+        return first[:200]
+    # SQLAlchemy text() / ClauseElement
+    if hasattr(first, "text"):
+        return str(first.text)[:200]
+    if hasattr(first, "string"):
+        return str(first.string)[:200]
+    return str(first)[:200]
+
+
+def _emit_query_sync(sql, duration_ms, track_tables, slow_ms, token, url, label):
+    try:
+        import requests
+        requests.post(
+            f"{url}/sdk/query",
+            json    = {
+                "sql_preview": sql or label,
+                "duration_ms": round(duration_ms, 1),
+                "tables":      _extract_tables(sql) if track_tables and sql else [],
+                "slow":        duration_ms > slow_ms,
+            },
+            headers = {"Authorization": f"Bearer {token}"},
+            timeout = 2,
+        )
+    except Exception:
+        pass
+
+
+async def _emit_query_async(sql, duration_ms, track_tables, slow_ms, token, url, label):
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            await client.post(
+                f"{url}/sdk/query",
+                json    = {
+                    "sql_preview": sql or label,
+                    "duration_ms": round(duration_ms, 1),
+                    "tables":      _extract_tables(sql) if track_tables and sql else [],
+                    "slow":        duration_ms > slow_ms,
+                },
+                headers = {"Authorization": f"Bearer {token}"},
+            )
+    except Exception:
+        pass
 
 
 # Module-level singleton — mirrors the JS SDK pattern

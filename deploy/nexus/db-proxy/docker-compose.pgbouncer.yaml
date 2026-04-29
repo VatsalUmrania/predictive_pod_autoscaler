@@ -1,0 +1,74 @@
+version: "3.9"
+
+# ── NEXUS Tier 1 DB Proxy ─────────────────────────────────────────────────────
+# Drop-in addition to your existing docker-compose stack.
+# Change DATABASE_URL from postgres://...@postgres:5432/db
+#                       to postgres://...@pgbouncer:5432/db
+# Nothing else in your app changes.
+
+services:
+
+  pgbouncer:
+    image: bitnami/pgbouncer:latest
+    container_name: nexus-pgbouncer
+    environment:
+      # Pass-through to your real Postgres
+      POSTGRESQL_HOST:     ${POSTGRES_HOST:-postgres}
+      POSTGRESQL_PORT:     ${POSTGRES_PORT:-5432}
+      POSTGRESQL_DATABASE: ${POSTGRES_DB:-appdb}
+      POSTGRESQL_USERNAME: ${POSTGRES_USER:-appuser}
+      POSTGRESQL_PASSWORD: ${POSTGRES_PASSWORD:-}
+      PGBOUNCER_POOL_MODE: transaction          # most compatible with ORMs
+      PGBOUNCER_MAX_CLIENT_CONN: 200
+      PGBOUNCER_DEFAULT_POOL_SIZE: 20
+      PGBOUNCER_LOG_CONNECTIONS: 1
+      PGBOUNCER_LOG_DISCONNECTIONS: 1
+      PGBOUNCER_LOG_STATS: 1
+      PGBOUNCER_STATS_PERIOD: 30
+      # Write logs to stdout so nexus-db-sidecar can tail them
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgbouncer_logs:/var/log/pgbouncer
+    networks:
+      - nexus-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -p 5432 -U ${POSTGRES_USER:-appuser}"]
+      interval: 5s
+      retries: 10
+
+  # ── NEXUS DB Sidecar ───────────────────────────────────────────────────────
+  # Lightweight Python process that:
+  #   1. Tails PgBouncer stats via SHOW STATS; every 10s
+  #   2. Reports slow queries and connection pressure to NEXUS /sdk/query
+  #   3. Detects query spikes → triggers DBTrafficCorrelator predictions
+  nexus-db-sidecar:
+    image: python:3.11-slim
+    container_name: nexus-db-sidecar
+    command: python /sidecar/db_sidecar.py
+    environment:
+      PGBOUNCER_HOST:   pgbouncer
+      PGBOUNCER_PORT:   "5432"
+      PGBOUNCER_USER:   ${POSTGRES_USER:-appuser}
+      PGBOUNCER_PASS:   ${POSTGRES_PASSWORD:-}
+      NEXUS_API_URL:    ${NEXUS_API_URL:-http://nexus-api:8080}
+      SELFHEAL_TOKEN:   ${SELFHEAL_TOKEN:-}
+      APP_NAME:         ${APP_NAME:-app}
+      POLL_INTERVAL_S:  "10"
+      SLOW_QUERY_MS:    "200"
+    volumes:
+      - ./db_sidecar.py:/sidecar/db_sidecar.py:ro
+    networks:
+      - nexus-net
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgbouncer_logs:
+
+networks:
+  nexus-net:
+    external: true
+    name: ${NEXUS_NETWORK:-nexus_default}

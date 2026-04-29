@@ -106,16 +106,43 @@ context = NexusContext()
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Initialize async resources (TokenStore) on startup."""
+    """Initialize async resources (TokenStore + NATS) on startup."""
+    import logging, os
+    _log = logging.getLogger(__name__)
+
+    # ── TokenStore ─────────────────────────────────────────────────────────────
     try:
         from nexus.integration.token_store import get_token_store
         store = get_token_store()
         await store.init()
     except Exception as exc:
-        import logging
-        logging.getLogger(__name__).warning(f"[StatusAPI] TokenStore init skipped: {exc}")
+        _log.warning(f"[StatusAPI] TokenStore init skipped: {exc}")
+
+    # ── NATS (required for SDK events to reach the orchestrator) ───────────────
+    global _nats_client
+    try:
+        from nexus.bus.nats_client import NATSClient
+        _nats_url = os.environ.get("NATS_URL", "nats://localhost:4222")
+        _nats_client = NATSClient(nats_url=_nats_url, reconnect_attempts=10)
+        await _nats_client.connect()
+        _log.info(f"[StatusAPI] ✅ NATS connected: {_nats_url}")
+    except Exception as exc:
+        _log.warning(f"[StatusAPI] ⚠️  NATS connection failed ({exc}) — SDK events won't reach orchestrator")
+        _nats_client = None
+
     _include_integration_routers(app)
     yield
+
+    # ── Cleanup ────────────────────────────────────────────────────────────────
+    if _nats_client:
+        try:
+            await _nats_client.close()
+        except Exception:
+            pass
+
+
+# Module-level NATS client — set by lifespan, read by sdk_ingest
+_nats_client = None
 
 
 app = FastAPI(

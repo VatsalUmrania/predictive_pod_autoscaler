@@ -1,7 +1,7 @@
 # NEXUS Self-Healing SDK
-# Real-world install: pip install nexus-selfheal
+# In production: pip install nexus-selfheal (from PyPI)
 # Demo: editable install from local repo so any source change is reflected immediately
--e ../../.[nexus]
+# -e ../../.[nexus]
 
 # Demo backend
 aiosqlite>=0.20.0
