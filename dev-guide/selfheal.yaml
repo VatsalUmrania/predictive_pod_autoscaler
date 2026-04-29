@@ -1,0 +1,30 @@
+app: shop-demo
+tier: production
+
+critical_routes:
+  - /orders
+  - /products
+  - /checkout
+
+healing_policy:
+  auto_rollback: true
+  max_auto_actions_per_hour: 20 # max 20 auto healing actions per hour
+  require_approval_for:
+    - database_migrations
+    - environment_variable_changes
+    - scaling_above: 5x
+  never_shed_routes:
+    - /orders
+
+predictive:
+  traffic_spike_tables:
+    - orders
+    - products
+    - users
+  pre_scale_threshold: 2.0      # pre-scale when 2.5x traffic predicted
+
+notifications:
+  slack_webhook: ${SLACK_WEBHOOK}
+  page_sre_after: 2             # 3 failed healing attempts triggers a human
+  notify_on_heal: true          # notify when healing occurs
+  notify_on_prescale: true      # notify when pre-scaling occurs
