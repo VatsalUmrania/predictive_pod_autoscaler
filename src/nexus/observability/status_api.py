@@ -51,7 +51,9 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -171,6 +173,27 @@ def _require(component: Any, name: str) -> Any:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Developer Dashboard (served at /)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_DASHBOARD_HTML = Path(__file__).parent / "developer-dashboard.html"
+
+@app.get("/", include_in_schema=False)
+def serve_dashboard() -> Response:
+    """Serve the NEXUS Developer Dashboard UI at the root URL."""
+    if not _DASHBOARD_HTML.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Dashboard HTML not found. Ensure developer-dashboard.html is bundled with the package.",
+        )
+    return Response(
+        content    = _DASHBOARD_HTML.read_text(encoding="utf-8"),
+        media_type = "text/html",
+        headers    = {"Cache-Control": "no-cache"},
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Health + info
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -182,6 +205,7 @@ def health() -> Dict[str, Any]:
         "timestamp":        datetime.now(timezone.utc).isoformat(),
         "uptime_seconds":   round(time.monotonic() - _start_time, 1),
     }
+
 
 
 @app.get("/status", tags=["system"])
