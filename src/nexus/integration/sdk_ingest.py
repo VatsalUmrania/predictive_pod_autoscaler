@@ -30,7 +30,9 @@ Event translation:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,6 +49,33 @@ router = APIRouter()
 
 # Path to beacon.js — relative to this file
 _BEACON_JS_PATH = Path(__file__).parent.parent / "sdk" / "js" / "beacon.js"
+
+# ── Lazy NATS singleton for SDK event publishing ──────────────────────────────
+# Independent of status_api lifecycle — connects on first use.
+# Publishes to nexus.incidents.sdk.<type> matching demo orchestrator subscription.
+_sdk_nats_nc   = None
+_sdk_nats_lock = None
+
+async def _get_nats():
+    """Return (or lazily create) a raw NATS core connection for SDK publishing."""
+    global _sdk_nats_nc, _sdk_nats_lock
+    if _sdk_nats_lock is None:
+        _sdk_nats_lock = asyncio.Lock()
+    async with _sdk_nats_lock:
+        if _sdk_nats_nc is None or _sdk_nats_nc.is_closed:
+            try:
+                import nats as _nats_lib
+                _url = os.environ.get("NATS_URL", "nats://localhost:4222")
+                _sdk_nats_nc = await _nats_lib.connect(
+                    _url,
+                    name="nexus-sdk-ingest",
+                    max_reconnect_attempts=5,
+                )
+                print(f"[SDKIngest] ✅ NATS connected: {_url}", flush=True)
+            except Exception as _e:
+                print(f"[SDKIngest] ⚠️  NATS connection failed: {_e}", flush=True)
+                _sdk_nats_nc = None
+        return _sdk_nats_nc
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Auth dependency
@@ -205,27 +234,44 @@ async def _publish_to_nats(
 ) -> None:
     """
     Translate an SDK payload into an IncidentEvent and publish to NATS.
-    Silently skips if NATS client is not configured (no-op in standalone mode).
+    Publishes to nexus.incidents.sdk.<event_type> — exactly what the demo
+    orchestrator subscribes to (nexus.incidents.sdk.*).
     """
+    # Event types that should NOT trigger the orchestrator
+    _IGNORE = {"heartbeat", "deploy_event", "healing_completed"}
+    if event_type in _IGNORE:
+        return
+
     try:
         from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
 
-        # Map SDK event types to NEXUS SignalTypes
         _TYPE_MAP = {
-            "route_error":           SignalType.HIGH_ERROR_RATE,
-            "js_error":              SignalType.HIGH_ERROR_RATE,
-            "unhandled_rejection":   SignalType.HIGH_ERROR_RATE,
-            "failed_fetch":          SignalType.HIGH_ERROR_RATE,
-            "failed_xhr":            SignalType.HIGH_ERROR_RATE,
-            "db_query":              SignalType.SLOW_QUERY_DETECTED,
-            "function_error":        SignalType.HIGH_ERROR_RATE,
-            "web_vital":             SignalType.THRESHOLD_BREACH,
-            "heartbeat":             None,   # Heartbeats are not incidents
+            # Standard SDK events
+            "route_error":             SignalType.HIGH_ERROR_RATE,
+            "js_error":                SignalType.HIGH_ERROR_RATE,
+            "unhandled_rejection":     SignalType.HIGH_ERROR_RATE,
+            "failed_fetch":            SignalType.HIGH_ERROR_RATE,
+            "failed_xhr":              SignalType.HIGH_ERROR_RATE,
+            "db_query":                SignalType.SLOW_QUERY_DETECTED,
+            "function_error":          SignalType.HIGH_ERROR_RATE,
+            "web_vital":               SignalType.THRESHOLD_BREACH,
+            # Demo injection events
+            "db_spike_injected":       SignalType.SLOW_QUERY_DETECTED,
+            "error_rate_injected":     SignalType.HIGH_ERROR_RATE,
+            "slow_query_injected":     SignalType.SLOW_QUERY_DETECTED,
+            "oom_injected":            SignalType.THRESHOLD_BREACH,
+            "dns_error_injected":      SignalType.HIGH_ERROR_RATE,
+            "config_drift_detected":   SignalType.ENV_CONTRACT_VIOLATION,
+            "bad_config":              SignalType.ENV_CONTRACT_VIOLATION,
+            "env_contract_violation":  SignalType.ENV_CONTRACT_VIOLATION,
+            "secret_committed":        SignalType.ENV_CONTRACT_VIOLATION,
+            "code_quality_warning":    SignalType.HIGH_ERROR_RATE,
         }
 
         signal = _TYPE_MAP.get(event_type)
         if signal is None:
             return   # heartbeats and unknown types are not incident events
+
 
         event = IncidentEvent(
             agent         = AgentType.ORCHESTRATOR,  # SDK acts as a virtual "app agent"
@@ -237,14 +283,20 @@ async def _publish_to_nats(
             context       = {"sdk_event_type": event_type, "app": app_name, **payload},
         )
 
-        # Import and use the global NATS client if available
-        from nexus.bus.nats_client import NATSClient
-        nc = NATSClient._instance
-        if nc and nc.is_connected:
+        # Publish to nexus.incidents.sdk.<type> via lazy raw NATS connection.
+        # This subject matches the demo orchestrator subscription: nexus.incidents.sdk.*
+        nc = await _get_nats()
+        if nc and not nc.is_closed:
             subject = f"nexus.incidents.sdk.{event_type}"
             await nc.publish(subject, event.model_dump_json().encode())
+            logger.info(f"[SDKIngest] → NATS {subject}")
+        else:
+            logger.warning(f"[SDKIngest] NATS unavailable — {event_type} dropped")
     except Exception as exc:
-        logger.debug(f"[SDKIngest] NATS publish skipped: {exc}")
+        logger.warning(f"[SDKIngest] publish error: {exc}")
+
+
+
 
 
 @router.post("/sdk/event", tags=["integration"])

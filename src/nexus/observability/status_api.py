@@ -51,7 +51,9 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -106,16 +108,43 @@ context = NexusContext()
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Initialize async resources (TokenStore) on startup."""
+    """Initialize async resources (TokenStore + NATS) on startup."""
+    import logging, os
+    _log = logging.getLogger(__name__)
+
+    # ── TokenStore ─────────────────────────────────────────────────────────────
     try:
         from nexus.integration.token_store import get_token_store
         store = get_token_store()
         await store.init()
     except Exception as exc:
-        import logging
-        logging.getLogger(__name__).warning(f"[StatusAPI] TokenStore init skipped: {exc}")
+        _log.warning(f"[StatusAPI] TokenStore init skipped: {exc}")
+
+    # ── NATS (required for SDK events to reach the orchestrator) ───────────────
+    global _nats_client
+    try:
+        from nexus.bus.nats_client import NATSClient
+        _nats_url = os.environ.get("NATS_URL", "nats://localhost:4222")
+        _nats_client = NATSClient(nats_url=_nats_url, reconnect_attempts=10)
+        await _nats_client.connect()
+        _log.info(f"[StatusAPI] ✅ NATS connected: {_nats_url}")
+    except Exception as exc:
+        _log.warning(f"[StatusAPI] ⚠️  NATS connection failed ({exc}) — SDK events won't reach orchestrator")
+        _nats_client = None
+
     _include_integration_routers(app)
     yield
+
+    # ── Cleanup ────────────────────────────────────────────────────────────────
+    if _nats_client:
+        try:
+            await _nats_client.close()
+        except Exception:
+            pass
+
+
+# Module-level NATS client — set by lifespan, read by sdk_ingest
+_nats_client = None
 
 
 app = FastAPI(
@@ -144,6 +173,27 @@ def _require(component: Any, name: str) -> Any:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Developer Dashboard (served at /)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_DASHBOARD_HTML = Path(__file__).parent / "developer-dashboard.html"
+
+@app.get("/", include_in_schema=False)
+def serve_dashboard() -> Response:
+    """Serve the NEXUS Developer Dashboard UI at the root URL."""
+    if not _DASHBOARD_HTML.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Dashboard HTML not found. Ensure developer-dashboard.html is bundled with the package.",
+        )
+    return Response(
+        content    = _DASHBOARD_HTML.read_text(encoding="utf-8"),
+        media_type = "text/html",
+        headers    = {"Cache-Control": "no-cache"},
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Health + info
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -155,6 +205,7 @@ def health() -> Dict[str, Any]:
         "timestamp":        datetime.now(timezone.utc).isoformat(),
         "uptime_seconds":   round(time.monotonic() - _start_time, 1),
     }
+
 
 
 @app.get("/status", tags=["system"])

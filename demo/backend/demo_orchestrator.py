@@ -252,7 +252,7 @@ async def _execute_healing(rule: Dict, incident_id: str, gemini_result: Optional
     except Exception:
         outcome = "failed"
 
-    # Write to AuditTrail
+    # Write to local AuditTrail SQLite (for historical persistence)
     await _write_audit(
         incident_id  = incident_id,
         runbook_id   = rule["runbook"],
@@ -263,7 +263,24 @@ async def _execute_healing(rule: Dict, incident_id: str, gemini_result: Optional
         confidence   = rule["confidence"],
     )
 
-    # Report outcome to NEXUS SDK endpoint
+    # Also POST to NEXUS /developer/incidents so the dashboard shows it
+    # immediately (independent of shared DB path or AuditTrail context)
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post(f"{NEXUS_API_URL}/developer/incidents", json={
+                "incident_id": incident_id,
+                "runbook_id":  rule["runbook"],
+                "target":      "shop-demo",
+                "level":       rule["level"],
+                "outcome":     outcome,
+                "description": description,
+                "confidence":  rule["confidence"],
+            })
+    except Exception:
+        pass
+
+    # Report outcome to NEXUS SDK event stream
+
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             await client.post(f"{NEXUS_API_URL}/sdk/event", json={

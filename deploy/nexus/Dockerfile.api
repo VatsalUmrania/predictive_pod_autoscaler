@@ -1,0 +1,70 @@
+# ── Stage 1: Builder ───────────────────────────────────────────────────────────
+# Installs all dependencies into a virtual env so only that venv is copied
+# to the final slim runtime image.
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+# System deps needed only at build time
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy only the package definition first (cache-friendly layer)
+COPY pyproject.toml ./
+COPY src ./src
+
+# Create isolated venv and install the nexus package + all extras
+RUN python -m venv /venv && \
+    /venv/bin/pip install --upgrade pip wheel && \
+    /venv/bin/pip install ".[nexus]" --no-cache-dir
+
+# ── Stage 2: Runtime ───────────────────────────────────────────────────────────
+# Slim image — only the venv + app source, no build tools
+FROM python:3.11-slim AS runtime
+
+LABEL org.opencontainers.image.title="NEXUS Self-Healing API"
+LABEL org.opencontainers.image.description="Autonomous infrastructure healing system"
+LABEL org.opencontainers.image.source="https://github.com/VatsalUmrania/predictive_pod_autoscaler"
+LABEL org.opencontainers.image.licenses="MIT"
+
+# Non-root user for security hardening
+RUN groupadd -r nexus && useradd -r -g nexus nexus
+
+# Runtime deps only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy virtual env from builder
+COPY --from=builder /venv /venv
+
+# Copy application source
+COPY --from=builder /build/src ./src
+
+# Copy config defaults and provisioning
+COPY deploy/nexus/prometheus.yml    ./config/prometheus.yml
+# Create data directory with correct permissions
+RUN mkdir -p /data /app/logs && chown -R nexus:nexus /data /app
+
+USER nexus
+
+ENV PATH="/venv/bin:$PATH"
+ENV PYTHONPATH="/app/src"
+ENV PYTHONUNBUFFERED=1
+ENV NEXUS_AUDIT_DB_PATH=/data/nexus_audit.db
+ENV NEXUS_KNOWLEDGE_DB_PATH=/data/nexus_knowledge.db
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+    CMD wget -qO- http://localhost:8080/health > /dev/null || exit 1
+
+
+CMD ["uvicorn", "nexus.observability.status_api:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8080", \
+     "--workers", "2", \
+     "--log-level", "info"]

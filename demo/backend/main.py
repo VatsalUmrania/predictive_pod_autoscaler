@@ -161,16 +161,27 @@ async def lifespan(app):
         except Exception as e:
             print(f"[ShopDemo] ⚠️  NEXUS registration failed ({e}) — running without SDK")
 
-    # Load selfheal.yaml and cache policy in NEXUS dashboard
+    # Upload selfheal.yaml to NEXUS via HTTP so the dashboard can display it.
+    # (Importing cache_policy directly only works in-process — NEXUS API is separate)
     try:
-        from nexus.integration.selfheal_config import load_selfheal_config
-        from nexus.integration.dashboard import cache_policy
-        cfg = load_selfheal_config(Path(__file__).parent)
-        if cfg:
-            cache_policy(cfg.app, cfg.to_dict())
-            print(f"[ShopDemo] 📋 selfheal.yaml loaded for app='{cfg.app}'")
-    except Exception:
-        pass
+        import yaml as _yaml
+        _yaml_path = Path(__file__).parent.parent / "selfheal.yaml"   # demo/selfheal.yaml
+        if not _yaml_path.exists():
+            _yaml_path = Path(__file__).parent / "selfheal.yaml"      # backend/selfheal.yaml
+        if _yaml_path.exists():
+            with open(_yaml_path) as _f:
+                _policy = _yaml.safe_load(_f)
+            _app_key = _policy.get("app", APP_NAME)
+            async with httpx.AsyncClient(timeout=3.0) as _c:
+                _r = await _c.post(
+                    f"{NEXUS_URL}/developer/policy/{_app_key}",
+                    json=_policy,
+                )
+            if _r.status_code == 200:
+                print(f"[ShopDemo] 📋 selfheal.yaml uploaded to NEXUS for app='{_app_key}'")
+    except Exception as _e:
+        print(f"[ShopDemo] ⚠️  Could not upload selfheal.yaml ({_e})")
+
 
     yield
     print("[ShopDemo] Shutting down.")

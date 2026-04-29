@@ -384,90 +384,67 @@ class RCAEngine:
     """
     Root Cause Analysis engine.
 
-    Primary: Gemini 1.5 Flash (structured JSON output, low temperature)
-    Fallback: Deterministic rule table (always available)
+    Primary:  Any configured LLM provider (Gemini / OpenAI / Anthropic / none)
+              Selected via NEXUS_LLM_PROVIDER env var.
+    Fallback: Deterministic rule table (always available, zero latency)
 
     Args:
-        api_key:    Google AI API key. If None, reads NEXUS_GEMINI_API_KEY from env.
-                    If still None/empty, falls back to rule-based.
-        model:      Gemini model name (default: gemini-1.5-flash).
-        timeout_s:  Maximum seconds to wait for Gemini response (default: 10).
+        api_key:      API key for the LLM provider. Falls back to env vars.
+        model:        Model name override. Falls back to NEXUS_LLM_MODEL (default: gemini).
+        timeout_s:    Maximum seconds to wait for LLM response (default: 10).
         use_fallback: If True (default), use rule-based fallback on LLM errors.
     """
 
     def __init__(
         self,
         api_key:      Optional[str] = None,
-        model:        str = "gemini-1.5-flash",
+        model:        str  = "gemini",
         timeout_s:    float = 10.0,
-        use_fallback: bool = True,
+        use_fallback: bool  = True,
     ):
-        self._api_key     = api_key or os.getenv("NEXUS_GEMINI_API_KEY", "")
-        self._model_name  = os.getenv("NEXUS_GEMINI_MODEL", model)
-        self._timeout_s   = float(os.getenv("NEXUS_RCA_TIMEOUT_S", str(timeout_s)))
+        # Legacy compat: NEXUS_GEMINI_API_KEY still works for Gemini provider
+        self._timeout_s    = float(os.getenv("NEXUS_RCA_TIMEOUT_S", str(timeout_s)))
         self._use_fallback = use_fallback
-        self._model       = None   # Lazy init on first call
-        self._llm_calls   = 0
-        self._llm_errors  = 0
+        self._llm_calls    = 0
+        self._llm_errors   = 0
 
-    def _ensure_model(self) -> bool:
-        """Initialize the Gemini model client. Returns False if SDK/key unavailable."""
-        if self._model is not None:
-            return True
-        if not self._api_key:
-            return False
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=self._api_key)
-            self._model = genai.GenerativeModel(
-                model_name=self._model_name,
-                system_instruction=_SYSTEM_INSTRUCTION,
-                generation_config=genai.GenerationConfig(
-                    temperature=0.2,
-                    max_output_tokens=512,
-                    response_mime_type="application/json",
-                ),
-            )
-            logger.info(f"[RCAEngine] Gemini client initialized — model={self._model_name}")
-            return True
-        except ImportError:
-            logger.warning(
-                "[RCAEngine] google-generativeai not installed — "
-                "install with: pip install google-generativeai"
-            )
-        except Exception as exc:
-            logger.warning(f"[RCAEngine] Gemini init failed: {exc}")
-        return False
+        # Resolve provider once at init time
+        from nexus.reasoning.llm_provider import get_llm_provider
+        self._provider = get_llm_provider(api_key=api_key or None, model=model or None)
 
     async def analyze(self, cluster: IncidentCluster) -> RCAResult:
         """
         Analyze an IncidentCluster and return an RCAResult.
 
-        Tries Gemini first; falls back to rule-based on any failure.
+        Tries the configured LLM first; falls back to rule-based on any failure.
         Never raises — always returns a valid RCAResult.
         """
-        # Try Gemini
-        if self._ensure_model():
+        if self._provider.is_available():
             try:
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(self._call_gemini, cluster),
+                prompt = _build_gemini_prompt(cluster)   # prompt works for all LLMs
+                raw_text = await asyncio.wait_for(
+                    self._provider.complete(prompt),
                     timeout=self._timeout_s,
                 )
+                self._llm_calls += 1
+                result = self._parse_response(raw_text)
                 if result:
+                    # Update source field with actual provider name
+                    result.source = self._provider.name
                     logger.info(
-                        f"[RCAEngine] Gemini RCA: class={result.failure_class} "
-                        f"L{result.healing_level} conf={result.confidence:.2f} "
-                        f"runbook={result.runbook_id}"
+                        f"[RCAEngine] {self._provider.name.upper()} RCA: "
+                        f"class={result.failure_class} L{result.healing_level} "
+                        f"conf={result.confidence:.2f} runbook={result.runbook_id}"
                     )
                     return result
             except asyncio.TimeoutError:
                 self._llm_errors += 1
                 logger.warning(
-                    f"[RCAEngine] Gemini timeout ({self._timeout_s}s) — using fallback"
+                    f"[RCAEngine] {self._provider.name} timeout ({self._timeout_s}s) — using fallback"
                 )
             except Exception as exc:
                 self._llm_errors += 1
-                logger.warning(f"[RCAEngine] Gemini error: {exc} — using fallback")
+                logger.warning(f"[RCAEngine] {self._provider.name} error: {exc} — using fallback")
 
         # Rule-based fallback
         result = _rule_based_rca(cluster)
@@ -478,22 +455,10 @@ class RCAEngine:
         )
         return result
 
-    def _call_gemini(self, cluster: IncidentCluster) -> Optional[RCAResult]:
-        """Synchronous Gemini API call (run in thread via asyncio.to_thread)."""
-        if not self._model:
-            return None
-
-        self._llm_calls += 1
-        prompt   = _build_gemini_prompt(cluster)
-        response = self._model.generate_content(prompt)
-        raw_text = response.text.strip()
-
-        return self._parse_response(raw_text)
-
     def _parse_response(self, raw: str) -> Optional[RCAResult]:
-        """Parse Gemini's JSON response into an RCAResult."""
-        # Strip markdown code fences if present (Gemini occasionally adds them)
-        clean = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
+        """Parse LLM JSON response into an RCAResult."""
+        import re as _re
+        clean = _re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
 
         try:
             data = json.loads(clean)
@@ -509,7 +474,7 @@ class RCAEngine:
                 runbook_id    = data.get("runbook_id") or None,
                 confidence    = float(data.get("confidence", 0.5)),
                 reasoning     = str(data.get("reasoning", "")),
-                source        = "gemini",
+                source        = "llm",
                 actions_to_avoid = list(data.get("actions_to_avoid", [])),
             )
         except (TypeError, ValueError) as exc:
@@ -521,6 +486,8 @@ class RCAEngine:
         return {
             "llm_calls":    self._llm_calls,
             "llm_errors":   self._llm_errors,
-            "model":        self._model_name,
-            "has_api_key":  bool(self._api_key),
+            "provider":     self._provider.name,
+            "model":        self._provider.model,
+            "has_api_key":  self._provider.is_available(),
         }
+
