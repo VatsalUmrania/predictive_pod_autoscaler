@@ -216,9 +216,9 @@ def prom_query(
         resp.raise_for_status()
         payload = resp.json()
         result = payload.get("data", {}).get("result", [])
+        _set_circuit_breaker(cr_state, 0, 0.0)  # Reset on success (200 OK)
         if not result:
             return None
-        _set_circuit_breaker(cr_state, 0, 0.0)  # Reset on success
         return float(result[0]["value"][1])
     except Exception as exc:
         prom_failures += 1
@@ -285,6 +285,7 @@ def prom_query_parallel(
         _query_single: Helper for individual query execution
     """
     results: dict[str, float | None] = {}
+    start_failures, _ = _get_circuit_breaker(cr_state)
 
     def _query_single(feature_query_pair: tuple[str, str]) -> tuple[str, float | None]:
         feature_name, query = feature_query_pair
@@ -324,6 +325,14 @@ def prom_query_parallel(
         # Circuit breaker active - all queries should fail
         logger.error("Circuit breaker active, aborting parallel queries")
         raise
+
+    # Individual prom_query calls may fail in parallel, but the operator reasons
+    # about one feature-collection cycle. Collapse multiple per-query increments
+    # into a single cycle failure to avoid tripping the breaker too aggressively.
+    if cr_state is not None:
+        end_failures, _ = _get_circuit_breaker(cr_state)
+        if end_failures > start_failures:
+            _set_circuit_breaker(cr_state, start_failures + 1, time.time())
 
     return results
 

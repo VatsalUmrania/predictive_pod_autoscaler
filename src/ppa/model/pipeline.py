@@ -14,12 +14,19 @@ import sys
 from pathlib import Path
 
 from ppa.common.feature_spec import TARGET_COLUMNS
-from ppa.model.convert import convert_model
 from ppa.model.deployment import patch_predictiveautoscaler_paths
-from ppa.model.evaluate import evaluate_model
 from ppa.model.model_qualifier import load_json as _load_json
 from ppa.model.model_qualifier import should_promote
-from ppa.model.train import LOOKBACK_STEPS, train_model
+from ppa.config import LOOKBACK_STEPS
+
+try:
+    from ppa.model.convert import convert_model
+    from ppa.model.evaluate import evaluate_model
+    from ppa.model.train import train_model
+except ModuleNotFoundError:
+    convert_model = None
+    evaluate_model = None
+    train_model = None
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:

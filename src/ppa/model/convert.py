@@ -6,9 +6,14 @@ import os
 from pathlib import Path
 
 import numpy as np
-import tensorflow as tf
 
 from ppa.model.artifacts import keras_model_path, tflite_model_path
+
+
+def _tensorflow():
+    import tensorflow as tf
+
+    return tf
 
 
 def evaluate_model_accuracy(model, eval_data=None):
@@ -56,6 +61,7 @@ def convert_model(
         return None
 
     print(f"Loading Keras model from {model_path}...")
+    tf = _tensorflow()
     model = tf.keras.models.load_model(model_path)
 
     # Establish baseline accuracy before quantization

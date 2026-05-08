@@ -156,7 +156,9 @@ def build_queries(
 
     return {
         # -------- Traffic --------
-        "requests_per_second": (f"sum(rate(http_requests_total{{{base}}}[{RATE_WINDOW}]))"),
+        "requests_per_second": (
+            f"(sum(rate(http_requests_total{{{base}}}[{RATE_WINDOW}])) or on() vector(0))"
+        ),
         # -------- CPU --------
         "cpu_utilization_pct": (
             f"sum(rate(container_cpu_usage_seconds_total{{{usage}}}[{RATE_WINDOW}])) "
@@ -214,15 +216,15 @@ def build_fallback_queries(
 
     return {
         "cpu_core_usage": (
-            f"sum(rate(container_cpu_usage_seconds_total{{{usage}}}[{RATE_WINDOW}]))"
+            f"(sum(rate(container_cpu_usage_seconds_total{{{usage}}}[{RATE_WINDOW}])) or vector(0))"
         ),
         "cpu_core_percent": (
-            f"sum(rate(container_cpu_usage_seconds_total{{{usage}}}[{RATE_WINDOW}])) * 100"
+            f"(sum(rate(container_cpu_usage_seconds_total{{{usage}}}[{RATE_WINDOW}])) or vector(0)) * 100"
         ),
-        "memory_usage_bytes": (f"sum(container_memory_working_set_bytes{{{usage}}})"),
-        "memory_utilization_pct": (f"sum(container_memory_working_set_bytes{{{usage}}})"),
+        "memory_usage_bytes": (f"(sum(container_memory_working_set_bytes{{{usage}}}) or vector(0))"),
+        "memory_utilization_pct": (f"(sum(container_memory_working_set_bytes{{{usage}}}) or vector(0))"),
         "cpu_acceleration": (
-            f"sum(rate(container_cpu_usage_seconds_total{{{usage}}}[{RATE_WINDOW}])) "
-            f"- sum(rate(container_cpu_usage_seconds_total{{{usage}}}[{BASELINE_WINDOW}]))"
+            f"(sum(rate(container_cpu_usage_seconds_total{{{usage}}}[{RATE_WINDOW}])) or vector(0)) "
+            f"- (sum(rate(container_cpu_usage_seconds_total{{{usage}}}[{BASELINE_WINDOW}])) or vector(0))"
         ),
     }

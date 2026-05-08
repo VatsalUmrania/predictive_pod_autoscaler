@@ -7,6 +7,7 @@ ppa.model.train.train_model() for business logic.
 from __future__ import annotations
 
 import os
+import inspect
 import time
 
 import typer
@@ -20,6 +21,7 @@ from ppa.cli.utils import (
     success,
 )
 from ppa.config import (
+    ARTIFACTS_DIR,
     DEFAULT_APP_NAME,
     DEFAULT_EPOCHS,
     DEFAULT_HORIZON,
@@ -143,19 +145,34 @@ def train_cmd(
                 console.print(f"  [step]{current_num}.[/]  {model_label}")
 
             # Train model with callbacks (no output suppression - let train_model print init info)
-            result = train_model(
-                csv_path=csv_path,
-                lookback=lookback,
-                epochs=epochs,
-                target_col=target_horizon,
-                app_name=app_name,
-                namespace=DEFAULT_NAMESPACE,
-                test_split=0.1,
-                target_floor=5.0,
-                early_stopping_patience=patience,
-                verbose=0,  # Suppress all Keras output when using progress
+            train_kwargs = {
+                "csv_path": csv_path,
+                "lookback": lookback,
+                "epochs": epochs,
+                "target_col": target_horizon,
+                "app_name": app_name,
+                "namespace": DEFAULT_NAMESPACE,
+                "test_split": 0.1,
+                "target_floor": 5.0,
+                "output_dir": str(ARTIFACTS_DIR),
+                "early_stopping_patience": patience,
+                "verbose": 0,  # Suppress all Keras output when using progress
                 **callbacks_kwargs,
+            }
+            signature = inspect.signature(train_model)
+            accepts_extra_kwargs = any(
+                param.kind == inspect.Parameter.VAR_KEYWORD
+                for param in signature.parameters.values()
             )
+            if accepts_extra_kwargs:
+                train_kwargs.update(
+                    {
+                        "fit_verbose": 0,
+                        "show_model_summary": False,
+                        "fit_callbacks": [_build_training_progress_callback(target_horizon)],
+                    }
+                )
+            result = train_model(**train_kwargs)
 
             # Ensure progress manager stops before results display
             if progress_manager:

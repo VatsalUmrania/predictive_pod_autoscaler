@@ -1,3 +1,949 @@
+# Predictive Pod Autoscaler (PPA) — Macro Architecture
+
+The PPA system is divided into two distinct, decoupled pipelines. This "Hub" document provides a 10,000-foot overview of how they interact.
+
+For detailed documentation, please refer to the specific subsystems below:
+
+## 1. [Data Collection & Load Generation](./architecture/data_collection.md)
+**Focus:** Infrastructure, metrics scraping, and training data creation.
+
+This pipeline is responsible for:
+- Generating dynamic chaotic HTTP traffic spikes using Locust `ChaoticLoadShape`.
+- Collecting data across fixed scale bounds to construct non-linear capacity curves.
+- Triggering the Kubernetes `HorizontalPodAutoscaler` to generate replica variance.
+- Running the `ppa-data-collector` CronJob hourly to extract specialized features from Prometheus.
+- Safely appending time-series data to the `training-data-pvc` for offline LSTM training.
+
+👉 **[Read the Data Collection Architecture](./architecture/data_collection.md)**
+
+---
+
+## 2. [ML Pipeline Architecture](./architecture/ml_pipeline.md)
+**Focus:** Keras LSTM training, multi-horizon forecasting, TFLite conversion, and champion-challenger promotion.
+
+This pipeline is responsible for:
+- Training independent LSTM models for 3 prediction horizons (3m, 5m, 10m ahead).
+- Building resilient models with target scaling, Huber loss, dropout, and gradient clipping.
+- Evaluating models with robust metrics (sMAPE, filtered MAPE) and HPA comparison.
+- Converting to optimized TFLite (~113KB) for edge deployment.
+- Promoting winning models via a champion-challenger policy with configurable gates.
+
+👉 **[Read the ML Pipeline Architecture](./architecture/ml_pipeline.md)**
+
+---
+
+## 3. [Operator & Live Inference](./operator/README.md)
+**Focus:** Kubernetes-native operator, TFLite inference, and active scaling decisions.
+
+This pipeline is responsible for:
+- Managing N independent `PredictiveAutoscaler` Custom Resources (CRs) in a single pod.
+- Fetching live 15s Prometheus metrics and building rolling 12-step feature windows.
+- Running TFLite inference to predict RPS 3–10 minutes ahead.
+- Making intelligent scaling decisions with rate limiting and stabilization filters.
+- Providing health endpoints, environment-configurable behavior, and Prometheus error resilience.
+
+👉 **[Read the Operator Documentation](./operator/README.md)**
+
+**Operator Documentation Folder Contents:**
+- **[Architecture & System Design](./operator/architecture.md)** — Detailed system topology, reconciliation cycle, component interactions
+- **[Deployment Guide](./operator/deployment.md)** — Step-by-step deployment instructions
+- **[Configuration Reference](./operator/configuration.md)** — Environment variables, CR specification, tuning guide
+- **[API Reference](./operator/api.md)** — Custom Resource schema with examples
+- **[Commands Reference](./operator/commands.md)** — Useful kubectl commands for monitoring
+- **[Troubleshooting Guide](./operator/troubleshooting.md)** — Common issues and solutions
+
+---
+
+## High-Level Topology
+
+```mermaid
+flowchart TD
+    subgraph DataGeneration ["Data Generation (Cluster)"]
+        direction TB
+        L1[Locust: ChaoticLoadShape] -->|Phased Spikes| APP[test-app]
+        L2[Fixed-Replica Profiler] -->|Capacity Bounds| APP
+        APP -.->|Metrics| PROM[(Prometheus)]
+    end
+
+    subgraph DataExtraction ["Data Extraction (Cluster)"]
+        cron[ppa-data-collector] -->|T+3/5/10m Shift| PROM
+        cron -->|Writes 14 Features| CSV[(training-data-pvc)]
+    end
+
+    subgraph MLPipeline ["ML Pipeline (Offline)"]
+        CSV -.->|Train| LSTM[Keras LSTM]
+        LSTM -.->|Quantize| TFLITE[.tflite Model]
+    end
+
+    subgraph PPAOperator ["PPA Operator (Cluster)"]
+        OP[ppa-operator] -->|Dynamic Load| TFLITE
+        OP -->|Live Inference| PROM
+        OP -->|Preemptive Scale| APP
+    end
+
+    DataGeneration ~~~ DataExtraction ~~~ MLPipeline ~~~ PPAOperator
+```
+# ML Pipeline Architecture
+
+**Last Updated:** 2026-03-09 · **Version:** 2.0 (Multi-Horizon with Champion-Challenger)
+
+---
+
+## Overview
+
+The ML Pipeline is a **complete end-to-end system** for training LSTM models on historical Prometheus metrics, optimizing them for multi-horizon RPS forecasting, and promoting winning models to production via a champion-challenger policy.
+
+The pipeline runs offline on a developer laptop and produces TFLite models that are deployed to the operator via a Kubernetes PersistentVolumeClaim.
+
+---
+
+## Architecture Diagram
+
+```mermaid
+flowchart LR
+    subgraph Training["Training Stage"]
+        CSV["training_data.csv<br/>(14F + 6T)"]
+        SHUFFLE["🔀 Shuffle Windows<br/>(fix distribution<br/>mismatch)"]
+        SPLIT["Split: 70/20/10<br/>train/val/test"]
+        FEATURE_SCALE["MinMaxScaler<br/>(features)"]
+        TARGET_SCALE["MinMaxScaler<br/>(targets)"]
+        LSTM["🧠 Keras LSTM<br/>64 → 32 → 16 → 1<br/>Huber loss<br/>Dropout 0.2<br/>Adam clipnorm=1.0"]
+        TRAIN_DONE["✅ Model trained"]
+    end
+
+    subgraph Evaluation["Evaluation Stage"]
+        TEST_SET["Test Split"]
+        PREDICT["Predictions"]
+        METRICS["📊 Metrics:<br/>sMAPE<br/>fMAPE<br/>MAE/RMSE<br/>HPA comparison"]
+    end
+
+    subgraph Conversion["Conversion Stage"]
+        KERAS["ppa_model.keras"]
+        QUANTIZE["TFLite Quantizer<br/>int8 + float16"]
+        TFLITE_MODEL["ppa_model.tflite<br/>~113 KB"]
+    end
+
+    subgraph Policy["Champion-Challenger<br/>Promotion Policy"]
+        CHAMPION["🏆 Champion<br/>(previous best)"]
+        CHALLENGER["🧪 Challenger<br/>(current run)"]
+        COMPARE["Compare:<br/>sMAPE delta<br/>underprov guard"]
+        PROMOTE["✅ Promote if<br/>better + threshold"]
+    end
+
+    subgraph Output["Output Artifacts"]
+        OUT_MODEL["ppa_model.tflite"]
+        OUT_SCALER["scaler.pkl"]
+        OUT_TARGET["target_scaler.pkl"]
+        OUT_EVAL["eval_summary.json"]
+    end
+
+    CSV --> SHUFFLE --> SPLIT
+    SPLIT --> FEATURE_SCALE & TARGET_SCALE
+    FEATURE_SCALE & TARGET_SCALE --> LSTM --> TRAIN_DONE
+    
+    TRAIN_DONE --> TEST_SET --> PREDICT --> METRICS
+    
+    KERAS --> QUANTIZE --> TFLITE_MODEL
+    
+    METRICS --> COMPARE
+    CHAMPION -->|current| COMPARE
+    CHALLENGER -->|results| COMPARE
+    COMPARE --> PROMOTE
+    PROMOTE -->|wins| OUT_MODEL & OUT_SCALER & OUT_TARGET & OUT_EVAL
+```
+
+---
+
+## Training Pipeline
+
+### Data Flow
+
+```mermaid
+sequenceDiagram
+    participant CSV as training_data.csv<br/>(14 features)
+    participant Shuffle as RandomState<br/>Shuffle Windows
+    participant Split as 70/20/10<br/>Split
+    participant Scale as MinMaxScaler<br/>(fit on train only)
+    participant LSTM as Keras LSTM<br/>(64→32→16→1)
+    participant Artifacts as Saved Artifacts
+
+    CSV->>Shuffle: Read 12,800 rows
+    Note over Shuffle: Fixes distribution mismatch<br/>in train/val/test<br/>(before: chronological<br/>had different segments)
+    Shuffle->>Split: 12,800 shuffled rows
+    Split-->>Split: train=8,960 (70%)<br/>val=2,560 (20%)<br/>test=1,280 (10%)
+    
+    Split->>Scale: Fit scaler on train only
+    Note over Scale: ⚠️ Target scaler also fitted<br/>on train only to prevent<br/>data leakage
+    
+    Scale->>LSTM: Sliding windows<br/>(batch of 12-step sequences)
+    Note over LSTM: Architecture:<br/>- 64 → 32 → 16 → 1<br/>- Dropout 0.2 per layer<br/>- Huber loss (robust to outliers)<br/>- Adam optimizer<br/>  - clipnorm=1.0<br/>  - lr=1e-3
+    
+    LSTM->>Artifacts: Save model, scalers, metadata
+    Artifacts-->>Artifacts: ppa_model_{target}.keras<br/>scaler_{target}.pkl<br/>target_scaler_{target}.pkl<br/>split_meta_{target}.json
+```
+
+### Key Design Decisions
+
+| Decision | Rationale |
+|---|---|
+| **24-step rolling windows** | 24 × 30s operator samples = 12 min history. Matches operator's `LOOKBACK_STEPS`. |
+| **Window shuffling before split** | Chronological split puts different segments (with different distributions) in val/test. Shuffling fixes distribution mismatch while preserving segment integrity within each window. |
+| **Separate target scaler** | Target is fit on train split only to prevent leakage. Inverse-transforms model output [0,1] → raw RPS. |
+| **Huber loss** | MSE is too sensitive to RPS outliers in traffic spikes. Huber is robust. |
+| **Dropout + gradient clipping** | Stabilizes training with noisy metrics. Clipnorm=1.0 prevents gradient explosion. |
+| **Patient early stopping** | patience=15, min_delta=1e-4. Prevents premature termination caused by val fluctuations. |
+| **Target floor clipping** | Clamp RPS to ≥5.0 during training. Prevents model from learning nonsensical negative/near-zero predictions. |
+
+### Hyperparameters (Configurable)
+
+| Parameter | Default | CLI Flag | Notes |
+|---|---|---|---|
+| `--epochs` | 50 | `--epochs 50` | Max training iterations |
+| `--batch-size` | 32 | `--batch-size 32` | Samples per gradient update |
+| `--patience` | 15 | `--patience 15` | Early stopping patience (epochs) |
+| `--target-floor` | 5.0 | `--target-floor 5.0` | Min RPS floor for clipping |
+| `--test-split` | 0.1 | `--test-split 0.1` | Holdout test fraction (after 80/20 val) |
+
+---
+
+## Evaluation Pipeline
+
+### Metrics Computed
+
+| Metric | Formula | Use Case |
+|---|---|---|
+| **sMAPE** | `2 × |pred - actual| / (|pred| + |actual|)` | **Primary gate metric** — symmetric, handles near-zero well |
+| **Filtered MAPE** | MAPE for rows where RPS > `low_traffic_threshold` (default 10) | Reveals accuracy on meaningful traffic (excludes noise) |
+| **MAE** | `mean(\|pred - actual\|)` | Average absolute error in RPS |
+| **RMSE** | `sqrt(mean((pred - actual)²))` | Penalizes large errors; influenced by outliers |
+
+### Quality Gate
+
+```yaml
+Gate: sMAPE < threshold
+  threshold: 35.0  # % — configurable via --quality-gate
+  Fail: Model quality insufficient, don't promote
+  Pass: Model is acceptable
+```
+
+### HPA Comparison
+
+The evaluation compares PPA's **predictive scaling** vs HPA's **reactive scaling** on the same test data:
+
+```
+PPA Strategy:
+  predicted_rps = model.predict(12-step window)
+  desired_replicas = ceil(predicted_rps / capacity_per_pod)
+  → scales BEFORE traffic arrives
+
+HPA Strategy (Baseline):
+  current_rps = actual_rps[t]
+  desired_replicas = ceil(current_rps / capacity_per_pod)
+  → scales AFTER traffic already arrived
+```
+
+**Computed Statistics:**
+- Average replicas (PPA vs HPA)
+- Over-provisioning rate (% time replicas > needed)
+- Under-provisioning rate (% time replicas < needed)
+- Wasted pod-capacity (pod-seconds over-provisioned)
+- Replica savings (%)
+
+---
+
+## Champion-Challenger Policy
+
+### Promotion Logic
+
+```mermaid
+flowchart TD
+    EVAL["Evaluate<br/>Challenger"]
+    CHECK_GATE["Check Quality Gate<br/>sMAPE < threshold"]
+    NO_CHAMP["No Champion<br/>exists yet"]
+    HAS_CHAMP["Champion<br/>exists"]
+    
+    EVAL --> CHECK_GATE
+    CHECK_GATE -->|FAIL| REJECT["❌ Reject<br/>Quality insufficient"]
+    CHECK_GATE -->|PASS| NO_CHAMP
+    
+    NO_CHAMP -->|Yes| PROMOTE1["✅ Promote as<br/>New Champion"]
+    NO_CHAMP -->|No| HAS_CHAMP
+    
+    HAS_CHAMP --> METRIC["Compare<br/>--promotion-metric<br/>(default: smape)"]
+    METRIC --> DELTA["Compute Δ<br/>Challenger vs Champion"]
+    DELTA --> MIN_IMPROVE["Check<br/>min_relative_improvement<br/>(default: 2%)"]
+    
+    MIN_IMPROVE -->|< threshold| HOLD1["🔄 Hold<br/>Improvement too small"]
+    MIN_IMPROVE -->|≥ threshold| UNDERPROV["Check<br/>underprov regression<br/>--max-underprov-regression"]
+    
+    UNDERPROV -->|worse| HOLD2["🔄 Hold<br/>Under-provisioning<br/>regressed"]
+    UNDERPROV -->|ok| PROMOTE2["✅ Promote<br/>Challenger as<br/>New Champion"]
+    
+    PROMOTE1 --> CR["Patch CR<br/>modelPath"]
+    PROMOTE2 --> CR
+    REJECT --> END["Done"]
+    HOLD1 --> END
+    HOLD2 --> END
+    CR --> END
+```
+
+### Configuration Flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--promote-if-better` | false | Enable promotion (off by default) |
+| `--champion-dir` | `model/champions` | Directory where champions are stored |
+| `--promotion-metric` | `smape` | Which metric to optimize (smape, mape_filtered, mae) |
+| `--promotion-gate` | 35.0 | Quality gate threshold (%) |
+| `--min-relative-improvement` | 2.0 | Min % improvement to promote (%) |
+| `--max-underprov-regression` | 5.0 | Max allowed under-prov regression (%) |
+| `--promote-cr-name` | `test-app-ppa` | CR name to patch on promotion |
+| `--promote-cr-namespace` | `default` | CR namespace to patch |
+
+### Promotion Outputs
+
+On promotion, artifacts are copied to `champion_dir/{target}/`:
+```
+champions/
+├── rps_t3m/
+│   ├── ppa_model.tflite        ← Latest champion
+│   ├── scaler.pkl
+│   ├── target_scaler.pkl
+│   ├── eval_summary.json       ← Metrics snapshot
+│   └── .timestamp              ← When promoted
+├── rps_t5m/
+└── rps_t10m/
+```
+
+When `--promote-cr-name` is set, the operator's CR is patched:
+```bash
+kubectl patch ppa test-app-ppa --type merge -p \
+  "{\"spec\":{\"modelPath\":\"/models/test-app/ppa_model.tflite\", ...}}"
+```
+
+The operator detects the path change and reloads on the next 30s cycle.
+
+---
+
+## Conversion to TFLite
+
+### Quantization Strategy
+
+```mermaid
+graph LR
+    KERAS["Keras Model<br/>(FP32)<br/>~500 KB"]
+    QUANTIZE["TFLite Converter<br/>–target_spec<br/>–optimizations"]
+    INT8["Integer8<br/>Quantization<br/>~50 KB"]
+    FLOAT16["Float16<br/>Quantization<br/>~113 KB"]
+    HYBRID["Hybrid:<br/>weights=int8<br/>activations=float32<br/>~150 KB"]
+    
+    KERAS -->|Dynamic Range| INT8
+    KERAS -->|Float16| FLOAT16
+    KERAS -->|Hybrid| HYBRID
+    
+    FLOAT16 -->|Current<br/>Default| TFLITE["ppa_model.tflite<br/>⚡ Operator<br/>Inference<br/>~113 KB"]
+```
+
+**Decision:** Float16 quantization (default)
+- Smaller than unquantized but larger than int8
+- Avoids quantization artifacts that hurt RPS prediction accuracy
+- Still <150KB → easy to deploy to edge/minimal environments
+- TFLite runtime supports on all K8s nodes
+
+---
+
+## Artifacts & File Structure
+
+### Training Artifacts
+
+```
+data/artifacts/
+├── ppa_model_rps_t3m.keras
+├── ppa_model_rps_t5m.keras
+├── ppa_model_rps_t10m.keras
+├── scaler_rps_t3m.pkl
+├── scaler_rps_t5m.pkl
+├── scaler_rps_t10m.pkl
+├── target_scaler_rps_t3m.pkl
+├── target_scaler_rps_t5m.pkl
+├── target_scaler_rps_t10m.pkl
+├── split_meta_rps_t3m.json  (test indices, target, lookback)
+├── split_meta_rps_t5m.json
+├── split_meta_rps_t10m.json
+├── eval_summary_rps_t3m.json
+├── eval_summary_rps_t5m.json
+├── eval_summary_rps_t10m.json
+├── ppa_model_rps_t3m.tflite
+├── ppa_model_rps_t5m.tflite
+└── ppa_model_rps_t10m.tflite
+```
+
+### Champion Artifacts (Promoted)
+
+```
+data/champions/
+├── rps_t3m/
+│   ├── ppa_model.tflite
+│   ├── scaler.pkl
+│   ├── target_scaler.pkl
+│   └── eval_summary.json
+├── rps_t5m/
+│   ├── ppa_model.tflite
+│   ├── scaler.pkl
+│   ├── target_scaler.pkl
+│   └── eval_summary.json
+└── rps_t10m/
+    ├── ppa_model.tflite
+    ├── scaler.pkl
+    ├── target_scaler.pkl
+    └── eval_summary.json
+```
+
+### PVC Deployment (Production)
+
+```
+/models/  (on PVC mounted by operator)
+└── test-app/
+    ├── ppa_model.tflite        ← Operator loads this
+    ├── scaler.pkl              ← Feature scaler
+    └── target_scaler.pkl       ← Target (RPS) scaler
+```
+
+---
+
+## Multi-Horizon Training
+
+The pipeline trains **three independent LSTM models** for three prediction horizons:
+
+```
+Horizon | Lookback | Prediction Window | Use Case
+--------|----------|-------------------|------------------
+rps_t3m | 12×30s   | 3 minutes ahead   | Immediate tactical scaling
+rps_t5m | 12×30s   | 5 minutes ahead   | Medium-term load planning
+rps_t10m| 12×30s   | 10 minutes ahead  | Strategic scaling buffer
+```
+
+Each model:
+- Has its own MinMaxScaler (fitted independently on its training split)
+- Has its own target scaler (inverse-transforms [0,1] → raw RPS)
+- Is evaluated against its own test split
+- Can have different sMAPE/MAE/RMSE performance
+- Can be promoted independently to the operator
+
+**Current best performer (as of 2026-03-09):**
+- `rps_t10m`: sMAPE 16.7%, MAE 35.97 RPS → **✅ Deployed**
+
+---
+
+## See Also
+
+- [ML Commands Reference](../reference/ml_commands.md) — Training, evaluation, and conversion CLI
+- [Operator Architecture](./ml_operator.md) — How the models are deployed and used for live inference
+- [Data Collection](./data_collection.md) — How training data is generated
+# Predictive Pod Autoscaler — System Architecture
+
+**Last Updated:** 2026-03-05 · **Version:** 2.0 (Multi-CR)
+
+---
+
+## Overview
+
+The Predictive Pod Autoscaler (PPA) is a Kubernetes-native system that uses LSTM-based ML to forecast application load **3–10 minutes ahead** and proactively scale deployments before traffic spikes arrive, effectively neutralizing "Kubernetes Cold Start" latencies.
+
+The system has three major subsystems:
+
+| Subsystem | Purpose | Runs As |
+|---|---|---|
+| **Data Collection** | Scrape Prometheus → build training CSV | CronJob (hourly) |
+| **ML Pipeline** | Train LSTM → convert to TFLite | Manual / Developer laptop |
+| **Operator** | Live inference → scaling decisions | Deployment (always-on pod) |
+
+---
+
+## System Diagram
+
+```mermaid
+flowchart TB
+    subgraph "Kubernetes Cluster"
+        subgraph "Application Layer"
+            TA["Target App Pods<br/>(prometheus_client instrumentation)"]
+            TG["Traffic Generator<br/>(curl loop / Locust)"]
+        end
+
+        subgraph "Monitoring Stack"
+            PM["PodMonitor<br/>(15s scrape)"]
+            PROM[("Prometheus<br/>30d retention")]
+            KSM["kube-state-metrics"]
+            CADV["cAdvisor"]
+            GF["Grafana<br/>(dashboards)"]
+        end
+
+        subgraph "Data Collection (CronJob)"
+            EXP["export_training_data.py"]
+            CSV[("CSV on PVC<br/>training-data-pvc")]
+        end
+
+        subgraph "PPA Operator (Deployment)"
+            REG["CR State Registry<br/>{(ns, name): CRState}"]
+            FEAT["features.py<br/>(namespace-scoped PromQL)"]
+            PRED["predictor.py<br/>(per-CR TFLite model)"]
+            CALC["scaler.py<br/>(replica calc + rate limit)"]
+            MAIN["main.py<br/>(kopf @timer 30s)"]
+        end
+
+        CR1["PredictiveAutoscaler CR<br/>test-app-ppa"]
+        CR2["PredictiveAutoscaler CR<br/>other-app-ppa"]
+        MPVC[("/models PVC<br/>├─ test-app/<br/>└─ other-app/")]
+    end
+
+    subgraph "Developer Laptop (Offline)"
+        TRAIN["ppa model train<br/>(Keras LSTM)"]
+        CONV["ppa model convert<br/>(TFLite + quantize)"]
+    end
+
+    TG -->|HTTP traffic| TA
+    TA -->|metrics| PM --> PROM
+    CADV --> PROM
+    KSM --> PROM
+    PROM --> GF
+
+    PROM -->|PromQL range queries| EXP --> CSV
+    CSV -.->|copy to laptop| TRAIN --> CONV -.->|copy .tflite + scaler.pkl| MPVC
+
+    CR1 -->|spec| REG
+    CR2 -->|spec| REG
+    MPVC -->|mount /models| PRED
+    PROM -->|PromQL instant queries| FEAT
+    MAIN --> FEAT --> REG
+    REG --> PRED --> CALC -->|patch replicas| TA
+```
+
+---
+
+## Data Collection Pipeline
+
+### What It Does
+
+A Kubernetes CronJob (`ppa-data-collector`) runs hourly inside the cluster. It queries Prometheus for a rolling window of historical metrics, computes temporal features, builds future prediction targets, and appends the result to a CSV on a PersistentVolumeClaim.
+
+### 14-Feature Vector
+
+| Category | Features |
+|---|---|
+| **Core Load** | `rps_per_replica`, `cpu_utilization_pct`, `memory_utilization_pct`, `latency_p95_ms` |
+| **Indicators** | `active_connections`, `error_rate` |
+| **Momentum** | `cpu_acceleration`, `rps_acceleration` |
+| **State** | `replicas_normalized` |
+| **Cyclical Time** | `hour_sin`, `hour_cos`, `dow_sin`, `dow_cos`, `is_weekend` |
+
+### Prediction Targets
+
+| Target | Description |
+|---|---|
+| `rps_t3m` / `rps_t5m` / `rps_t10m` | Future RPS at +3, +5, +10 minutes |
+| `replicas_t3m` / `replicas_t5m` / `replicas_t10m` | Ceiling-based replica forecast |
+
+### Gap Handling
+
+The pipeline is **segment-aware**: large gaps (>10 minutes, e.g. overnight shutdown) create separate segments. Prediction targets are computed independently within each segment so cross-gap rows aren't poisoned with NaN.
+
+### Modules
+
+| File | Responsibility |
+|---|---|
+| `config.py` | Parameterized PromQL queries, feature columns, env vars |
+| `export_training_data.py` | Main processor: fetch → resample → targets → safe append |
+| `verify_features.py` | Liveness probe for Prometheus query readiness |
+| `validate_training_data.py` | ML quality gates before training |
+
+---
+
+## ML Pipeline
+
+### Training Flow
+
+```mermaid
+flowchart LR
+    CSV["training_data.csv<br/>(14 features + targets)"]
+    SCALE["MinMaxScaler<br/>.fit()"]
+    WINDOW["Sliding Windows<br/>(12 steps × 14 features)"]
+    LSTM["Keras LSTM<br/>(64 → 32 → 16 → 1)"]
+    TFLITE[".tflite<br/>(quantized)"]
+    PKL["scaler.pkl"]
+
+    CSV --> SCALE --> WINDOW --> LSTM
+    LSTM --> TFLITE
+    SCALE --> PKL
+```
+
+### Key Design Decisions
+
+| Decision | Rationale |
+|---|---|
+| **TFLite** (not Flask API) | Embedded inference: no network hop, no sidecar, <100ms latency |
+| **Segment-aware windows** | Training windows never cross overnight gaps |
+| **MinMaxScaler** | Simple, invertible, saved alongside model for exact reproduction |
+
+### Artifacts
+
+| File | Location | Description |
+|---|---|---|
+| `ppa_model.tflite` | `/models/{app}/` on PVC | Quantized LSTM model |
+| `scaler.pkl` | `/models/{app}/` on PVC | Sklearn MinMaxScaler fitted on training features |
+
+---
+
+## Operator Architecture (Multi-CR)
+
+### Design Principle
+
+One operator pod manages **N** independently-configured `PredictiveAutoscaler` CRs. Each CR specifies its own target deployment, namespace, model paths, and scaling parameters. The operator maintains per-CR state (predictor instance, stabilization counters) in a registry keyed by `(cr_namespace, cr_name)` to avoid cross-namespace collisions.
+
+### CRD Spec
+
+```yaml
+apiVersion: ppa.example.com/v1
+kind: PredictiveAutoscaler
+metadata:
+  name: test-app-ppa
+  namespace: default
+spec:
+  targetDeployment: test-app       # required
+  namespace: default               # target deployment namespace
+  minReplicas: 2                   # hard floor
+  maxReplicas: 20                  # hard ceiling
+  capacityPerPod: 50               # req/s per pod
+  modelPath: ""                    # empty = /models/{target}/ppa_model.tflite
+  scalerPath: ""                   # empty = /models/{target}/scaler.pkl
+  scaleUpRate: 2.0                 # max 2× current per cycle
+  scaleDownRate: 0.5               # max 50% reduction per cycle
+```
+
+### Reconciliation Loop (30s cycle)
+
+```mermaid
+sequenceDiagram
+    participant Timer as Kopf Timer
+    participant Reg as CR State Registry
+    participant Feat as features.py
+    participant Prom as Prometheus
+    participant Pred as Predictor
+    participant Scaler as scaler.py
+    participant K8s as K8s API
+
+    Timer->>Reg: get_or_create(ns, name)
+    Note over Reg: Lazy-init Predictor<br/>Reload if paths changed
+
+    Timer->>Feat: build_feature_vector(app, namespace)
+    Feat->>Prom: 9× namespace-scoped PromQL
+    Prom-->>Feat: scalar values
+    Feat-->>Timer: 14-feature dict
+
+    Timer->>Pred: update(features)
+    Note over Pred: Append to rolling window (12 steps)
+
+    alt Window not full
+        Pred-->>Timer: not ready
+    else Window ready
+        Timer->>Pred: predict()
+        Pred-->>Timer: predicted_rps
+
+        alt Unstable (<2 reads)
+            Timer->>Timer: stabilization wait
+        else Stable
+            Timer->>Scaler: calculate_replicas(predicted, current, params...)
+            Scaler-->>Timer: desired
+
+            alt desired ≠ current
+                Timer->>K8s: PATCH deployment/scale
+            end
+        end
+    end
+```
+
+### Operator Modules
+
+| File | Responsibility |
+|---|---|
+| `config.py` | Cluster-wide defaults only (`PROMETHEUS_URL`, `TIMER_INTERVAL`, `LOOKBACK_STEPS`, `DEFAULT_*` constants). No app-specific values. |
+| `features.py` | `build_feature_vector(target_app, namespace)` — all PromQL queries namespace-scoped |
+| `predictor.py` | `Predictor(model_path, scaler_path)` — per-CR instance with `paths_match()` for reload detection |
+| `scaler.py` | `calculate_replicas(...)` — all params as args. `scale_deployment(name, replicas, namespace)` |
+| `main.py` | Per-CR state registry `{(ns, name): CRState}`. Lazy-init + reload. Delete handler for cleanup. |
+
+### Model Lifecycle
+
+```
+Developer trains model
+    → copies .tflite + .pkl to PVC at /models/{app}/
+        → Operator detects new CR or path change
+            → Predictor reloads from PVC
+                → Live inference begins
+```
+
+Models are **never baked into the Docker image**. They live on a `PersistentVolumeClaim` mounted at `/models`. To update a model, replace the files on the PVC — the operator will reload on the next reconciliation cycle if the CR's `modelPath` changed, or on pod restart.
+
+---
+
+## Deployment Topology
+
+```mermaid
+flowchart TD
+    subgraph "Namespace: monitoring"
+        P["Prometheus<br/>(kube-prometheus-stack)"]
+        G["Grafana"]
+    end
+
+    subgraph "Namespace: default"
+        OP["ppa-operator Pod"]
+        PVC1["/models PVC"]
+        CRD1["PredictiveAutoscaler CRs"]
+        APP["test-app Deployment"]
+        TGEN["traffic-gen Deployment"]
+        CRON["ppa-data-collector CronJob"]
+        PVC2["training-data PVC"]
+    end
+
+    OP -->|reads| CRD1
+    OP -->|mounts| PVC1
+    OP -->|queries| P
+    OP -->|patches scale| APP
+    CRON -->|queries| P
+    CRON -->|writes CSV| PVC2
+```
+
+### Key Files
+
+| File | Purpose |
+|---|---|
+| `deploy/crd.yaml` | PredictiveAutoscaler CRD definition (v2.1: added targetScalerPath, containerName, consecutiveSkips) |
+| `deploy/rbac.yaml` | ServiceAccount + ClusterRole + Binding |
+| `deploy/operator-deployment.yaml` | Operator Deployment + health probes + env vars + PVC for models |
+| `deploy/predictiveautoscaler.yaml` | Example CR with rps_t10m champion model paths |
+| `deploy/cronjob-data-collector.yaml` | Data collection CronJob |
+| `scripts/ppa_redeploy.sh` | Full pipeline: retrain + convert + deploy for Minikube |
+
+---
+
+## Operator Hardening (v2.1)
+
+### Health Endpoint
+
+The operator exposes a lightweight HTTP health endpoint on port 8080 for Kubernetes liveness and readiness probes:
+
+```
+GET /healthz → 200 OK "ok"
+```
+
+Deployment includes:
+- **Liveness probe** (every 15s): Restarts pod if 3 consecutive failures
+- **Readiness probe** (every 10s): Removes pod from service if unhealthy
+
+### Environment-Configurable Constants
+
+All operator behavior can be tuned via environment variables:
+
+| Env Var | Default | Purpose |
+|---|---|---|
+| `PPA_TIMER_INTERVAL` | 30 | Reconciliation cycle (seconds) |
+| `PPA_INITIAL_DELAY` | 60 | Warmup delay before first cycle |
+| `PPA_LOOKBACK_STEPS` | 12 | Rolling window size (must match model) |
+| `PPA_STABILIZATION_STEPS` | 2 | Consecutive stable predictions before scaling |
+| `PPA_NAMESPACE` | default | Default K8s namespace |
+| `PPA_PROM_FAILURE_THRESHOLD` | 10 | Prometheus failures before ERROR escalation |
+
+### Prometheus Error Resilience
+
+On Prometheus unavailability:
+```
+Cycles 1-9: log WARNING
+Cycle 10+: log ERROR + CR status.consecutiveSkips visible in kubectl get ppa
+Success: counter resets
+```
+
+The operator continues running safely, skipping scaling decisions when metrics are unavailable.
+
+### CRD Enhancements (v2.1)
+
+New spec fields:
+```yaml
+targetScalerPath: ""   # Target scaler for inverse-transform (empty = convention)
+containerName: ""      # Container for PromQL filtering (optional)
+```
+
+---
+
+## Deployment Topology
+
+```mermaid
+flowchart TD
+    subgraph "Namespace: monitoring"
+        P["Prometheus<br/>(kube-prometheus-stack)"]
+        G["Grafana"]
+    end
+
+    subgraph "Namespace: default"
+        OP["ppa-operator Pod"]
+        PVC1["/models PVC"]
+        CRD1["PredictiveAutoscaler CRs"]
+        APP["test-app Deployment"]
+        TGEN["traffic-gen Deployment"]
+        CRON["ppa-data-collector CronJob"]
+        PVC2["training-data PVC"]
+    end
+
+    OP -->|reads| CRD1
+    OP -->|mounts| PVC1
+    OP -->|queries| P
+    OP -->|patches scale| APP
+    CRON -->|queries| P
+    CRON -->|writes CSV| PVC2
+```
+
+### Key Files
+
+| File | Purpose |
+|---|---|
+| `deploy/crd.yaml` | PredictiveAutoscaler CRD definition (v2.1: added targetScalerPath, containerName, consecutiveSkips) |
+| `deploy/rbac.yaml` | ServiceAccount + ClusterRole + Binding |
+| `deploy/operator-deployment.yaml` | Operator Deployment + health probes + env vars + PVC for models |
+| `deploy/predictiveautoscaler.yaml` | Example CR with rps_t10m champion model paths |
+| `deploy/cronjob-data-collector.yaml` | Data collection CronJob |
+| `scripts/ppa_redeploy.sh` | Full pipeline: retrain + convert + deploy for Minikube |
+
+---
+
+## How to Onboard a New App
+
+1. **Instrument** the app with `prometheus_client` (expose `http_requests_total`, `http_request_duration_seconds`, `http_connections_active`)
+2. **Collect data** — run traffic, let the CronJob accumulate ≥5,000 CSV rows
+3. **Train** — `ppa model train --csv <path>`
+4. **Convert** — `ppa model convert`
+5. **Deploy model** — copy `ppa_model.tflite` + `scaler.pkl` to `/models/{app}/` on the PVC
+6. **Apply CR** — `kubectl apply -f` a `PredictiveAutoscaler` CR targeting the new deployment
+7. The operator auto-detects the CR and starts scaling
+
+---
+
+## Technology Stack
+
+| Component | Technology | Rationale |
+|---|---|---|
+| Language | Python 3.11 | Unified ML + K8s ecosystem |
+| ML Framework | Keras (TensorFlow) | LSTM support, wide documentation |
+| Inference | TFLite | Embedded, <100ms, no sidecar needed |
+| Operator | Kopf | Python-native, simpler than Go-based Kubebuilder |
+| Metrics | Prometheus + kube-prometheus-stack | Industry standard, CRD-based service discovery |
+| Visualization | Grafana | Bundled with kube-prometheus-stack |
+| Load Testing | Locust | Python-native, phased traffic simulation |
+| Local K8s | Minikube (KVM2) | Near-bare-metal on Linux |
+
+---
+
+## See Also
+
+- [ML Pipeline Architecture](./ml_pipeline.md) — Training and model promotion
+- [Operator Commands](../reference/operator_commands.md) — Deployment and debugging guide
+- [ML Commands](../reference/ml_commands.md) — Model training and evaluation guide
+- [Data Collection](./data_collection.md) — Training data generation
+# Predictive Pod Autoscaler Data Collection Architecture
+
+## Overview
+The data collection pipeline for the Predictive Pod Autoscaler (PPA) is a key component configured as a Kubernetes CronJob. It acts as an event-driven extractor, pulling detailed runtime metrics from Prometheus at defined intervals, pre-processing, and generating features suitable for LSTM model training and subsequent autoscaler operator predictions.
+
+## Architecture
+
+At a high level, the extraction process is stateless, self-contained, and configured to scrape via internal cluster DNS:
+
+```mermaid
+flowchart LR
+    %% Logical Boundaries
+    subgraph Traffic_Infrastructure [Traffic & Workload]
+        L_C["Locust Swarm<br/>(In-Cluster)"]
+        L_F["Fixed-Replica Profiler<br/>(Chaos Testing)"]
+    end
+
+    subgraph Service_Runtime [Service Data Plane]
+        APP["test-app Deployment<br/>(Instrumentation: :9091)"]
+        HPA["K8s HPA<br/>(Reactive Feedback)"]
+        
+        APP <--> HPA
+    end
+
+    subgraph Observability [Observability Plane]
+        PROM[("Prometheus<br/>(TSDB)")]
+    end
+
+    subgraph Feature_Engineering [Cold-Start Feature Pipeline]
+        LR
+        EXT["export_training_data.py"]
+        
+        subgraph Operations [Transformations]
+            TR1["Semantic Normalization<br/>(cpu_utilization_pct)"]
+            TR2["Temporal Cyclical Encoding<br/>(Cos/Sin)"]
+            TR3["Predictive Horizon Shifting<br/>(T+3m, T+5m, T+10m)"]
+        end
+        
+        EXT --> Operations
+    end
+
+    subgraph Intelligence_Storage [ML Dataset Hub]
+        CSV[("training_data.csv")]
+        BAK[("Schema Backup Log")]
+    end
+
+    %% Flow Definitions
+    Traffic_Infrastructure -->|Phased Chaos| APP
+    APP -.->|Metric Exposure| PROM
+    HPA -.->|Scrape Readiness| PROM
+    
+    PROM -->|Vector Selection| EXT
+    Operations -->|Deduplicated Append| CSV
+    CSV -.->|Rollback/Backup| BAK
+
+    %% Styling
+    classDef plain fill:#fff,stroke:#333,stroke-width:2px;
+    classDef storage fill:#fff3e0,stroke:#ff9800,stroke-width:2px;
+    classDef runtime fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
+    classDef logic fill:#f1f8e9,stroke:#33691e,stroke-width:1px;
+
+    class APP,HPA runtime;
+    class PROM,CSV,BAK storage;
+    class EXT,L_C,L_F logic;
+    class Operations logic;
+```
+
+## Features
+
+An optimal 14-feature dimension is collected in line with the latest specifications, structured into core load signals, state awareness features, unique indicators, momentum calculations, and generated cyclical signals. 
+
+| Feature Category | Features |
+| --- | --- |
+| **Core Load** | `rps_per_replica`, `cpu_utilization_pct`, `memory_utilization_pct`, `latency_p95_ms` |
+| **State** | `replicas_normalized` |
+| **Indicators** | `active_connections`, `error_rate` |
+| **Momentum** | `cpu_acceleration`, `rps_acceleration` |
+| **Cyclical** | `hour_sin`, `hour_cos`, `dow_sin`, `dow_cos`, `is_weekend` |
+
+The target calculations generated dynamically from the state are `rps_t3m`, `rps_t5m`, `rps_t10m` forecasting the target feature at time window advancements to account for Kubernetes cold-start periods (e.g. 3 minutes).
+
+## Dynamic Load Generation & Variance
+To successfully train the forecasting ML models, the training data requires extreme volatility and variance in replica counts.
+
+- **Aggressive HPA Target**: The `test-app` is governed by a HorizontalPodAutoscaler targeted at `50% CPU Utilization`.
+- **Compound Chaotic Spikes**: The clustered `Locust` traffic generator uses a `ChaoticLoadShape` to mimic real-world unpredictability. Stages jump dynamically from normal load (100 users) to flash bursts (800 users), dead drops (10 users), and massive spikes (1500 users). This ensures the CPU threshold is broken repeatedly and unpredictably.
+- **Fixed Replica Profiling**: To decouple the model from learning the HPA's specific feedback loop, standalone tests (`scripts/fixed_replica_test.sh`) disable the HPA and lock replicas to fixed bounds (2, 5, 10, 20). The chaotic traffic is then pushed against these static capacities to establish pure scale-limit datasets.
+
+## Automated Startup
+The entire infrastructure, load generation, and monitoring stack has been codified into `ppa_startup.sh`. This orchestrates 10 sequential steps covering prerequisites, Minikube KVM provisioning, helm installations (Kube-Prometheus stack), and the injection of custom `Locust` scripts to guarantee deterministic data.
+
+## Modules
+
+The underlying stack is standard Python, utilizing `pandas` and `requests`. No sidecars or complex frameworks (e.g. Flask) are utilized inside this data-extractor pod. 
+
+- `config.py`: Single source of truth. Contains core configurations dynamically parameterized (`TARGET_APP`, `PROMETHEUS_URL`) and the exhaustive map of `QUERIES` holding the raw robust PromQL patterns for calculation.
+- `verify_features.py`: Independent troubleshooting script to locally poll against `PROMETHEUS_URL` and assert query matches data outputs, acting as a liveness probe on metrics readiness.
+- `export_training_data.py`: Primary processor to load features via pandas dataframes dynamically over a stated window, evaluate targets natively through shifting constraints (`df.shift(-lag)`), safely append deduplicated blocks against long-running storage volumes, and format as `.csv`.
 # 🔴 PPA System Review: Fatal Flaws & Breakdown Points
 
 **Assessment Date:** March 17, 2026

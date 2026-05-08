@@ -35,10 +35,19 @@ __all__ = ["Predictor"]
 class Predictor:
     """Per-CR predictor: loads model + scaler from given paths."""
 
-    def __init__(self, model_path: str, scaler_path: str, target_scaler_path: str | None = None):
+    def __init__(
+        self,
+        model_path: str,
+        scaler_path: str,
+        target_scaler_path: str | None = None,
+        metadata_path: str | None = None,
+        version: str | None = None,
+    ):
         self.model_path = model_path
         self.scaler_path = scaler_path
         self.target_scaler_path = target_scaler_path
+        self.metadata_path = metadata_path
+        self.version = version
         self.history: deque = deque(maxlen=LOOKBACK_STEPS)
         self.interpreter: tflite.Interpreter | None = None
         self.scaler: StandardScaler | None = None
@@ -46,6 +55,9 @@ class Predictor:
         self.input_details: list[dict[str, int]] | None = None
         self.output_details: list[dict[str, int]] | None = None
         self._load_failed = False
+        self.last_load_error: str | None = None
+        self.model_load_time_ms = 0.0
+        self.last_prediction_latency_ms = 0.0
         # FIX (PR#10): Add exponential backoff for model reload failures
         self._load_failures = 0
         self._last_load_attempt = 0.0
@@ -75,11 +87,21 @@ class Predictor:
         - Missing metadata file: proceed without validation (backward compat)
         """
         model_dir = Path(self.model_path).parent
-        metadata_path = model_dir / f"{Path(self.model_path).stem}_metadata.json"
+        metadata_candidates = []
+        if self.metadata_path:
+            metadata_candidates.append(Path(self.metadata_path))
+        metadata_candidates.extend(
+            [
+                model_dir / "metadata.json",
+                model_dir / "ppa_model_metadata.json",
+                model_dir / f"{Path(self.model_path).stem}_metadata.json",
+            ]
+        )
+        metadata_path = next((path for path in metadata_candidates if path.exists()), None)
 
-        if not metadata_path.exists():
+        if metadata_path is None:
             logger.warning(
-                f"No metadata file found at {metadata_path}. "
+                f"No metadata file found near {self.model_path}. "
                 f"Proceeding without schema validation (consider retraining)"
             )
             return None
@@ -118,6 +140,9 @@ class Predictor:
                     f"(threshold: 5.0%)"
                 )
 
+        if "version" in metadata:
+            self.version = str(metadata["version"])
+
         logger.info(f"Metadata validated: {metadata_path}")
         return metadata
 
@@ -134,6 +159,7 @@ class Predictor:
                 return  # Don't retry yet, still in backoff period
 
         self._last_load_attempt = time.time()
+        load_started = time.time()
 
         # GRANULAR ERROR TRACKING: Track which step fails
         load_step = "initialization"
@@ -197,11 +223,7 @@ class Predictor:
                 self.scaler = joblib.load(self.scaler_path)
                 logger.info(f"✓ {load_step} succeeded: {self.scaler_path}")
             except Exception as e:
-                logger.warning(f"Failed to load scaler: {e}")
-                import traceback
-
-                logger.warning(f"Scaler traceback: {traceback.format_exc()}")
-                self.scaler = None
+                raise RuntimeError(f"Failed to load required scaler: {e}") from e
 
             # Load target scaler (optional)
             load_step = "target_scaler_load"
@@ -225,6 +247,15 @@ class Predictor:
                 logger.debug(f"Input details retrieved: {len(self.input_details)} tensors")
                 self.output_details = self.interpreter.get_output_details()
                 logger.debug(f"Output details retrieved: {len(self.output_details)} tensors")
+                input_shape = list(self.input_details[0].get("shape", []))
+                expected_shapes = [
+                    [1, LOOKBACK_STEPS, NUM_FEATURES],
+                    [-1, LOOKBACK_STEPS, NUM_FEATURES],
+                ]
+                if input_shape not in expected_shapes:
+                    raise RuntimeError(
+                        f"Model input shape mismatch: {input_shape} not in {expected_shapes}"
+                    )
                 logger.info(f"✓ {load_step} succeeded")
             except Exception as e:
                 logger.error(f"Failed to get tensor details: {e}")
@@ -233,6 +264,10 @@ class Predictor:
                 logger.error(f"Tensor details traceback: {traceback.format_exc()}")
                 raise
 
+            self._load_failed = False
+            self._load_failures = 0
+            self.last_load_error = None
+            self.model_load_time_ms = (time.time() - load_started) * 1000
             logger.info("All components loaded successfully")
 
         except Exception as e:
@@ -242,9 +277,12 @@ class Predictor:
             logger.error(f"Traceback: {traceback.format_exc()}")
             self._load_failed = True
             self._load_failures += 1
+            self.last_load_error = str(e)
             self.interpreter = None
             self.scaler = None
             self.target_scaler = None
+            self.input_details = None
+            self.output_details = None
 
     def paths_match(
         self, model_path: str, scaler_path: str, target_scaler_path: str | None = None
@@ -254,6 +292,15 @@ class Predictor:
             self.model_path == model_path
             and self.scaler_path == scaler_path
             and self.target_scaler_path == target_scaler_path
+        )
+
+    def is_loaded(self) -> bool:
+        return (
+            not self._load_failed
+            and self.interpreter is not None
+            and self.scaler is not None
+            and self.input_details is not None
+            and self.output_details is not None
         )
 
     def copy_history(self) -> list:
@@ -277,8 +324,7 @@ class Predictor:
             self._try_load()
         return (
             len(self.history) >= self.lookback
-            and self.interpreter is not None
-            and self.scaler is not None
+            and self.is_loaded()
         )
 
     def predict(self) -> float:
@@ -301,6 +347,7 @@ class Predictor:
         self.interpreter.set_tensor(self.input_details[0]["index"], input_data)
         self.interpreter.invoke()
         inference_time = (time.time() - start_time) * 1000  # Convert to milliseconds
+        self.last_prediction_latency_ms = inference_time
 
         if inference_time > 100:  # >100ms is concerning
             logger.warning(f"Slow inference: {inference_time:.1f}ms (expected <100ms)")

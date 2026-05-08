@@ -14,6 +14,7 @@ import requests
 from ppa.common.feature_spec import FEATURE_COLUMNS
 from ppa.common.promql import build_fallback_queries, build_queries
 from ppa.config import (
+    FeatureVectorException,
     LOOKBACK_STEPS,
     PROMETHEUS_URL,
     TIMER_INTERVAL,
@@ -41,27 +42,105 @@ if str(ROOT_DIR) not in sys.path:
 
 logger = logging.getLogger("ppa.features")
 
+REQUIRED_METRICS = {
+    "current_replicas",
+    "requests_per_second",
+    "cpu_utilization_pct",
+    "memory_utilization_pct",
+}
+PRIMARY_SIGNAL_METRICS = {"requests_per_second", "cpu_utilization_pct", "latency_p95_ms"}
+DEFAULT_METRIC_FRESHNESS_SECONDS = 30.0
+VOLATILE_METRIC_FRESHNESS_SECONDS = 10.0
+VOLATILE_RPS_CHANGE_ENTER = 0.5
+VOLATILE_RPS_CHANGE_EXIT = 0.35
 
-def _validate_critical_metrics(values: dict[str, float | None]) -> None:
-    """Validate that critical metrics are available (not None).
 
-    For critical missing metrics, log warning and set defaults instead of failing.
+def _metric_cache(cr_state: object | None) -> dict[str, tuple[float, float]]:
+    if cr_state is None:
+        return {}
+    cache = getattr(cr_state, "metric_cache", None)
+    if cache is None:
+        cache = {}
+        setattr(cr_state, "metric_cache", cache)
+    return cache
+
+
+def _freshness_threshold(cr_state: object | None) -> float:
+    return (
+        VOLATILE_METRIC_FRESHNESS_SECONDS
+        if bool(getattr(cr_state, "volatile_metrics", False))
+        else DEFAULT_METRIC_FRESHNESS_SECONDS
+    )
+
+
+def _apply_metric_degradation(
+    values: dict[str, float | None],
+    cr_state: object | None,
+    now: float,
+) -> tuple[dict[str, float | None], list[str], dict[str, float]]:
+    """Use fresh cached values for one missing required metric; fail otherwise.
+
+    This prevents silent corruption from stale cache while still tolerating a single
+    delayed Prometheus series in an otherwise healthy scrape.
     """
-    default_values = {
-        "cpu_utilization_pct": 0.0,
-        "memory_utilization_pct": 0.0,
-        "requests_per_second": 0.0,
-        "current_replicas": 1.0,
-    }
+    cache = _metric_cache(cr_state)
+    missing_required = [name for name in REQUIRED_METRICS if values.get(name) is None]
+    degraded: list[str] = []
+    metric_ages: dict[str, float] = {}
 
-    for feature, default in default_values.items():
-        if values.get(feature) is None:
-            values[feature] = default
+    for name, value in values.items():
+        if value is not None and isinstance(value, (int, float)) and not math.isnan(float(value)):
+            cache[name] = (float(value), now)
+            metric_ages[name] = 0.0
+
+    if len(missing_required) == 1:
+        missing = missing_required[0]
+        cached = cache.get(missing)
+        threshold = _freshness_threshold(cr_state)
+        if cached is not None:
+            cached_value, cached_at = cached
+            age = now - cached_at
+            metric_ages[missing] = age
+            if age <= threshold:
+                values[missing] = cached_value
+                degraded.append(f"cached_{missing}")
+                return values, degraded, metric_ages
+        raise FeatureVectorException(
+            f"Missing required metric {missing} and no fresh cached value is available"
+        )
+
+    if len(missing_required) > 1:
+        raise FeatureVectorException(
+            "Multiple required metrics missing from Prometheus: "
+            + ", ".join(sorted(missing_required))
+        )
+
+    return values, degraded, metric_ages
+
+
+def _update_volatility(raw_rps: float, cr_state: object | None) -> None:
+    if cr_state is None:
+        return
+    cache = _metric_cache(cr_state)
+    previous = cache.get("_previous_rps")
+    volatile = bool(getattr(cr_state, "volatile_metrics", False))
+    if previous is not None:
+        prev_rps, _ = previous
+        denom = max(abs(prev_rps), 1.0)
+        change = abs(raw_rps - prev_rps) / denom
+        if not volatile and change >= VOLATILE_RPS_CHANGE_ENTER:
+            setattr(cr_state, "volatile_metrics", True)
+        elif volatile and change <= VOLATILE_RPS_CHANGE_EXIT:
+            setattr(cr_state, "volatile_metrics", False)
+    cache["_previous_rps"] = (raw_rps, time_now())
+
+
+def time_now() -> float:
+    return datetime.now(timezone.utc).timestamp()
 
 
 def _normalize_metrics(
     values: dict[str, float | None],
-    reference_replicas: int,
     max_replicas: int,
 ) -> dict[str, float | None]:
     """Normalize metrics for LSTM input.
@@ -70,7 +149,6 @@ def _normalize_metrics(
 
     Args:
         values: Raw metric values dict
-        reference_replicas: Current pod count for RPS normalization
         max_replicas: Maximum pod count for replica normalization
 
     Returns:
@@ -81,11 +159,13 @@ def _normalize_metrics(
     if math.isnan(rps):
         rps = 0.0
 
-    # FIX: Use reference_replicas (stable) instead of current_replicas (volatile)
-    # This ensures the feature has consistent meaning across scale events
-    stable_ref = max(reference_replicas, 1)  # Clamp to 1 to avoid division by zero
-    values["rps_per_replica"] = rps / stable_ref
-    current_replicas = values.get("current_replicas") or 1.0
+    current_replicas = values.get("current_replicas") or 0.0
+    if current_replicas <= 0:
+        values["rps_per_replica"] = rps
+        values["scale_from_zero"] = 1.0
+    else:
+        values["rps_per_replica"] = rps / current_replicas
+        values["scale_from_zero"] = 0.0
     values["replicas_normalized"] = current_replicas / float(max_replicas)
 
     return values
@@ -121,7 +201,7 @@ def build_feature_vector(
     container_name: str | None = None,
     prom_url: str | None = None,
     cr_state: object | None = None,
-) -> tuple[dict[str, float | None], float]:
+) -> tuple[dict[str, float | None], float, dict[str, float], list[str]]:
     """Build feature vector from Prometheus metrics for LSTM prediction.
 
     Queries Prometheus for current load metrics, resource usage, and time features.
@@ -156,7 +236,7 @@ def build_feature_vector(
         cr_state: Optional CRD status object for circuit breaker state
 
     Returns:
-        Tuple of (feature_dict, current_replica_count) where:
+        Tuple of (feature_dict, current_replica_count, raw_metrics, degraded_reasons) where:
         - feature_dict: Dict mapping metric names to float values
         - current_replica_count: Current pod count from Prometheus
 
@@ -193,6 +273,7 @@ def build_feature_vector(
         set_prometheus_url(prom_url)
 
     # Step 1: Query Prometheus
+    now = time_now()
     queries = build_queries(target_app, namespace, container_name)
     values = prom_query_parallel(
         queries, max_workers=5, timeout=2.0, prom_url=prom_url, cr_state=cr_state
@@ -207,8 +288,52 @@ def build_feature_vector(
     if latency_raw is not None and latency_raw == 0.0:
         values["latency_p95_ms"] = None  # Will become NaN in Step 3
 
-    # Step 2: Validate critical metrics are available
-    _validate_critical_metrics(values)
+    # Step 1c: Try fallback queries for resource utilization metrics if primary queries failed.
+    # kube_pod_container_resource_limits may not be available in all Prometheus setups
+    # (e.g., environments without kube-state-metrics or with limited scraping config).
+    # In these cases, we try absolute CPU/memory metrics from kubelet instead.
+    if values.get("cpu_utilization_pct") is None:
+        try:
+            fallbacks = build_fallback_queries(target_app, namespace, container_name)
+            fallback_cpu = prom_query_parallel(
+                {"cpu_utilization_pct": fallbacks.get("cpu_core_percent", "")},
+                max_workers=1,
+                timeout=2.0,
+                prom_url=prom_url,
+                cr_state=cr_state,
+            )
+            if fallback_cpu.get("cpu_utilization_pct") is not None:
+                values["cpu_utilization_pct"] = fallback_cpu["cpu_utilization_pct"]
+                logger.warning(f"[{target_app}] Using fallback CPU metric (absolute usage, not percentage)")
+        except Exception as e:
+            logger.debug(f"[{target_app}] Fallback CPU query failed: {e}")
+
+    if values.get("memory_utilization_pct") is None:
+        try:
+            fallbacks = build_fallback_queries(target_app, namespace, container_name)
+            fallback_mem = prom_query_parallel(
+                {"memory_utilization_pct": fallbacks.get("memory_usage_bytes", "")},
+                max_workers=1,
+                timeout=2.0,
+                prom_url=prom_url,
+                cr_state=cr_state,
+            )
+            if fallback_mem.get("memory_utilization_pct") is not None:
+                values["memory_utilization_pct"] = fallback_mem["memory_utilization_pct"]
+                logger.warning(f"[{target_app}] Using fallback memory metric (absolute usage, not percentage)")
+        except Exception as e:
+            logger.debug(f"[{target_app}] Fallback memory query failed: {e}")
+
+    # Step 2: Apply freshness-aware degradation for required metrics.
+    values, degraded_reasons, metric_ages = _apply_metric_degradation(values, cr_state, now)
+
+    primary_missing = [
+        name
+        for name in PRIMARY_SIGNAL_METRICS
+        if values.get(name) is None or (isinstance(values.get(name), float) and math.isnan(values[name]))
+    ]
+    if len(primary_missing) == len(PRIMARY_SIGNAL_METRICS):
+        raise FeatureVectorException("All primary input signals are missing")
 
     # Step 3: Convert None to NaN for optional features
     critical_features = [
@@ -222,12 +347,16 @@ def build_feature_vector(
             values[k] = float("nan")
 
     current_replicas_value = values.get("current_replicas")
-    current_replicas: float = (
-        current_replicas_value if isinstance(current_replicas_value, float) else float("nan")
-    )
+    current_replicas = float(current_replicas_value or 0.0)
+    raw_metrics = {
+        key: float(value)
+        for key, value in values.items()
+        if value is not None and isinstance(value, (int, float)) and not math.isnan(float(value))
+    }
+    _update_volatility(raw_metrics.get("requests_per_second", 0.0), cr_state)
 
     # Step 4: Normalize metrics for LSTM
-    values = _normalize_metrics(values, reference_replicas, max_replicas)
+    values = _normalize_metrics(values, max_replicas)
 
     # Step 5: Add temporal features
     values = _add_temporal_features(values)
@@ -238,8 +367,14 @@ def build_feature_vector(
 
     if oob:
         logger.info(f"Clipped {len(oob)} out-of-bounds features")
+        degraded_reasons.extend([f"clipped_{item['feature']}" for item in oob])
 
-    return final_features, current_replicas
+    if cr_state is not None:
+        setattr(cr_state, "degraded_reasons", degraded_reasons)
+        setattr(cr_state, "metric_ages", metric_ages)
+        setattr(cr_state, "last_raw_metrics", raw_metrics)
+
+    return final_features, current_replicas, raw_metrics, degraded_reasons
 
 
 def prom_range_query(query: str, step_seconds: int = 30, hours: int = 1) -> dict[float, float]:

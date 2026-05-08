@@ -11,7 +11,7 @@ spec:
   maxReplicas: 10
   capacityPerPod: 20
   scaleUpRate: 2.0
-  scaleDownRate: 1.0
+  scaleDownRate: 0.5
   safetyFactor: 1.15
   observerMode: true
   modelPath: "/models/test-app/rps_t3m/ppa_model_rps_t3m.tflite"

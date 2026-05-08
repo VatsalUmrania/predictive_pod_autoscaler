@@ -37,7 +37,7 @@ def add_cmd(
     rps_capacity: int = typer.Option(20, "--rps-capacity", help="RPS capacity per pod."),
     safety_factor: float = typer.Option(1.15, "--safety-factor", help="Safety multiplier buffer."),
     scale_up: float = typer.Option(2.0, "--scale-up", help="Max scale-up rate."),
-    scale_down: float = typer.Option(1.0, "--scale-down", help="Max scale-down rate."),
+    scale_down: float = typer.Option(0.5, "--scale-down", help="Max scale-down rate."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Generate manifests without applying."),
 ) -> None:
     """Register an app for autoscaling.

@@ -133,10 +133,8 @@ def _validate_tflite_model(model_path: Path) -> bool:
     """
     try:
         with open(model_path, "rb") as f:
-            # TFLite files have "TFL3" at offset 4
-            f.seek(4)
-            magic = f.read(4)
-            return magic == b"TFL3"
+            header = f.read(8)
+            return header.startswith(b"TFL3") or header[4:8] == b"TFL3"
     except Exception as e:
         logger.warning(f"Failed to validate model {model_path}: {e}")
         return False
@@ -259,11 +257,12 @@ def push_models(
             local_dir = CHAMPION_DIR / app_name / h
             local_dir.mkdir(parents=True, exist_ok=True)
 
-            if model_file != local_dir / "ppa_model.tflite":
-                shutil.copy2(model_file, local_dir / "ppa_model.tflite")
+            canonical_model = local_dir / "ppa_model.tflite"
+            if model_file != canonical_model:
+                shutil.copy2(model_file, canonical_model)
 
             cp(
-                str(local_dir / "ppa_model.tflite"),
+                str(model_file),
                 f"{namespace}/{pod_name}:/models/{h}/ppa_model.tflite",
             )
             info(f"Copied {h}/ppa_model.tflite")
@@ -274,7 +273,7 @@ def push_models(
                     shutil.copy2(metadata_file, canonical_metadata)
 
                 cp(
-                    str(canonical_metadata),
+                    str(metadata_file),
                     f"{namespace}/{pod_name}:/models/{h}/ppa_model_metadata.json",
                 )
                 info(f"Copied {h}/ppa_model_metadata.json")
@@ -314,6 +313,10 @@ def push_models(
                 cp(
                     f"{namespace}/{pod_name}:/models/{h}/{fname}",
                     str(local_dir / fname),
+                )
+                cp(
+                    str(local_dir / fname),
+                    f"{namespace}/{pod_name}:/models/{h}/{fname}",
                 )
 
         success("Scalers synced to host")

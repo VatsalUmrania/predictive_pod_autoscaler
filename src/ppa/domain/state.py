@@ -62,5 +62,28 @@ class CRState:
     # Populated immediately when the CR state is created so peer CRs can check whether
     # they share the same managed deployment (the only case that causes oscillations).
     target_deployment: str = ""
+    target_namespace: str = ""
     # Suppress repeated multiple-CR warnings — log once per operator restart.
     conflict_logged: bool = False
+    # Model version and upgrade observability.
+    active_model_version: str | None = None
+    pending_model_version: str | None = None
+    last_failed_model_version: str | None = None
+    model_upgrade_failure_reason: str | None = None
+    model_load_pending: bool = False
+    model_load_time_ms: float = 0.0
+    # Metric degradation and freshness tracking.
+    metric_cache: dict[str, tuple[float, float]] | None = None
+    volatile_metrics: bool = False
+    degraded_reasons: list[str] | None = None
+    metric_ages: dict[str, float] | None = None
+    last_raw_metrics: dict[str, float] | None = None
+    # Scaling failure backoff.
+    scale_failures: int = 0
+    last_scale_failure_time: float = 0.0
+    next_scale_retry_time: float = 0.0
+    last_scale_error: str | None = None
+    # Status throttling.
+    last_status_update_time: float = 0.0
+    last_status_snapshot: dict | None = None
+    last_decision_trace: dict | None = None
