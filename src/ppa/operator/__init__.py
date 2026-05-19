@@ -12,6 +12,7 @@ from ppa.config import (
 from ppa.operator.features import PrometheusCircuitBreakerError, build_feature_vector
 from ppa.operator.predictor import Predictor
 from ppa.operator.scaler import calculate_replicas, scale_deployment
+from ppa.operator.state_machine import ScalerStateMachine
 
 __all__ = [
     "PROMETHEUS_URL",
@@ -26,4 +27,5 @@ __all__ = [
     "Predictor",
     "calculate_replicas",
     "scale_deployment",
+    "ScalerStateMachine",
 ]
