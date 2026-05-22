@@ -50,6 +50,7 @@ GIT_URL_PATTERN = re.compile(
 )
 
 SHELL_INJECTION_CHARS = {";", "|", "&", "$", "`", "\n", "\x00"}
+PORT_FORWARD_LOG_DIR = Path(os.getenv("PPA_PORT_FORWARD_LOG_DIR", "/tmp/ppa-port-forwards"))
 
 # Global to store app_path between steps
 _app_path: Path | None = None
@@ -247,6 +248,9 @@ def step_4_prometheus() -> None:
     info("Applying PPA Dashboard ConfigMap...")
     run_cmd_silent(["kubectl", "apply", "-f", str(DEPLOY_DIR / "grafana-dashboard-configmap.yaml")])
 
+    # Always update helm repos to get latest chart versions
+    run_cmd(["helm", "repo", "update"], title="Updating Helm repos")
+
     result = run_cmd_silent(["helm", "status", "prometheus", "-n", "monitoring"], check=False)
     if result.returncode == 0:
         success("Prometheus already installed — upgrading with sidecar config...")
@@ -263,11 +267,17 @@ def step_4_prometheus() -> None:
                 "grafana.sidecar.dashboards.enabled=true",
                 "--set",
                 "grafana.sidecar.dashboards.searchNamespace=monitoring",
+                # Enable kube-state-metrics for resource metrics (required for PPA)
+                "--set",
+                "kubeStateMetrics.enabled=true",
+                "--set",
+                "kubeStateMetrics.metricLabelsAllowlist=deployments={deployment}",
                 "--timeout=5m",
             ],
             title="Helm upgrade Prometheus",
         )
     else:
+        # Install latest version of kube-prometheus-stack
         run_cmd(
             [
                 "helm",
@@ -286,14 +296,24 @@ def step_4_prometheus() -> None:
                 "grafana.sidecar.dashboards.enabled=true",
                 "--set",
                 "grafana.sidecar.dashboards.searchNamespace=monitoring",
+                # Enable kube-state-metrics for resource metrics (required for PPA)
+                "--set",
+                "kubeStateMetrics.enabled=true",
+                "--set",
+                "kubeStateMetrics.metricLabelsAllowlist=deployments={deployment}",
                 "--timeout=5m",
             ],
-            title="Helm install Prometheus stack",
+            title="Helm install Prometheus stack (latest)",
         )
         info("Waiting for Prometheus pods...")
         time.sleep(30)
         wait_for_pods("app.kubernetes.io/name=prometheus", "monitoring")
-        success("Prometheus stack installed")
+        # Verify kube-state-metrics is running (critical for PPA metrics)
+    info("Verifying kube-state-metrics deployment...")
+    time.sleep(10)  # Give helm time to install
+    # Note: kube-prometheus-stack chart labels kube-state-metrics with app.kubernetes.io/name, not app=
+    wait_for_pods("app.kubernetes.io/name=kube-state-metrics", "monitoring")
+    success("Prometheus stack installed")
 
 
 def step_5_test_app(ctx: typer.Context | None = None) -> None:
@@ -368,6 +388,31 @@ def step_6_traffic_gen() -> None:
     success("Traffic generator deployed")
 
 
+def _start_port_forward(cmd: list[str], port: int, name: str) -> None:
+    """Start a detached kubectl port-forward and verify it did not exit immediately."""
+    PORT_FORWARD_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = PORT_FORWARD_LOG_DIR / f"{name.lower().replace(' ', '-')}-{port}.log"
+
+    with open(log_path, "ab") as log_file:
+        process = subprocess.Popen(
+            cmd,
+            stdout=log_file,
+            stderr=log_file,
+            start_new_session=True,
+        )
+
+    time.sleep(1)
+    if process.poll() is None:
+        success(f"{name} port-forward started (→ {port})")
+        return
+
+    detail = log_path.read_text(errors="replace").strip()
+    error(f"{name} port-forward failed (see {log_path})")
+    if detail:
+        error(detail.splitlines()[-1])
+    raise typer.Exit(1)
+
+
 def step_7_port_forwards() -> None:
     """Start port forwards for Prometheus, Grafana, test-app, and test-app metrics."""
     info("Starting port forwards (background)...")
@@ -409,15 +454,9 @@ def step_7_port_forwards() -> None:
         ),
     ]
 
-    # Start port-forwards as detached background processes (survive parent exit)
+    # Start port-forwards as detached background processes (survive parent exit).
     for cmd, port, name in commands:
-        subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            preexec_fn=os.setsid,  # Detach from parent process group (Unix only)
-        )
-        success(f"{name} port-forward started (→ {port})")
+        _start_port_forward(cmd, port, name)
 
 
 def step_8_watchdog() -> None:

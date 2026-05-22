@@ -14,7 +14,6 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import kopf
-from prometheus_client import Counter, Gauge
 from prometheus_client import start_http_server as _prom_start_http_server
 
 from ppa.config import DEFAULT_MODEL_DIR, INITIAL_DELAY, NAMESPACE, TIMER_INTERVAL
@@ -26,13 +25,13 @@ from ppa.operator.model_bundle import (
     resolve_model_bundle,
 )
 from ppa.operator.state_machine import ScalerStateMachine
-# Prometheus metrics
-_LABELS = ["cr_name", "namespace"]
-
-ppa_predicted_load_rps = Gauge("ppa_predicted_load_rps", "LSTM predicted load (req/s)", _LABELS)
-ppa_desired_replicas = Gauge("ppa_desired_replicas", "Target replicas", _LABELS)
-ppa_current_replicas = Gauge("ppa_current_replicas", "Observed ready replicas", _LABELS)
-ppa_scale_events_total = Counter("ppa_scale_events_total", "Total scaling decisions", _LABELS)
+# Re-export metrics for backward compatibility and external access
+from ppa.operator.metrics import (
+    ppa_predicted_load_rps,
+    ppa_desired_replicas,
+    ppa_current_replicas,
+    ppa_scale_events_total,
+)
 # Logging setup
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 logger = logging.getLogger("ppa.operator")

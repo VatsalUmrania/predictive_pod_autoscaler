@@ -22,7 +22,7 @@ last-updated: 2026-05-16
 ### Step 1: Clone and Install {#clone-install}
 
 ```bash
-git clone https://github.com/your-org/predictive-pod-autoscaler.git
+git clone https://github.com/vatsalumrania/predictive-pod-autoscaler.git
 cd predictive-pod-autoscaler
 
 # Install with dev dependencies

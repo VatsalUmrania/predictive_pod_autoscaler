@@ -15,7 +15,7 @@ import time
 from typing import Any
 
 import kopf
-from prometheus_client import Counter, Gauge
+from ppa.operator.metrics import PpaOperatorMetrics
 
 from ppa.config import (
     DEFAULT_CAPACITY_PER_POD,
@@ -262,16 +262,10 @@ class ScalerStateMachine:
         history_len = len(self.state.predictor.history)
         maxlen = self.state.predictor.history.maxlen
 
-        # Update Prometheus metrics
-        ppa_warmup_progress = Gauge("ppa_warmup_progress", "History window fill ratio (0-1)", ["cr_name", "namespace"])
-        ppa_model_load_failed = Gauge("ppa_model_load_failed", "1 if model failed to load, else 0", ["cr_name", "namespace"])
-
-        ppa_warmup_progress.labels(cr_name=self.cr_name, namespace=self.cr_namespace).set(
-            history_len / maxlen if maxlen else 0
-        )
-        ppa_model_load_failed.labels(cr_name=self.cr_name, namespace=self.cr_namespace).set(
-            1 if self.state.predictor._load_failed else 0
-        )
+        # Update Prometheus metrics (centralized in metrics.py)
+        metrics = PpaOperatorMetrics.for_cr(self.cr_name, self.cr_namespace)
+        metrics.warmup_progress.set(history_len / maxlen if maxlen else 0)
+        metrics.model_load_failed.set(1 if self.state.predictor._load_failed else 0)
 
         _update_status(self.patch, "currentReplicas", current)
 
@@ -527,8 +521,9 @@ class ScalerStateMachine:
                     f"{current} → {desired}"
                 )
                 if scale_deployment(self.config["target"], desired, self.config["target_ns"]):
-                    ppa_scale_events_total = Counter("ppa_scale_events_total", "Total scaling decisions applied", ["cr_name", "namespace"])
-                    ppa_scale_events_total.labels(cr_name=self.cr_name, namespace=self.cr_namespace).inc()
+            # Increment scale events counter (centralized in metrics.py)
+                    metrics = PpaOperatorMetrics.for_cr(self.cr_name, self.cr_namespace)
+                    metrics.scale_events.inc()
                     self.state.stable_count = 0
                     _reset_scale_backoff(self.state, self.patch)
                     _update_status(self.patch, "lastScaleTime", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
