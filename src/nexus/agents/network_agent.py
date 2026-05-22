@@ -30,7 +30,6 @@ import logging
 import os
 import socket
 import time
-from typing import Dict, List, Optional, Set
 
 import httpx
 
@@ -51,16 +50,17 @@ logger = logging.getLogger(__name__)
 # K8s Service discovery
 # ──────────────────────────────────────────────────────────────────────────────
 
-def discover_k8s_service_hostnames(namespaces: Optional[List[str]] = None) -> List[str]:
+def discover_k8s_service_hostnames(namespaces: list[str] | None = None) -> list[str]:
     """
     Return a list of DNS names for all Kubernetes Services in the given namespaces.
     Falls back to empty list if K8s API is unreachable.
 
     DNS format: <service>.<namespace>.svc.cluster.local
     """
-    hostnames: List[str] = []
+    hostnames: list[str] = []
     try:
-        from kubernetes import client as k8s_client, config as k8s_config
+        from kubernetes import client as k8s_client
+        from kubernetes import config as k8s_config
         try:
             k8s_config.load_incluster_config()
         except Exception:
@@ -116,8 +116,8 @@ class NetworkAgent(BaseAgent):
     def __init__(
         self,
         nats_client: NATSClient,
-        namespaces: Optional[List[str]] = None,
-        extra_endpoints: Optional[List[str]] = None,
+        namespaces: list[str] | None = None,
+        extra_endpoints: list[str] | None = None,
         dns_timeout_s: float = 3.0,
         http_timeout_s: float = 5.0,
         latency_threshold_ms: float = 500.0,
@@ -136,15 +136,15 @@ class NetworkAgent(BaseAgent):
         self.latency_threshold_ms   = float(os.getenv("NEXUS_NETWORK_LATENCY_THRESHOLD_MS", str(latency_threshold_ms)))
         self.refresh_every          = refresh_services_every
 
-        self._service_hostnames: List[str] = []
+        self._service_hostnames: list[str] = []
         self._cycle_count = 0
 
         # Track consecutive DNS failures per hostname for de-duplication
-        self._dns_failures: Dict[str, int] = {}
+        self._dns_failures: dict[str, int] = {}
 
     # ── DNS probe ─────────────────────────────────────────────────────────────
 
-    async def _probe_dns(self, hostname: str) -> Optional[float]:
+    async def _probe_dns(self, hostname: str) -> float | None:
         """
         Resolve hostname via getaddrinfo.
         Returns latency in ms, or None on failure.
@@ -160,7 +160,7 @@ class NetworkAgent(BaseAgent):
         except (asyncio.TimeoutError, socket.gaierror, OSError):
             return None
 
-    async def _check_dns(self, hostname: str) -> Optional[IncidentEvent]:
+    async def _check_dns(self, hostname: str) -> IncidentEvent | None:
         latency = await self._probe_dns(hostname)
         if latency is None:
             self._dns_failures[hostname] = self._dns_failures.get(hostname, 0) + 1
@@ -186,7 +186,7 @@ class NetworkAgent(BaseAgent):
 
     # ── HTTP probe ────────────────────────────────────────────────────────────
 
-    async def _probe_http(self, url: str) -> Optional[float]:
+    async def _probe_http(self, url: str) -> float | None:
         """
         HTTP GET to health/ready endpoint.
         Returns latency in ms, or None on connection failure / 5xx.
@@ -202,9 +202,9 @@ class NetworkAgent(BaseAgent):
         except Exception:
             return None
 
-    async def _check_service_http(self, hostname: str) -> List[IncidentEvent]:
+    async def _check_service_http(self, hostname: str) -> list[IncidentEvent]:
         """Probe common health paths for a service hostname."""
-        events: List[IncidentEvent] = []
+        events: list[IncidentEvent] = []
 
         for path in ("/healthz", "/health", "/ready", "/"):
             url     = f"http://{hostname}{path}"
@@ -253,7 +253,7 @@ class NetworkAgent(BaseAgent):
     async def on_start(self) -> None:
         await self._refresh_services()
 
-    async def sense(self) -> List[IncidentEvent]:
+    async def sense(self) -> list[IncidentEvent]:
         self._cycle_count += 1
 
         # Refresh service list periodically
@@ -261,7 +261,7 @@ class NetworkAgent(BaseAgent):
             await self._refresh_services()
 
         all_hosts = list(set(self._service_hostnames))
-        events: List[IncidentEvent] = []
+        events: list[IncidentEvent] = []
 
         # ── DNS checks (all K8s service hosts) ────────────────────────────────
         dns_results = await asyncio.gather(

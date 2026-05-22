@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 class _Noop:
     """Silent no-op replacement for any Prometheus metric."""
-    def labels(self, **kwargs) -> "_Noop": return self
+    def labels(self, **kwargs) -> _Noop: return self
     def inc(self, amount: float = 1) -> None: pass
     def observe(self, amount: float) -> None: pass
     def set(self, value: float) -> None: pass
@@ -93,7 +93,11 @@ class NexusMetrics:
     def _init(self) -> None:
         try:
             from prometheus_client import (
-                Counter, Gauge, Histogram, CollectorRegistry, CONTENT_TYPE_LATEST
+                CONTENT_TYPE_LATEST,
+                CollectorRegistry,
+                Counter,
+                Gauge,
+                Histogram,
             )
             self._registry = CollectorRegistry()
             self._ct       = CONTENT_TYPE_LATEST
@@ -269,7 +273,7 @@ class NexusMetrics:
         except Exception as exc:
             logger.debug(f"[NexusMetrics] KPI update error: {exc}")
 
-    def update_from_runbook_stats(self, all_stats: Dict[str, Any]) -> None:
+    def update_from_runbook_stats(self, all_stats: dict[str, Any]) -> None:
         """Update per-runbook success rate gauges (call from FeedbackLoop)."""
         for rb_id, stats in all_stats.items():
             try:
@@ -279,7 +283,7 @@ class NexusMetrics:
             except Exception:
                 pass
 
-    def update_from_adjustments(self, adjustments: Dict[str, float]) -> None:
+    def update_from_adjustments(self, adjustments: dict[str, float]) -> None:
         """Update per-runbook KB adjustment gauges (call from FeedbackLoop)."""
         for rb_id, delta in adjustments.items():
             try:
@@ -300,7 +304,7 @@ class NexusMetrics:
 # Module-level singleton — import this
 # ──────────────────────────────────────────────────────────────────────────────
 
-_instance: Optional[NexusMetrics] = None
+_instance: NexusMetrics | None = None
 _singleton_lock = threading.Lock()
 
 

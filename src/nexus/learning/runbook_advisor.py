@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from nexus.learning.outcome_store import OutcomeStore, RunbookStats, SystemKPIs
 
@@ -70,9 +70,9 @@ class RunbookRecommendation:
     recommendation:   str
     message:          str
     suggested_action: str
-    evidence:         Dict[str, Any] = field(default_factory=dict)
+    evidence:         dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "runbook_id":       self.runbook_id,
             "severity":         self.severity,
@@ -97,21 +97,21 @@ class RunbookAdvisor:
         outcome_store: Used for time-series queries (7-day vs 30-day comparison).
     """
 
-    def __init__(self, outcome_store: Optional[OutcomeStore] = None):
+    def __init__(self, outcome_store: OutcomeStore | None = None):
         self._store = outcome_store
 
     def analyze(
         self,
-        all_stats:  Dict[str, RunbookStats],
-        system_kpis: Optional[SystemKPIs] = None,
-    ) -> List[RunbookRecommendation]:
+        all_stats:  dict[str, RunbookStats],
+        system_kpis: SystemKPIs | None = None,
+    ) -> list[RunbookRecommendation]:
         """
         Run all advisory rules against the current runbook statistics.
         Returns a list of recommendations, sorted by severity (action_required first).
         """
-        recs: List[RunbookRecommendation] = []
+        recs: list[RunbookRecommendation] = []
 
-        for rb_id, stats in all_stats.items():
+        for _rb_id, stats in all_stats.items():
             recs.extend(self._check_runbook(stats))
 
         if system_kpis:
@@ -134,8 +134,8 @@ class RunbookAdvisor:
 
     # ── Per-runbook rules ─────────────────────────────────────────────────────
 
-    def _check_runbook(self, stats: RunbookStats) -> List[RunbookRecommendation]:
-        recs: List[RunbookRecommendation] = []
+    def _check_runbook(self, stats: RunbookStats) -> list[RunbookRecommendation]:
+        recs: list[RunbookRecommendation] = []
         n     = stats.completed
         rate  = stats.success_rate
         rb_id = stats.runbook_id
@@ -221,8 +221,8 @@ class RunbookAdvisor:
 
     # ── System-level rules ────────────────────────────────────────────────────
 
-    def _check_system(self, kpis: SystemKPIs) -> List[RunbookRecommendation]:
-        recs: List[RunbookRecommendation] = []
+    def _check_system(self, kpis: SystemKPIs) -> list[RunbookRecommendation]:
+        recs: list[RunbookRecommendation] = []
 
         # High false-heal rate across all runbooks
         if kpis.false_heal_rate > 0.40 and kpis.total_actions >= 10:
@@ -260,7 +260,7 @@ class RunbookAdvisor:
 
     # ── Async queries for time-series analysis ────────────────────────────────
 
-    async def find_chronic_targets(self) -> List[RunbookRecommendation]:
+    async def find_chronic_targets(self) -> list[RunbookRecommendation]:
         """
         Identify resources that keep needing the same healing action.
         These are permanent failures that runbooks alone cannot fix.

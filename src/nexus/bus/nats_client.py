@@ -27,12 +27,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Awaitable, Callable, List, Optional
+from collections.abc import Awaitable, Callable
 
 import nats
 from nats.aio.client import Client as NATSConnection
 from nats.js import JetStreamContext
-from nats.js.api import StreamConfig, RetentionPolicy, StorageType
+from nats.js.api import RetentionPolicy, StorageType, StreamConfig
 
 from nexus.bus.incident_event import IncidentEvent
 
@@ -81,9 +81,9 @@ class NATSClient:
         self._url               = nats_url
         self._connect_timeout   = connect_timeout
         self._reconnect_attempts = reconnect_attempts
-        self._nc: Optional[NATSConnection] = None
-        self._js: Optional[JetStreamContext] = None
-        self._subscribers: List[asyncio.Task] = []
+        self._nc: NATSConnection | None = None
+        self._js: JetStreamContext | None = None
+        self._subscribers: list[asyncio.Task] = []
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -111,7 +111,7 @@ class NATSClient:
             await self._nc.drain()
         logger.info("[NATS] Connection closed")
 
-    async def __aenter__(self) -> "NATSClient":
+    async def __aenter__(self) -> NATSClient:
         await self.connect()
         return self
 
@@ -166,8 +166,8 @@ class NATSClient:
         handler: HandlerType,
         agent_filter: str = ">",
         signal_filter: str = ">",
-        durable_name: Optional[str] = None,
-        queue_group: Optional[str] = None,
+        durable_name: str | None = None,
+        queue_group: str | None = None,
     ) -> None:
         """
         Subscribe to incident events matching the given filters.

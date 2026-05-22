@@ -37,7 +37,6 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
 
 from nexus.agents.base_agent import BaseAgent
 from nexus.bus.incident_event import (
@@ -63,7 +62,7 @@ class DBConnectionStats:
     active_connections: int
     max_connections:    int
     utilization_pct:    float
-    blocking_query:     Optional[str] = None
+    blocking_query:     str | None = None
 
 
 @dataclass
@@ -71,14 +70,14 @@ class SlowQuery:
     query_digest:   str
     avg_latency_ms: float
     calls:          int
-    database:       Optional[str] = None
+    database:       str | None = None
 
 
 @dataclass
 class QuerySnapshot:
     """Timestamped per-table/collection query volume — input for DBTrafficCorrelator."""
     db_engine:    str
-    table_counts: Dict[str, int] = field(default_factory=dict)   # table → read+write count
+    table_counts: dict[str, int] = field(default_factory=dict)   # table → read+write count
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -128,7 +127,7 @@ class PostgresAdapter:
                 raise
         return self._pool
 
-    async def connection_stats(self) -> Optional[DBConnectionStats]:
+    async def connection_stats(self) -> DBConnectionStats | None:
         try:
             pool = await self._get_pool()
             async with pool.acquire() as conn:
@@ -160,7 +159,7 @@ class PostgresAdapter:
             logger.warning(f"[DBAgent/Postgres] connection_stats failed: {exc}")
             return None
 
-    async def slow_queries(self, threshold_ms: float = 1000.0) -> List[SlowQuery]:
+    async def slow_queries(self, threshold_ms: float = 1000.0) -> list[SlowQuery]:
         try:
             pool = await self._get_pool()
             async with pool.acquire() as conn:
@@ -254,7 +253,7 @@ class MySQLAdapter:
                 raise
         return self._pool
 
-    async def connection_stats(self) -> Optional[DBConnectionStats]:
+    async def connection_stats(self) -> DBConnectionStats | None:
         try:
             pool = await self._get_pool()
             async with pool.acquire() as conn:
@@ -277,7 +276,7 @@ class MySQLAdapter:
             logger.warning(f"[DBAgent/MySQL] connection_stats failed: {exc}")
             return None
 
-    async def slow_queries(self, threshold_ms: float = 1000.0) -> List[SlowQuery]:
+    async def slow_queries(self, threshold_ms: float = 1000.0) -> list[SlowQuery]:
         try:
             pool = await self._get_pool()
             async with pool.acquire() as conn:
@@ -344,7 +343,7 @@ class MongoDBAdapter:
                 raise
         return self._client
 
-    async def connection_stats(self) -> Optional[DBConnectionStats]:
+    async def connection_stats(self) -> DBConnectionStats | None:
         try:
             client = self._get_client()
             status = await client[self.database].command("serverStatus")
@@ -363,7 +362,7 @@ class MongoDBAdapter:
             logger.warning(f"[DBAgent/MongoDB] connection_stats failed: {exc}")
             return None
 
-    async def slow_queries(self, threshold_ms: float = 1000.0) -> List[SlowQuery]:
+    async def slow_queries(self, threshold_ms: float = 1000.0) -> list[SlowQuery]:
         try:
             client = self._get_client()
             ops    = await client[self.database].command(
@@ -414,12 +413,12 @@ class DBAgent(BaseAgent):
     def __init__(
         self,
         nats_client: NATSClient,
-        adapters: List[_AdapterType],
+        adapters: list[_AdapterType],
         connection_threshold_pct: float = 80.0,
         slow_query_threshold_ms: float = 1000.0,
         poll_interval_seconds: float = 30.0,
-        namespace: Optional[str] = None,
-        deployment_name: Optional[str] = None,
+        namespace: str | None = None,
+        deployment_name: str | None = None,
     ):
         super().__init__(
             nats_client           = nats_client,
@@ -434,8 +433,8 @@ class DBAgent(BaseAgent):
 
     # ── Per-adapter checks ────────────────────────────────────────────────────
 
-    async def _check_adapter(self, adapter: _AdapterType) -> List[IncidentEvent]:
-        events: List[IncidentEvent] = []
+    async def _check_adapter(self, adapter: _AdapterType) -> list[IncidentEvent]:
+        events: list[IncidentEvent] = []
 
         # Connection stats
         stats = await adapter.connection_stats()
@@ -508,12 +507,12 @@ class DBAgent(BaseAgent):
 
     # ── BaseAgent interface ───────────────────────────────────────────────────
 
-    async def sense(self) -> List[IncidentEvent]:
+    async def sense(self) -> list[IncidentEvent]:
         results = await asyncio.gather(
             *[self._check_adapter(adapter) for adapter in self.adapters],
             return_exceptions=True,
         )
-        events: List[IncidentEvent] = []
+        events: list[IncidentEvent] = []
         for r in results:
             if isinstance(r, Exception):
                 logger.warning(f"[DBAgent] Adapter check failed: {r}")
@@ -542,7 +541,7 @@ def db_agent_from_env(nats_client: NATSClient) -> DBAgent:
         NEXUS_MYSQL_HOST / PORT / DB / USER / PASSWORD
         NEXUS_MONGODB_URI / DB
     """
-    adapters: List[_AdapterType] = []
+    adapters: list[_AdapterType] = []
 
     if os.getenv("NEXUS_POSTGRES_HOST"):
         adapters.append(PostgresAdapter(

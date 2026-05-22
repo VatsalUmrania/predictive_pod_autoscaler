@@ -37,9 +37,8 @@ import asyncio
 import json
 import logging
 import os
-import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any
 
 from nexus.reasoning.incident_cluster import IncidentCluster
 
@@ -67,11 +66,11 @@ class RCAResult:
     root_cause:    str
     failure_class: str
     healing_level: int
-    runbook_id:    Optional[str]
+    runbook_id:    str | None
     confidence:    float
     reasoning:     str
     source:        str   # "gemini" | "rule_based"
-    actions_to_avoid: List[str] = field(default_factory=list)
+    actions_to_avoid: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         # Clamp and validate
@@ -80,7 +79,7 @@ class RCAResult:
         if self.failure_class not in VALID_FAILURE_CLASSES:
             self.failure_class = "unknown"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "root_cause":        self.root_cause,
             "failure_class":     self.failure_class,
@@ -110,7 +109,7 @@ class RCAResult:
 # partial_ok=False means ALL signals required (AND match).
 # Rules are evaluated top-to-bottom; first match wins.
 
-_RULES: List[Tuple[FrozenSet[str], bool, Dict[str, Any]]] = [
+_RULES: list[tuple[frozenset[str], bool, dict[str, Any]]] = [
 
     # ── Highest confidence first ───────────────────────────────────────────────
 
@@ -397,7 +396,7 @@ class RCAEngine:
 
     def __init__(
         self,
-        api_key:      Optional[str] = None,
+        api_key:      str | None = None,
         model:        str  = "gemini",
         timeout_s:    float = 10.0,
         use_fallback: bool  = True,
@@ -455,7 +454,7 @@ class RCAEngine:
         )
         return result
 
-    def _parse_response(self, raw: str) -> Optional[RCAResult]:
+    def _parse_response(self, raw: str) -> RCAResult | None:
         """Parse LLM JSON response into an RCAResult."""
         import re as _re
         clean = _re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()

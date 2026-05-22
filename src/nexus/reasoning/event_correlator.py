@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
 
 from nexus.bus.incident_event import IncidentEvent
 from nexus.reasoning.incident_cluster import IncidentCluster
@@ -72,7 +71,7 @@ class EventCorrelator:
         self._flush_timeout = flush_timeout_s
 
         # namespace → open IncidentCluster
-        self._open: Dict[str, IncidentCluster] = {}
+        self._open: dict[str, IncidentCluster] = {}
 
         # De-duplication set (cluster_id → already emitted)
         self._emitted: set = set()
@@ -83,7 +82,7 @@ class EventCorrelator:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def ingest(self, event: IncidentEvent) -> Optional[IncidentCluster]:
+    def ingest(self, event: IncidentEvent) -> IncidentCluster | None:
         """
         Ingest a single event synchronously.
 
@@ -156,15 +155,15 @@ class EventCorrelator:
 
         return None
 
-    def flush_stale(self) -> List[IncidentCluster]:
+    def flush_stale(self) -> list[IncidentCluster]:
         """
         Return all clusters that have been open longer than flush_timeout_s.
         Called by the orchestrator's background flush loop every 30s.
         Returns a list of IncidentClusters ready for RCA.
         """
         now    = datetime.now(timezone.utc)
-        stale_keys: List[str] = []
-        ready:  List[IncidentCluster] = []
+        stale_keys: list[str] = []
+        ready:  list[IncidentCluster] = []
 
         for key, cluster in self._open.items():
             age = (now - cluster.created_at).total_seconds()

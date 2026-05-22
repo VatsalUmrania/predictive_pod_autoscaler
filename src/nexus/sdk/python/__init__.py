@@ -43,7 +43,10 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Optional
+import re as _re
+import threading as _threading
+import time as _time
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -88,16 +91,16 @@ class _SelfHeal:
     """
 
     def __init__(self) -> None:
-        self._token:    Optional[str] = None
+        self._token:    str | None = None
         self._nexus_url: str = os.getenv("NEXUS_API_URL", "http://localhost:8080")
-        self._app_name: Optional[str] = None
+        self._app_name: str | None = None
         self._initialized = False
 
     def init(
         self,
         app:       Any,
-        token:     Optional[str]  = None,
-        nexus_url: Optional[str]  = None,
+        token:     str | None  = None,
+        nexus_url: str | None  = None,
         wsgi:      bool           = False,
         slow_threshold_ms: int    = 500,
     ) -> Any:
@@ -123,8 +126,8 @@ class _SelfHeal:
                 "Set SELFHEAL_TOKEN or call SelfHeal.init(token=...)."
             )
 
-        MW = _get_middleware()
-        wrapped = MW(
+        mw = _get_middleware()
+        wrapped = mw(
             app             = app,
             token           = self._token,
             nexus_url       = self._nexus_url,
@@ -146,7 +149,7 @@ class _SelfHeal:
     def critical(
         self,
         never_shed:          bool         = False,
-        fallback:            Optional[str]= None,
+        fallback:            str | None= None,
         alert_sre_after:     int          = 3,
         max_healing_actions: int          = 5,
     ):
@@ -179,7 +182,7 @@ class _SelfHeal:
         label:            str           = "",
         spike_indicator:  bool          = False,
         cache_on_failure: bool          = False,
-        timeout_ms:       Optional[int] = None,
+        timeout_ms:       int | None = None,
     ):
         """
         DB query annotation — marks a query function for NEXUS tracking.
@@ -217,7 +220,7 @@ class _SelfHeal:
         except Exception as exc:
             logger.debug(f"[SelfHeal] send_event failed: {exc}")
 
-    def wrapDB(
+    def wrap_db(
         self,
         engine_or_pool: Any,
         slow_ms:        int  = 200,
@@ -264,10 +267,6 @@ class _SelfHeal:
 # ──────────────────────────────────────────────────────────────────────────────
 # _DBWrapper — transparent proxy that instruments .execute() and .query()
 # ──────────────────────────────────────────────────────────────────────────────
-
-import re as _re
-import time as _time
-import threading as _threading
 
 _SQL_TABLE_RE = _re.compile(
     r'(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+["\' `]?(\w+)["\' `]?', _re.IGNORECASE

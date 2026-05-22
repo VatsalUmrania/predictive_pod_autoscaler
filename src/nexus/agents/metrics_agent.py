@@ -35,7 +35,6 @@ import math
 import os
 import time
 from collections import deque
-from typing import Dict, List, Optional, Tuple
 
 import httpx
 
@@ -56,7 +55,7 @@ logger = logging.getLogger(__name__)
 # Feature bounds — clamp before passing to any model or rule
 # ──────────────────────────────────────────────────────────────────────────────
 
-_BOUNDS: Dict[str, Tuple[float, float]] = {
+_BOUNDS: dict[str, tuple[float, float]] = {
     "cpu_utilization_pct":    (0.0,  200.0),
     "memory_utilization_pct": (0.0,  110.0),
     "error_rate":             (0.0,    1.0),
@@ -87,7 +86,7 @@ class _PrometheusCircuitBreaker:
         self.reset_timeout = reset_timeout
         self._failures     = 0
         self._state        = self.CLOSED
-        self._opened_at: Optional[float] = None
+        self._opened_at: float | None = None
 
     @property
     def state(self) -> str:
@@ -135,7 +134,7 @@ class MetricsAgent(BaseAgent):
     """
 
     # Default PromQL queries
-    QUERIES: Dict[str, str] = {
+    QUERIES: dict[str, str] = {
         "cpu_utilization_pct": (
             'avg(rate(container_cpu_usage_seconds_total{container!=""}[2m])) * 100'
         ),
@@ -161,13 +160,13 @@ class MetricsAgent(BaseAgent):
     def __init__(
         self,
         nats_client: NATSClient,
-        prometheus_url: Optional[str] = None,
+        prometheus_url: str | None = None,
         poll_interval_seconds: float = 30.0,
         http_timeout: float = 5.0,
         cb_failure_threshold: int = 5,
         cb_reset_timeout: float = 60.0,
-        namespace: Optional[str] = None,
-        deployment_name: Optional[str] = None,
+        namespace: str | None = None,
+        deployment_name: str | None = None,
     ):
         super().__init__(
             nats_client           = nats_client,
@@ -193,7 +192,7 @@ class MetricsAgent(BaseAgent):
 
     # ── Prometheus query helpers ───────────────────────────────────────────────
 
-    async def _query(self, name: str, promql: str) -> Optional[float]:
+    async def _query(self, name: str, promql: str) -> float | None:
         """Execute a single PromQL instant query, respecting the circuit breaker."""
         if not self.cb.can_attempt():
             return None
@@ -238,7 +237,7 @@ class MetricsAgent(BaseAgent):
 
         return None
 
-    async def _query_all(self) -> Dict[str, Optional[float]]:
+    async def _query_all(self) -> dict[str, float | None]:
         """Run all metric queries concurrently."""
         tasks = {
             name: asyncio.create_task(self._query(name, promql))
@@ -248,16 +247,16 @@ class MetricsAgent(BaseAgent):
 
     # ── Threshold checks ──────────────────────────────────────────────────────
 
-    def _check(self, metrics: Dict[str, Optional[float]]) -> List[IncidentEvent]:
-        events: List[IncidentEvent] = []
+    def _check(self, metrics: dict[str, float | None]) -> list[IncidentEvent]:
+        events: list[IncidentEvent] = []
 
         def _make_anomaly_event(
             metric_name: str,
             current: float,
             threshold: float,
             severity: Severity,
-            runbook: Optional[str] = None,
-            healing_level: Optional[int] = None,
+            runbook: str | None = None,
+            healing_level: int | None = None,
             confidence: float = 0.85,
         ) -> IncidentEvent:
             score = min(abs(current - threshold) / max(threshold, 1e-6), 1.0)
@@ -348,7 +347,7 @@ class MetricsAgent(BaseAgent):
 
     # ── BaseAgent interface ───────────────────────────────────────────────────
 
-    async def sense(self) -> List[IncidentEvent]:
+    async def sense(self) -> list[IncidentEvent]:
         metrics = await self._query_all()
 
         # All None + CB open → emit single METRIC_UNAVAILABLE

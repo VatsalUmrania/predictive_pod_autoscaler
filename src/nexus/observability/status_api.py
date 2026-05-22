@@ -49,23 +49,23 @@ Usage:
 from __future__ import annotations
 
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
 
 from nexus.observability.metrics import get_metrics
+
 
 # Phase 8 integration routers (imported lazily to avoid circular deps)
 def _include_integration_routers(app: FastAPI) -> None:
     try:
+        from nexus.integration.dashboard import router as dev_router
         from nexus.integration.sdk_ingest import router as sdk_router
-        from nexus.integration.dashboard  import router as dev_router
         app.include_router(sdk_router)
         app.include_router(dev_router)
     except ImportError as exc:
@@ -109,7 +109,8 @@ context = NexusContext()
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Initialize async resources (TokenStore + NATS) on startup."""
-    import logging, os
+    import logging
+    import os
     _log = logging.getLogger(__name__)
 
     # ── TokenStore ─────────────────────────────────────────────────────────────
@@ -198,7 +199,7 @@ def serve_dashboard() -> Response:
 # ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["system"])
-def health() -> Dict[str, Any]:
+def health() -> dict[str, Any]:
     """Liveness probe — always returns 200 if the server is up."""
     return {
         "status":           "ok",
@@ -209,9 +210,9 @@ def health() -> Dict[str, Any]:
 
 
 @app.get("/status", tags=["system"])
-async def status() -> Dict[str, Any]:
+async def status() -> dict[str, Any]:
     """Full system snapshot — orchestrator, governance, prescaler, learning."""
-    out: Dict[str, Any] = {
+    out: dict[str, Any] = {
         "uptime_seconds": round(time.monotonic() - _start_time, 1),
         "timestamp":      datetime.now(timezone.utc).isoformat(),
     }
@@ -247,7 +248,7 @@ def prometheus_metrics() -> Response:
 # ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/rca/last", tags=["reasoning"])
-def last_rca(n: int = 10) -> List[Dict[str, Any]]:
+def last_rca(n: int = 10) -> list[dict[str, Any]]:
     """Return the N most recent RCA decisions from the Orchestrator."""
     orc = _require(context.orchestrator, "NexusOrchestrator")
     return orc.last_rca_results(n)
@@ -258,7 +259,7 @@ def last_rca(n: int = 10) -> List[Dict[str, Any]]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/runbooks/stats", tags=["governance"])
-async def runbook_stats(days: int = 30) -> Dict[str, Any]:
+async def runbook_stats(days: int = 30) -> dict[str, Any]:
     """Per-runbook statistics from the AuditTrail (success_rate, false_heal_rate)."""
     store = _require(context.outcome_store, "OutcomeStore")
     all_stats = await store.get_all_runbook_stats(days=days)
@@ -266,7 +267,7 @@ async def runbook_stats(days: int = 30) -> Dict[str, Any]:
 
 
 @app.get("/runbooks/list", tags=["governance"])
-def runbook_list() -> List[str]:
+def runbook_list() -> list[str]:
     """List all loaded runbook IDs from RunbookLibrary."""
     lib = _require(context.runbook_library, "RunbookLibrary")
     return list(lib._runbooks.keys())
@@ -277,7 +278,7 @@ def runbook_list() -> List[str]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/prescaler", tags=["predictive"])
-def prescaler_status() -> Dict[str, Any]:
+def prescaler_status() -> dict[str, Any]:
     """Prescaler statistics, mode, and recent decisions."""
     p = _require(context.prescaler, "Prescaler")
     stats = p.stats
@@ -299,7 +300,7 @@ def prescaler_status() -> Dict[str, Any]:
 
 
 @app.post("/prescaler/mode/{mode}", tags=["predictive"])
-def prescaler_set_mode(mode: str) -> Dict[str, str]:
+def prescaler_set_mode(mode: str) -> dict[str, str]:
     """Change prescaler autonomy mode: shadow | advisory | autonomous."""
     from nexus.predictive.prescaler import PrescaleMode
     p = _require(context.prescaler, "Prescaler")
@@ -317,14 +318,14 @@ def prescaler_set_mode(mode: str) -> Dict[str, str]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/learning", tags=["learning"])
-def learning_status() -> Dict[str, Any]:
+def learning_status() -> dict[str, Any]:
     """FeedbackLoop status and latest system KPIs."""
     fl = _require(context.feedback_loop, "FeedbackLoop")
     return fl.status
 
 
 @app.post("/learning/run", tags=["learning"])
-async def learning_run() -> Dict[str, Any]:
+async def learning_run() -> dict[str, Any]:
     """Trigger an immediate learning feedback cycle (useful for testing)."""
     fl = _require(context.feedback_loop, "FeedbackLoop")
     result = await fl.run_now()
@@ -332,7 +333,7 @@ async def learning_run() -> Dict[str, Any]:
 
 
 @app.get("/knowledge", tags=["learning"])
-async def knowledge_records() -> List[Dict[str, Any]]:
+async def knowledge_records() -> list[dict[str, Any]]:
     """All KnowledgeBase confidence adjustment records."""
     kb = _require(context.knowledge_base, "KnowledgeBase")
     records = await kb.get_all_records()
@@ -340,7 +341,7 @@ async def knowledge_records() -> List[Dict[str, Any]]:
 
 
 @app.get("/advisor", tags=["learning"])
-async def advisor_recommendations(days: int = 30) -> List[Dict[str, Any]]:
+async def advisor_recommendations(days: int = 30) -> list[dict[str, Any]]:
     """Run the RunbookAdvisor and return current recommendations."""
     from nexus.learning.runbook_advisor import RunbookAdvisor
     store = _require(context.outcome_store, "OutcomeStore")
@@ -358,7 +359,7 @@ async def advisor_recommendations(days: int = 30) -> List[Dict[str, Any]]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/audit/tail", tags=["governance"])
-async def audit_tail(n: int = 20) -> List[Dict[str, Any]]:
+async def audit_tail(n: int = 20) -> list[dict[str, Any]]:
     """Return the N most recent audit records from the AuditTrail."""
     at = _require(context.audit_trail, "AuditTrail")
     rows = await at.query_recent(limit=n)
@@ -373,7 +374,7 @@ async def audit_tail(n: int = 20) -> List[Dict[str, Any]]:
 
 
 @app.get("/audit/{incident_id}", tags=["governance"])
-async def audit_by_incident(incident_id: str) -> List[Dict[str, Any]]:
+async def audit_by_incident(incident_id: str) -> list[dict[str, Any]]:
     """Return all audit records for a specific incident/correlation ID."""
     at = _require(context.audit_trail, "AuditTrail")
     return await at.query_by_incident(incident_id)
@@ -384,7 +385,7 @@ async def audit_by_incident(incident_id: str) -> List[Dict[str, Any]]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 @app.post("/approve/{action_id}", tags=["governance"])
-async def approve_action(action_id: str) -> Dict[str, str]:
+async def approve_action(action_id: str) -> dict[str, str]:
     """
     Approve a pending human-review action (from Phase 3 HumanApprovalQueue).
     Triggers the queued executor callback.
@@ -398,11 +399,11 @@ async def approve_action(action_id: str) -> Dict[str, str]:
             return {"status": "approved", "action_id": action_id}
         raise HTTPException(status_code=404, detail=f"Action {action_id!r} not found in approval queue")
     except AttributeError:
-        raise HTTPException(status_code=503, detail="HumanApprovalQueue not accessible")
+        raise HTTPException(status_code=503, detail="HumanApprovalQueue not accessible") from None
 
 
 @app.get("/approvals/pending", tags=["governance"])
-async def pending_approvals() -> List[Dict[str, Any]]:
+async def pending_approvals() -> list[dict[str, Any]]:
     """List all actions currently waiting in the HumanApprovalQueue."""
     orc = _require(context.orchestrator, "NexusOrchestrator")
     try:

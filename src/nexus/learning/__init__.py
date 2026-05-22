@@ -3,10 +3,10 @@
 # Closes the act → verify → learn loop
 # AuditTrail → OutcomeStore → KnowledgeBase → ConfidenceScorer feedback
 
-from nexus.learning.outcome_store   import OutcomeStore, OutcomeRecord, RunbookStats, SystemKPIs
-from nexus.learning.knowledge_base  import KnowledgeBase, AdjustmentRecord
+from nexus.learning.feedback_loop import FeedbackLoop, build_feedback_loop
+from nexus.learning.knowledge_base import AdjustmentRecord, KnowledgeBase
+from nexus.learning.outcome_store import OutcomeRecord, OutcomeStore, RunbookStats, SystemKPIs
 from nexus.learning.runbook_advisor import RunbookAdvisor, RunbookRecommendation
-from nexus.learning.feedback_loop   import FeedbackLoop, build_feedback_loop
 
 __all__ = [
     # Outcome store

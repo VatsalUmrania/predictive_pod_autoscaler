@@ -15,12 +15,9 @@ import time
 from typing import Any
 
 import kopf
-from ppa.operator.metrics import PpaOperatorMetrics
 
 from ppa.config import (
     DEFAULT_CAPACITY_PER_POD,
-    DEFAULT_SCALE_DOWN_RATE,
-    DEFAULT_SCALE_UP_RATE,
     FEATURE_COLUMNS,
     STABILIZATION_STEPS,
     STABILIZATION_TOLERANCE,
@@ -28,6 +25,7 @@ from ppa.config import (
 )
 from ppa.domain import CRState, calculate_replicas
 from ppa.operator.features import PrometheusCircuitBreakerTripped, build_feature_vector
+from ppa.operator.metrics import PpaOperatorMetrics
 from ppa.operator.scaler import scale_deployment
 
 logger = logging.getLogger("ppa.operator.state_machine")
@@ -56,14 +54,14 @@ def _update_status(patch: kopf.Patch, key: str, value: Any) -> None:
 
 def _record_scale_failure(state: CRState, patch: kopf.Patch, reason: str) -> None:
     """Record a scaling failure and calculate backoff."""
-    SCALE_BACKOFF_INITIAL_SECONDS = 30.0
-    SCALE_BACKOFF_MAX_SECONDS = 300.0
-    SCALE_BACKOFF_JITTER = 0.2
+    scale_backoff_initial_seconds = 30.0
+    scale_backoff_max_seconds = 300.0
+    scale_backoff_jitter = 0.2
 
     state.scale_failures += 1
     state.last_scale_failure_time = time.time()
-    base = min(SCALE_BACKOFF_MAX_SECONDS, SCALE_BACKOFF_INITIAL_SECONDS * (2 ** max(state.scale_failures - 1, 0)))
-    state.next_scale_retry_time = state.last_scale_failure_time + base * random.uniform(1.0 - SCALE_BACKOFF_JITTER, 1.0 + SCALE_BACKOFF_JITTER)
+    base = min(scale_backoff_max_seconds, scale_backoff_initial_seconds * (2 ** max(state.scale_failures - 1, 0)))
+    state.next_scale_retry_time = state.last_scale_failure_time + base * random.uniform(1.0 - scale_backoff_jitter, 1.0 + scale_backoff_jitter)
     state.last_scale_error = reason
     _update_status(patch, "lastScaleError", reason)
     _update_status(patch, "scaleBackoffUntil", state.next_scale_retry_time)
@@ -368,8 +366,8 @@ class ScalerStateMachine:
 
         # Calculate candidate replicas with safety factor
         self.state.last_prediction = predicted_load
-        capacity = self.config["capacity"] if self.config["capacity"] is not None else DEFAULT_CAPACITY_PER_POD
-        inflated = predicted_load * self.config["safety_factor"]
+        self.config["capacity"] if self.config["capacity"] is not None else DEFAULT_CAPACITY_PER_POD
+        predicted_load * self.config["safety_factor"]
 
         candidate = calculate_replicas(
             predicted_load,
@@ -385,7 +383,7 @@ class ScalerStateMachine:
         # Write prediction into shared registry
         deploy_key = (self.config["target_ns"], self.config["target"])
         horizon = self.config["target_horizon"]
-        now = time.time()
+        time.time()
         with _prediction_registry_lock:
             if deploy_key not in _prediction_registry:
                 _prediction_registry[deploy_key] = {}
@@ -426,7 +424,7 @@ class ScalerStateMachine:
             valid_predictions: list[float] = []
             with _prediction_registry_lock:
                 registry = _prediction_registry.get(deploy_key, {})
-                for h, val in registry.items():
+                for _h, val in registry.items():
                     valid_predictions.append(val)
 
             if len(valid_predictions) >= 2:

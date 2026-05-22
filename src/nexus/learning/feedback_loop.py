@@ -32,7 +32,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
 from nexus.bus.nats_client import NATSClient
@@ -62,7 +62,7 @@ class FeedbackLoop:
         outcome_store:     OutcomeStore,
         knowledge_base:    KnowledgeBase,
         confidence_scorer: ConfidenceScorer,
-        nats_client:       Optional[NATSClient] = None,
+        nats_client:       NATSClient | None = None,
         interval_s:        float = 300.0,
         window_days:       int   = 30,
     ):
@@ -76,14 +76,14 @@ class FeedbackLoop:
         self._advisor      = RunbookAdvisor(outcome_store=outcome_store)
 
         # Background task handle
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
 
         # Observability
         self._cycles_run      = 0
-        self._last_cycle_at:  Optional[float] = None
-        self._last_kpis:      Optional[Dict[str, Any]] = None
-        self._last_recs:      List[Dict[str, Any]] = []
-        self._start_time:     Optional[float] = None
+        self._last_cycle_at:  float | None = None
+        self._last_kpis:      dict[str, Any] | None = None
+        self._last_recs:      list[dict[str, Any]] = []
+        self._start_time:     float | None = None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -149,7 +149,7 @@ class FeedbackLoop:
         )
 
         # ── 1. Query AuditTrail ───────────────────────────────────────────────
-        all_stats:  Dict[str, RunbookStats] = await self._store.get_all_runbook_stats(
+        all_stats:  dict[str, RunbookStats] = await self._store.get_all_runbook_stats(
             days=self._window_days
         )
         system_kpis: SystemKPIs = await self._store.get_system_kpis(
@@ -166,7 +166,7 @@ class FeedbackLoop:
             )
 
         # ── 2. Persist KnowledgeBase adjustments ──────────────────────────────
-        adjustments: Dict[str, float] = {}
+        adjustments: dict[str, float] = {}
         if all_stats:
             adjustments = await self._kb.bulk_update(all_stats)
 
@@ -175,7 +175,7 @@ class FeedbackLoop:
         self._scorer.set_historical_boosts(all_adjustments)
 
         # ── 4. Run RunbookAdvisor ─────────────────────────────────────────────
-        recs: List[RunbookRecommendation] = self._advisor.analyze(all_stats, system_kpis)
+        recs: list[RunbookRecommendation] = self._advisor.analyze(all_stats, system_kpis)
 
         # Also check chronic targets (async)
         chronic = await self._advisor.find_chronic_targets()
@@ -221,8 +221,8 @@ class FeedbackLoop:
     async def _publish_summary(
         self,
         kpis:         SystemKPIs,
-        recs:         List[RunbookRecommendation],
-        adjustments:  Dict[str, float],
+        recs:         list[RunbookRecommendation],
+        adjustments:  dict[str, float],
         cycle_ms:     int,
     ) -> None:
         """Publish a LEARNING_CYCLE_COMPLETE event to NATS."""
@@ -249,7 +249,7 @@ class FeedbackLoop:
 
     # ── Manual trigger ────────────────────────────────────────────────────────
 
-    async def run_now(self) -> Dict[str, Any]:
+    async def run_now(self) -> dict[str, Any]:
         """
         Trigger an immediate learning cycle (useful for testing or CLI invocation).
         Returns the cycle summary.
@@ -264,7 +264,7 @@ class FeedbackLoop:
     # ── Observability ─────────────────────────────────────────────────────────
 
     @property
-    def status(self) -> Dict[str, Any]:
+    def status(self) -> dict[str, Any]:
         uptime = time.monotonic() - self._start_time if self._start_time else 0.0
         return {
             "cycles_run":       self._cycles_run,
@@ -280,7 +280,7 @@ class FeedbackLoop:
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _infer_signals_from_runbook(runbook_id: str) -> Optional[set]:
+def _infer_signals_from_runbook(runbook_id: str) -> set | None:
     """
     Infer the likely triggering signal types from a runbook ID.
     Used for Phase 6 pattern recording until Phase 7 links correlation_ids.
@@ -301,9 +301,9 @@ def _infer_signals_from_runbook(runbook_id: str) -> Optional[set]:
 
 async def build_feedback_loop(
     confidence_scorer: ConfidenceScorer,
-    nats_client:       Optional[NATSClient] = None,
-    audit_db_path:     Optional[str] = None,
-    knowledge_db_path: Optional[str] = None,
+    nats_client:       NATSClient | None = None,
+    audit_db_path:     str | None = None,
+    knowledge_db_path: str | None = None,
     interval_s:        float = 300.0,
 ) -> FeedbackLoop:
     """

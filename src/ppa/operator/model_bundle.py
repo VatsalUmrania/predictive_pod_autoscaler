@@ -48,7 +48,7 @@ def _jittered_delay(attempt: int) -> float:
         LOAD_RETRY_MAX_DELAY_SECONDS,
         LOAD_RETRY_INITIAL_DELAY_SECONDS * (2**attempt),
     )
-    return base * random.uniform(1.0 - LOAD_RETRY_JITTER, 1.0 + LOAD_RETRY_JITTER)
+    return float(base * random.uniform(1.0 - LOAD_RETRY_JITTER, 1.0 + LOAD_RETRY_JITTER))
 
 
 def _sha256(path: Path) -> str:
@@ -63,7 +63,7 @@ def _read_metadata(path: Path | None) -> dict[str, Any]:
     if path is None:
         return {}
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text())  # type: ignore[no-any-return]
     except json.JSONDecodeError as exc:
         raise BundleValidationError(f"metadata corrupted: {path}: {exc}") from exc
     except OSError as exc:

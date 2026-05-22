@@ -35,7 +35,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
 from nexus.bus.nats_client import NATSClient
@@ -86,11 +86,11 @@ class NexusOrchestrator:
         # Observability
         self._clusters_processed = 0
         self._actions_dispatched = 0
-        self._rca_results: List[Dict[str, Any]] = []   # Last 100 RCA results for inspection
-        self._start_time: Optional[float] = None
+        self._rca_results: list[dict[str, Any]] = []   # Last 100 RCA results for inspection
+        self._start_time: float | None = None
 
         # Background task handles
-        self._flush_task:  Optional[asyncio.Task] = None
+        self._flush_task:  asyncio.Task | None = None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -345,7 +345,7 @@ class NexusOrchestrator:
             "governance_cb":      self.executor.ladder.governance_cb.status_dict(),
         }
 
-    def last_rca_results(self, n: int = 10) -> List[Dict[str, Any]]:
+    def last_rca_results(self, n: int = 10) -> list[dict[str, Any]]:
         """Return the N most recent RCA records (newest first)."""
         return list(reversed(self._rca_results[-n:]))
 
@@ -357,7 +357,7 @@ class NexusOrchestrator:
 def build_orchestrator(
     nats_client: NATSClient,
     executor: RunbookExecutor,
-    gemini_api_key: Optional[str] = None,
+    gemini_api_key: str | None = None,
     correlation_window_s: float = 60.0,
     quorum_events: int = 3,
     flush_interval_s: float = 30.0,

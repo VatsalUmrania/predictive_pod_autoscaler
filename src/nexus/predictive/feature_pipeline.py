@@ -32,7 +32,7 @@ import math
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # Feature bounds (clamp to training distribution)
 # ──────────────────────────────────────────────────────────────────────────────
 
-FEATURE_BOUNDS: Dict[str, Tuple[float, float]] = {
+FEATURE_BOUNDS: dict[str, tuple[float, float]] = {
     "cpu_utilization_pct":     (0.0,   100.0),
     "memory_utilization_pct":  (0.0,   100.0),
     "error_rate":              (0.0,   1.0),
@@ -68,11 +68,11 @@ class QuerySnapshot:
     """
     captured_at:  datetime
     db_engine:    str
-    table_counts: Dict[str, int] = field(default_factory=dict)
+    table_counts: dict[str, int] = field(default_factory=dict)
     """Raw cumulative counters per table (not rate — pipeline computes delta)."""
 
     @classmethod
-    def from_event_context(cls, context: Dict[str, Any]) -> Optional["QuerySnapshot"]:
+    def from_event_context(cls, context: dict[str, Any]) -> QuerySnapshot | None:
         """Parse a QuerySnapshot from a DBAgent event context dict."""
         table_counts = context.get("table_counts")
         db_engine    = context.get("db_engine", "unknown")
@@ -98,12 +98,12 @@ class FeatureVector:
     All values are clamped to FEATURE_BOUNDS.
     """
     timestamp:  datetime
-    features:   Dict[str, float] = field(default_factory=dict)
-    missing:    List[str] = field(default_factory=list)   # Features that were filled
+    features:   dict[str, float] = field(default_factory=dict)
+    missing:    list[str] = field(default_factory=list)   # Features that were filled
     has_db:     bool = False
     has_metrics: bool = False
 
-    def to_list(self, feature_names: List[str]) -> List[float]:
+    def to_list(self, feature_names: list[str]) -> list[float]:
         """Return a dense vector in the given feature order."""
         return [self.features.get(name, 0.0) for name in feature_names]
 
@@ -163,14 +163,14 @@ class FeaturePipeline:
         self._interval_s = interval_s
 
         # Rolling snapshot history: deque of QuerySnapshot
-        self._snapshots: Deque[QuerySnapshot] = deque(maxlen=snapshot_window)
+        self._snapshots: deque[QuerySnapshot] = deque(maxlen=snapshot_window)
 
         # Running mean for FILL_MEAN strategy
-        self._feature_sums:  Dict[str, float] = {}
-        self._feature_counts: Dict[str, int]  = {}
+        self._feature_sums:  dict[str, float] = {}
+        self._feature_counts: dict[str, int]  = {}
 
         # Last seen feature values for FILL_LAST strategy
-        self._last_values: Dict[str, float] = {}
+        self._last_values: dict[str, float] = {}
 
     # ── DB features ───────────────────────────────────────────────────────────
 
@@ -178,7 +178,7 @@ class FeaturePipeline:
         """Add a QuerySnapshot to the rolling history."""
         self._snapshots.append(snapshot)
 
-    def _compute_db_features(self) -> Dict[str, float]:
+    def _compute_db_features(self) -> dict[str, float]:
         """
         Compute per-table read/write rates from the last two snapshots.
         Returns an empty dict if fewer than 2 snapshots are available.
@@ -194,7 +194,7 @@ class FeaturePipeline:
         if dt <= 0.0:
             dt = self._interval_s
 
-        features: Dict[str, float] = {}
+        features: dict[str, float] = {}
         total_reads  = 0.0
         total_writes = 0.0
 
@@ -226,12 +226,12 @@ class FeaturePipeline:
     # ── Metrics features ──────────────────────────────────────────────────────
 
     @staticmethod
-    def _extract_metrics_features(context: Dict[str, Any]) -> Dict[str, float]:
+    def _extract_metrics_features(context: dict[str, Any]) -> dict[str, float]:
         """
         Extract and clamp metrics features from a MetricsAgent event context.
         Uses _guard() on every value — immune to NaN/None/string inputs.
         """
-        raw: Dict[str, float] = {
+        raw: dict[str, float] = {
             "cpu_utilization_pct":    _guard(context.get("cpu_utilization_pct",    context.get("cpu_pct"))),
             "memory_utilization_pct": _guard(context.get("memory_utilization_pct", context.get("mem_pct"))),
             "error_rate":             _guard(context.get("error_rate")),
@@ -247,7 +247,7 @@ class FeaturePipeline:
 
     def build_vector(
         self,
-        metrics_context: Optional[Dict[str, Any]] = None,
+        metrics_context: dict[str, Any] | None = None,
     ) -> FeatureVector:
         """
         Construct a FeatureVector, combining DB rates from rolling history
@@ -261,7 +261,7 @@ class FeaturePipeline:
         """
         ts      = datetime.now(timezone.utc)
         missing = []
-        features: Dict[str, float] = {}
+        features: dict[str, float] = {}
 
         # DB features
         db_features = self._compute_db_features()

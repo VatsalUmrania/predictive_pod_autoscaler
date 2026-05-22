@@ -31,9 +31,9 @@ import logging
 import re
 import time
 from collections import defaultdict, deque
-from datetime import datetime, timezone
+from collections.abc import AsyncIterator
+from datetime import datetime
 from pathlib import Path
-from typing import AsyncIterator, Dict, Optional, Tuple
 
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
@@ -42,7 +42,11 @@ from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 
 from nexus.bus.incident_event import (
-    AgentType, IncidentEvent, NginxHighErrorContext, Severity, SignalType,
+    AgentType,
+    IncidentEvent,
+    NginxHighErrorContext,
+    Severity,
+    SignalType,
 )
 from nexus.bus.nats_client import NATSClient
 
@@ -66,7 +70,7 @@ _COMBINED_RE = re.compile(
 _NGINX_TIME_FMT = "%d/%b/%Y:%H:%M:%S %z"
 
 
-def parse_nginx_line(line: str) -> Optional[Dict]:
+def parse_nginx_line(line: str) -> dict | None:
     """Parse a single NGINX combined log line. Returns None on parse failure."""
     m = _COMBINED_RE.match(line.strip())
     if not m:
@@ -94,7 +98,7 @@ class EndpointStats:
         # deque of (timestamp, status_code, request_time_or_None)
         self._records: deque = deque()
 
-    def record(self, status: int, request_time: Optional[float]) -> None:
+    def record(self, status: int, request_time: float | None) -> None:
         now = time.monotonic()
         self._records.append((now, status, request_time))
         self._expire(now)
@@ -114,7 +118,7 @@ class EndpointStats:
     def rps(self) -> float:
         return len(self._records) / max(self.window, 1)
 
-    def p95_latency(self) -> Optional[float]:
+    def p95_latency(self) -> float | None:
         times = [t for _, _, t in self._records if t is not None]
         if not times:
             return None
@@ -144,7 +148,7 @@ class NginxLogShipper:
     def __init__(
         self,
         log_path: str = "/var/log/nginx/access.log",
-        nats_client: Optional[NATSClient] = None,
+        nats_client: NATSClient | None = None,
         otel_endpoint: str = "http://localhost:4318",
         error_rate_threshold: float = 0.05,
         latency_p95_ms: float = 500.0,
@@ -160,7 +164,7 @@ class NginxLogShipper:
         self.check_interval      = check_interval
 
         # Per-endpoint rolling stats
-        self._stats: Dict[str, EndpointStats] = defaultdict(
+        self._stats: dict[str, EndpointStats] = defaultdict(
             lambda: EndpointStats(window_seconds)
         )
 
@@ -194,7 +198,7 @@ class NginxLogShipper:
             while not self.log_path.exists():
                 await asyncio.sleep(5)
 
-        with open(self.log_path, "r") as f:
+        with open(self.log_path) as f:
             f.seek(0, 2)  # Seek to end — only tail new lines
             while True:
                 line = f.readline()

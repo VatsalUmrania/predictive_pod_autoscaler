@@ -10,28 +10,23 @@ This file is a thin delegation layer:
 
 import logging
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any
 
 import kopf
 from prometheus_client import start_http_server as _prom_start_http_server
 
 from ppa.config import DEFAULT_MODEL_DIR, INITIAL_DELAY, NAMESPACE, TIMER_INTERVAL
 from ppa.domain import CRState
+
+# Re-export metrics for backward compatibility and external access
 from ppa.operator.model_bundle import (
     BundlePendingError,
     BundleValidationError,
-    ModelBundle,
     resolve_model_bundle,
 )
 from ppa.operator.state_machine import ScalerStateMachine
-# Re-export metrics for backward compatibility and external access
-from ppa.operator.metrics import (
-    ppa_predicted_load_rps,
-    ppa_desired_replicas,
-    ppa_current_replicas,
-    ppa_scale_events_total,
-)
+
 # Logging setup
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 logger = logging.getLogger("ppa.operator")
@@ -74,15 +69,15 @@ def _parse_crd_spec(
     cr_ns: str,
     cr_name: str,
     patch: kopf.Patch,
-) -> tuple[dict[str, any], CRState]:
+) -> tuple[dict[str, Any], CRState]:
     """Parse CRD spec into config dict and load/create CR state."""
+
     from ppa.config import (
         DEFAULT_CAPACITY_PER_POD,
         DEFAULT_MIN_REPLICAS,
         DEFAULT_SCALE_DOWN_RATE,
         DEFAULT_SCALE_UP_RATE,
     )
-    from pathlib import Path
 
     target = spec["targetDeployment"]
     target_ns = spec.get("namespace", cr_ns)

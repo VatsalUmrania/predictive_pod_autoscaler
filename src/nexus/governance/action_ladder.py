@@ -31,7 +31,6 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Set
 
 from nexus.bus.incident_event import IncidentEvent
 from nexus.governance.cooldown_store import CooldownStore
@@ -68,7 +67,7 @@ class GovernanceCircuitBreaker:
         self._failures    = 0
         self._state       = self.CLOSED
         self._nats        = nats_client
-        self._tripped_at: Optional[str] = None
+        self._tripped_at: str | None = None
 
     @property
     def state(self) -> str:
@@ -145,9 +144,9 @@ class HumanApprovalQueue:
     """
 
     def __init__(self):
-        self._pending:  Dict[str, PendingApproval] = {}
-        self._approved: Set[str] = set()
-        self._rejected: Set[str] = set()
+        self._pending:  dict[str, PendingApproval] = {}
+        self._approved: set[str] = set()
+        self._rejected: set[str] = set()
 
     def enqueue(
         self,
@@ -157,7 +156,7 @@ class HumanApprovalQueue:
         incident_id: str,
         healing_level: int,
         confidence: float,
-        context: Optional[dict] = None,
+        context: dict | None = None,
     ) -> str:
         """
         Stage an action for human approval.
@@ -204,7 +203,7 @@ class HumanApprovalQueue:
     def is_rejected(self, approval_id: str) -> bool:
         return approval_id in self._rejected
 
-    def pending_list(self) -> List[PendingApproval]:
+    def pending_list(self) -> list[PendingApproval]:
         return [
             p for approval_id, p in self._pending.items()
             if approval_id not in self._approved and approval_id not in self._rejected
@@ -225,9 +224,9 @@ class HumanApprovalQueue:
 class LadderDecision:
     can_proceed:          bool
     requires_approval:    bool = False
-    approval_id:          Optional[str] = None
-    denial_reason:        Optional[str] = None
-    policy_decision:      Optional[PolicyDecision] = None
+    approval_id:          str | None = None
+    denial_reason:        str | None = None
+    policy_decision:      PolicyDecision | None = None
     cooldown_remaining_s: float = 0.0
 
 

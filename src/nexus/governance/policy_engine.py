@@ -41,7 +41,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import List, Optional
 
 import httpx
 
@@ -55,7 +54,7 @@ logger = logging.getLogger(__name__)
 class PolicyDecision:
     allowed:           bool
     requires_approval: bool = False
-    deny_reasons:      List[str] = field(default_factory=list)
+    deny_reasons:      list[str] = field(default_factory=list)
     source:            str = "unknown"   # "opa" | "fallback"
 
     @property
@@ -99,7 +98,7 @@ def _fallback_evaluate(
     Pure Python policy evaluation — equivalent to nexus_policies.rego.
     Called when OPA is unreachable.
     """
-    deny_reasons: List[str] = []
+    deny_reasons: list[str] = []
 
     # Governance circuit breaker
     if governance_cb_open:
@@ -257,7 +256,7 @@ class PolicyEngine:
             allowed = bool(allow_resp.json().get("result", False))
 
             # Query deny_reasons rule for diagnostic info
-            deny_reasons: List[str] = []
+            deny_reasons: list[str] = []
             deny_resp = await client.post(
                 f"{self._opa_url}/v1/data/nexus/deny_reasons",
                 json=input_doc,

@@ -48,7 +48,7 @@ from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any
 
 from nexus.predictive.feature_pipeline import _guard
 
@@ -59,7 +59,7 @@ MODEL_FEATURES = ["cpu_utilization_pct", "memory_utilization_pct", "rps", "error
 N_FEATURES     = len(MODEL_FEATURES)
 
 # Normalization bounds for GRU model input (matches feature_pipeline FEATURE_BOUNDS)
-_NORM_MAX: Dict[str, float] = {
+_NORM_MAX: dict[str, float] = {
     "cpu_utilization_pct":    100.0,
     "memory_utilization_pct": 100.0,
     "rps":                    10_000.0,   # Clip at 10k for normalization (not clamp)
@@ -76,7 +76,7 @@ class AnomalyScore:
     """Output of the anomaly detector for one feature vector."""
     score:           float    # 0.0 = normal, 1.0 = highly anomalous
     detector:        str      # "gru" | "zscore"
-    contributing:    Dict[str, float]   # Per-feature contribution scores
+    contributing:    dict[str, float]   # Per-feature contribution scores
     is_anomaly:      bool              # score >= threshold
     threshold:       float
 
@@ -97,7 +97,7 @@ class AnomalyDetector(ABC):
     """Abstract anomaly detector interface."""
 
     @abstractmethod
-    def detect(self, features: Dict[str, float]) -> AnomalyScore:
+    def detect(self, features: dict[str, float]) -> AnomalyScore:
         """Score a single feature vector. Must be non-blocking."""
         ...
 
@@ -136,7 +136,7 @@ class ZScoreDetector(AnomalyDetector):
     ):
         self._window    = window_size
         self._threshold = threshold
-        self._history:  Dict[str, Deque[float]] = {
+        self._history:  dict[str, deque[float]] = {
             f: deque(maxlen=window_size) for f in MODEL_FEATURES
         }
         self._samples   = 0
@@ -149,7 +149,7 @@ class ZScoreDetector(AnomalyDetector):
     def is_ready(self) -> bool:
         return self._samples >= max(10, self._window // 3)
 
-    def detect(self, features: Dict[str, float]) -> AnomalyScore:
+    def detect(self, features: dict[str, float]) -> AnomalyScore:
         """Compute z-scores and update rolling windows."""
         # Ingest
         for feat in MODEL_FEATURES:
@@ -163,7 +163,7 @@ class ZScoreDetector(AnomalyDetector):
                 contributing={}, is_anomaly=False, threshold=self._threshold
             )
 
-        contributing: Dict[str, float] = {}
+        contributing: dict[str, float] = {}
         max_score = 0.0
 
         for feat in MODEL_FEATURES:
@@ -222,7 +222,7 @@ class GRUAutoencoder(AnomalyDetector):
 
     def __init__(
         self,
-        checkpoint_path: Optional[Path] = None,
+        checkpoint_path: Path | None = None,
         hidden_dim:      int = 64,
         seq_len:         int = 30,
         error_threshold: float = 0.05,
@@ -234,7 +234,7 @@ class GRUAutoencoder(AnomalyDetector):
         self._seq_len       = int(os.getenv("NEXUS_GRU_SEQ_LEN", str(seq_len)))
         self._error_thresh  = error_threshold
         self._model         = None
-        self._buffer: Deque[List[float]] = deque(maxlen=self._seq_len)
+        self._buffer: deque[list[float]] = deque(maxlen=self._seq_len)
         self._ready         = False
         self._torch_ok      = False
 
@@ -284,7 +284,7 @@ class GRUAutoencoder(AnomalyDetector):
                 self.decoder    = nn.GRU(hidden_dim, hidden_dim, num_layers=2, batch_first=True)
                 self.output_layer = nn.Linear(hidden_dim, n_features)
 
-            def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
                 # x: (batch, seq_len, n_features)
                 _, hidden  = self.encoder(x)
                 # Use last hidden state as initial decoder input
@@ -302,7 +302,7 @@ class GRUAutoencoder(AnomalyDetector):
     def is_ready(self) -> bool:
         return self._ready and self._torch_ok
 
-    def detect(self, features: Dict[str, float]) -> AnomalyScore:
+    def detect(self, features: dict[str, float]) -> AnomalyScore:
         """Score a single feature vector (buffers into sequence window internally)."""
         if not self._torch_ok:
             return AnomalyScore(score=0.0, detector=self.name, contributing={},
@@ -318,7 +318,7 @@ class GRUAutoencoder(AnomalyDetector):
 
         return self._score_buffer()
 
-    def _normalize(self, features: Dict[str, float]) -> List[float]:
+    def _normalize(self, features: dict[str, float]) -> list[float]:
         """Normalize features to [0, 1] using _NORM_MAX. Guarded against NaN."""
         vec = []
         for feat in MODEL_FEATURES:
@@ -361,11 +361,11 @@ class GRUAutoencoder(AnomalyDetector):
 
     def train_from_data(
         self,
-        data: List[Dict[str, float]],
+        data: list[dict[str, float]],
         epochs: int = 50,
         lr:     float = 1e-3,
         batch_size: int = 32,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """
         Train the GRU Autoencoder on historical normal-traffic data.
 
@@ -457,14 +457,14 @@ class AutoAnomalyDetector:
 
     def __init__(
         self,
-        checkpoint_path: Optional[Path] = None,
+        checkpoint_path: Path | None = None,
         zscore_window:   int = int(os.getenv("NEXUS_ZSCORE_WINDOW", "60")),
         zscore_threshold: float = float(os.getenv("NEXUS_ZSCORE_THRESHOLD", "3.0")),
     ):
         self._gru    = GRUAutoencoder(checkpoint_path=checkpoint_path)
         self._zscore = ZScoreDetector(window_size=zscore_window, threshold=zscore_threshold)
 
-    def detect(self, features: Dict[str, float]) -> AnomalyScore:
+    def detect(self, features: dict[str, float]) -> AnomalyScore:
         """Score using GRU if ready, otherwise ZScore."""
         # Always update ZScore (maintain its rolling window regardless)
         zscore_result = self._zscore.detect(features)
@@ -489,6 +489,6 @@ class AutoAnomalyDetector:
     def active_detector(self) -> str:
         return "gru+zscore" if self._gru.is_ready else "zscore"
 
-    def train_gru(self, data: List[Dict[str, float]], **kwargs) -> Dict[str, float]:
+    def train_gru(self, data: list[dict[str, float]], **kwargs) -> dict[str, float]:
         """Train the GRU detector from historical data."""
         return self._gru.train_from_data(data, **kwargs)

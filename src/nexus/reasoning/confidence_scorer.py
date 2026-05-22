@@ -33,7 +33,6 @@ Design decision:
 from __future__ import annotations
 
 import logging
-from typing import Dict, Optional
 
 from nexus.reasoning.incident_cluster import IncidentCluster
 from nexus.reasoning.rca_engine import RCAResult
@@ -93,7 +92,7 @@ class ConfidenceScorer:
 
         # Phase 6: historical boosts injected by FeedbackLoop
         # runbook_id → delta (range ±0.05 from KnowledgeBase)
-        self._historical_boosts: Dict[str, float] = {}
+        self._historical_boosts: dict[str, float] = {}
 
     def score(
         self,
@@ -160,7 +159,7 @@ class ConfidenceScorer:
         )
         return final
 
-    def set_historical_boosts(self, boosts: Dict[str, float]) -> None:
+    def set_historical_boosts(self, boosts: dict[str, float]) -> None:
         """
         Update the historical boost map from the Learning Plane.
         Called by FeedbackLoop every N minutes after the KnowledgeBase is updated.

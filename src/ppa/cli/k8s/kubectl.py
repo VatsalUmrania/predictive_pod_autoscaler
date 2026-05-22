@@ -13,22 +13,25 @@ def cp(src: str, dest: str, retries: int = 3) -> None:
 
     Retries on failure to handle timing issues with pod readiness.
     """
-    last_error = None
+    last_result: subprocess.CompletedProcess | None = None
     for attempt in range(retries):
         result = _run(["kubectl", "cp", src, dest])
         if result.returncode == 0:
             return
-        last_error = result
-        # Print retry info for debugging
+        last_result = result
         if attempt < retries - 1:
-            import time
             import sys
-            print(f"  CP retry {attempt+1}/{retries}: {result.stderr.strip()}", file=sys.stderr)
-            time.sleep(2)  # Wait before retry
-    # All retries failed
-    raise subprocess.CalledProcessError(
-        last_error.returncode, last_error.args, last_error.stdout, last_error.stderr
-    )
+            import time
+            print(f" CP retry {attempt+1}/{retries}: {result.stderr.strip()}", file=sys.stderr)
+            time.sleep(2)
+
+    if last_result is not None:
+        raise subprocess.CalledProcessError(
+            last_result.returncode,
+            last_result.args,
+            last_result.stdout or "",
+            last_result.stderr or "",
+        )
 
 
 def exec_cmd(pod_path: str, *args: str) -> subprocess.CompletedProcess:

@@ -33,7 +33,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import aiosqlite
 
@@ -78,7 +78,7 @@ class AuditTrail:
 
     def __init__(self, db_path: str = "/tmp/nexus_audit.db"):
         self.db_path = db_path
-        self._db: Optional[aiosqlite.Connection] = None
+        self._db: aiosqlite.Connection | None = None
         self._lock = asyncio.Lock()
 
     async def initialize(self) -> None:
@@ -103,14 +103,14 @@ class AuditTrail:
         triggered_by: str,
         runbook_id: str,
         healing_level: int = 0,
-        target: Optional[str] = None,
-        pre_check_results: Optional[Dict] = None,
+        target: str | None = None,
+        pre_check_results: dict | None = None,
         execution_outcome: str = "success",
-        post_check_results: Optional[Dict] = None,
+        post_check_results: dict | None = None,
         rollback_triggered: bool = False,
-        incident_id: Optional[str] = None,
-        action_results: Optional[List[Dict]] = None,
-        action_id: Optional[str] = None,
+        incident_id: str | None = None,
+        action_results: list[dict] | None = None,
+        action_id: str | None = None,
     ) -> str:
         """
         Write a complete audit record.
@@ -171,9 +171,9 @@ class AuditTrail:
         action_id: str,
         *,
         execution_outcome: str,
-        post_check_results: Optional[Dict] = None,
+        post_check_results: dict | None = None,
         rollback_triggered: bool = False,
-        action_results: Optional[List[Dict]] = None,
+        action_results: list[dict] | None = None,
     ) -> None:
         """Update an existing pending record with the final outcome."""
         if not self._db:
@@ -201,7 +201,7 @@ class AuditTrail:
 
     # ── Query ─────────────────────────────────────────────────────────────────
 
-    async def query_by_incident(self, incident_id: str) -> List[Dict[str, Any]]:
+    async def query_by_incident(self, incident_id: str) -> list[dict[str, Any]]:
         """Return all audit records for a given correlation/incident ID."""
         if not self._db:
             raise RuntimeError("AuditTrail not initialized.")
@@ -213,7 +213,7 @@ class AuditTrail:
             rows = await cur.fetchall()
             return [dict(row) for row in rows]
 
-    async def query_recent(self, limit: int = 50) -> List[Dict[str, Any]]:
+    async def query_recent(self, limit: int = 50) -> list[dict[str, Any]]:
         """Return the N most recent audit records."""
         if not self._db:
             raise RuntimeError("AuditTrail not initialized.")
@@ -225,7 +225,7 @@ class AuditTrail:
             rows = await cur.fetchall()
             return [dict(row) for row in rows]
 
-    async def query_by_runbook(self, runbook_id: str) -> List[Dict[str, Any]]:
+    async def query_by_runbook(self, runbook_id: str) -> list[dict[str, Any]]:
         """Return all records for a given runbook (used by Learning Plane for scoring)."""
         if not self._db:
             raise RuntimeError("AuditTrail not initialized.")
@@ -255,7 +255,7 @@ class AuditTrail:
             await self._db.close()
             logger.info("[AuditTrail] Database connection closed")
 
-    async def __aenter__(self) -> "AuditTrail":
+    async def __aenter__(self) -> AuditTrail:
         await self.initialize()
         return self
 

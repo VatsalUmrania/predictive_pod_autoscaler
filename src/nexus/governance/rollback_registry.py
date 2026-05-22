@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class PreActionState:
     target_namespace: str
     target_name:      str
     captured_at:      str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    state_data:       Dict[str, Any] = field(default_factory=dict)
+    state_data:       dict[str, Any] = field(default_factory=dict)
 
     @property
     def rollback_key(self) -> str:
@@ -117,7 +117,7 @@ class RollbackRegistry:
         pre_state: PreActionState,
         k8s_apps=None,
         k8s_core=None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Execute the undo operation for the given action using captured pre-state.
         Returns a result dict with status and message.
@@ -125,7 +125,7 @@ class RollbackRegistry:
         action_type = pre_state.action_type
         ns          = pre_state.target_namespace
         name        = pre_state.target_name
-        result: Dict[str, Any] = {"action_type": action_type, "status": "noop"}
+        result: dict[str, Any] = {"action_type": action_type, "status": "noop"}
 
         logger.info(f"[RollbackRegistry] Rolling back: {action_type} on {ns}/{name}")
 

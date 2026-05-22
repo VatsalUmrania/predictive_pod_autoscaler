@@ -24,10 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
-import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Set
 
 from nexus.agents.base_agent import BaseAgent
 from nexus.bus.incident_event import (
@@ -104,9 +101,9 @@ class ConfigAgent(BaseAgent):
     def __init__(
         self,
         nats_client: NATSClient,
-        manifests_dir: Optional[str] = None,
-        required_env_keys: Optional[Set[str]] = None,
-        namespaces: Optional[List[str]] = None,
+        manifests_dir: str | None = None,
+        required_env_keys: set[str] | None = None,
+        namespaces: list[str] | None = None,
         poll_interval_seconds: float = 60.0,
     ):
         super().__init__(
@@ -119,7 +116,7 @@ class ConfigAgent(BaseAgent):
         self.namespaces         = namespaces or ["default"]
 
         # Cache of last-known checksums per resource key "ns/kind/name"
-        self._baseline_checksums: Dict[str, str] = {}
+        self._baseline_checksums: dict[str, str] = {}
 
         self._k8s_core = None
         self._k8s_apps = None
@@ -131,7 +128,8 @@ class ConfigAgent(BaseAgent):
 
     def _init_k8s(self) -> None:
         try:
-            from kubernetes import client as k8s_client, config as k8s_config
+            from kubernetes import client as k8s_client
+            from kubernetes import config as k8s_config
             try:
                 k8s_config.load_incluster_config()
             except Exception:
@@ -143,7 +141,7 @@ class ConfigAgent(BaseAgent):
 
     # ── IaC drift detection ───────────────────────────────────────────────────
 
-    def _load_git_manifests(self) -> Dict[str, dict]:
+    def _load_git_manifests(self) -> dict[str, dict]:
         """
         Parse all YAML manifests in manifests_dir and return a dict:
             "ns/kind/name" → normalised spec dict
@@ -153,7 +151,7 @@ class ConfigAgent(BaseAgent):
 
         import yaml
 
-        manifests: Dict[str, dict] = {}
+        manifests: dict[str, dict] = {}
         for path in self.manifests_dir.rglob("*.yaml"):
             try:
                 with open(path) as f:
@@ -176,7 +174,7 @@ class ConfigAgent(BaseAgent):
 
         return manifests
 
-    def _get_live_deployment(self, name: str, namespace: str) -> Optional[dict]:
+    def _get_live_deployment(self, name: str, namespace: str) -> dict | None:
         """Fetch a live Deployment from K8s API and normalise it."""
         if not self._k8s_apps:
             return None
@@ -186,8 +184,8 @@ class ConfigAgent(BaseAgent):
         except Exception:
             return None
 
-    def _check_iac_drift(self) -> List[IncidentEvent]:
-        events: List[IncidentEvent] = []
+    def _check_iac_drift(self) -> list[IncidentEvent]:
+        events: list[IncidentEvent] = []
         manifests = self._load_git_manifests()
 
         for key, git_spec in manifests.items():
@@ -253,12 +251,12 @@ class ConfigAgent(BaseAgent):
 
     # ── Runtime env contract check ────────────────────────────────────────────
 
-    def _check_runtime_env(self) -> List[IncidentEvent]:
+    def _check_runtime_env(self) -> list[IncidentEvent]:
         """
         Check that running pods have all required env vars populated.
         Reads pod spec.containers[].env[] — catches vars injected via envFrom too.
         """
-        events: List[IncidentEvent] = []
+        events: list[IncidentEvent] = []
 
         if not self.required_env_keys or not self._k8s_core:
             return []
@@ -274,7 +272,7 @@ class ConfigAgent(BaseAgent):
 
             for pod in pods:
                 pod_name = pod.metadata.name
-                present_keys: Set[str] = set()
+                present_keys: set[str] = set()
 
                 for container in (pod.spec.containers or []):
                     for env_var in (container.env or []):
@@ -308,10 +306,10 @@ class ConfigAgent(BaseAgent):
 
     # ── BaseAgent interface ───────────────────────────────────────────────────
 
-    async def sense(self) -> List[IncidentEvent]:
+    async def sense(self) -> list[IncidentEvent]:
         import asyncio
         loop   = asyncio.get_event_loop()
-        events: List[IncidentEvent] = []
+        events: list[IncidentEvent] = []
 
         # IaC drift (file I/O + K8s API — run in thread)
         if self.manifests_dir:

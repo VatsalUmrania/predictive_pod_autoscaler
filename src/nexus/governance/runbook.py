@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field
@@ -56,43 +56,43 @@ class BlastRadius(str, Enum):
 class PreCheck(BaseModel):
     """Assertion that must pass before executing the runbook's actions."""
     type: str = "prometheus_query"       # "prometheus_query" | "event_field" | "k8s_resource"
-    query: Optional[str] = None          # PromQL query (type=prometheus_query)
-    field: Optional[str] = None          # Event context field (type=event_field)
+    query: str | None = None          # PromQL query (type=prometheus_query)
+    field: str | None = None          # Event context field (type=event_field)
     operator: str = "gt"                 # gt | gte | lt | lte | eq | ne
-    threshold: Optional[float] = None    # Numeric comparison value
-    value: Optional[Any] = None          # Non-numeric comparison value
-    description: Optional[str] = None
+    threshold: float | None = None    # Numeric comparison value
+    value: Any | None = None          # Non-numeric comparison value
+    description: str | None = None
 
 
 class PostCheck(BaseModel):
     """SLO assertion that validates healing succeeded."""
-    metric_query: Optional[str] = None   # Primary field name (YAML)
-    query: Optional[str] = None          # Alias
+    metric_query: str | None = None   # Primary field name (YAML)
+    query: str | None = None          # Alias
     operator: str = "lt"
     threshold: float = 0.0
     window_seconds: int = Field(60, ge=1)
     timeout_seconds: int = Field(120, ge=10)
-    description: Optional[str] = None
+    description: str | None = None
 
     @property
-    def effective_query(self) -> Optional[str]:
+    def effective_query(self) -> str | None:
         return self.metric_query or self.query
 
 
 class RunbookAction(BaseModel):
     """A single discrete action in the healing sequence."""
     type: str                                                # Action type key
-    description: Optional[str] = None
-    params: Dict[str, Any] = Field(default_factory=dict)
+    description: str | None = None
+    params: dict[str, Any] = Field(default_factory=dict)
     abort_on_failure: bool = True                           # Stop runbook on this action's failure
-    condition: Optional[str] = None                         # Optional guard expression (future use)
+    condition: str | None = None                         # Optional guard expression (future use)
 
 
 class RunbookTrigger(BaseModel):
     """Conditions under which a runbook fires."""
-    signal_types: List[str] = Field(default_factory=list)
+    signal_types: list[str] = Field(default_factory=list)
     severity_minimum: str = "warning"
-    conditions: List[Dict[str, Any]] = Field(default_factory=list)
+    conditions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -114,11 +114,11 @@ class Runbook(BaseModel):
     failure_class: str = ""
     healing_level: int = Field(0, ge=0, le=3)
     trigger: RunbookTrigger
-    pre_checks: List[PreCheck] = Field(default_factory=list)
-    actions: List[RunbookAction] = Field(default_factory=list)
-    post_checks: List[PostCheck] = Field(default_factory=list)
+    pre_checks: list[PreCheck] = Field(default_factory=list)
+    actions: list[RunbookAction] = Field(default_factory=list)
+    post_checks: list[PostCheck] = Field(default_factory=list)
     rollback_if_post_check_fails: bool = True
-    rollback_actions: List[RunbookAction] = Field(default_factory=list)
+    rollback_actions: list[RunbookAction] = Field(default_factory=list)
     cooldown_seconds: int = Field(300, ge=0)
     blast_radius: str = "unknown"
 
@@ -171,7 +171,7 @@ class RunbookLibrary:
 
     def __init__(self, runbook_dir: Path):
         self._dir = runbook_dir
-        self._runbooks: Dict[str, Runbook] = {}
+        self._runbooks: dict[str, Runbook] = {}
         self._load_all()
 
     # ── Loading ───────────────────────────────────────────────────────────────
@@ -190,7 +190,7 @@ class RunbookLibrary:
 
         logger.info(f"[RunbookLibrary] Loaded {loaded} runbooks from {self._dir}")
 
-    def _load_one(self, path: Path) -> Optional[Runbook]:
+    def _load_one(self, path: Path) -> Runbook | None:
         try:
             with open(path, encoding="utf-8") as f:
                 raw = yaml.safe_load(f)
@@ -212,7 +212,7 @@ class RunbookLibrary:
 
     # ── Lookup ────────────────────────────────────────────────────────────────
 
-    def find_matching(self, event: IncidentEvent) -> List[Runbook]:
+    def find_matching(self, event: IncidentEvent) -> list[Runbook]:
         """
         Return all runbooks whose trigger matches the event.
         Results are sorted by healing_level ascending (L0 first — least invasive).
@@ -222,14 +222,14 @@ class RunbookLibrary:
             key=lambda r: r.healing_level,
         )
 
-    def get(self, runbook_id: str) -> Optional[Runbook]:
+    def get(self, runbook_id: str) -> Runbook | None:
         return self._runbooks.get(runbook_id)
 
-    def all(self) -> List[Runbook]:
+    def all(self) -> list[Runbook]:
         return list(self._runbooks.values())
 
     def count(self) -> int:
         return len(self._runbooks)
 
-    def ids(self) -> List[str]:
+    def ids(self) -> list[str]:
         return sorted(self._runbooks.keys())

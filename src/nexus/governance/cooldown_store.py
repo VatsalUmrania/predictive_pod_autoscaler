@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +46,7 @@ class CooldownStore:
 
     def __init__(
         self,
-        redis_url: Optional[str] = None,
+        redis_url: str | None = None,
         key_prefix: str = "nexus:cooldown",
     ):
         self._redis_url = redis_url
@@ -55,7 +54,7 @@ class CooldownStore:
         self._redis     = None
 
         # In-memory fallback: key → expiry monotonic timestamp
-        self._memory: Dict[str, float] = {}
+        self._memory: dict[str, float] = {}
 
     # ── Connection ────────────────────────────────────────────────────────────
 
@@ -159,7 +158,7 @@ class CooldownStore:
 
     # ── Context manager ───────────────────────────────────────────────────────
 
-    async def __aenter__(self) -> "CooldownStore":
+    async def __aenter__(self) -> CooldownStore:
         await self.connect()
         return self
 

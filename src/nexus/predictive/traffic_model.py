@@ -28,12 +28,12 @@ Usage:
 
 from __future__ import annotations
 
-import math
 import logging
+import math
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any
 
 from nexus.predictive.feature_pipeline import _guard, _safe_div
 
@@ -56,7 +56,7 @@ class TrafficPrediction:
     horizon_minutes:  int
     confidence:       float
     model_type:       str              # "ewma" | "gru"
-    smape:            Optional[float] = None   # Rolling SMAPE from past predictions
+    smape:            float | None = None   # Rolling SMAPE from past predictions
     predicted_at:     str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -90,7 +90,7 @@ class SMAPETracker:
     """
 
     def __init__(self, window: int = 50):
-        self._errors: Deque[float] = deque(maxlen=window)
+        self._errors: deque[float] = deque(maxlen=window)
 
     def record(self, predicted: float, actual: float) -> float:
         """Record a prediction outcome. Returns the SMAPE for this sample."""
@@ -103,7 +103,7 @@ class SMAPETracker:
         return smape
 
     @property
-    def rolling_smape(self) -> Optional[float]:
+    def rolling_smape(self) -> float | None:
         if not self._errors:
             return None
         return sum(self._errors) / len(self._errors)
@@ -190,7 +190,7 @@ class EWMATrafficModel:
     """
 
     def __init__(self, default_target_rps_per_replica: float = 100.0):
-        self._states: Dict[str, EndpointState] = {}
+        self._states: dict[str, EndpointState] = {}
         self._target_rps_per_replica = default_target_rps_per_replica
 
     def update(self, deployment: str, current_rps: float) -> None:
@@ -230,7 +230,7 @@ class EWMATrafficModel:
             smape           = round(smape, 2) if smape is not None else None,
         )
 
-    def record_outcome(self, deployment: str, actual_rps: float) -> Optional[float]:
+    def record_outcome(self, deployment: str, actual_rps: float) -> float | None:
         """
         Record the actual RPS observed {horizon} minutes after a prediction.
         Updates SMAPE tracker for accuracy monitoring.
@@ -242,10 +242,10 @@ class EWMATrafficModel:
         predicted = state.predict_rps(0)   # Current EWMA as the "committed prediction"
         return state.tracker.record(predicted=predicted, actual=_guard(actual_rps))
 
-    def smape_for(self, deployment: str) -> Optional[float]:
+    def smape_for(self, deployment: str) -> float | None:
         return self._states.get(deployment, EndpointState()).tracker.rolling_smape
 
-    def all_stats(self) -> Dict[str, Any]:
+    def all_stats(self) -> dict[str, Any]:
         return {
             name: {
                 "rps_ewma":    round(s.rps_ewma, 2),
