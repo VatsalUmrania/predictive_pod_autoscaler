@@ -13,7 +13,6 @@ model/artifacts/
 .claude/
 .agents/
 .vscode/
-tests/
 *.png
 *.svg
 *.json

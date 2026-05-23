@@ -1,0 +1,24 @@
+                                                                                
+ Usage: python -m ppa.cli train [OPTIONS]                                       
+                                                                                
+ Train LSTM model(s): by default, all models: rps_t3m, rps_t5m, and rps_t10m    
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --app          -a      TEXT     App name (required if multiple apps          │
+│                                 registered).                                 │
+│ --horizon              TEXT     Prediction horizon(s): single target or      │
+│                                 comma-separated list (e.g.,                  │
+│                                 rps_t3m,rps_t5m,rps_t10m).                   │
+│                                 [default: rps_t10m]                          │
+│ --csv                  TEXT     Path to training CSV (default: auto-export   │
+│                                 from Prometheus).                            │
+│ --epochs               INTEGER  Training epochs. [default: 50]               │
+│ --lookback             INTEGER  Lookback window steps. [default: 60]         │
+│ --patience             INTEGER  Early stopping patience. [default: 20]       │
+│ --eval                          Show evaluation metrics after training, skip │
+│                                 deploy.                                      │
+│ --apply                         Run ppa apply automatically after training.  │
+│ --no-progress                   Disable progress indicators (for scripting). │
+│ --help                          Show this message and exit.                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
