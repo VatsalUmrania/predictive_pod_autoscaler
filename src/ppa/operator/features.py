@@ -6,7 +6,7 @@ import math
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import cast
+from typing import NamedTuple, cast
 
 import numpy as np
 import requests
@@ -50,6 +50,12 @@ REQUIRED_METRICS = {
     "memory_utilization_pct",
 }
 PRIMARY_SIGNAL_METRICS = {"requests_per_second", "cpu_utilization_pct", "latency_p95_ms"}
+
+
+class FeatureContract(NamedTuple):
+    feature_columns: list[str]
+    target_columns: tuple[str, ...]
+    num_features: int
 
 
 def _is_missing_or_nan(value: float | None) -> bool:
@@ -526,3 +532,23 @@ def build_historical_features(
 
     logger.info(f"Reconstructed {len(feature_rows)} historical feature vectors")
     return feature_rows
+
+# Feature contract API
+def get_feature_columns(version: str = "v2") -> list[str]:
+    """Return the ordered list of feature columns for the given contract version."""
+    if version == "v2":
+        return list(FEATURE_COLUMNS)
+    raise ValueError(f"Unknown feature contract version: {version}")
+
+
+def get_contract(version: str = "v2") -> FeatureContract:
+    """Return the full feature contract for the given version."""
+    from ppa.common.feature_spec import NUM_FEATURES, TARGET_COLUMNS
+
+    if version == "v2":
+        return FeatureContract(
+            feature_columns=list(FEATURE_COLUMNS),
+            target_columns=tuple(TARGET_COLUMNS),
+            num_features=NUM_FEATURES,
+        )
+    raise ValueError(f"Unknown feature contract version: {version}")

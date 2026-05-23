@@ -4,7 +4,6 @@ __pycache__/
 .env
 venv/
 *.health.json
-Agents.md
 
 .gemini/
 model/artifacts/
@@ -238,7 +237,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-AGENTS.md
 # Added by code-review-graph
 #.code-review-graph/
 # Added by code-review-graph

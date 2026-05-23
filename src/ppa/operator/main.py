@@ -61,6 +61,35 @@ logger.info("Prometheus metrics endpoint listening on :9100/metrics")
 _cr_state: dict[tuple[str, str], CRState] = {}
 _cr_state_lock = threading.Lock()
 
+
+def _warn_if_conflicting_active_cr(
+    key: tuple[str, str],
+    state: CRState,
+    target_ns: str,
+    target: str,
+) -> None:
+    """Warn once when multiple active CRs manage the same deployment."""
+    if state.observer_mode or state.conflict_logged:
+        return
+
+    for peer_key, peer_state in _cr_state.items():
+        if peer_key == key or peer_state.observer_mode:
+            continue
+        if (
+            peer_state.target_namespace == target_ns
+            and peer_state.target_deployment == target
+        ):
+            logger.warning(
+                "[%s] Multiple CRs detected for target %s/%s; "
+                "active autoscalers can fight over replicas",
+                key[1],
+                target_ns,
+                target,
+            )
+            state.conflict_logged = True
+            return
+
+
 # Model bundle resolution
 def _parse_crd_spec(
     spec: dict,
@@ -127,6 +156,8 @@ def _parse_crd_spec(
             existing.target_deployment = target
             _cr_state[key] = existing
             logger.info(f"[{cr_name}] Initialized new CR state")
+
+        _warn_if_conflicting_active_cr(key, existing, target_ns, target)
 
         # Resolve model bundle
         try:
@@ -250,3 +281,15 @@ def startup(**kwargs):
     logger.info("PPA Operator starting up")
     logger.info(f"DEFAULT_MODEL_DIR: {DEFAULT_MODEL_DIR}")
     logger.info("=" * 80)
+
+# Model path resolution for CR reconciliation
+def _resolve_paths(config: dict, bundle) -> tuple:
+    """Resolve model and scaler paths from config and bundle.
+
+    Returns:
+        Tuple of (model_path, scaler_path, target_scaler_path, legacy, failed)
+    """
+    model_path = str(bundle.model_path) if bundle.model_path else None
+    scaler_path = str(bundle.scaler_path) if bundle.scaler_path else None
+    target_scaler_path = str(bundle.target_scaler_path) if bundle.target_scaler_path else None
+    return (model_path, scaler_path, target_scaler_path, bundle.legacy, False)

@@ -16,6 +16,7 @@ from rich.progress import (
     Progress,
     ProgressColumn,
     SpinnerColumn,
+    Task,
     TaskProgressColumn,
     TextColumn,
     TimeElapsedColumn,
@@ -226,7 +227,7 @@ def get_live_progress_callback(
             class BlockBarColumn(ProgressColumn):
                 """Custom progress column with block characters."""
 
-                def render(self, task):
+                def render(self, task: Task) -> Text:
                     """Render block-style progress bar."""
                     completed = int((task.percentage or 0) / 100 * 40)
                     remaining = 40 - completed
