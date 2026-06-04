@@ -72,16 +72,6 @@ NEXUS_NATS_URL=nats://localhost:4222
 
 ---
 
-## MCP: code-review-graph
-
-Use before Grep/Glob/Read:
-- `detect_changes` — code review
-- `get_review_context` — source snippets
-- `get_impact_radius` — blast radius
-- `query_graph` — callers/callees/imports/tests
-
----
-
 ## Get Help
 
 1. Architecture → [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
