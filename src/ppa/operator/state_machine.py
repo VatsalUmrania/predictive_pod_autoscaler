@@ -5,17 +5,23 @@ Extracts the reconciliation logic from main.py into a cohesive class
 with clear predict(), decide(), and act() phases.
 """
 
+import asyncio
 import hashlib
 import logging
 import math
+import os
 import random
 import statistics
 import threading
 import time
+from collections import deque
+from datetime import datetime, timezone
 from typing import Any
 
 import kopf
 
+from ppa.bus.nats_client import PpaNATSClient
+from ppa.bus.prediction_event import PpaPredictionEvent
 from ppa.config import (
     DEFAULT_CAPACITY_PER_POD,
     FEATURE_COLUMNS,
@@ -191,6 +197,10 @@ class ScalerStateMachine:
         self.config = config
         self.patch = patch
         self.status = status
+        self._nats = PpaNATSClient(
+            nats_url=os.getenv("NEXUS_NATS_URL", "nats://localhost:4222")
+        )
+        self._pending_events: deque = deque(maxlen=100)
 
     def fetch_and_validate_features(
         self,
@@ -308,6 +318,89 @@ class ScalerStateMachine:
         predicted_load = predictor.predict()
         logger.info(f"[{self.cr_name}] Predicted load: {predicted_load:.1f} req/s")
         return predicted_load
+
+    def _compute_confidence(self) -> float:
+        """Compute prediction confidence from predictor metadata."""
+        predictor = self.state.predictor
+        if predictor is None:
+            return 0.5
+
+        drift_check = predictor.check_concept_drift()
+        if drift_check.get("detected"):
+            severity = drift_check.get("severity", "low")
+            return {"low": 0.6, "medium": 0.4, "high": 0.2}.get(severity, 0.5)
+
+        return 0.75
+
+    async def _publish_prediction(
+        self, predicted_rps: float, features: dict[str, Any]
+    ) -> None:
+        """Publish prediction event to NATS for NEXUS Prescaler consumption.
+
+        Publishes to subject ``ppa.predictions.{deployment}``.
+        On NATS failure, accumulates events in _pending_events (max 100).
+        On next successful publish, flushes the pending queue.
+        """
+        raw_features: dict[str, float] = {}
+        for k, v in features.items():
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                raw_features[k] = float(v)
+
+        event = PpaPredictionEvent(
+            deployment=self.config["target"],
+            namespace=self.config["target_ns"],
+            predicted_rps=predicted_rps,
+            current_rps=features.get("rps_per_replica", 0.0) or 0.0,
+            confidence=self._compute_confidence(),
+            horizon_minutes=self.config["target_horizon"],
+            model_version=self.state.active_model_version or "unknown",
+            raw_features=raw_features,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+        subject = f"ppa.predictions.{self.config['target']}"
+
+        # Lazy connect
+        if not self._nats.is_connected:
+            try:
+                await self._nats.connect()
+            except Exception as exc:
+                logger.warning(
+                    f"[{self.cr_name}] NATS connect failed: {exc} — "
+                    f"accumulating event (pending={len(self._pending_events)}/100)"
+                )
+                self._pending_events.append(event)
+                return
+
+        try:
+            await self._nats.publish(subject, event.to_dict())
+            logger.debug(f"[{self.cr_name}] Published prediction to {subject}")
+        except Exception:
+            logger.warning(
+                f"[{self.cr_name}] NATS publish failed — "
+                f"accumulating event (pending={len(self._pending_events)}/100)"
+            )
+            if len(self._pending_events) >= 100:
+                logger.error(
+                    f"[{self.cr_name}] Pending event deque overflow — dropping oldest"
+                )
+                self._pending_events.popleft()
+            self._pending_events.append(event)
+            return
+
+        # Flush pending events on successful publish
+        while self._pending_events:
+            pending = self._pending_events.popleft()
+            try:
+                await self._nats.publish(
+                    f"ppa.predictions.{pending.deployment}",
+                    pending.to_dict(),
+                )
+            except Exception:
+                self._pending_events.appendleft(pending)
+                logger.warning(
+                    f"[{self.cr_name}] Pending flush failed — retry next cycle"
+                )
+                break
 
     def decide(
         self,
@@ -504,6 +597,15 @@ class ScalerStateMachine:
                     f"[{self.cr_name}] OBSERVER: would scale {self.config['target_ns']}/{self.config['target']}: "
                     f"{current} → {desired} (skipped — observerMode=true)"
                 )
+                # Schedule async NATS publish without blocking kopf reconciliation.
+                # kopf @kopf.timer runs inside an active event loop.
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(
+                        self._publish_prediction(self.state.last_prediction, {})
+                    )
+                else:
+                    asyncio.run(self._publish_prediction(self.state.last_prediction, {}))
             else:
                 now = time.time()
                 if self.state.next_scale_retry_time and now < self.state.next_scale_retry_time:
