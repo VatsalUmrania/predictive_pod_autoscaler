@@ -212,6 +212,47 @@ class NATSClient:
         task = asyncio.create_task(self._keep_alive(sub))
         self._subscribers.append(task)
 
+    RawHandlerType = Callable[[dict, str], Awaitable[None]]  # (payload_dict, subject)
+
+    async def subscribe_raw(
+        self,
+        subject_pattern: str,
+        handler: RawHandlerType,
+        durable_name: str | None = None,
+    ) -> None:
+        """
+        Subscribe to raw-dict NATS subjects (non-IncidentEvent payloads).
+        Used for PPA prediction events on ``ppa.predictions.*``.
+
+        Args:
+            subject_pattern: Full NATS subject with optional wildcard, e.g.
+                             ``ppa.predictions.>``
+            handler:         Async callback receiving ``(payload: dict, subject: str)``.
+            durable_name:    JetStream durable consumer name.
+        """
+        if not self._js:
+            raise RuntimeError("NATSClient not connected.")
+
+        logger.info(f"[NATS] Subscribing to raw pattern '{subject_pattern}' durable={durable_name}")
+
+        async def _raw_handler(msg):
+            try:
+                import json
+                data = json.loads(msg.data.decode("utf-8"))
+                await handler(data, msg.subject)
+                await msg.ack()
+            except Exception as exc:
+                logger.error(f"[NATS] Raw handler error on {msg.subject}: {exc}", exc_info=True)
+                await msg.nak()
+
+        sub_kwargs: dict = {}
+        if durable_name:
+            sub_kwargs["durable"] = durable_name
+
+        sub = await self._js.subscribe(subject_pattern, cb=_raw_handler, **sub_kwargs)
+        task = asyncio.create_task(self._keep_alive(sub))
+        self._subscribers.append(task)
+
     @staticmethod
     async def _keep_alive(sub) -> None:
         """Keeps the subscription task alive indefinitely."""

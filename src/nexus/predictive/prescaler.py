@@ -312,6 +312,53 @@ class Prescaler:
             f"threshold={self._threshold_pct}% "
             f"min_confidence={self._min_confidence}"
         )
+
+    async def subscribe_to_ppa_predictions(self) -> None:
+        """
+        Subscribe to ``ppa.predictions.*`` NATS subject.
+
+        Becomes the primary driver of pre-scaling decisions (DBTrafficCorrelator
+        is the fallback). Falls back to DBTrafficCorrelator in degraded mode.
+        """
+        async def handler(data: dict, subject: str) -> None:
+            if not subject.startswith("ppa.predictions."):
+                return
+
+            deployment = data.get("deployment", subject.split(".")[-1])
+
+            event = IncidentEvent(
+                agent=AgentType.ORCHESTRATOR,
+                signal_type=SignalType.TRAFFIC_SPIKE_PREDICTED,
+                severity=Severity.WARNING,
+                namespace=data.get("namespace", "default"),
+                resource_name=deployment,
+                context={
+                    "current_rps":               data.get("current_rps", 0.0),
+                    "predicted_rps":             data.get("predicted_rps", 0.0),
+                    "confidence":                data.get("confidence", 0.0),
+                    "endpoint":                 f"/{deployment}",
+                    "prediction_horizon_minutes": data.get("horizon_minutes", 10),
+                    "db_table_trigger":          None,
+                    "ppa_model_version":         data.get("model_version", "unknown"),
+                    "raw_features":              data.get("raw_features", {}),
+                },
+                confidence=data.get("confidence", 0.0),
+            )
+            try:
+                await self.handle_spike_prediction(event)
+            except Exception as exc:
+                logger.error(
+                    f"[PreScaler] handle_spike_prediction failed for {subject}: {exc}",
+                    exc_info=True,
+                )
+
+        await self._nats.subscribe_raw(
+            "ppa.predictions.>",
+            handler=handler,
+            durable_name="prescaler-ppa-predictions",
+        )
+        logger.info("[PreScaler] Subscribed to ppa.predictions.*")
+
     # ── NATS handler ──────────────────────────────────────────────────────────
 
     async def handle_spike_prediction(self, event: IncidentEvent) -> None:
