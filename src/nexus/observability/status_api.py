@@ -85,14 +85,15 @@ class NexusContext:
     Populate fields before starting uvicorn.
     Any field left as None causes its endpoint to return 503.
     """
-    orchestrator:    Any = None   # NexusOrchestrator
-    prescaler:       Any = None   # Prescaler
-    feedback_loop:   Any = None   # FeedbackLoop
-    outcome_store:   Any = None   # OutcomeStore
-    knowledge_base:  Any = None   # KnowledgeBase
-    audit_trail:     Any = None   # AuditTrail
-    runbook_library: Any = None   # RunbookLibrary
-    started_at:      float = field(default_factory=time.monotonic)
+    orchestrator:        Any = None   # NexusOrchestrator
+    prescaler:           Any = None   # Prescaler
+    feedback_loop:       Any = None   # FeedbackLoop
+    ppa_outcome_tracker: Any = None   # PpaOutcomeTracker
+    outcome_store:       Any = None   # OutcomeStore
+    knowledge_base:      Any = None   # KnowledgeBase
+    audit_trail:         Any = None   # AuditTrail
+    runbook_library:     Any = None   # RunbookLibrary
+    started_at:          float = field(default_factory=time.monotonic)
 
     def uptime_seconds(self) -> float:
         return round(time.monotonic() - self.started_at, 1)
@@ -108,7 +109,7 @@ context = NexusContext()
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Initialize async resources (TokenStore + NATS) on startup."""
+    """Initialize async resources (TokenStore, NATS, PPA OutcomeTracker) on startup."""
     import logging
     import os
     _log = logging.getLogger(__name__)
@@ -121,7 +122,7 @@ async def _lifespan(app: FastAPI):
     except Exception as exc:
         _log.warning(f"[StatusAPI] TokenStore init skipped: {exc}")
 
-    # ── NATS (required for SDK events to reach the orchestrator) ───────────────
+    # ── NATS (required for SDK events and PPA outcome tracking) ─────────────────
     global _nats_client
     try:
         from nexus.bus.nats_client import NATSClient
@@ -133,15 +134,67 @@ async def _lifespan(app: FastAPI):
         _log.warning(f"[StatusAPI] ⚠️  NATS connection failed ({exc}) — SDK events won't reach orchestrator")
         _nats_client = None
 
+    # ── PPA Outcome Tracker ────────────────────────────────────────────────────
+    global _ppa_outcome_tracker
+    _ppa_outcome_tracker = None
+    if _nats_client:
+        try:
+            from nexus.learning.ppa_outcome_tracker import PpaOutcomeTracker
+            _ppa_outcome_tracker = PpaOutcomeTracker(nats_client=_nats_client)
+            await _ppa_outcome_tracker.start()
+            # Subscribe to PPA prediction events
+            await _nats_client.subscribe(
+                "ppa.predictions.*",
+                cb=_on_ppa_prediction,
+            )
+            _log.info("[StatusAPI] ✅ PPA OutcomeTracker started")
+        except Exception as exc:
+            _log.warning(f"[StatusAPI] ⚠️  PPA OutcomeTracker init failed ({exc})")
+
     _include_integration_routers(app)
     yield
 
     # ── Cleanup ────────────────────────────────────────────────────────────────
+    if _ppa_outcome_tracker:
+        try:
+            await _ppa_outcome_tracker.stop()
+        except Exception:
+            pass
     if _nats_client:
         try:
             await _nats_client.close()
         except Exception:
             pass
+
+
+# Module-level tracker — set by lifespan
+_ppa_outcome_tracker = None
+
+
+async def _on_ppa_prediction(msg: Any) -> None:
+    """Handle incoming ppa.predictions.* events — delegate to OutcomeTracker."""
+    if _ppa_outcome_tracker is None:
+        return
+    try:
+        import json
+        data = json.loads(msg.data.decode())
+        # Subject format: ppa.predictions.<deployment>
+        subject_parts = msg.subject.split(".")
+        deployment = subject_parts[-1] if len(subject_parts) > 2 else "unknown"
+        await _ppa_outcome_tracker.on_prediction(
+            deployment        = deployment,
+            namespace         = data.get("namespace", "default"),
+            predicted_rps     = float(data.get("predicted_rps", 0)),
+            current_rps       = float(data.get("current_rps", 0)),
+            confidence        = float(data.get("confidence", 0)),
+            horizon_minutes   = int(data.get("horizon_minutes", 10)),
+            model_version     = data.get("model_version", "unknown"),
+            raw_features      = data.get("raw_features", {}),
+            event_timestamp   = data.get("timestamp", ""),
+        )
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(f"[_on_ppa_prediction] {exc}")
 
 
 # Module-level NATS client — set by lifespan, read by sdk_ingest

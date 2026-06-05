@@ -38,6 +38,7 @@ from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalT
 from nexus.bus.nats_client import NATSClient
 from nexus.learning.knowledge_base import KnowledgeBase
 from nexus.learning.outcome_store import OutcomeStore, RunbookStats, SystemKPIs
+from nexus.learning.ppa_outcome_tracker import PpaOutcomeTracker
 from nexus.learning.runbook_advisor import RunbookAdvisor, RunbookRecommendation
 from nexus.reasoning.confidence_scorer import ConfidenceScorer
 
@@ -59,18 +60,20 @@ class FeedbackLoop:
 
     def __init__(
         self,
-        outcome_store:     OutcomeStore,
-        knowledge_base:    KnowledgeBase,
-        confidence_scorer: ConfidenceScorer,
-        nats_client:       NATSClient | None = None,
-        interval_s:        float = 300.0,
-        window_days:       int   = 30,
+        outcome_store:       OutcomeStore,
+        knowledge_base:      KnowledgeBase,
+        confidence_scorer:   ConfidenceScorer,
+        nats_client:         NATSClient | None = None,
+        ppa_outcome_tracker: PpaOutcomeTracker | None = None,
+        interval_s:          float = 300.0,
+        window_days:         int   = 30,
     ):
         import os
         self._store   = outcome_store
         self._kb      = knowledge_base
         self._scorer  = confidence_scorer
         self._nats    = nats_client
+        self._ppa_tracker = ppa_outcome_tracker
         self._interval     = float(os.getenv("NEXUS_FEEDBACK_INTERVAL_S", str(interval_s)))
         self._window_days  = int(os.getenv("NEXUS_FEEDBACK_WINDOW_DAYS", str(window_days)))
         self._advisor      = RunbookAdvisor(outcome_store=outcome_store)
@@ -223,12 +226,11 @@ class FeedbackLoop:
 
     async def _update_ppa_outcomes(self) -> None:
         """
-        Log PPA prediction accuracy records.
-
-        Direct persistence (JSONL) is handled by PpaOutcomeTracker.
-        This call provides visibility into OutcomeStore analytics.
+        Flush PPA outcome batch to JSONL for PPA retraining pipeline.
+        Nightly — calls run_batch_flush() on the wired PpaOutcomeTracker.
         """
-        logger.debug("[FeedbackLoop] PPA outcome tracking cycle complete")
+        if self._ppa_tracker is not None:
+            await self._ppa_tracker.run_batch_flush()
 
     async def _publish_summary(
         self,
@@ -312,21 +314,23 @@ def _infer_signals_from_runbook(runbook_id: str) -> set | None:
 # ──────────────────────────────────────────────────────────────────────────────
 
 async def build_feedback_loop(
-    confidence_scorer: ConfidenceScorer,
-    nats_client:       NATSClient | None = None,
-    audit_db_path:     str | None = None,
-    knowledge_db_path: str | None = None,
-    interval_s:        float = 300.0,
+    confidence_scorer:     ConfidenceScorer,
+    nats_client:           NATSClient | None = None,
+    ppa_outcome_tracker:   PpaOutcomeTracker | None = None,
+    audit_db_path:         str | None = None,
+    knowledge_db_path:     str | None = None,
+    interval_s:            float = 300.0,
 ) -> FeedbackLoop:
     """
     Build and initialize a FeedbackLoop with its dependencies.
 
     Args:
-        confidence_scorer: Phase 4 ConfidenceScorer (will receive historical boosts).
-        nats_client:       Optional NATSClient for publishing learning updates.
-        audit_db_path:     Override for AuditTrail DB path.
-        knowledge_db_path: Override for KnowledgeBase DB path.
-        interval_s:        Polling interval (default 300s / 5 min).
+        confidence_scorer:   Phase 4 ConfidenceScorer (will receive historical boosts).
+        nats_client:        Optional NATSClient for publishing learning updates.
+        ppa_outcome_tracker: Optional PpaOutcomeTracker for PPA prediction tracking.
+        audit_db_path:      Override for AuditTrail DB path.
+        knowledge_db_path:  Override for KnowledgeBase DB path.
+        interval_s:         Polling interval (default 300s / 5 min).
 
     Returns:
         Initialized FeedbackLoop (not yet started — call loop.start()).
@@ -342,5 +346,6 @@ async def build_feedback_loop(
         knowledge_base    = kb,
         confidence_scorer = confidence_scorer,
         nats_client       = nats_client,
+        ppa_outcome_tracker = ppa_outcome_tracker,
         interval_s        = interval_s,
     )
