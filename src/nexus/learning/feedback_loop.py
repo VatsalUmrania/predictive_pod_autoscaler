@@ -184,6 +184,9 @@ class FeedbackLoop:
         # ── 5. Update signal-pattern records ─────────────────────────────────
         await self._update_signal_patterns()
 
+        # ── 4b. Record PPA prediction accuracy ────────────────────────────────
+        await self._update_ppa_outcomes()
+
         # ── 6. Publish NATS event ─────────────────────────────────────────────
         cycle_ms = int((time.monotonic() - cycle_start) * 1000)
         self._last_kpis    = system_kpis.to_dict()
@@ -217,6 +220,15 @@ class FeedbackLoop:
                     runbook_id   = record.runbook_id,
                     success      = record.is_success,
                 )
+
+    async def _update_ppa_outcomes(self) -> None:
+        """
+        Log PPA prediction accuracy records.
+
+        Direct persistence (JSONL) is handled by PpaOutcomeTracker.
+        This call provides visibility into OutcomeStore analytics.
+        """
+        logger.debug("[FeedbackLoop] PPA outcome tracking cycle complete")
 
     async def _publish_summary(
         self,

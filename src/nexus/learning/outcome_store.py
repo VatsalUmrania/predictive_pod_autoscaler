@@ -391,3 +391,15 @@ class OutcomeStore:
             """,
             (since, limit),
         )
+
+    async def write_ppa_outcome(self, outcome: dict) -> None:
+        """Record a PPA prediction outcome verdict (passthrough / no-op stub).
+
+        In Phase 3 direct persistence is handled by PpaOutcomeTracker which
+        appends JSONL to /data/ppa_outcomes.jsonl. This stub allows FeedbackLoop
+        to call through OutcomeStore without importing the tracker.
+        """
+        logger.debug(
+            f"[OutcomeStore] PPA outcome: verdict={outcome.get('verdict')} "
+            f"for {outcome.get('deployment')}"
+        )
