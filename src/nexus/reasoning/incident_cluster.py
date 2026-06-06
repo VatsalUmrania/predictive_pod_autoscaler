@@ -46,6 +46,7 @@ class IncidentCluster:
     created_at: datetime
     last_event_at: datetime
     events: list[IncidentEvent] = field(default_factory=list)
+    ppa_raw_features: dict[str, float] | None = None
 
     # ── Computed properties ───────────────────────────────────────────────────
 
@@ -172,15 +173,16 @@ class IncidentCluster:
             ctx_kv = ""
             if isinstance(event.context, dict):
                 _key_order = [
-                    "error_rate", "current_value", "threshold", "anomaly_score",
+                    "current_rps", "error_rate", "threshold", "anomaly_score",
                     "latency_p95_ms", "restart_count", "missing_keys",
                     "sha", "author", "reason", "utilization_pct", "active_connections",
+                    "predicted_rps", "confidence", "raw_features",
                 ]
                 relevant = {
                     k: event.context[k]
-                    for k in _key_order
+                    for k in _key_order[:3]
                     if k in event.context
-                }[:3]
+                }
                 if relevant:
                     parts = []
                     for k, v in relevant.items():
@@ -198,6 +200,14 @@ class IncidentCluster:
                 f"sev={str(event.severity).lower()}"
                 f"{ctx_kv}"
             )
+
+            if isinstance(event.context, dict) and "raw_features" in event.context:
+                rf = event.context["raw_features"]
+                lines.append(
+                    f"         raw: rps/rep={rf.get('rps_per_replica', 'N/A'):>7}  "
+                    f"cpu={rf.get('cpu_utilization_pct', 'N/A'):>6}  "
+                    f"rps={rf.get('requests_per_second', 'N/A'):>7}"
+                )
 
         # Deploy event detail block
         if self.has_deploy_event:

@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from nexus.bus.incident_event import IncidentEvent
+from nexus.bus.incident_event import IncidentEvent, SignalType
 from nexus.reasoning.incident_cluster import IncidentCluster
 
 logger = logging.getLogger(__name__)
@@ -122,6 +122,10 @@ class EventCorrelator:
             cluster = IncidentCluster.new(event)
             self._open[key] = cluster
             logger.debug(f"[EventCorrelator] New cluster {cluster.cluster_id} for ns={key}")
+            # Propagate ppa_raw_features from TRAFFIC_SPIKE_PREDICTED events
+            if (isinstance(event.context, dict) and "raw_features" in event.context
+                    and event.signal_type == SignalType.TRAFFIC_SPIKE_PREDICTED):
+                cluster.ppa_raw_features = event.context["raw_features"]
             return None
 
         # Check if the window has expired (time since last event)
@@ -131,6 +135,10 @@ class EventCorrelator:
             old_cluster = self._open.pop(key, None)
             cluster = IncidentCluster.new(event)
             self._open[key] = cluster
+            # Propagate ppa_raw_features from TRAFFIC_SPIKE_PREDICTED events
+            if (isinstance(event.context, dict) and "raw_features" in event.context
+                    and event.signal_type == SignalType.TRAFFIC_SPIKE_PREDICTED):
+                cluster.ppa_raw_features = event.context["raw_features"]
             logger.debug(
                 f"[EventCorrelator] Window expired ({gap_s:.0f}s) — "
                 f"old={old_cluster and old_cluster.cluster_id} new={cluster.cluster_id}"
