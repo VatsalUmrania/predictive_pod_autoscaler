@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import logging
 
-from nexus.bus.incident_event import SignalType
 from nexus.reasoning.incident_cluster import IncidentCluster
 from nexus.reasoning.rca_engine import RCAResult
 

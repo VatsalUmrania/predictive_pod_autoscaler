@@ -36,7 +36,6 @@ from nexus.learning.feedback_loop import FeedbackLoop
 from nexus.learning.ppa_outcome_tracker import PendingPrediction, PpaOutcomeTracker
 from nexus.predictive.prescaler import PrescaleMode, Prescaler
 
-
 # ── Test fixtures ──────────────────────────────────────────────────────────────
 
 def make_ppa_payload(
