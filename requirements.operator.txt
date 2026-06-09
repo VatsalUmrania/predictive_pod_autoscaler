@@ -13,3 +13,4 @@ rich==14.3.3
 typer==0.15.2
 python-json-logger==4.0.0
 tflite-runtime>=2.14.0
+nats-py>=2.7.0

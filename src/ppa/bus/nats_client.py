@@ -45,25 +45,29 @@ class PpaNATSClient:
         js = self._js
         if js is None:
             return
+        cfg = StreamConfig(
+            name=PPA_PREDICTION_STREAM,
+            subjects=["ppa.predictions.>", "ppa.outcomes.>"],
+            retention=RetentionPolicy.LIMITS,
+            storage=StorageType.MEMORY,
+            max_age=3600,
+            max_bytes=10 * 1024 * 1024,
+        )
         try:
-            await js.find_stream("ppa.predictions.>")  # type: ignore[attr-defined]
-            logger.debug(f"[PPA-NATS] Stream '{PPA_PREDICTION_STREAM}' already exists")
-        except Exception:
-            try:
-                cfg = StreamConfig(
-                    name=PPA_PREDICTION_STREAM,
-                    subjects=["ppa.predictions.>", "ppa.outcomes.>"],
-                    retention=RetentionPolicy.LIMITS,
-                    storage=StorageType.MEMORY,
-                    max_age=3600,
-                    max_bytes=10 * 1024 * 1024,
-                )
-                await js.add_stream(cfg)  # type: ignore[attr-defined]
-                logger.info(f"[PPA-NATS] Created stream '{PPA_PREDICTION_STREAM}'")
-            except Exception as exc:
-                logger.warning(
-                    f"[PPA-NATS] Stream creation warning (likely harmless): {exc}"
-                )
+            await js.add_stream(cfg)  # type: ignore[attr-defined]
+            logger.info(f"[PPA-NATS] Created stream '{PPA_PREDICTION_STREAM}'")
+        except Exception as exc:
+            # err_code=10058 → stream already exists with a different config.
+            # Reconcile by updating to the desired config instead of warning.
+            exc_str = str(exc)
+            if "10058" in exc_str or "already in use" in exc_str:
+                try:
+                    await js.update_stream(cfg)  # type: ignore[attr-defined]
+                    logger.info(f"[PPA-NATS] Updated stream '{PPA_PREDICTION_STREAM}' config")
+                except Exception as upd_exc:
+                    logger.warning(f"[PPA-NATS] Stream update failed (non-fatal): {upd_exc}")
+            else:
+                logger.warning(f"[PPA-NATS] Stream ensure failed (non-fatal): {exc}")
 
     async def connect(self) -> None:
         self._nc = await nats.connect(

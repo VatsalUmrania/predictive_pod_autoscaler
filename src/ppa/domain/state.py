@@ -6,7 +6,7 @@ Moved from operator/main.py (Phase 2 refactoring).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ppa.operator.predictor import Predictor
@@ -87,3 +87,6 @@ class CRState:
     last_status_update_time: float = 0.0
     last_status_snapshot: dict | None = None
     last_decision_trace: dict | None = None
+    # Cached ScalerStateMachine — persisted so its NATS loop/thread survive
+    # across kopf timer ticks (recreating it every 30 s killed the NATS conn).
+    state_machine: Any | None = None

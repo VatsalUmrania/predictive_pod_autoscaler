@@ -241,15 +241,25 @@ def reconcile(spec, status, meta, patch, **kwargs):
         return
 
     try:
-        # 2. Create state machine and run reconciliation
-        state_machine = ScalerStateMachine(
-            cr_name=cr_name,
-            cr_namespace=cr_ns,
-            state=state,
-            config=config,
-            patch=patch,
-            status=status,
-        )
+        # 2. Reuse or create ScalerStateMachine so the NATS loop/thread
+        # survives across timer ticks (a new instance every 30 s would
+        # kill the NATS connection before it could be established).
+        if state.state_machine is None:
+            state.state_machine = ScalerStateMachine(
+                cr_name=cr_name,
+                cr_namespace=cr_ns,
+                state=state,
+                config=config,
+                patch=patch,
+                status=status,
+            )
+        else:
+            # Patch and status change each invocation — update in-place.
+            state.state_machine.patch = patch
+            state.state_machine.status = status
+            state.state_machine.config = config
+
+        state_machine = state.state_machine
 
         # 3. Run full cycle
         status_update = state_machine.reconcile()
@@ -277,9 +287,12 @@ def on_delete(meta, **kwargs):
 @kopf.on.startup()
 def startup(**kwargs):
     """Operator startup hook."""
+    import os
+    nats_url = os.getenv("NATS_URL", "nats://localhost:4222")
     logger.info("=" * 80)
     logger.info("PPA Operator starting up")
     logger.info(f"DEFAULT_MODEL_DIR: {DEFAULT_MODEL_DIR}")
+    logger.info(f"NATS_URL: {nats_url}")
     logger.info("=" * 80)
 
 # Model path resolution for CR reconciliation

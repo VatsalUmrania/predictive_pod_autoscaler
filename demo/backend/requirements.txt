@@ -11,3 +11,8 @@ httpx>=0.27.0
 pydantic>=2.0.0
 pyyaml>=6.0
 nats-py>=2.6.0
+
+# ── PPA Observability ─────────────────────────────────────────────────────────
+# Required so Prometheus (via PodMonitor on port 9091) can scrape HTTP metrics
+# that feed the PPA operator's 14-dimensional feature pipeline.
+prometheus_client>=0.20.0

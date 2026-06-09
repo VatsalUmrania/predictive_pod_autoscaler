@@ -197,10 +197,24 @@ class ScalerStateMachine:
         self.config = config
         self.patch = patch
         self.status = status
+        # Resolve NATS URL — deployment sets NATS_URL; fall back to localhost for local dev.
         self._nats = PpaNATSClient(
-            nats_url=os.getenv("NEXUS_NATS_URL", "nats://localhost:4222")
+            nats_url=os.getenv("NATS_URL", "nats://localhost:4222")
         )
         self._pending_events: deque = deque(maxlen=100)
+
+        # Dedicated event loop for NATS coroutines.
+        # kopf reconcile handlers run in ThreadPoolExecutor threads that have
+        # no event loop, so asyncio.get_event_loop() raises RuntimeError in
+        # Python 3.10+.  We keep one loop per CR alive in a daemon thread and
+        # schedule coroutines onto it with run_coroutine_threadsafe.
+        self._nats_loop = asyncio.new_event_loop()
+        self._nats_thread = threading.Thread(
+            target=self._nats_loop.run_forever,
+            daemon=True,
+            name=f"ppa-nats-{cr_name}",
+        )
+        self._nats_thread.start()
 
     def fetch_and_validate_features(
         self,
@@ -589,23 +603,30 @@ class ScalerStateMachine:
         )
         return candidate, True
 
-    def act(self, desired: int, current: int) -> None:
-        """Apply scaling decision to deployment."""
+    def _schedule_nats_publish(self, predicted_rps: float, features: dict[str, Any]) -> None:
+        """Schedule a NATS prediction event on the dedicated background loop.
+
+        Thread-safe: safe to call from any kopf ThreadPoolExecutor thread.
+        """
+        asyncio.run_coroutine_threadsafe(
+            self._publish_prediction(predicted_rps, features),
+            self._nats_loop,
+        )
+
+    def act(self, desired: int, current: int, features: dict[str, Any] | None = None, predicted_rps: float | None = None) -> None:
+        """Apply scaling decision to deployment and publish NATS event."""
+        _features = features or {}
+        _rps = predicted_rps if predicted_rps is not None else self.state.last_prediction
+
         if desired != current:
             if self.config["observer_mode"]:
                 logger.info(
                     f"[{self.cr_name}] OBSERVER: would scale {self.config['target_ns']}/{self.config['target']}: "
                     f"{current} → {desired} (skipped — observerMode=true)"
                 )
-                # Schedule async NATS publish without blocking kopf reconciliation.
-                # kopf @kopf.timer runs inside an active event loop.
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    loop.create_task(
-                        self._publish_prediction(self.state.last_prediction, {})
-                    )
-                else:
-                    asyncio.run(self._publish_prediction(self.state.last_prediction, {}))
+                # Publish prediction to NATS even in observer mode so NEXUS can
+                # record shadow decisions.
+                self._schedule_nats_publish(_rps, _features)
             else:
                 now = time.time()
                 if self.state.next_scale_retry_time and now < self.state.next_scale_retry_time:
@@ -621,12 +642,14 @@ class ScalerStateMachine:
                     f"{current} → {desired}"
                 )
                 if scale_deployment(self.config["target"], desired, self.config["target_ns"]):
-            # Increment scale events counter (centralized in metrics.py)
+                    # Increment scale events counter (centralized in metrics.py)
                     metrics = PpaOperatorMetrics.for_cr(self.cr_name, self.cr_namespace)
                     metrics.scale_events.inc()
                     self.state.stable_count = 0
                     _reset_scale_backoff(self.state, self.patch)
                     _update_status(self.patch, "lastScaleTime", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+                    # Publish to NATS after successful scale so NEXUS can track outcomes.
+                    self._schedule_nats_publish(_rps, _features)
                 else:
                     _record_scale_failure(self.state, self.patch, "Kubernetes scale patch failed")
         else:
@@ -656,9 +679,9 @@ class ScalerStateMachine:
         # 4. Decide
         desired, should_apply = self.decide(predicted_load, features, raw_metrics, current)
 
-        # 5. Act
+        # 5. Act (pass features + predicted_load so NATS events carry real data)
         if should_apply:
-            self.act(desired, current)
+            self.act(desired, current, features=features, predicted_rps=predicted_load)
 
         # Return status update fragment
         return {

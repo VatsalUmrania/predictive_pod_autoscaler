@@ -464,3 +464,138 @@ async def pending_approvals() -> list[dict[str, Any]]:
         return queue.pending_list()
     except AttributeError:
         return []
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PPA Integration Endpoints
+# Backed by the PpaOutcomeTracker started in the lifespan.
+# These are available without a full Orchestrator / Prescaler — the
+# OutcomeTracker subscribes to ppa.predictions.* via NATS directly.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.get("/ppa/decisions", tags=["predictive"])
+def ppa_decisions(n: int = 20) -> list[dict[str, Any]]:
+    """
+    Recent PPA prediction events received from the PPA operator via NATS.
+
+    Each entry represents one ppa.predictions.* message recorded by the
+    PpaOutcomeTracker. Outcomes (verdict + SMAPE) are back-filled after
+    the prediction horizon elapses.
+
+    Returns [] when no events have been received yet (normal on first startup
+    before the PPA operator publishes its first cycle).
+    """
+    tracker = _ppa_outcome_tracker
+    if tracker is None:
+        return []
+
+    # Combine pending (unresolved) + resolved outcomes, newest first
+    pending = [
+        {
+            "decision_id":    p.decision_id,
+            "deployment":     p.deployment,
+            "namespace":      p.namespace,
+            "predicted_rps":  round(p.predicted_rps, 1),
+            "current_rps":    round(p.current_rps, 1),
+            "confidence":     round(p.confidence, 3),
+            "horizon_minutes": p.horizon_minutes,
+            "model_version":  p.model_version,
+            "status":         "pending",
+            "verdict":        None,
+            "smape":          None,
+            "created_at":     p.created_at.isoformat(),
+            "resolves_at":    p.expected_resolution_time.isoformat(),
+        }
+        for p in tracker._pending.values()
+    ]
+
+    resolved = [
+        {
+            "decision_id":    o.get("decision_id"),
+            "deployment":     o.get("deployment"),
+            "namespace":      o.get("namespace"),
+            "predicted_rps":  o.get("predicted_rps"),
+            "current_rps":    None,   # not stored in outcome event
+            "confidence":     o.get("confidence"),
+            "horizon_minutes": None,
+            "model_version":  o.get("model_version"),
+            "status":         "resolved",
+            "verdict":        o.get("verdict"),
+            "smape":          o.get("smape"),
+            "created_at":     o.get("resolution_at"),
+            "resolves_at":    None,
+        }
+        for o in tracker._recent_outcomes
+    ]
+
+    all_decisions = pending + resolved
+    # Sort newest first (pending have created_at; resolved have resolution_at)
+    all_decisions.sort(
+        key=lambda d: (d.get("created_at") or d.get("resolves_at") or ""),
+        reverse=True,
+    )
+    return all_decisions[:n]
+
+
+@app.get("/ppa/stats", tags=["predictive"])
+def ppa_stats() -> dict[str, Any]:
+    """
+    Aggregated PPA prediction statistics from the PpaOutcomeTracker.
+
+    Returns counts of pending / resolved predictions, mean SMAPE,
+    and spike hit-rate so you can gauge model quality without Grafana.
+    """
+    tracker = _ppa_outcome_tracker
+    if tracker is None:
+        return {
+            "tracker_ready":  False,
+            "nats_connected": False,
+            "message": (
+                "PpaOutcomeTracker not initialised — "
+                "check NATS_URL in the nexus-api container."
+            ),
+        }
+
+    resolved = tracker._recent_outcomes
+    pending  = list(tracker._pending.values())
+
+    total_resolved = len(resolved)
+    spike_hits     = sum(1 for o in resolved if o.get("verdict") == "spike_hit")
+    spike_misses   = sum(1 for o in resolved if o.get("verdict") == "spike_missed")
+    smape_vals     = [o["smape"] for o in resolved if o.get("smape") is not None]
+    mean_smape     = round(sum(smape_vals) / len(smape_vals), 3) if smape_vals else None
+    hit_rate       = round(spike_hits / total_resolved, 3) if total_resolved else None
+
+    return {
+        "tracker_ready":    True,
+        "nats_connected":   _nats_client is not None,
+        "pending_count":    len(pending),
+        "resolved_count":   total_resolved,
+        "spike_hits":       spike_hits,
+        "spike_misses":     spike_misses,
+        "correct_no_spike": total_resolved - spike_hits - spike_misses,
+        "mean_smape":       mean_smape,
+        "spike_hit_rate":   hit_rate,
+        "ready_for_advisory": (hit_rate or 0) >= 0.7 and total_resolved >= 10,
+    }
+
+
+@app.get("/ppa/pending", tags=["predictive"])
+def ppa_pending() -> list[dict[str, Any]]:
+    """Predictions currently awaiting their horizon window to elapse."""
+    tracker = _ppa_outcome_tracker
+    if tracker is None:
+        return []
+    return [
+        {
+            "decision_id":    p.decision_id,
+            "deployment":     p.deployment,
+            "predicted_rps":  round(p.predicted_rps, 1),
+            "current_rps":    round(p.current_rps, 1),
+            "confidence":     round(p.confidence, 3),
+            "horizon_minutes": p.horizon_minutes,
+            "resolves_at":    p.expected_resolution_time.isoformat(),
+            "is_expired":     p.is_expired,
+        }
+        for p in tracker._pending.values()
+    ]
