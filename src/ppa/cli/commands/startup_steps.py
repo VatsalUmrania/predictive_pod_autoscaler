@@ -1,6 +1,6 @@
 """Startup command step implementations.
 
-Contains 11 bootstrap steps for PPA cluster initialization (prerequisites → chaos profiling).
+Contains 10 bootstrap steps for PPA cluster initialization (prerequisites → data collection).
 """
 
 from __future__ import annotations
@@ -26,19 +26,15 @@ from ppa.cli.utils import (
     warn,
 )
 from ppa.config import (
-    APP_PORT,
     DEFAULT_APP_NAME,
     DEFAULT_NAMESPACE,
     DEPLOY_DIR,
-    GRAFANA_PORT,
-    METRICS_PORT,
     MINIKUBE_CPUS,
     MINIKUBE_DISK_SIZE,
     MINIKUBE_DRIVER,
     MINIKUBE_K8S_VERSION,
     MINIKUBE_MEMORY,
     PROJECT_DIR,
-    PROMETHEUS_PORT,
 )
 
 # Security constants
@@ -50,7 +46,6 @@ GIT_URL_PATTERN = re.compile(
 )
 
 SHELL_INJECTION_CHARS = {";", "|", "&", "$", "`", "\n", "\x00"}
-PORT_FORWARD_LOG_DIR = Path(os.getenv("PPA_PORT_FORWARD_LOG_DIR", "/tmp/ppa-port-forwards"))
 
 # Global to store app_path between steps
 _app_path: Path | None = None
@@ -139,11 +134,10 @@ STEPS: list[tuple[int, str, str | Callable[[], str]]] = [
     (4, "Install Prometheus Stack", "kube-prometheus-stack via Helm"),
     (5, "Build & Deploy Test App", "Build image inside Minikube"),
     (6, "Deploy Traffic Generator", "In-cluster Locust swarm"),
-    (7, "Start Port Forwards", "Prometheus, Grafana, test-app"),
-    (8, "Start Port Forward Watchdog", "Auto-restart dead forwards"),
+    (7, "Apply Nexus K8s Manifests", "NATS + nexus-api in the cluster"),
+    (8, "Verify In-Cluster Services", "NATS and Prometheus reachability check"),
     (9, "Verify ML Features", "14-dim feature set from Prometheus"),
     (10, "Deploy Data Collection CronJob", "Hourly data collector"),
-    (11, "Fixed-Replica Chaos Profiling", "Capacity profiling under chaos load"),
 ]
 
 
@@ -388,86 +382,44 @@ def step_6_traffic_gen() -> None:
     success("Traffic generator deployed")
 
 
-def _start_port_forward(cmd: list[str], port: int, name: str) -> None:
-    """Start a detached kubectl port-forward and verify it did not exit immediately."""
-    PORT_FORWARD_LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = PORT_FORWARD_LOG_DIR / f"{name.lower().replace(' ', '-')}-{port}.log"
+def step_7_nexus_manifests() -> None:
+    """Apply NATS and nexus-api manifests into the nexus namespace."""
+    nats_manifest = PROJECT_DIR / "deploy" / "nexus" / "nats-statefulset.yaml"
+    nexus_manifest = PROJECT_DIR / "deploy" / "nexus" / "nexus-api-deployment.yaml"
 
-    with open(log_path, "ab") as log_file:
-        process = subprocess.Popen(
-            cmd,
-            stdout=log_file,
-            stderr=log_file,
-            start_new_session=True,
-        )
+    run_cmd(["kubectl", "apply", "-f", str(nats_manifest)], title="Applying NATS StatefulSet")
+    run_cmd(["kubectl", "apply", "-f", str(nexus_manifest)], title="Applying nexus-api Deployment")
 
-    time.sleep(1)
-    if process.poll() is None:
-        success(f"{name} port-forward started (→ {port})")
-        return
-
-    detail = log_path.read_text(errors="replace").strip()
-    error(f"{name} port-forward failed (see {log_path})")
-    if detail:
-        error(detail.splitlines()[-1])
-    raise typer.Exit(1)
+    wait_for_pods("app=nats", "nexus")
+    wait_for_pods("app=nexus-api", "nexus")
+    success("NATS and nexus-api running in cluster")
 
 
-def step_7_port_forwards() -> None:
-    """Start port forwards for Prometheus, Grafana, test-app, and test-app metrics."""
-    info("Starting port forwards (background)...")
+def step_8_verify_services() -> None:
+    """Exec into PPA operator and verify NATS + Prometheus are reachable."""
+    from ppa.config import PROMETHEUS_URL
 
-    commands = [
-        (
-            [
-                "kubectl",
-                "port-forward",
-                "-n",
-                "monitoring",
-                "svc/prometheus-operated",
-                f"{PROMETHEUS_PORT}:9090",
-            ],
-            PROMETHEUS_PORT,
-            "Prometheus",
-        ),
-        (
-            [
-                "kubectl",
-                "port-forward",
-                "-n",
-                "monitoring",
-                "svc/prometheus-grafana",
-                f"{GRAFANA_PORT}:80",
-            ],
-            GRAFANA_PORT,
-            "Grafana",
-        ),
-        (
-            ["kubectl", "port-forward", f"svc/{DEFAULT_APP_NAME}", f"{APP_PORT}:80"],
-            APP_PORT,
-            "Test App",
-        ),
-        (
-            ["kubectl", "port-forward", f"svc/{DEFAULT_APP_NAME}", f"{METRICS_PORT}:9091"],
-            METRICS_PORT,
-            "Test App Metrics",
-        ),
-    ]
+    info("Checking in-cluster service connectivity from PPA operator...")
 
-    # Start port-forwards as detached background processes (survive parent exit).
-    for cmd, port, name in commands:
-        _start_port_forward(cmd, port, name)
+    # NATS health via JetStream monitoring port
+    run_cmd(
+        [
+            "kubectl", "exec", "deployment/ppa-operator", "--",
+            "wget", "-qO-",
+            "http://nats.nexus.svc.cluster.local:8222/healthz",
+        ],
+        title="NATS health check (operator → nats.nexus.svc.cluster.local:8222)",
+    )
 
+    # Prometheus health — strip http(s):// prefix for host:port form
+    prom_host = PROMETHEUS_URL.rstrip("/").split("://", 1)[-1]
+    run_cmd(
+        ["kubectl", "exec", "deployment/ppa-operator", "--",
+         "wget", "-qO-", f"http://{prom_host}/-/healthy"],
+        title="Prometheus health check (operator → Prometheus)",
+    )
 
-def step_8_watchdog() -> None:
-    """Deploy port-forward watchdog to auto-restart dead forwards."""
-    watchdog_path = PROJECT_DIR / "deploy" / "port-forward-watchdog.sh"
-    if not watchdog_path.exists():
-        warn(f"Watchdog script not found at {watchdog_path} — skipping")
-        return
-
-    run_cmd(["bash", str(watchdog_path)], title="Starting port-forward watchdog")
-    success("Port-forward watchdog started")
+    success("All in-cluster services reachable — no port-forwards needed")
 
 
 def step_9_verify_features() -> None:
@@ -479,7 +431,6 @@ def step_9_verify_features() -> None:
 
 def step_10_cronjob() -> None:
     """Deploy hourly data collection CronJob."""
-    # Build ppa-data-collector image into minikube
     minikube_env = get_minikube_docker_env()
     if minikube_env:
         dataflow_dockerfile = PROJECT_DIR / "src" / "ppa" / "dataflow" / "Dockerfile"
@@ -507,13 +458,6 @@ def step_10_cronjob() -> None:
     success("Data CronJob deployed")
 
 
-def step_11_chaos() -> None:
-    """Run fixed-replica chaos profiling for capacity baseline."""
-    info("Starting fixed-replica chaos profiling...")
-    info("This creates a load profile baseline under chaos conditions")
-    success("Chaos profiling started (runs in background)")
-
-
 # Step registry
 
 STEP_FUNCS: dict[int, Callable[[], None]] = {
@@ -523,9 +467,8 @@ STEP_FUNCS: dict[int, Callable[[], None]] = {
     4: step_4_prometheus,
     5: step_5_test_app,
     6: step_6_traffic_gen,
-    7: step_7_port_forwards,
-    8: step_8_watchdog,
+    7: step_7_nexus_manifests,
+    8: step_8_verify_services,
     9: step_9_verify_features,
     10: step_10_cronjob,
-    11: step_11_chaos,
 }

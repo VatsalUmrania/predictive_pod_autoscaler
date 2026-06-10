@@ -1,0 +1,149 @@
+# nexus-api Deployment + Services — runs inside Minikube alongside PPA operator.
+# Replaces the Docker Compose nexus-api service. All connections are K8s service DNS.
+#
+# Apply with:
+#   kubectl apply -f deploy/nexus/nexus-api-deployment.yaml
+#
+# After apply, in-cluster access:
+#   http://nexus-api.nexus.svc.cluster.local:8080
+# Browser access (developer dashboards):
+#   http://$(minikube ip):30081
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nexus
+  # Already defined in nats-statefulset.yaml; idempotent — namespace is a global resource.
+  labels:
+    app.kubernetes.io/name: nexus
+    app.kubernetes.io/component: self-healing
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-api
+  namespace: nexus
+  labels:
+    app: nexus-api
+    app.kubernetes.io/name: nexus-api
+    app.kubernetes.io/component: self-healing
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nexus-api
+  template:
+    metadata:
+      labels:
+        app: nexus-api
+    spec:
+      containers:
+        - name: nexus-api
+          image: ghcr.io/vatsalumrania/nexus-api:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9100
+              protocol: TCP
+          env:
+            - name: NATS_URL
+              value: "nats://nats.nexus.svc.cluster.local:4222"
+            - name: NEXUS_AUDIT_DB_PATH
+              value: /data/nexus_audit.db
+            - name: NEXUS_KNOWLEDGE_DB_PATH
+              value: /data/nexus_knowledge.db
+            - name: NEXUS_LOG_LEVEL
+              value: info
+            # Optional: mount via Secret named "nexus-secrets" with key "gemini-api-key"
+            # - name: NEXUS_GEMINI_API_KEY
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: nexus-secrets
+            #       key: gemini-api-key
+            #       optional: true
+          volumeMounts:
+            - name: nexus-data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+      volumes:
+        - name: nexus-data
+          persistentVolumeClaim:
+            claimName: nexus-api-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nexus-api-data
+  namespace: nexus
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+# ClusterIP — used by PPA operator and shop-demo inside the cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus-api
+  namespace: nexus
+  labels:
+    app: nexus-api
+spec:
+  selector:
+    app: nexus-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+    - name: metrics
+      port: 9100
+      targetPort: 9100
+      protocol: TCP
+  type: ClusterIP
+---
+# NodePort — used by developers to access NEXUS dashboards from browser.
+# Avoids any port-forward requirement.
+# Access: http://$(minikube ip):30081
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus-api-external
+  namespace: nexus
+  labels:
+    app: nexus-api
+spec:
+  selector:
+    app: nexus-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30081
+      protocol: TCP
+  type: NodePort

@@ -16,18 +16,21 @@ uvicorn main:app --port 8001 --reload &
 python demo_orchestrator.py &      # starts the reasoning loop
 
 # 3. Open the NEXUS Status API (must be running separately)
-# See deploy/nexus/docker-compose.dev.yaml
+# See demo/docker-compose.standalone.yaml — runs full NEXUS stack in Docker
+# Or for the standard dev flow, NEXUS runs inside Kubernetes (see integration guide)
 
 # 4. Open in browser
 open frontend/shop.html      # E-commerce store
 open frontend/console.html   # NEXUS Console
 ```
 
-## Full Docker Stack
+## Full Docker Stack (no Kubernetes)
+
+For running NEXUS locally without a Kubernetes cluster:
 
 ```bash
 cd demo
-docker compose up -d
+docker compose -f docker-compose.standalone.yaml up -d
 ```
 
 | Service | URL | What it is |
@@ -37,6 +40,9 @@ docker compose up -d
 | Grafana | http://localhost:3000 | Metrics dashboard (admin/nexus_admin) |
 | Prometheus | http://localhost:9090 | Metrics |
 | NATS | nats://localhost:4222 | Event bus |
+
+**For the standard PPA development workflow (in-cluster NEXUS):** see
+[docs/ppa_nexus_nats_integration_test_guide.md](../docs/ppa_nexus_nats_integration_test_guide.md).
 
 ## Presentation Script
 

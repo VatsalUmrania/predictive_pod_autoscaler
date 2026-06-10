@@ -92,9 +92,11 @@ app.add_typer(data_app, name="data", help="Training data — export, validate, i
 
 # --- SYSTEM ---
 from ppa.cli.commands.config_cmd import config_app  # noqa: E402
+from ppa.cli.commands.nexus import app as nexus_app  # noqa: E402
 from ppa.cli.commands.operator import app as operator_app  # noqa: E402
 
 app.add_typer(operator_app, name="operator", help="Operator image lifecycle — build, deploy, restart", rich_help_panel="SYSTEM")
+app.add_typer(nexus_app, name="nexus", help="NEXUS (NATS + nexus-api) lifecycle — apply, status, logs, verify", rich_help_panel="SYSTEM")
 app.add_typer(config_app, name="config", help="View and edit PPA configuration", rich_help_panel="SYSTEM")
 
 @app.command("cleanup", help="Stop all PPA services and remove session", rich_help_panel="SYSTEM")

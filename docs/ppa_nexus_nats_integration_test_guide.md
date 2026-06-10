@@ -9,7 +9,9 @@
 
 | File | Change |
 |------|--------|
-| `deploy/operator-deployment.yaml` | Added `NATS_URL: nats://host.minikube.internal:4222` |
+| `deploy/nexus/nats-statefulset.yaml` | **New** — NATS StatefulSet in `nexus` namespace |
+| `deploy/nexus/nexus-api-deployment.yaml` | **New** — nexus-api Deployment in `nexus` namespace |
+| `deploy/operator-deployment.yaml` | Changed `NATS_URL` → `nats://nats.nexus.svc.cluster.local:4222` |
 | `demo/backend/requirements.txt` | Added `prometheus_client>=0.20.0` |
 | `demo/backend/main.py` | Added Prometheus Counter/Histogram + `/metrics` route + port 9091 server |
 | `demo/backend/deployment.yaml` | **New** — K8s Deployment + Service + HPA + PodMonitor for shop-demo |
@@ -32,7 +34,7 @@
 │              │                                                         │
 │              └── PpaNATSClient.publish()                             │
 │                         │                                              │
-│           host.minikube.internal:4222  (= demo NATS in Docker)       │
+│           nats.nexus.svc.cluster.local:4222  (K8s service DNS)       │
 └──────────────────────────────────────────────────────────────────────┘
                            │
                     NATS JetStream
@@ -40,13 +42,17 @@
                     subject: ppa.predictions.shop-demo
                            │
 ┌──────────────────────────────────────────────────────────────────────┐
-│  Docker Compose (demo/)                                               │
+│  nexus namespace (in-cluster)                                          │
+│                                                                        │
+│  nats.nexus.svc.cluster.local:4222   ← PPA operator connects here    │
 │                                                                        │
 │  nexus-api  ──  Prescaler.subscribe_to_ppa_predictions()             │
 │                  handle_spike_prediction()                            │
 │                    SHADOW:     log + precision track                  │
 │                    ADVISORY:   publish nexus.incidents.*              │
 │                    AUTONOMOUS: kubectl scale shop-demo                │
+│                                                                        │
+│  Developer browser → nexus-api-external NodePort :30081               │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -68,30 +74,43 @@ helm version
 
 ---
 
-## Phase 1 — Start the NEXUS Demo Stack (Docker Compose)
+## Phase 1 — Deploy NEXUS into Kubernetes
+
+All NEXUS services run inside Minikube — no Docker Compose, no `host.minikube.internal` hacks.
 
 ```bash
-cd demo
-export NEXUS_GEMINI_API_KEY="your-key"   # optional, for LLM RCA
+kubectl apply -f deploy/nexus/nats-statefulset.yaml
+kubectl apply -f deploy/nexus/nexus-api-deployment.yaml
 
-docker compose up -d
-docker compose ps   # wait until nexus-api is healthy (~30s)
+# Verify
+kubectl get pods -n nexus
+# Expected: nats-0 Running, nexus-api-xxxx Running (~30s)
+
+# Developer browser access (no port-forward needed):
+#   http://$(minikube ip):30081
 ```
 
-**Smoke test:**
+**Smoke test (from inside the cluster):**
 ```bash
-curl -s http://localhost:8222/healthz          # NATS
-curl -s http://localhost:8080/health           # NEXUS API
-curl -s http://localhost:8080/ppa/decisions    # should return []
+kubectl exec deployment/ppa-operator -- \
+  wget -qO- http://nats.nexus.svc.cluster.local:8222/healthz   # NATS → {"status":"ok"}
+kubectl exec -n nexus deployment/nexus-api -- \
+  wget -qO- http://localhost:8080/health                      # NEXUS API → 200
 ```
+
+**For Docker-only (no K8s):** use `demo/docker-compose.standalone.yaml` instead.
 
 ---
 
 ## Phase 2 — Bootstrap PPA Infra (`ppa init`)
 
-`ppa init` runs 11 steps: prerequisites → Minikube → addons → Prometheus
-(Helm) → test-app → Locust → port-forwards → watchdog → ML feature verify
-→ data CronJob → chaos baseline.
+`ppa init` runs 10 steps: prerequisites → Minikube → addons → Prometheus
+(Helm) → test-app → Locust → NEXUS K8s manifests → service verify
+→ ML feature verify → data CronJob.
+
+> [!NOTE]
+> Phase 1 (NEXUS manifests) and Phase 2 (`ppa init` steps 7–8) are both
+> required before proceeding to `ppa add`.
 
 ```bash
 cd ..   # back to repo root
@@ -100,7 +119,7 @@ cd ..   # back to repo root
 ppa init --list
 ppa init --dry-run
 
-# Run all 11 steps (~5-8 min on first run)
+# Run all 10 steps (~5-8 min on first run)
 ppa init
 
 # Or step-by-step:
@@ -110,11 +129,10 @@ ppa init --step 3   # Enable metrics-server + ingress addons
 ppa init --step 4   # Install kube-prometheus-stack via Helm
 ppa init --step 5   # Build + deploy shop-demo into Minikube
 ppa init --step 6   # Deploy Locust traffic generator
-ppa init --step 7   # Start port-forwards (Prometheus :9090, Grafana :3000, app :8001, metrics :8000)
-ppa init --step 8   # Port-forward watchdog
+ppa init --step 7   # Apply NATS + nexus-api K8s manifests
+ppa init --step 8   # Verify in-cluster NATS + Prometheus reachability
 ppa init --step 9   # Verify 14-dim Prometheus feature set
 ppa init --step 10  # Deploy data collection CronJob
-ppa init --step 11  # Chaos profiling baseline
 ```
 
 > [!NOTE]
@@ -152,15 +170,14 @@ kubectl get podmonitor -n monitoring
 ### §2b — Verify Prometheus is scraping shop-demo
 
 ```bash
-# Port-forward Prometheus if not already done
-kubectl port-forward -n monitoring svc/prometheus-operated 9090:9090 &
-
-# Wait 60s for first scrape, then query
-curl -s 'http://localhost:9090/api/v1/query?query=http_requests_total{job="shop-demo"}' \
+# Query from inside the cluster (operator or any pod in monitoring ns)
+kubectl exec deployment/ppa-operator -- \
+  wget -qO- 'http://prometheus.monitoring:9090/api/v1/query?query=http_requests_total{job="shop-demo"}' \
   | python -m json.tool | head -20
 
 # Confirm the 14-dim PPA feature set is present
-curl -s 'http://localhost:9090/api/v1/query?query=http_request_duration_seconds_count' \
+kubectl exec deployment/ppa-operator -- \
+  wget -qO- 'http://prometheus.monitoring:9090/api/v1/query?query=http_request_duration_seconds_count' \
   | python -m json.tool
 ```
 
@@ -239,14 +256,14 @@ ppa operator restart                  # rolling restart (rebuild + redeploy)
 ```bash
 kubectl get deployment ppa-operator -o jsonpath='{.spec.template.spec.containers[0].env}' \
   | python -m json.tool | grep -A2 NATS_URL
-# Expected:  "value": "nats://host.minikube.internal:4222"
+# Expected:  "value": "nats://nats.nexus.svc.cluster.local:4222"
 ```
 
 **Verify operator logs show NATS connection:**
 ```bash
 kubectl logs -f deployment/ppa-operator | grep "PPA-NATS"
 # Expected:
-# [PPA-NATS] Connected to nats://host.minikube.internal:4222
+# [PPA-NATS] Connected to nats://nats.nexus.svc.cluster.local:4222
 # [PPA-NATS] Created stream 'PPA_PREDICTIONS'
 # [PPA-NATS] Published ppa.predictions.shop-demo seq=1
 ```
@@ -257,7 +274,11 @@ kubectl logs -f deployment/ppa-operator | grep "PPA-NATS"
 
 ### Check stream state
 ```bash
+# Port-forward both NATS ports. Run in a separate terminal (stays in foreground):
+kubectl port-forward -n nexus svc/nats 4222:4222 8222:8222 &
+
 # PPA_PREDICTIONS stream (created by PpaNATSClient on connect)
+sleep 3
 curl -s "http://localhost:8222/jsz?streams=true" | python -m json.tool | grep -E '"name"|"messages"'
 
 # Both streams should show messages > 0 after operator has run 1 cycle (~30s)
@@ -296,8 +317,7 @@ ppa monitor --interval 10
 ## Phase 7 — Verify NEXUS Prescaler Receives Events
 
 ```bash
-docker compose -f demo/docker-compose.yaml logs -f nexus-api \
-  | grep -i "prescal\|ppa\|prediction"
+kubectl logs -n nexus deployment/nexus-api -f | grep -i "prescal\|ppa\|prediction"
 ```
 
 **Expected log lines:**
@@ -319,18 +339,24 @@ docker compose -f demo/docker-compose.yaml logs -f nexus-api \
 
 ## Phase 8 — Query the NEXUS API
 
+**Developer browser access** (no port-forward needed):
 ```bash
+open http://$(minikube ip):30081   # NEXUS API + Swagger UI
+open http://$(minikube ip):30081/docs  # Swagger UI (all 30+ endpoints)
+```
+
+**CLI access:**
+```bash
+NEXUS=http://$(minikube ip):30081
+
 # PPA prescale decisions log
-curl -s http://localhost:8080/ppa/decisions | python -m json.tool
+curl -s $NEXUS/ppa/decisions | python -m json.tool
 
 # Prescaler stats (precision, SMAPE, mode)
-curl -s http://localhost:8080/ppa/stats | python -m json.tool
+curl -s $NEXUS/ppa/stats | python -m json.tool
 
 # Full incident audit trail
-curl -s http://localhost:8080/developer/incidents | python -m json.tool
-
-# Swagger UI (all 30+ endpoints)
-open http://localhost:8080/docs
+curl -s $NEXUS/developer/incidents | python -m json.tool
 ```
 
 **Expected `/ppa/stats`:**
@@ -351,7 +377,13 @@ open http://localhost:8080/docs
 
 ## Phase 9 — Inject a Synthetic PPA Event (Fast Verification)
 
-Bypass the 30s operator cycle to instantly test the full NEXUS pipeline:
+Bypass the 30s operator cycle to instantly test the full PPA→NEXUS pipeline.
+
+**Requires the NATS port-forward running first:**
+```bash
+# In a separate terminal — forwards K8s NATS to localhost
+kubectl port-forward -n nexus svc/nats 4222:4222 8222:8222 &
+```
 
 ```bash
 python - <<'EOF'
@@ -359,6 +391,7 @@ import asyncio, json, nats
 from datetime import datetime, timezone
 
 async def inject():
+    # Connect via port-forward (host → K8s NATS at nats.nexus.svc.cluster.local:4222)
     nc = await nats.connect("nats://localhost:4222")
     js = nc.jetstream()
 
@@ -388,43 +421,48 @@ asyncio.run(inject())
 EOF
 
 # Immediately verify
+NEXUS=http://$(minikube ip):30081
 sleep 2
-curl -s http://localhost:8080/ppa/decisions | python -m json.tool
-docker compose -f demo/docker-compose.yaml logs nexus-api | tail -10
+curl -s $NEXUS/ppa/decisions | python -m json.tool
+kubectl logs -n nexus deployment/nexus-api | tail -10
 ```
 
 ---
 
-## Phase 10 — End-to-End Checklist
+## Phase 9 — End-to-End Checklist
 
 | # | Check | Command | Pass condition |
 |---|-------|---------|----------------|
-| 1 | NATS healthy | `curl http://localhost:8222/healthz` | `{"status":"ok"}` |
-| 2 | NEXUS API healthy | `curl http://localhost:8080/health` | `200 OK` |
-| 3 | shop-demo pods running | `kubectl get pods -l app=shop-demo` | `Running` |
-| 4 | PodMonitor created | `kubectl get podmonitor -n monitoring` | `shop-demo` listed |
-| 5 | Prometheus scraping | `curl 'http://localhost:9090/api/v1/query?query=http_requests_total'` | `resultType: vector` with data |
-| 6 | PPA_PREDICTIONS stream | `curl 'http://localhost:8222/jsz?streams=true'` | `PPA_PREDICTIONS` in list |
-| 7 | Operator emitting events | `kubectl logs deployment/ppa-operator \| grep PPA-NATS` | `Published` present |
-| 8 | Prescaler subscribed | `docker compose logs nexus-api \| grep Subscribed` | `ppa.predictions.*` line |
-| 9 | Decision recorded | `curl http://localhost:8080/ppa/decisions` | Non-empty array |
-| 10 | Synthetic inject works | Run inject script + query decisions | New entry appears |
+| 1 | NATS healthy | `kubectl exec deploy/nats -n nexus -- wget -qO- http://localhost:8222/healthz` | `{"status":"ok"}` |
+| 2 | NEXUS API healthy | `kubectl exec deploy/nexus-api -n nexus -- wget -qO- http://localhost:8080/health` | `200 OK` |
+| 3 | NEXUS API external | `curl http://$(minikube ip):30081/health` | `200 OK` |
+| 4 | shop-demo pods running | `kubectl get pods -l app=shop-demo` | `Running` |
+| 5 | PodMonitor created | `kubectl get podmonitor -n monitoring` | `shop-demo` listed |
+| 6 | Prometheus scraping | `kubectl exec deploy/ppa-operator -- wget -qO- http://prometheus.monitoring:9090/api/v1/query?query=http_requests_total` | `resultType: vector` with data |
+| 7 | PPA_PREDICTIONS stream | `kubectl port-forward -n nexus svc/nats 8222:8222 & sleep 2 && curl 'http://localhost:8222/jsz?streams=true'` | `PPA_PREDICTIONS` in list |
+| 8 | Operator emitting events | `kubectl logs deployment/ppa-operator \| grep PPA-NATS \| grep Published` | Non-empty |
+| 9 | Prescaler subscribed | `kubectl logs -n nexus deployment/nexus-api \| grep Subscribed` | `ppa.predictions.*` line |
+| 10 | Synthetic inject works | Run inject script + `curl $NEXUS/ppa/decisions` | New entry appears |
 
 ---
 
 ## Troubleshooting
 
-### "host.minikube.internal" not resolving inside Minikube pods
+### NATS not reachable from PPA operator
 
+Verify both are using the same NATS service:
 ```bash
-# Verify Minikube's gateway IP (usually 192.168.49.1 on Linux)
-minikube ssh -- route | grep default
+# Operator NATS_URL
+kubectl exec deployment/ppa-operator -- env | grep NATS_URL
+# Should be: nats://nats.nexus.svc.cluster.local:4222
 
-# If host.minikube.internal DNS doesn't work, patch the operator deployment
-# with the concrete gateway IP:
-GATEWAY=$(minikube ssh -- route -n | grep '^0.0.0.0' | awk '{print $2}')
-kubectl set env deployment/ppa-operator NATS_URL="nats://${GATEWAY}:4222"
-kubectl rollout restart deployment/ppa-operator
+# nexus-api NATS_URL
+kubectl exec deployment/nexus-api -n nexus -- env | grep NATS_URL
+# Should be: nats://nats.nexus.svc.cluster.local:4222
+
+# Verify both pods can reach NATS
+kubectl exec deployment/ppa-operator -- wget -qO- http://nats.nexus.svc.cluster.local:8222/healthz
+kubectl exec deployment/nexus-api -n nexus -- wget -qO- http://nats.nexus.svc.cluster.local:8222/healthz
 ```
 
 ### Prometheus not scraping shop-demo (PodMonitor not picked up)
@@ -441,37 +479,40 @@ curl -s 'http://localhost:9090/api/v1/targets' | python -m json.tool | grep shop
 ### Operator emits events but Prescaler logs nothing
 
 The `PPA_PREDICTIONS` and `NEXUS_INCIDENTS` streams must be on the **same NATS
-server**. Verify both the operator and `nexus-api` use `localhost:4222`:
+server**. Verify both the operator and `nexus-api` use `nats.nexus.svc.cluster.local`:
 
 ```bash
 # Operator NATS_URL
 kubectl exec deployment/ppa-operator -- env | grep NATS
 # nexus-api NATS_URL
-docker compose exec nexus-api env | grep NATS
-# Both must resolve to the same nats://... address
+kubectl exec deployment/nexus-api -n nexus -- env | grep NATS
+# Both must resolve to: nats://nats.nexus.svc.cluster.local:4222
 ```
 
 ### All Prescaler events are skipped
 
-Lower the gates temporarily (restart nexus-api after):
+Lower the gates temporarily (patch the deployment and restart):
 ```bash
-docker compose stop nexus-api
-NEXUS_PRESCALE_MIN_CONFIDENCE=0.01 \
-NEXUS_PRESCALE_THRESHOLD_PCT=1 \
-NEXUS_PRESCALE_COOLDOWN_S=5 \
-  docker compose up -d nexus-api
+kubectl set env deployment/nexus-api -n nexus \
+  NEXUS_PRESCALE_MIN_CONFIDENCE=0.01 \
+  NEXUS_PRESCALE_THRESHOLD_PCT=1 \
+  NEXUS_PRESCALE_COOLDOWN_S=5
+kubectl rollout restart deployment/nexus-api -n nexus
 ```
 
-### metrics port 9091 not reachable
+### metrics port 9091 not scraping
 
 ```bash
 # Check prometheus_client server started in logs
-docker compose logs shop-backend | grep "Prometheus metrics server"
-# Expected: [ShopDemo] 📊 Prometheus metrics server started on :9091
+kubectl logs -l app=shop-demo | grep "Prometheus metrics server"
+# Expected: [ShopDemo] Prometheus metrics server started on :9091
 
-# Direct curl (from host, with port-forward)
-kubectl port-forward svc/shop-demo 9091:9091 &
-curl http://localhost:9091/metrics | grep http_requests_total
+# Verify PodMonitor is picked up by Prometheus
+curl -s 'http://localhost:9090/api/v1/targets' | python -m json.tool | grep shop-demo
+# Or from inside the cluster (ppa-operator has Prometheus access):
+kubectl exec deployment/ppa-operator -- \
+  wget -qO- 'http://prometheus.monitoring:9090/api/v1/targets' \
+  | python -m json.tool | grep shop-demo
 ```
 
 ---
@@ -480,8 +521,9 @@ curl http://localhost:9091/metrics | grep http_requests_total
 
 | Variable | Default | Set in |
 |----------|---------|--------|
-| `NATS_URL` (operator) | `nats://host.minikube.internal:4222` | `deploy/operator-deployment.yaml` |
-| `NATS_URL` (nexus-api) | `nats://nats:4222` | `demo/docker-compose.yaml` |
+| `NATS_URL` (operator) | `nats://nats.nexus.svc.cluster.local:4222` | `deploy/operator-deployment.yaml` |
+| `NATS_URL` (nexus-api) | `nats://nats.nexus.svc.cluster.local:4222` | `deploy/nexus/nexus-api-deployment.yaml` |
+| `NEXUS_API_URL` (shop-demo) | `http://nexus-api.nexus.svc.cluster.local:8080` | `demo/backend/deployment.yaml` |
 | `NEXUS_PRESCALE_MODE` | `shadow` | nexus-api container env |
 | `NEXUS_PRESCALE_THRESHOLD_PCT` | `30` | nexus-api container env |
 | `NEXUS_PRESCALE_MIN_CONFIDENCE` | `0.55` | nexus-api container env |
@@ -494,7 +536,7 @@ curl http://localhost:9091/metrics | grep http_requests_total
 ## Full PPA CLI Lifecycle Reference
 
 ```bash
-ppa init --list                           # Show all 11 infra steps
+ppa init --list                           # Show all 10 infra steps
 ppa init                                  # Run full cluster bootstrap
 ppa init --step 4                         # Run only Prometheus install
 ppa init --app demo/backend               # Bootstrap using demo as target app

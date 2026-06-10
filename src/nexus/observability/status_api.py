@@ -148,6 +148,15 @@ async def _lifespan(app: FastAPI):
                 cb=_on_ppa_prediction,
             )
             _log.info("[StatusAPI] ✅ PPA OutcomeTracker started")
+
+            # ── Prescaler (ppa.predictions → pre-scale decision engine) ─────────
+            try:
+                from nexus.predictive.prescaler import Prescaler
+                context.prescaler = Prescaler(nats_client=_nats_client)
+                await context.prescaler.subscribe_to_ppa_predictions()
+                _log.info("[StatusAPI] ✅ Prescaler subscribed to ppa.predictions.*")
+            except Exception as exc:
+                _log.warning(f"[StatusAPI] ⚠️  Prescaler init failed ({exc}) — pre-scale decisions disabled")
         except Exception as exc:
             _log.warning(f"[StatusAPI] ⚠️  PPA OutcomeTracker init failed ({exc})")
 
