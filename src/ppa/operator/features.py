@@ -6,7 +6,7 @@ import math
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import cast
+from typing import NamedTuple, cast
 
 import numpy as np
 import requests
@@ -14,12 +14,13 @@ import requests
 from ppa.common.feature_spec import FEATURE_COLUMNS
 from ppa.common.promql import build_fallback_queries, build_queries
 from ppa.config import (
-    FeatureVectorException,
     LOOKBACK_STEPS,
     PROMETHEUS_URL,
     TIMER_INTERVAL,
+    FeatureVectorException,
 )
 from ppa.domain import validate_feature_bounds
+from ppa.domain.state import CRState
 from ppa.operator.prometheus import (
     PrometheusCircuitBreakerError,
     PrometheusCircuitBreakerTripped,
@@ -49,23 +50,38 @@ REQUIRED_METRICS = {
     "memory_utilization_pct",
 }
 PRIMARY_SIGNAL_METRICS = {"requests_per_second", "cpu_utilization_pct", "latency_p95_ms"}
+
+
+class FeatureContract(NamedTuple):
+    feature_columns: list[str]
+    target_columns: tuple[str, ...]
+    num_features: int
+
+
+def _is_missing_or_nan(value: float | None) -> bool:
+    """Check if value is None or NaN."""
+    if value is None:
+        return True
+    if isinstance(value, float):
+        return math.isnan(value)
+    return False
 DEFAULT_METRIC_FRESHNESS_SECONDS = 30.0
 VOLATILE_METRIC_FRESHNESS_SECONDS = 10.0
 VOLATILE_RPS_CHANGE_ENTER = 0.5
 VOLATILE_RPS_CHANGE_EXIT = 0.35
 
 
-def _metric_cache(cr_state: object | None) -> dict[str, tuple[float, float]]:
+def _metric_cache(cr_state: "CRState | None") -> dict[str, tuple[float, float]]:
     if cr_state is None:
         return {}
     cache = getattr(cr_state, "metric_cache", None)
     if cache is None:
         cache = {}
-        setattr(cr_state, "metric_cache", cache)
+        cr_state.metric_cache = cache
     return cache
 
 
-def _freshness_threshold(cr_state: object | None) -> float:
+def _freshness_threshold(cr_state: CRState | None) -> float:
     return (
         VOLATILE_METRIC_FRESHNESS_SECONDS
         if bool(getattr(cr_state, "volatile_metrics", False))
@@ -75,7 +91,7 @@ def _freshness_threshold(cr_state: object | None) -> float:
 
 def _apply_metric_degradation(
     values: dict[str, float | None],
-    cr_state: object | None,
+    cr_state: CRState | None,
     now: float,
 ) -> tuple[dict[str, float | None], list[str], dict[str, float]]:
     """Use fresh cached values for one missing required metric; fail otherwise.
@@ -118,7 +134,7 @@ def _apply_metric_degradation(
     return values, degraded, metric_ages
 
 
-def _update_volatility(raw_rps: float, cr_state: object | None) -> None:
+def _update_volatility(raw_rps: float, cr_state: CRState | None) -> None:
     if cr_state is None:
         return
     cache = _metric_cache(cr_state)
@@ -129,9 +145,9 @@ def _update_volatility(raw_rps: float, cr_state: object | None) -> None:
         denom = max(abs(prev_rps), 1.0)
         change = abs(raw_rps - prev_rps) / denom
         if not volatile and change >= VOLATILE_RPS_CHANGE_ENTER:
-            setattr(cr_state, "volatile_metrics", True)
+            cr_state.volatile_metrics = True
         elif volatile and change <= VOLATILE_RPS_CHANGE_EXIT:
-            setattr(cr_state, "volatile_metrics", False)
+            cr_state.volatile_metrics = False
     cache["_previous_rps"] = (raw_rps, time_now())
 
 
@@ -200,7 +216,7 @@ def build_feature_vector(
     max_replicas: int,
     container_name: str | None = None,
     prom_url: str | None = None,
-    cr_state: object | None = None,
+    cr_state: CRState | None = None,
 ) -> tuple[dict[str, float | None], float, dict[str, float], list[str]]:
     """Build feature vector from Prometheus metrics for LSTM prediction.
 
@@ -330,7 +346,7 @@ def build_feature_vector(
     primary_missing = [
         name
         for name in PRIMARY_SIGNAL_METRICS
-        if values.get(name) is None or (isinstance(values.get(name), float) and math.isnan(values[name]))
+        if _is_missing_or_nan(values.get(name))
     ]
     if len(primary_missing) == len(PRIMARY_SIGNAL_METRICS):
         raise FeatureVectorException("All primary input signals are missing")
@@ -370,9 +386,9 @@ def build_feature_vector(
         degraded_reasons.extend([f"clipped_{item['feature']}" for item in oob])
 
     if cr_state is not None:
-        setattr(cr_state, "degraded_reasons", degraded_reasons)
-        setattr(cr_state, "metric_ages", metric_ages)
-        setattr(cr_state, "last_raw_metrics", raw_metrics)
+        cr_state.degraded_reasons = degraded_reasons
+        cr_state.metric_ages = metric_ages
+        cr_state.last_raw_metrics = raw_metrics
 
     return final_features, current_replicas, raw_metrics, degraded_reasons
 
@@ -516,3 +532,23 @@ def build_historical_features(
 
     logger.info(f"Reconstructed {len(feature_rows)} historical feature vectors")
     return feature_rows
+
+# Feature contract API
+def get_feature_columns(version: str = "v2") -> list[str]:
+    """Return the ordered list of feature columns for the given contract version."""
+    if version == "v2":
+        return list(FEATURE_COLUMNS)
+    raise ValueError(f"Unknown feature contract version: {version}")
+
+
+def get_contract(version: str = "v2") -> FeatureContract:
+    """Return the full feature contract for the given version."""
+    from ppa.common.feature_spec import NUM_FEATURES, TARGET_COLUMNS
+
+    if version == "v2":
+        return FeatureContract(
+            feature_columns=list(FEATURE_COLUMNS),
+            target_columns=tuple(TARGET_COLUMNS),
+            num_features=NUM_FEATURES,
+        )
+    raise ValueError(f"Unknown feature contract version: {version}")

@@ -1,145 +1,37 @@
 # operator/main.py — kopf timer handler (multi-CR orchestrator)
-"""PPA Operator: manages N PredictiveAutoscaler CRs independently."""
+"""PPA Operator: manages N PredictiveAutoscaler CRs independently.
+
+This file is a thin delegation layer:
+- Startup hooks
+- Health endpoint
+- Prometheus metrics
+- CR reconciliation → delegates to ScalerStateMachine
+"""
 
 import logging
-import math
-import os
-import random
-import hashlib
-import statistics
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import kopf
-from prometheus_client import Counter, Gauge
 from prometheus_client import start_http_server as _prom_start_http_server
 
-from ppa.config import (
-    DEFAULT_CAPACITY_PER_POD,
-    DEFAULT_MIN_REPLICAS,
-    DEFAULT_MODEL_DIR,
-    DEFAULT_SCALE_DOWN_RATE,
-    DEFAULT_SCALE_UP_RATE,
-    FEATURE_COLUMNS,
-    INITIAL_DELAY,
-    NAMESPACE,
-    STABILIZATION_STEPS,
-    STABILIZATION_TOLERANCE,
-    TIMER_INTERVAL,
-    FeatureVectorException,
-)
-from ppa.domain import CRState, calculate_replicas
-from ppa.operator.features import (
-    PrometheusCircuitBreakerTripped,
-    build_feature_vector,
-)
+from ppa.config import DEFAULT_MODEL_DIR, INITIAL_DELAY, NAMESPACE, TIMER_INTERVAL
+from ppa.domain import CRState
+
+# Re-export metrics for backward compatibility and external access
 from ppa.operator.model_bundle import (
     BundlePendingError,
     BundleValidationError,
-    ModelBundle,
     resolve_model_bundle,
 )
-from ppa.operator.predictor import Predictor
-from ppa.operator.scaler import scale_deployment
+from ppa.operator.state_machine import ScalerStateMachine
 
-# ---------------------------------------------------------------------------
-# Prometheus metrics — labelled by cr_name + namespace for multi-CR support
-# ---------------------------------------------------------------------------
-_LABELS = ["cr_name", "namespace"]
-
-ppa_predicted_load_rps = Gauge("ppa_predicted_load_rps", "LSTM predicted load (req/s)", _LABELS)
-ppa_inflated_load_rps = Gauge("ppa_inflated_load_rps", "predicted * safety_factor (req/s)", _LABELS)
-ppa_raw_desired_replicas = Gauge("ppa_raw_desired_replicas", "Unclamped replica target", _LABELS)
-ppa_desired_replicas = Gauge(
-    "ppa_desired_replicas", "Rate-limited, bounds-clamped replicas", _LABELS
-)
-ppa_current_replicas = Gauge("ppa_current_replicas", "Observed ready replicas", _LABELS)
-ppa_consecutive_skips = Gauge("ppa_consecutive_skips", "Cycles skipped due to bad data", _LABELS)
-ppa_warmup_progress = Gauge("ppa_warmup_progress", "History window fill ratio (0-1)", _LABELS)
-ppa_model_load_failed = Gauge("ppa_model_load_failed", "1 if model failed to load, else 0", _LABELS)
-ppa_scale_events_total = Counter(
-    "ppa_scale_events_total", "Total scaling decisions applied", _LABELS
-)
-ppa_circuit_breaker_tripped = Gauge(
-    "ppa_circuit_breaker_tripped", "1 if circuit breaker active, 0 else", _LABELS
-)
-ppa_metric_failures = Gauge(
-    "ppa_metric_failures", "Consecutive metric extraction failures", _LABELS
-)
-ppa_concept_drift_detected = Gauge(
-    "ppa_concept_drift_detected", "1 if concept drift detected, 0 else", _LABELS
-)
-ppa_prediction_error_pct = Gauge(
-    "ppa_prediction_error_pct", "Mean absolute percentage error %", _LABELS
-)
-ppa_inference_latency_ms = Gauge(
-    "ppa_inference_latency_ms", "Model inference latency in ms", _LABELS
-)
-
+# Logging setup
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 logger = logging.getLogger("ppa.operator")
-
-# Suppress kopf.objects verbose logging (patching, timers, etc.)
 logging.getLogger("kopf.objects").setLevel(logging.ERROR)
-
-
-# ---------------------------------------------------------------------------
-# Multi-model prediction registry
-# Keyed by (target_ns, target_deployment) → {horizon: predicted_replicas}
-# Populated by every CR on each reconcile cycle; the non-observer (t10m) CR
-# reads the aggregated median and applies the single scaling decision.
-# ---------------------------------------------------------------------------
-_prediction_registry: dict[tuple[str, str], dict[str, float]] = {}
-_prediction_registry_lock = threading.Lock()
-
-# TTL: predictions older than 2× timer interval are stale and must be discarded.
-_PREDICTION_TTL_SECONDS = TIMER_INTERVAL * 2
-_prediction_timestamps: dict[tuple[str, str], dict[str, float]] = {}
-
-SCALE_BACKOFF_INITIAL_SECONDS = 30.0
-SCALE_BACKOFF_MAX_SECONDS = 300.0
-SCALE_BACKOFF_JITTER = 0.2
-STATUS_HEARTBEAT_SECONDS = 60.0
-PREDICTION_STATUS_THRESHOLD = 0.10
-DECISION_TRACE_SAMPLE_RATE = 0.10
-
-
-def _validate_input_signals(features: dict[str, Any]) -> bool:
-    """Return False (→ skip prediction) when ALL primary signals are absent/zero.
-
-    Rule: if rps_per_replica AND cpu_utilization_pct are both ≤ 0 AND
-    latency_p95_ms is NaN/None, the feature vector carries no real signal.
-    Scaling on such a vector produces nonsensical phantom predictions.
-    """
-    rps = features.get("rps_per_replica", 0.0) or 0.0
-    cpu = features.get("cpu_utilization_pct", 0.0) or 0.0
-    lat = features.get("latency_p95_ms")
-
-    lat_is_nan = lat is None or (isinstance(lat, float) and math.isnan(lat))
-
-    if rps <= 0.0 and cpu <= 0.0 and lat_is_nan:
-        return False  # All primary signals dead
-    return True
-
-
-def _check_prediction_sanity(predicted_load: float, features: dict[str, Any]) -> bool:
-    """Return False (→ reject prediction) when predicted_load is high but inputs are near-zero.
-
-    Threshold: predicted_load > 50 req/s while rps_per_replica == 0.
-    This catches LSTM hallucinations driven entirely by temporal embeddings.
-    """
-    rps = features.get("rps_per_replica", 0.0) or 0.0
-    if predicted_load > 50.0 and rps <= 0.0:
-        return False
-    return True
-
-
-# ---------------------------------------------------------------------------
-# Health endpoint — lightweight HTTP server for liveness / readiness probes
-# ---------------------------------------------------------------------------
+# Health endpoint
 class _HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/healthz":
@@ -149,9 +41,8 @@ class _HealthHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"ok")
         else:
             self.send_response(404)
-            self.end_headers()
 
-    def log_message(self, format, *args):  # noqa: A002 — suppress per-request logs
+    def log_message(self, format, *args):
         pass
 
 
@@ -162,522 +53,66 @@ def _start_health_server(port: int = 8080):
     logger.info(f"Health endpoint listening on :{port}/healthz")
 
 
-def _update_status(patch: kopf.Patch, key: str, value: Any) -> None:
-    """Idempotent status update: only write if value changed.
-
-    Prevents patch conflicts by only updating status fields when the value
-    actually differs from current state.
-    """
-    if patch.status.get(key) != value:
-        patch.status[key] = value
-
-
-def _status_should_update(state: CRState, next_status: dict[str, Any], now: float) -> bool:
-    previous = state.last_status_snapshot or {}
-    if now - state.last_status_update_time >= STATUS_HEARTBEAT_SECONDS:
-        return True
-    always = {
-        "driftSeverity",
-        "activeModelVersion",
-        "pendingModelVersion",
-        "lastFailedModelVersion",
-        "modelUpgradeFailed",
-        "modelUpgradeFailureReason",
-        "scaleBackoffUntil",
-        "lastScaleError",
-        "circuitBreakerTripped",
-    }
-    for key in always:
-        if previous.get(key) != next_status.get(key):
-            return True
-    for key in ("currentReplicas", "desiredReplicas"):
-        old = previous.get(key)
-        new = next_status.get(key)
-        if old is None or new is None:
-            if old != new:
-                return True
-        elif abs(int(new) - int(old)) >= 1:
-            return True
-    old_pred = previous.get("lastPredictedLoad")
-    new_pred = next_status.get("lastPredictedLoad")
-    if old_pred is None or new_pred is None:
-        return old_pred != new_pred
-    return abs(float(new_pred) - float(old_pred)) / max(abs(float(old_pred)), 1.0) >= (
-        PREDICTION_STATUS_THRESHOLD
-    )
-
-
-def _patch_status_throttled(patch: kopf.Patch, state: CRState, values: dict[str, Any]) -> None:
-    now = time.time()
-    if not _status_should_update(state, values, now):
-        return
-    for key, value in values.items():
-        _update_status(patch, key, value)
-    state.last_status_snapshot = dict(values)
-    state.last_status_update_time = now
-
-
-def _scale_backoff_delay(failures: int) -> float:
-    base = min(SCALE_BACKOFF_MAX_SECONDS, SCALE_BACKOFF_INITIAL_SECONDS * (2 ** max(failures - 1, 0)))
-    return base * random.uniform(1.0 - SCALE_BACKOFF_JITTER, 1.0 + SCALE_BACKOFF_JITTER)
-
-
-def _record_scale_failure(state: CRState, patch: kopf.Patch, reason: str) -> None:
-    state.scale_failures += 1
-    state.last_scale_failure_time = time.time()
-    state.next_scale_retry_time = state.last_scale_failure_time + _scale_backoff_delay(
-        state.scale_failures
-    )
-    state.last_scale_error = reason
-    _update_status(patch, "lastScaleError", reason)
-    _update_status(patch, "scaleBackoffUntil", state.next_scale_retry_time)
-
-
-def _reset_scale_backoff(state: CRState, patch: kopf.Patch) -> None:
-    state.scale_failures = 0
-    state.last_scale_failure_time = 0.0
-    state.next_scale_retry_time = 0.0
-    state.last_scale_error = None
-    _update_status(patch, "lastScaleError", None)
-    _update_status(patch, "scaleBackoffUntil", None)
-
-
-def _trace_sampled(event_key: str, sample_rate: float = DECISION_TRACE_SAMPLE_RATE) -> bool:
-    digest = hashlib.sha256(event_key.encode("utf-8")).hexdigest()
-    bucket = int(digest[:8], 16) / 0xFFFFFFFF
-    return bucket < sample_rate
-
-
-def _trace_value(value: Any) -> float | int | str | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            return "nan"
-        return round(value, 4)
-    return str(value)
-
-
-def _compact_feature_trace(features: dict[str, Any]) -> dict[str, float | int | str | None]:
-    return {name: _trace_value(features.get(name)) for name in FEATURE_COLUMNS if name in features}
-
-
-def _maybe_record_decision_trace(
-    cr_name: str,
-    cr_ns: str,
-    config: dict[str, Any],
-    state: CRState,
-    patch: kopf.Patch,
-    features: dict[str, Any],
-    raw_metrics: dict[str, float],
-    predicted_load: float,
-    candidate: int,
-    final_decision: int,
-    current: int,
-    reason: str,
-    apply_scaling: bool,
-    force: bool = False,
-) -> None:
-    degraded_reasons = state.degraded_reasons or []
-    force = force or bool(degraded_reasons) or final_decision != current
-    now = time.time()
-    event_key = (
-        f"{cr_ns}/{cr_name}:{config['target_horizon']}:{state.active_model_version}:"
-        f"{int(now // max(TIMER_INTERVAL, 1))}:{current}:{final_decision}:"
-        f"{round(predicted_load, 1)}:{reason}"
-    )
-    if not force and not _trace_sampled(event_key):
-        return
-
-    trace = {
-        "eventKey": event_key,
-        "modelVersion": state.active_model_version,
-        "horizon": config["target_horizon"],
-        "currentReplicas": current,
-        "inputFeatures": _compact_feature_trace(features),
-        "rawMetrics": {key: _trace_value(value) for key, value in raw_metrics.items()},
-        "prediction": _trace_value(predicted_load),
-        "candidateReplicas": candidate,
-        "finalDecision": final_decision,
-        "applyScaling": apply_scaling,
-        "reason": reason,
-        "degradedReasons": degraded_reasons,
-    }
-    state.last_decision_trace = trace
-    _update_status(patch, "decisionTrace", trace)
-    logger.info("[%s] decision trace: %s", cr_name, trace)
-
-
-def _ensure_model_directory_ready(max_retries: int = 5) -> None:
-    """Startup guard: wait for model directory to exist before processing CRs.
-
-    Used at operator startup to handle Kubernetes volume mount delays.
-    FATAL after retries: raises RuntimeError if directory never appears.
-    This ensures K8s knows operator failed to start and can restart the pod.
-    """
-    model_dir = DEFAULT_MODEL_DIR
-
-    for attempt in range(max_retries):
-        if os.path.exists(model_dir):
-            logger.info(f"✓ Model directory ready: {model_dir}")
-            return
-
-        if attempt < max_retries - 1:
-            wait_seconds = 2**attempt  # Exponential backoff: 1s, 2s, 4s, 8s, 16s
-            logger.warning(
-                f"Model directory not found (attempt {attempt + 1}/{max_retries}): {model_dir}\n"
-                f"Retrying in {wait_seconds}s..."
-            )
-            time.sleep(wait_seconds)
-        else:
-            error_msg = (
-                f"Model directory still not found after {max_retries} retries: {model_dir}\n"
-                f"Check: 1) PPA_MODEL_DIR environment variable\n"
-                f"       2) /models volume mount in Kubernetes\n"
-                f"       3) Pod startup order (volume mount may be delayed)\n"
-                f"This is a FATAL error - operator cannot start."
-            )
-            logger.critical(error_msg)
-            raise RuntimeError(error_msg)
-
-
+# Start health server and Prometheus metrics
 _start_health_server()
-
-# Start Prometheus metrics endpoint on port 9100 (separate from healthz on 8080)
 _prom_start_http_server(9100)
-logging.getLogger("ppa.operator").info("Prometheus metrics endpoint listening on :9100/metrics")
-
-
-# Registry keyed by (cr_namespace, cr_name) to avoid cross-namespace collisions.
-# Thread-safe: protected by _cr_state_lock for concurrent reconciliation cycles
+logger.info("Prometheus metrics endpoint listening on :9100/metrics")
+# Per-CR state registry
 _cr_state: dict[tuple[str, str], CRState] = {}
 _cr_state_lock = threading.Lock()
 
 
-def _state_target_key(state: CRState) -> str:
-    target_ns = getattr(state, "target_namespace", "")
-    target_dep = getattr(state, "target_deployment", "")
-    if target_ns and target_dep and "/" not in target_dep:
-        return f"{target_ns}/{target_dep}"
-    return target_dep
-
-
-def _resolve_paths(
-    spec: dict, target_app: str, target_horizon: str
-) -> tuple[str | None, str | None, str | None, bool, bool]:
-    """Resolve model/scaler/target paths. Supports two directory layouts.
-
-    Layout 1 — structured (preferred, v2 architecture):
-        /models/{app}/{horizon}/current/ppa_model.tflite
-        /models/{app}/{horizon}/current/scaler.pkl
-        /models/{app}/{horizon}/current/target_scaler.pkl   (optional)
-
-    Layout 2 — flat (legacy upload-pod produces this):
-        /models/{horizon}/ppa_model.tflite
-        /models/{horizon}/scaler.pkl
-        /models/{horizon}/target_scaler.pkl   (optional)
-
-    The structured layout is tried first. If not present, the flat layout is
-    tried as a fallback. This allows the operator to work with both layouts
-    during a migration period.
-
-    To migrate from flat → structured, create the directory and symlink:
-        mkdir -p /models/{app}/{horizon}/v1
-        cp /models/{horizon}/* /models/{app}/{horizon}/v1/
-        ln -sfn /models/{app}/{horizon}/v1 /models/{app}/{horizon}/current
-
-    CR spec fields (modelPath, scalerPath, targetScalerPath) are DEPRECATED
-    and are ignored — the caller logs a one-time warning via the state flag.
-
-    Returns:
-        (model_path, scaler_path, target_scaler_path, used_legacy: bool, is_override: bool)
-        Returns (None, None, None, False, False) if neither layout is ready.
-    """
-    model_dir = DEFAULT_MODEL_DIR
-    target_scaler_path: str | None = None
-
-    # Layout 1: /models/{app}/{horizon}/current/  (structured, preferred)
-    structured_base = os.path.join(model_dir, target_app, target_horizon, "current")
-    if os.path.exists(structured_base):
-        model_path = os.path.join(structured_base, "ppa_model.tflite")
-        scaler_path = os.path.join(structured_base, "scaler.pkl")
-        tsp = os.path.join(structured_base, "target_scaler.pkl")
-        target_scaler_path = tsp if os.path.exists(tsp) else None
-        logger.debug(f"Resolved artifacts via structured layout: {structured_base}")
-        return model_path, scaler_path, target_scaler_path, False, False
-
-    # Layout 2: /models/{horizon}/  (flat, produced by current upload-pod)
-    flat_base = os.path.join(model_dir, target_horizon)
-    if os.path.exists(flat_base):
-        model_path = os.path.join(flat_base, "ppa_model.tflite")
-        scaler_path = os.path.join(flat_base, "scaler.pkl")
-        tsp2 = os.path.join(flat_base, "target_scaler.pkl")
-        target_scaler_path = tsp2 if os.path.exists(tsp2) else None
-        logger.debug(
-            f"Resolved artifacts via flat layout: {flat_base} "
-            f"(migrate to {structured_base} for versioned upgrades)"
-        )
-        return model_path, scaler_path, target_scaler_path, False, False
-
-    logger.debug(
-        f"No model artifacts found for {target_app}/{target_horizon}. "
-        f"Tried: {structured_base}  and  {flat_base}"
-    )
-    return None, None, None, False, False
-
-
-def _validate_artifact_paths(
-    model_path: str,
-    scaler_path: str,
-    target_scaler_path: str | None,
-    target_app: str,
-    target_horizon: str,
-    model_dir: str,
-) -> None:
-    """Validate artifact paths exist. Raises RuntimeError if ANY missing.
-
-    Called ONCE on first load or path change, not every reconciliation cycle.
-    """
-    missing = []
-
-    if not os.path.exists(model_path):
-        missing.append(f"Model: {model_path}")
-    if not os.path.exists(scaler_path):
-        missing.append(f"Scaler: {scaler_path}")
-    if target_scaler_path and not os.path.exists(target_scaler_path):
-        missing.append(f"Target scaler: {target_scaler_path}")
-
-    if missing:
-        raise RuntimeError(
-            f"Missing model artifacts for {target_app}/{target_horizon}:\n"
-            + "\n".join(f"  ❌ {path}" for path in missing)
-            + "\nExpected directory structure:\n"
-            + f"  {model_dir}/{target_app}/{target_horizon}/\n"
-            + "    ├─ ppa_model.tflite\n"
-            + "    ├─ scaler.pkl\n"
-            + "    └─ target_scaler.pkl (optional)"
-        )
-
-
-def _get_or_create_state(
+def _warn_if_conflicting_active_cr(
     key: tuple[str, str],
-    bundle: ModelBundle,
-    config: dict[str, Any] | None = None,
-    target_app: str = "",
-    target_ns: str = "",
-    max_r: int = 1,
-    container_name: str | None = None,
-    min_r: int = 1,
-    persisted_history: dict | None = None,
-    target_horizon: str = "",
-) -> tuple[CRState, dict[str, Any]]:
-    """Lazy-init or reload CRState if model paths changed.
+    state: CRState,
+    target_ns: str,
+    target: str,
+) -> None:
+    """Warn once when multiple active CRs manage the same deployment."""
+    if state.observer_mode or state.conflict_logged:
+        return
 
-    FIX (PR#3): Prefill is SKIPPED to avoid scaler distribution mismatch.
-    FIX (PR#5): History is PRESERVED when model is upgraded (new paths), preventing 30-min blindness.
-    FIX (PR#15): Restore history from CR status on pod restart.
-    FIX (Phase 3): Full function lock (Issue 2) + try-catch on Predictor creation (Issue 17)
-
-    Thread-safe: protected by _cr_state_lock for entire function (sole lock owner).
-
-    Returns:
-        Tuple of (CRState, upgrade_info dict with keys: upgraded, failed_to_upgrade, reason)
-    """
-    # SOLE LOCK OWNER: wrap entire function body (Issue 2)
-    with _cr_state_lock:
-        existing = _cr_state.get(key)
-        model_path = str(bundle.model_path)
-        scaler_path = str(bundle.scaler_path)
-        target_scaler_path = str(bundle.target_scaler_path) if bundle.target_scaler_path else None
-        metadata_path = str(bundle.metadata_path) if bundle.metadata_path else None
-
-        if existing and existing.predictor and existing.active_model_version == bundle.version:
-            existing.observer_mode = bool((config or {}).get("observer_mode", False))
-            existing.model_load_pending = False
-            return existing, {"upgraded": False, "failed_to_upgrade": False, "reason": None}
-
-        if existing and existing.predictor:
-            # Model upgraded: preserve history, reload interpreter only (PR#5 fix)
-            logger.info(f"Model upgraded for {key}, reloading interpreter (preserving history)...")
-            existing.pending_model_version = bundle.version
-
-            # Validate new paths BEFORE creating new predictor
-            try:
-                _validate_artifact_paths(
-                    model_path,
-                    scaler_path,
-                    target_scaler_path,
-                    target_app,
-                    target_horizon,
-                    DEFAULT_MODEL_DIR,
-                )
-            except RuntimeError as e:
-                # PRODUCTION-SAFE: Don't break working system on upgrade failure
-                # Keep old predictor running, log error clearly, signal upgrade failure
-                error_msg = str(e)
-                logger.error(
-                    f"[{key}] Model upgrade FAILED - keeping old model active: {error_msg}"
-                )
-                existing.observer_mode = bool((config or {}).get("observer_mode", False))
-                return existing, {
-                    "upgraded": False,
-                    "failed_to_upgrade": True,
-                    "reason": error_msg[:200],
-                }
-
-            # Log successful new paths (INFO level - this is a change)
-            logger.info(
-                f"[{key}] Resolved upgraded paths:\n"
-                f"  Model:  {model_path}\n"
-                f"  Scaler: {scaler_path}\n"
-                f"  Target: {target_scaler_path or '(optional, not found)'}"
+    for peer_key, peer_state in _cr_state.items():
+        if peer_key == key or peer_state.observer_mode:
+            continue
+        if (
+            peer_state.target_namespace == target_ns
+            and peer_state.target_deployment == target
+        ):
+            logger.warning(
+                "[%s] Multiple CRs detected for target %s/%s; "
+                "active autoscalers can fight over replicas",
+                key[1],
+                target_ns,
+                target,
             )
-
-            # Snapshot history before creating new predictor
-            old_history = existing.predictor.copy_history()
-            history_len = len(old_history)
-
-            # Issue 17: Try-catch around Predictor creation (file exists but corrupted/unreadable)
-            try:
-                new_predictor = Predictor(
-                    model_path,
-                    scaler_path,
-                    target_scaler_path,
-                    metadata_path=metadata_path,
-                    version=bundle.version,
-                )
-                if not new_predictor.is_loaded():
-                    raise RuntimeError(new_predictor.last_load_error or "predictor not loaded")
-            except Exception as e:
-                existing.pending_model_version = bundle.version
-                existing.last_failed_model_version = bundle.version
-                existing.model_upgrade_failure_reason = str(e)[:200]
-                existing.model_load_pending = False
-                logger.error(
-                    f"[{key}] Predictor load FAILED despite file existence check: {e}\n"
-                    f"  Model: {model_path}\n"
-                    f"  Scaler: {scaler_path}\n"
-                    f"  Possible causes: file corruption, wrong format, permissions, NFS stale metadata"
-                )
-                # Keep old predictor, signal upgrade failure
-                return existing, {
-                    "upgraded": False,
-                    "failed_to_upgrade": True,
-                    "reason": f"Predictor load failed: {str(e)[:100]}",
-                }
-
-            # Restore history into new predictor
-            new_predictor.restore_history(old_history)
-
-            # Update state in-place (don't create new CRState)
-            existing.predictor = new_predictor
-            existing.observer_mode = bool((config or {}).get("observer_mode", False))
-            existing.active_model_version = bundle.version
-            existing.pending_model_version = None
-            existing.last_failed_model_version = None
-            existing.model_upgrade_failure_reason = None
-            existing.model_load_pending = False
-            existing.model_load_time_ms = new_predictor.model_load_time_ms
-
-            logger.info(f"Restored {history_len}/{60} history steps to new model")
-            return existing, {"upgraded": True, "failed_to_upgrade": False, "reason": None}
-
-        # First time: VALIDATE BEFORE creating new state (fail hard on missing artifacts)
-        try:
-            _validate_artifact_paths(
-                model_path,
-                scaler_path,
-                target_scaler_path,
-                target_app,
-                target_horizon,
-                DEFAULT_MODEL_DIR,
-            )
-        except RuntimeError as e:
-            logger.error(f"[{key}] {e}")
-            raise  # Fail immediately - operator will retry at appropriate interval
-
-        # Log successful paths (INFO level - this is a new state)
-        logger.info(
-            f"[{key}] Resolved paths:\n"
-            f"  Model:  {model_path}\n"
-            f"  Scaler: {scaler_path}\n"
-            f"  Target: {target_scaler_path or '(optional, not found)'}"
-        )
-
-        # Issue 17: Try-catch around first-time Predictor creation
-        try:
-            predictor = Predictor(
-                model_path,
-                scaler_path,
-                target_scaler_path,
-                metadata_path=metadata_path,
-                version=bundle.version,
-            )
-            if not predictor.is_loaded():
-                raise RuntimeError(predictor.last_load_error or "predictor not loaded")
-        except Exception as e:
-            logger.error(
-                f"[{key}] First-time predictor load FAILED despite validation: {e}\n"
-                f"  Model: {model_path}\n"
-                f"  Scaler: {scaler_path}"
-            )
-            raise
-
-        state = CRState(
-            predictor=predictor,
-            observer_mode=bool((config or {}).get("observer_mode", False)),
-        )
-        state.active_model_version = bundle.version
-        state.model_load_time_ms = predictor.model_load_time_ms
-
-        # FIX (PR#15): Restore history from CR status if available (pod restart resilience)
-        if persisted_history and persisted_history.get("data"):
-            try:
-                assert state.predictor is not None
-                history_data = persisted_history["data"]
-                restored = state.predictor.deserialize_history(history_data)
-                if restored:
-                    logger.info(
-                        f"[{key}] Restored {len(history_data)} history steps from CR status (PR#15)"
-                    )
-                else:
-                    logger.warning(
-                        f"[{key}] Failed to restore history from CR status, starting fresh"
-                    )
-            except Exception as exc:
-                logger.warning(f"[{key}] Error restoring history: {exc}, starting fresh")
-        else:
-            logger.info(
-                f"[{key}] Skipping prefill to avoid scaler distribution mismatch (cold-start: ~30 min warmup)"
-            )
-
-        _cr_state[key] = state
-        return state, {"upgraded": False, "failed_to_upgrade": False, "reason": None}
+            state.conflict_logged = True
+            return
 
 
+# Model bundle resolution
 def _parse_crd_spec(
-    spec: dict[str, Any],
-    status: dict[str, Any] | None,
-    meta: dict[str, Any],
+    spec: dict,
+    status: dict | None,
+    meta: dict,
     cr_ns: str,
     cr_name: str,
     patch: kopf.Patch,
 ) -> tuple[dict[str, Any], CRState]:
-    """Parse CRD spec into config and load/create CR state. Extract state management logic.
+    """Parse CRD spec into config dict and load/create CR state."""
 
-    Returns:
-        Tuple of (config dict, CRState)
-    """
+    from ppa.config import (
+        DEFAULT_CAPACITY_PER_POD,
+        DEFAULT_MIN_REPLICAS,
+        DEFAULT_SCALE_DOWN_RATE,
+        DEFAULT_SCALE_UP_RATE,
+    )
+
     target = spec["targetDeployment"]
     target_ns = spec.get("namespace", cr_ns)
     target_app = spec.get("appName", target)
     target_horizon = spec.get("horizon", "rps_t3m")
 
-    # Validate required fields
     max_r = spec.get("maxReplicas")
     if max_r is None:
         raise ValueError("maxReplicas must be set in PredictiveAutoscaler spec")
@@ -698,759 +133,103 @@ def _parse_crd_spec(
         "prom_url": spec.get("prometheusUrl") or None,
     }
 
-    # Detect multiple CRs managing the SAME deployment (thread-safe check)
-    # Only warn when another non-observer CR targets the same namespace/deployment pair.
-    # Checking all peer CRs regardless of their target caused false positives when
-    # multiple CRs manage *different* deployments (a perfectly valid use-case).
+    # Get or create state
     key = (cr_ns, cr_name)
-
-    # Initialize state early enough for conflict_logged access below
-    _existing_pre = _cr_state.get(key)
-
     with _cr_state_lock:
-        peer_target_crs = [
-            k
-            for k, s in _cr_state.items()
-            if k != key
-            and not s.observer_mode
-            and _state_target_key(s) == f"{target_ns}/{target}"
-        ]
-    if peer_target_crs and not config["observer_mode"]:
-        # Log once on first detection; suppress repeats to avoid flooding logs every cycle.
-        conflict_logged = getattr(_existing_pre, "conflict_logged", False)
-        if not conflict_logged:
-            logger.warning(
-                f"[{cr_name}] Multiple CRs detected managing the same target "
-                f"{target_ns}/{target}. Ensure only ONE active CR manages this deployment "
-                f"to avoid scaling oscillations. "
-                f"Set observerMode: true on all but one CR. "
-                f"Conflicting CRs: {peer_target_crs}"
+        existing = _cr_state.get(key)
+
+        if existing is None:
+            existing = CRState(
+                predictor=None,
+                observer_mode=False,
+                stable_count=0,
+                last_prediction=0.0,
+                last_desired=-1.0,
+                last_known_good_replicas=0,
+                last_known_good_prediction=0.0,
+                consecutive_failures=0,
+                last_successful_cycle=0.0,
+                prom_failures=0,
+                prom_last_failure_time=0.0,
             )
-            if _existing_pre is not None:
-                _existing_pre.conflict_logged = True
+            existing.target_namespace = target_ns
+            existing.target_deployment = target
+            _cr_state[key] = existing
+            logger.info(f"[{cr_name}] Initialized new CR state")
 
-    # STEP 1: Get or initialize state (double-check locking - Issue 12)
-    existing = _cr_state.get(key)
+        _warn_if_conflicting_active_cr(key, existing, target_ns, target)
 
-    if existing is None:
-        with _cr_state_lock:
-            # Check AGAIN inside lock (another thread may have created it)
-            existing = _cr_state.get(key)
-            if existing is None:
-                # Safe to create: we're the only thread doing this now
-                existing = CRState(
-                    predictor=None,
-                    observer_mode=False,
-                    stable_count=0,
-                    last_prediction=0.0,
-                    last_desired=-1.0,
-                    last_known_good_replicas=0,
-                    last_known_good_prediction=0.0,
-                    consecutive_failures=0,
-                    last_successful_cycle=0.0,
-                    prom_failures=0,
-                    prom_last_failure_time=0.0,
-                )
-                existing.artifact_load_failures = 0
-                existing.using_legacy_artifacts = False
-                existing.predictor_missing_logged = False
-                existing.deprecation_logged = False
-                existing.target_scaler_missing_logged = False
-                existing.target_namespace = target_ns
-                existing.target_deployment = target
-                existing.conflict_logged = False  # Only warn on first detection
-
-                _cr_state[key] = existing
-                logger.info(f"[{cr_name}] Initialized new CR state")
-
-    # STEP 2: Resolve versioned model bundle. Transient current-pointer failures
-    # are not model failures; keep the active predictor and retry next reconcile.
-    try:
-        bundle = resolve_model_bundle(DEFAULT_MODEL_DIR, target_app, target_horizon)
-    except BundlePendingError as exc:
-        # Compatibility path for unit tests and legacy callers that still patch
-        # _resolve_paths directly. Real deployments should use versioned bundles.
-        model_path, scaler_path, target_scaler_path, used_legacy, _is_override = _resolve_paths(
-            spec, target_app, target_horizon
-        )
-        if model_path is None or scaler_path is None:
+        # Resolve model bundle
+        try:
+            bundle = resolve_model_bundle(DEFAULT_MODEL_DIR, target_app, target_horizon)
+        except BundlePendingError as exc:
             existing.model_load_pending = True
+            logger.warning(f"[{cr_name}] Model bundle pending: {exc}")
+            return config, existing
+        except BundleValidationError as exc:
+            existing.model_load_pending = False
+            existing.last_failed_model_version = target_horizon
+            existing.model_upgrade_failure_reason = str(exc)[:200]
+            logger.error(f"[{cr_name}] Model bundle validation failed: {exc}")
+            return config, existing
+
+        # Load or update predictor
+        model_path = str(bundle.model_path)
+        scaler_path = str(bundle.scaler_path)
+        target_scaler_path = str(bundle.target_scaler_path) if bundle.target_scaler_path else None
+        metadata_path = str(bundle.metadata_path) if bundle.metadata_path else None
+
+        # Check if we need to reload
+        if existing.predictor and existing.active_model_version == bundle.version:
+            existing.observer_mode = bool(config.get("observer_mode", False))
+            return config, existing
+
+        # Model upgrade or first load
+        if existing.predictor:
+            logger.info(f"[{cr_name}] Model upgraded, reloading interpreter...")
+            existing.pending_model_version = bundle.version
+            old_history = existing.predictor.copy_history()
+        else:
+            old_history = None
+
+        try:
+            from ppa.operator.predictor import Predictor
+
+            new_predictor = Predictor(
+                model_path,
+                scaler_path,
+                target_scaler_path,
+                metadata_path=metadata_path,
+                version=bundle.version,
+            )
+            if not new_predictor.is_loaded():
+                raise RuntimeError(new_predictor.last_load_error or "predictor not loaded")
+
+            # Restore history if upgrading
+            if old_history:
+                new_predictor.restore_history(old_history)
+                logger.info(f"[{cr_name}] Restored {len(old_history)} history steps")
+
+            existing.predictor = new_predictor
+            existing.active_model_version = bundle.version
             existing.pending_model_version = None
-            _update_status(patch, "modelLoadPending", True)
-            _update_status(patch, "modelUpgradeFailureReason", None)
-            logger.warning(
-                f"[{cr_name}] Model bundle pending for {target_app}/{target_horizon}: {exc}"
-            )
+            existing.last_failed_model_version = None
+            existing.model_upgrade_failure_reason = None
+            existing.model_load_pending = False
+            existing.model_load_time_ms = new_predictor.model_load_time_ms
+
+        except Exception as e:
+            logger.error(f"[{cr_name}] Predictor load failed: {e}")
+            if not existing.predictor:
+                raise
             return config, existing
-        bundle = ModelBundle(
-            root=Path(model_path).parent,
-            model_path=Path(model_path),
-            scaler_path=Path(scaler_path),
-            target_scaler_path=Path(target_scaler_path) if target_scaler_path else None,
-            metadata_path=None,
-            version=target_horizon,
-            metadata={},
-            legacy=used_legacy,
-        )
-    except BundleValidationError as exc:
-        existing.model_load_pending = False
-        existing.last_failed_model_version = target_horizon
-        existing.model_upgrade_failure_reason = str(exc)[:200]
-        _update_status(patch, "modelUpgradeFailed", True)
-        _update_status(patch, "modelUpgradeFailureReason", existing.model_upgrade_failure_reason)
-        logger.error(f"[{cr_name}] Model bundle validation failed: {exc}")
+
         return config, existing
 
-    used_legacy = bundle.legacy
-    model_path = str(bundle.model_path)
-    scaler_path = str(bundle.scaler_path)
-    target_scaler_path = str(bundle.target_scaler_path) if bundle.target_scaler_path else None
-    is_override = False
-
-    # DEPRECATION WARNING (log once only)
-    existing.target_namespace = target_ns
-    existing.target_deployment = target
-
-    if spec.get("modelPath") or spec.get("scalerPath"):
-        if not existing.deprecation_logged:
-            logger.warning(
-                f"[{cr_name}] modelPath/scalerPath/targetScalerPath are deprecated and ignored. "
-                f"Artifacts are now loaded from /models/{{app}}/{{horizon}}/current/. "
-                f"Remove these fields from CR spec."
-            )
-            existing.deprecation_logged = True
-
-    # STEP 2b: Handle None paths from _resolve_paths (graceful retry)
-    if model_path is None:
-        with _cr_state_lock:
-            existing.artifact_load_failures += 1
-            failures = existing.artifact_load_failures
-
-        if failures < 3:
-            logger.debug(f"[{cr_name}] Artifacts not ready (base missing). Will retry...")
-        elif failures == 3:
-            logger.error(
-                f"[{cr_name}] Artifacts unavailable after {failures} attempts. "
-                f"Check /models/{target_app}/{config['target_horizon']}/current/ symlink. "
-                f"Run 'ppa model train --app {target_app} --horizon {config['target_horizon']}' "
-                f"to generate artifacts."
-            )
-        elif failures % 10 == 0:
-            logger.error(
-                f"[{cr_name}] Still no artifacts after {failures} attempts. "
-                f"/models/{target_app}/{config['target_horizon']}/current/ symlink missing."
-            )
-        return config, existing
-
-    # STEP 3: Apply legacy flag transitions (locked + stable - Issues 14, 16)
-    if used_legacy and not existing.using_legacy_artifacts:
-        with _cr_state_lock:
-            existing.using_legacy_artifacts = True
-        if not patch.status.get("usingLegacyArtifacts"):
-            patch.status["usingLegacyArtifacts"] = True
-            logger.warning(
-                f"[{cr_name}] Using legacy artifact paths. "
-                f"Consider updating CR spec to use canonical paths."
-            )
-
-    elif (
-        existing.using_legacy_artifacts
-        and not used_legacy
-        and model_path is not None
-        and os.path.exists(model_path)
-        and scaler_path is not None
-        and os.path.exists(scaler_path)
-    ):
-        with _cr_state_lock:
-            existing.using_legacy_artifacts = False
-        if patch.status.get("usingLegacyArtifacts"):
-            patch.status["usingLegacyArtifacts"] = False
-            logger.info(f"[{cr_name}] Switched to canonical artifact paths")
-
-    # STEP 4: Check existence & retry logic (locked, all-or-nothing - Issues 4, 14, 17, 18, 19)
-    missing_paths = []
-    if model_path is None or not os.path.exists(model_path):
-        missing_paths.append(f"Model: {model_path or 'unknown'}")
-    if scaler_path is None or not os.path.exists(scaler_path):
-        missing_paths.append(f"Scaler: {scaler_path or 'unknown'}")
-
-    # Handle target_scaler (optional, log once)
-    if target_scaler_path and not os.path.exists(target_scaler_path):
-        if not existing.target_scaler_missing_logged:
-            logger.warning(
-                f"[{cr_name}] Target scaler missing at {target_scaler_path}, continuing without it"
-            )
-            existing.target_scaler_missing_logged = True
-        target_scaler_path = None
-
-    if missing_paths:
-        # Increment counter UNDER LOCK (Issue 14)
-        with _cr_state_lock:
-            existing.artifact_load_failures += 1
-            failures = existing.artifact_load_failures
-
-        if failures < 3:
-            # Retry window: log but don't fail
-            missing_str = ", ".join(missing_paths)
-            if is_override:
-                logger.debug(
-                    f"[{cr_name}] CR-specified paths not ready (attempt {failures}/3). "
-                    f"Check configuration:\n  {missing_str}\n"
-                    f"Will retry..."
-                )
-            else:
-                logger.debug(
-                    f"[{cr_name}] Artifact not ready (attempt {failures}/3). "
-                    f"Missing: {missing_str}. Will retry..."
-                )
-            return config, existing
-        else:
-            # After 3 failures: signal failure with error classification (Issues 18, 19)
-            missing_str = ", ".join(missing_paths)
-            error_msg = f"Missing after {failures} retries: {missing_str}"
-            error_type = "USER_CONFIG" if is_override else "SYSTEM_DELAY"
-
-            # Update status (idempotent - Issue 15)
-            if not patch.status.get("artifactLoadFailed"):
-                patch.status["artifactLoadFailed"] = True
-                patch.status["artifactLoadError"] = error_msg
-                patch.status["artifactLoadErrorType"] = error_type
-
-            # Periodic escalation logging (Issue 18)
-            if failures == 3:
-                # First-time failure log
-                if is_override:
-                    logger.error(
-                        f"[{cr_name}] ARTIFACT LOAD FAILED (CR override misconfigured): "
-                        f"{failures} retries exhausted.\n"
-                        f"  {missing_str}\n"
-                        f"Action: Verify CR spec paths are correct."
-                    )
-                else:
-                    logger.error(
-                        f"[{cr_name}] ARTIFACT LOAD FAILED: {failures} retries exhausted. "
-                        f"Missing: {missing_str}. Continuing with null predictor (scaling disabled)."
-                    )
-            elif failures % 10 == 0:
-                # Periodic re-escalation every 10 failures (Issue 18)
-                logger.error(
-                    f"[{cr_name}] STILL FAILING after {failures} attempts (status=artifactLoadFailed). "
-                    f"Artifacts remain unavailable. "
-                    f"Type: {error_type}. "
-                    f"Action: {'Fix CR spec' if is_override else 'Investigate cluster state, PVC, artifact job'}"
-                )
-            else:
-                # Ensure errorType is always set (idempotent - Issue 15)
-                if patch.status.get("artifactLoadErrorType") != error_type:
-                    patch.status["artifactLoadErrorType"] = error_type
-
-            return config, existing
-
-    # Paths exist: reset counter and clear failure state (locked - Issue 14, idempotent - Issue 15)
-    with _cr_state_lock:
-        if existing.artifact_load_failures > 0:
-            existing.artifact_load_failures = 0
-            should_clear_failure = True
-        else:
-            should_clear_failure = False
-
-    if should_clear_failure:
-        logger.info(f"[{cr_name}] Artifacts recovered (counter reset)")
-
-        # Clear all failure-related status fields (Issue 10, 15)
-        if patch.status.get("artifactLoadFailed"):
-            patch.status["artifactLoadFailed"] = False
-            patch.status["artifactLoadError"] = None
-            patch.status["artifactLoadErrorType"] = None
-            logger.info(f"[{cr_name}] Cleared artifact failure signal")
-
-    # STEP 5: Call _get_or_create_state (paths validated, paths exist)
-    # STEP 5: Call _get_or_create_state (paths validated, paths exist)
-    assert model_path is not None and scaler_path is not None, "Paths should be validated before this point"
-    state, upgrade_info = _get_or_create_state(
-        key,
-        bundle,
-        config,
-        target,
-        target_ns,
-        max_r,
-        config["container_name"],
-        config["min_r"],
-        None,  # persisted_history removed (no longer stored in status)
-        config["target_horizon"],
-    )
-
-    # STEP 6: Re-fetch state (fresh reference after lock release in _get_or_create_state)
-    state = cast(CRState, _cr_state.get(key))
-
-    # Handle upgrade_info (idempotent status updates - Issue 15)
-    if upgrade_info["failed_to_upgrade"]:
-        if not patch.status.get("modelUpgradeFailed"):
-            patch.status["modelUpgradeFailed"] = True
-            patch.status["modelUpgradeFailureReason"] = upgrade_info["reason"]
-            patch.status["lastFailedModelVersion"] = state.last_failed_model_version
-            logger.warning(
-                f"[{cr_name}] Model upgrade failed - running on old model. "
-                f"Reason: {upgrade_info['reason']}"
-            )
-    elif upgrade_info["upgraded"]:
-        if patch.status.get("modelUpgradeFailed"):
-            patch.status["modelUpgradeFailed"] = False
-            patch.status["modelUpgradeFailureReason"] = None
-            patch.status["activeModelVersion"] = state.active_model_version
-            logger.info(f"[{cr_name}] Model upgraded successfully")
-    else:
-        # Only set if not already in status (idempotent - Issue 15)
-        if "modelUpgradeFailed" not in (status or {}):
-            patch.status["modelUpgradeFailed"] = False
-    patch.status["modelLoadPending"] = False
-    patch.status["activeModelVersion"] = state.active_model_version
-    patch.status["modelLoadTimeMs"] = state.model_load_time_ms
-
-    return config, state
-
-
-def _fetch_and_validate_features(
-    config: dict[str, Any],
-    cr_name: str,
-    cr_ns: str,
-    state: CRState,
-    patch: kopf.Patch,
-    status: dict[str, Any] | None,
-) -> tuple[dict[str, Any], int, dict[str, float], list[str], bool]:
-    """Fetch features from Prometheus and handle failures. Extract feature acquisition and error handling.
-
-    Returns:
-        Tuple of (features dict, current_replicas, raw_metrics, degraded_reasons, should_continue)
-    """
-    try:
-        features, current_replicas, raw_metrics, degraded_reasons = build_feature_vector(
-            config["target"],
-            config["target_ns"],
-            config["min_r"],
-            config["max_r"],
-            config["container_name"],
-            config["prom_url"],
-            state,
-        )
-        state.last_successful_cycle = time.time()
-        state.consecutive_failures = 0
-        state.last_known_good_replicas = int(current_replicas)
-        return features, int(current_replicas), raw_metrics, degraded_reasons, True
-
-    except (FeatureVectorException, PrometheusCircuitBreakerTripped) as e:
-        state.consecutive_failures += 1
-        metric_failures = (status.get("metricFailures", 0) if status else 0) + 1
-
-        logger.error(f"[{cr_name}] Feature extraction failed ({metric_failures}/5): {e}")
-
-        if state.last_known_good_replicas > 0 and state.consecutive_failures <= 3:
-            fallback_replicas = state.last_known_good_replicas
-            logger.warning(
-                f"[{cr_name}] Using fallback scaling: {fallback_replicas} replicas "
-                f"(last known good, failure {state.consecutive_failures}/3)"
-            )
-
-            if not config["observer_mode"]:
-                logger.info(
-                    f"[{cr_name}] FALLBACK: Scaling {config['target_ns']}/{config['target']} "
-                    f"to {fallback_replicas} replicas"
-                )
-                if not scale_deployment(config["target"], fallback_replicas, config["target_ns"]):
-                    _record_scale_failure(state, patch, "fallback scale patch failed")
-
-            return {}, 0, {}, [], False
-
-        if metric_failures >= 5:
-            ppa_circuit_breaker_tripped.labels(cr_name=cr_name, namespace=cr_ns).set(1)
-            logger.critical(
-                f"[{cr_name}] CIRCUIT BREAKER TRIPPED after {metric_failures} metric failures. "
-                f"PPA will not scale until metrics recover."
-            )
-        else:
-            ppa_metric_failures.labels(cr_name=cr_name, namespace=cr_ns).set(metric_failures)
-
-        return {}, 0, {}, [], False
-
-
-def _update_predictor_state(
-    cr_name: str,
-    cr_ns: str,
-    config: dict[str, Any],
-    state: CRState,
-    features: dict[str, Any],
-    current: int,
-    patch: kopf.Patch,
-) -> bool:
-    """Update predictor history and check readiness. Extract model warmup logic.
-
-    Returns:
-        True if predictor is ready for prediction, False otherwise
-    """
-    # Guard: If predictor not ready (e.g., during artifact retry), return early
-    if state.predictor is None:
-        if not state.predictor_missing_logged:
-            logger.debug(
-                f"[{cr_name}] Predictor not available yet. Waiting for artifacts to load..."
-            )
-            state.predictor_missing_logged = True
-        patch.status["currentReplicas"] = current
-        return False
-
-    state.predictor.update(features)
-    history_len = len(state.predictor.history)
-    maxlen = state.predictor.history.maxlen
-
-    ppa_warmup_progress.labels(cr_name=cr_name, namespace=cr_ns).set(
-        history_len / maxlen if maxlen else 0
-    )
-    ppa_model_load_failed.labels(cr_name=cr_name, namespace=cr_ns).set(
-        1 if state.predictor._load_failed else 0
-    )
-    patch.status["currentReplicas"] = current
-
-    if not state.predictor.ready():
-        if state.predictor._load_failed:
-            logger.debug(
-                f"[{cr_name}] Model not loaded (will retry next cycle). "
-                f"History: {history_len}/{maxlen}"
-            )
-        else:
-            logger.info(f"[{cr_name}] Warming up: {history_len}/{maxlen} steps collected")
-        return False
-
-    # Reset transition flag when predictor becomes ready
-    state.predictor_missing_logged = False
-
-    lat = features.get("latency_p95_ms", float("nan"))
-    lat_display = f"{lat:.1f}" if isinstance(lat, float) and not math.isnan(lat) else "nan"
-    logger.info(
-        f"[{cr_name}] RPS/Pod={features['rps_per_replica']:.1f}  "
-        f"P95={lat_display}ms  "
-        f"CPU={features['cpu_utilization_pct']:.1f}%  "
-        f"Replicas={features['replicas_normalized']:.2f} (norm)"
-    )
-
-    # Input validation: skip prediction entirely when all primary signals are dead.
-    if not _validate_input_signals(features):
-        logger.warning(
-            f"[{cr_name}] Skipping prediction due to invalid input signals "
-            f"(rps=0, cpu=0, latency=NaN)"
-        )
-        return False
-
-    return True
-
-
-def _make_scaling_decision(
-    cr_name: str,
-    cr_ns: str,
-    config: dict[str, Any],
-    state: CRState,
-    features: dict[str, Any],
-    raw_metrics: dict[str, float],
-    current: int,
-    patch: kopf.Patch,
-) -> tuple[int, bool]:
-    """Predict load, check drift, stabilize, and calculate target replicas. Extract scaling logic.
-
-    Returns:
-        Tuple of (desired_replicas, should_apply_scaling)
-    """
-    # Guard: If predictor not ready, skip scaling (quietly with debug level)
-    predictor = state.predictor
-    if predictor is None:
-        logger.debug(f"[{cr_name}] Skipping scaling (predictor not ready yet)")
-        return current, False
-
-    predicted_load = predictor.predict()
-    logger.info(f"[{cr_name}] Predicted load: {predicted_load:.1f} req/s")
-    ppa_inference_latency_ms.labels(cr_name=cr_name, namespace=cr_ns).set(
-        predictor.last_prediction_latency_ms
-    )
-
-    ppa_predicted_load_rps.labels(cr_name=cr_name, namespace=cr_ns).set(predicted_load)
-
-    # Prediction sanity check: reject hallucinations inconsistent with near-zero input.
-    if not _check_prediction_sanity(predicted_load, features):
-        logger.warning(
-            f"[{cr_name}] Rejecting prediction: inconsistent with input signals "
-            f"(predicted={predicted_load:.1f} req/s but rps_per_replica=0)"
-        )
-        _maybe_record_decision_trace(
-            cr_name,
-            cr_ns,
-            config,
-            state,
-            patch,
-            features,
-            raw_metrics,
-            predicted_load,
-            current,
-            current,
-            current,
-            "prediction_sanity_reject",
-            False,
-            force=True,
-        )
-        return current, False
-
-    # Track prediction accuracy and check for concept drift
-    actual_rps = raw_metrics.get("requests_per_second", 0.0)
-    predictor.track_prediction_accuracy(predicted_load, actual_rps)
-
-    drift_check = predictor.check_concept_drift()
-    if drift_check.get("checked") and drift_check.get("detected"):
-        error_pct = drift_check.get("error_pct", 0)
-        severity = drift_check.get("severity", "unknown")
-        ppa_concept_drift_detected.labels(cr_name=cr_name, namespace=cr_ns).set(1)
-        ppa_prediction_error_pct.labels(cr_name=cr_name, namespace=cr_ns).set(error_pct)
-        logger.error(
-            f"[{cr_name}] CONCEPT DRIFT ({severity}): "
-            f"Prediction error {error_pct:.1f}% (threshold: 20%). "
-            f"Consider retraining the model."
-        )
-
-        retraining_check = predictor.should_trigger_retraining(severity, error_pct)
-        if retraining_check.get("trigger"):
-            logger.critical(
-                f"[{cr_name}] RETRAINING TRIGGERED: {retraining_check.get('reason')}. "
-                f"Please run 'ppa model retrain --app {config['target_app']} "
-                f"--horizon {config['target_horizon']}' or enable auto-retraining in CR spec."
-            )
-    else:
-        ppa_concept_drift_detected.labels(cr_name=cr_name, namespace=cr_ns).set(0)
-
-    # Calculate candidate replicas with safety factor
-    state.last_prediction = predicted_load
-    capacity = config["capacity"] if config["capacity"] is not None else DEFAULT_CAPACITY_PER_POD
-    inflated = predicted_load * config["safety_factor"]
-    raw_desired = math.ceil(inflated / capacity) if capacity else current
-    ppa_inflated_load_rps.labels(cr_name=cr_name, namespace=cr_ns).set(inflated)
-    ppa_raw_desired_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(raw_desired)
-
-    candidate = calculate_replicas(
-        predicted_load,
-        current,
-        config["min_r"],
-        config["max_r"],
-        config["capacity"],
-        config["up_rate"],
-        config["down_rate"],
-        config["safety_factor"],
-    )
-
-    # Write this CR's prediction into the shared registry (keyed by deployment).
-    # The non-observer (active scaler) CR will read the aggregated median.
-    deploy_key = (config["target_ns"], config["target"])
-    horizon = config["target_horizon"]
-    now = time.time()
-    with _prediction_registry_lock:
-        if deploy_key not in _prediction_registry:
-            _prediction_registry[deploy_key] = {}
-            _prediction_timestamps[deploy_key] = {}
-        _prediction_registry[deploy_key][horizon] = float(candidate)
-        _prediction_timestamps[deploy_key][horizon] = now
-
-    # Tolerance-based stabilization (still per-CR — needed to correctly gate _apply_scaling)
-    if abs(candidate - state.last_desired) <= STABILIZATION_TOLERANCE:
-        state.stable_count += 1
-    else:
-        state.stable_count = 1
-
-    state.last_desired = float(candidate)
-
-    if state.stable_count < STABILIZATION_STEPS:
-        logger.info(
-            f"[{cr_name}] Stabilizing: {state.stable_count}/{STABILIZATION_STEPS} "
-            f"(target: {candidate} replicas, tolerance: ±{STABILIZATION_TOLERANCE})"
-        )
-        ppa_desired_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(candidate)
-        _maybe_record_decision_trace(
-            cr_name,
-            cr_ns,
-            config,
-            state,
-            patch,
-            features,
-            raw_metrics,
-            predicted_load,
-            candidate,
-            candidate,
-            current,
-            "stabilizing",
-            False,
-        )
-        return candidate, False
-
-    # --- Multi-model aggregation (active scaler only) ---
-    # Observer CRs still return (candidate, True) so _apply_scaling can log "would scale".
-    # The actual scaling below in reconcile() is guarded: observers never call scale_deployment.
-    if not config["observer_mode"]:
-        # Discard stale predictions (older than TTL) before aggregating.
-        with _prediction_registry_lock:
-            valid_predictions: list[float] = []
-            registry = _prediction_registry.get(deploy_key, {})
-            timestamps = _prediction_timestamps.get(deploy_key, {})
-            for h, val in registry.items():
-                age = now - timestamps.get(h, 0.0)
-                if age <= _PREDICTION_TTL_SECONDS:
-                    valid_predictions.append(val)
-
-        logger.info(
-            f"[{cr_name}] Model predictions this cycle: "
-            + ", ".join(
-                f"{h}={v:.1f}" for h, v in _prediction_registry.get(deploy_key, {}).items()
-            )
-        )
-
-        if len(valid_predictions) >= 2:
-            pred_max = max(valid_predictions)
-            pred_min = min(valid_predictions)
-            epsilon = 1e-6
-            ratio = pred_max / max(pred_min, epsilon)
-
-            if ratio > 5.0:
-                logger.warning(
-                    f"[{cr_name}] Skipping scaling due to model disagreement "
-                    f"(max={pred_max:.1f}, min={pred_min:.1f}, ratio={ratio:.1f}x > 5)"
-                )
-                ppa_desired_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(candidate)
-                _maybe_record_decision_trace(
-                    cr_name,
-                    cr_ns,
-                    config,
-                    state,
-                    patch,
-                    features,
-                    raw_metrics,
-                    predicted_load,
-                    candidate,
-                    current,
-                    current,
-                    "model_disagreement",
-                    False,
-                    force=True,
-                )
-                return current, False
-
-            # All models agree: use median as the single scaling target.
-            median_replicas = int(round(statistics.median(valid_predictions)))
-            median_replicas = max(config["min_r"], min(config["max_r"], median_replicas))
-            logger.info(
-                f"[{cr_name}] Aggregated replica target (median of {len(valid_predictions)} models): "
-                f"{median_replicas}"
-            )
-            ppa_desired_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(median_replicas)
-            _maybe_record_decision_trace(
-                cr_name,
-                cr_ns,
-                config,
-                state,
-                patch,
-                features,
-                raw_metrics,
-                predicted_load,
-                candidate,
-                median_replicas,
-                current,
-                "aggregated_median",
-                True,
-            )
-            return median_replicas, True
-
-    ppa_desired_replicas.labels(cr_name=cr_name, namespace=cr_ns).set(candidate)
-    _maybe_record_decision_trace(
-        cr_name,
-        cr_ns,
-        config,
-        state,
-        patch,
-        features,
-        raw_metrics,
-        predicted_load,
-        candidate,
-        candidate,
-        current,
-        "single_model_candidate",
-        True,
-    )
-    return candidate, True
-
-
-def _apply_scaling(
-    cr_name: str,
-    cr_ns: str,
-    config: dict[str, Any],
-    state: CRState,
-    desired: int,
-    current: int,
-    patch: kopf.Patch,
-) -> None:
-    """Apply scaling decision to deployment. Extract scaling action logic.
-
-    Args:
-        desired: Target replica count
-        current: Current replica count
-    """
-
-    if desired != current:
-        if config["observer_mode"]:
-            logger.info(
-                f"[{cr_name}] OBSERVER: would scale {config['target_ns']}/{config['target']}: "
-                f"{current} → {desired} (skipped — observerMode=true)"
-            )
-        else:
-            now = time.time()
-            if state.next_scale_retry_time and now < state.next_scale_retry_time:
-                logger.warning(
-                    f"[{cr_name}] Skipping scale attempt during backoff until "
-                    f"{state.next_scale_retry_time:.0f}"
-                )
-                _update_status(patch, "scaleBackoffUntil", state.next_scale_retry_time)
-                return
-            logger.info(
-                f"[{cr_name}] Scaling {config['target_ns']}/{config['target']}: {current} → {desired}"
-            )
-            if scale_deployment(config["target"], desired, config["target_ns"]):
-                ppa_scale_events_total.labels(cr_name=cr_name, namespace=cr_ns).inc()
-                state.stable_count = 0
-                _reset_scale_backoff(state, patch)
-                patch.status["lastScaleTime"] = time.strftime(
-                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                )
-            else:
-                _record_scale_failure(state, patch, "Kubernetes scale patch failed")
-    else:
-        logger.info(f"[{cr_name}] No scaling needed: {current} replicas is correct")
-
-
-@kopf.on.startup()
-def startup(logger_: kopf.Logger | None = None, **kwargs):
-    """Operator startup hook - runs once when operator pod starts."""
-    pass
-    logger.info("=" * 80)
-    logger.info("PPA Operator starting up")
-    logger.info(f"DEFAULT_MODEL_DIR: {DEFAULT_MODEL_DIR}")
-    logger.info("=" * 80)
-
-    # Check model directory is accessible
-    _ensure_model_directory_ready()
-
-
-@kopf.timer(
-    "ppa.example.com",
-    "v1",
-    "predictiveautoscalers",
-    interval=TIMER_INTERVAL,
-    initial_delay=INITIAL_DELAY,
-)
+# Reconciliation handler
+@kopf.timer("ppa.example.com", "v1", "predictiveautoscalers", interval=TIMER_INTERVAL, initial_delay=INITIAL_DELAY)
 def reconcile(spec, status, meta, patch, **kwargs):
-    """Main control loop — runs every TIMER_INTERVAL seconds per CR.
-
-    Orchestrates: CRD parsing → feature fetching → prediction → scaling decision → apply.
-    CR-level error isolation: any exception in one CR doesn't affect others.
-    """
+    """Main control loop — delegates to ScalerStateMachine."""
     cr_ns = meta.get("namespace", NAMESPACE)
     cr_name = meta.get("name", "unknown")
 
@@ -1458,76 +237,72 @@ def reconcile(spec, status, meta, patch, **kwargs):
         # 1. Parse CRD spec and load CR state
         config, state = _parse_crd_spec(spec, status, meta, cr_ns, cr_name, patch)
     except Exception as e:
-        # CR-level isolation: log error, mark CR as failed, don't crash operator
         logger.error(f"[{cr_name}] CR reconciliation FAILED: {e}")
         return
 
     try:
-        # 2. Fetch features from Prometheus with error handling
-        features, current, raw_metrics, degraded_reasons, should_continue = _fetch_and_validate_features(
-            config, cr_name, cr_ns, state, patch, status
-        )
-        if not should_continue:
-            return
+        # 2. Reuse or create ScalerStateMachine so the NATS loop/thread
+        # survives across timer ticks (a new instance every 30 s would
+        # kill the NATS connection before it could be established).
+        if state.state_machine is None:
+            state.state_machine = ScalerStateMachine(
+                cr_name=cr_name,
+                cr_namespace=cr_ns,
+                state=state,
+                config=config,
+                patch=patch,
+                status=status,
+            )
+        else:
+            # Patch and status change each invocation — update in-place.
+            state.state_machine.patch = patch
+            state.state_machine.status = status
+            state.state_machine.config = config
 
-        # Reset metric failure counters on success
-        patch.status["circuitBreakerTripped"] = False
-        patch.status["degradedReasons"] = degraded_reasons
-        patch.status["metricAges"] = state.metric_ages or {}
-        ppa_circuit_breaker_tripped.labels(cr_name=cr_name, namespace=cr_ns).set(0)
-        ppa_metric_failures.labels(cr_name=cr_name, namespace=cr_ns).set(0)
+        state_machine = state.state_machine
 
-        assert list(features.keys()) == FEATURE_COLUMNS, (
-            f"[{cr_name}] Feature vector order mismatch"
-        )
+        # 3. Run full cycle
+        status_update = state_machine.reconcile()
 
-        # 3. Update predictor and check readiness
-        ready = _update_predictor_state(cr_name, cr_ns, config, state, features, current, patch)
-        if not ready:
-            return
-
-        # 4. Make scaling decision
-        desired, should_apply = _make_scaling_decision(
-            cr_name, cr_ns, config, state, features, raw_metrics, current, patch
-        )
-        _patch_status_throttled(
-            patch,
-            state,
-            {
-                "currentReplicas": current,
-                "desiredReplicas": desired,
-                "lastPredictedLoad": state.last_prediction,
-                "activeModelVersion": state.active_model_version,
-                "degradedReasons": degraded_reasons,
-                "metricAges": state.metric_ages or {},
-                "modelLoadTimeMs": state.model_load_time_ms,
-                "predictionLatencyMs": (
-                    state.predictor.last_prediction_latency_ms if state.predictor else 0.0
-                ),
-                "scaleBackoffUntil": state.next_scale_retry_time or None,
-                "lastScaleError": state.last_scale_error,
-                "circuitBreakerTripped": False,
-            },
-        )
-        if not should_apply:
-            return
-
-        # 5. Apply scaling
-        _apply_scaling(cr_name, cr_ns, config, state, desired, current, patch)
-
-        # Clear any previous error state on success
+        # 4. Update status (throttled) - inline to avoid circular import
+        if status_update:
+            for key, value in status_update.items():
+                if patch.status.get(key) != value:
+                    patch.status[key] = value
 
     except Exception as e:
-        # Reconciliation logic failed - log clearly and mark CR
         logger.error(f"[{cr_name}] Reconciliation cycle error: {e}", exc_info=True)
-        # Don't re-raise - let operator continue with other CRs
 
-
+# Cleanup on CR deletion
 @kopf.on.delete("ppa.example.com", "v1", "predictiveautoscalers")
 def on_delete(meta, **kwargs):
-    """Clean up per-CR state when a CR is deleted (thread-safe)."""
+    """Clean up per-CR state when a CR is deleted."""
     key = (meta.get("namespace", NAMESPACE), meta.get("name", "unknown"))
     with _cr_state_lock:
         removed = _cr_state.pop(key, None)
-    if removed:
-        logger.info(f"Cleaned up state for {key}")
+        if removed:
+            logger.info(f"Cleaned up state for {key}")
+
+# Startup hook
+@kopf.on.startup()
+def startup(**kwargs):
+    """Operator startup hook."""
+    import os
+    nats_url = os.getenv("NATS_URL", "nats://localhost:4222")
+    logger.info("=" * 80)
+    logger.info("PPA Operator starting up")
+    logger.info(f"DEFAULT_MODEL_DIR: {DEFAULT_MODEL_DIR}")
+    logger.info(f"NATS_URL: {nats_url}")
+    logger.info("=" * 80)
+
+# Model path resolution for CR reconciliation
+def _resolve_paths(config: dict, bundle) -> tuple:
+    """Resolve model and scaler paths from config and bundle.
+
+    Returns:
+        Tuple of (model_path, scaler_path, target_scaler_path, legacy, failed)
+    """
+    model_path = str(bundle.model_path) if bundle.model_path else None
+    scaler_path = str(bundle.scaler_path) if bundle.scaler_path else None
+    target_scaler_path = str(bundle.target_scaler_path) if bundle.target_scaler_path else None
+    return (model_path, scaler_path, target_scaler_path, bundle.legacy, False)

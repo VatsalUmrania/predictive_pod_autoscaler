@@ -15,11 +15,11 @@ Example:
 """
 
 from nexus.bus.incident_event import (
-    IncidentEvent,
     AgentType,
-    SignalType,
-    Severity,
     HealingLevel,
+    IncidentEvent,
+    Severity,
+    SignalType,
 )
 from nexus.bus.nats_client import NATSClient
 

@@ -29,11 +29,9 @@ from __future__ import annotations
 import ast
 import asyncio
 import logging
-import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Set
 
 from nexus.agents.base_agent import BaseAgent
 from nexus.bus.incident_event import (
@@ -52,7 +50,7 @@ logger = logging.getLogger(__name__)
 # Secret detection heuristics
 # ──────────────────────────────────────────────────────────────────────────────
 
-_SECRET_PATTERNS: List[tuple] = [
+_SECRET_PATTERNS: list[tuple] = [
     (r'(?i)(api_key|api-key|apikey)\s*[=:]\s*["\'][a-zA-Z0-9_\-]{20,}["\']', "api_key"),
     (r'(?i)(secret|password|passwd|pwd)\s*[=:]\s*["\'][^"\']{8,}["\']',      "password"),
     (r'(?i)(token)\s*[=:]\s*["\'][a-zA-Z0-9_\-\.]{20,}["\']',               "token"),
@@ -66,7 +64,7 @@ _SECRET_PATTERNS: List[tuple] = [
 _SECRET_RES = [(re.compile(p), label) for p, label in _SECRET_PATTERNS]
 
 # System/CI environment variables to exclude from the required contract
-_SYSTEM_ENV_VARS: Set[str] = {
+_SYSTEM_ENV_VARS: set[str] = {
     "PATH", "HOME", "USER", "SHELL", "PWD", "LANG", "TERM", "TMPDIR",
     "PYTHONPATH", "PYTHONDONTWRITEBYTECODE", "VIRTUAL_ENV", "CONDA_PREFIX",
     "NODE_ENV", "NODE_PATH", "DEBUG", "LOG_LEVEL", "PORT", "HOST",
@@ -78,7 +76,7 @@ _SYSTEM_ENV_VARS: Set[str] = {
 # AST-based env key extraction (Python)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def extract_env_keys_python(source: str, filepath: str = "<unknown>") -> Set[str]:
+def extract_env_keys_python(source: str, filepath: str = "<unknown>") -> set[str]:
     """
     Extract all env var keys referenced in Python source code via AST walking.
 
@@ -91,7 +89,7 @@ def extract_env_keys_python(source: str, filepath: str = "<unknown>") -> Set[str
         getenv("KEY")                 →  "KEY"  (from os import getenv)
         settings.get("KEY")           →  skipped (heuristic: only os.*)
     """
-    keys: Set[str] = set()
+    keys: set[str] = set()
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -144,7 +142,7 @@ _ENV_JS_DOT     = re.compile(r'process\.env\.([A-Z_][A-Z0-9_]*)')
 _ENV_JS_BRACKET = re.compile(r'process\.env\[[\'"]([\w]+)[\'"]\]')
 
 
-def extract_env_keys_js(source: str) -> Set[str]:
+def extract_env_keys_js(source: str) -> set[str]:
     """
     Extract env var keys from JavaScript / TypeScript source.
 
@@ -153,7 +151,7 @@ def extract_env_keys_js(source: str) -> Set[str]:
         process.env['MY_KEY']
         process.env["MY_KEY"]
     """
-    keys: Set[str] = set()
+    keys: set[str] = set()
     keys.update(_ENV_JS_DOT.findall(source))
     keys.update(_ENV_JS_BRACKET.findall(source))
     return keys
@@ -163,7 +161,7 @@ def extract_env_keys_js(source: str) -> Set[str]:
 # Secret scanner
 # ──────────────────────────────────────────────────────────────────────────────
 
-def scan_diff_for_secrets(diff: str) -> List[Dict]:
+def scan_diff_for_secrets(diff: str) -> list[dict]:
     """
     Scan a git diff for accidentally committed secrets.
     Only scans added lines (prefix '+').
@@ -203,8 +201,8 @@ class EnvContractValidator:
     def __init__(
         self,
         repo_path: Path,
-        env_file_paths: Optional[List[str]] = None,
-        k8s_secret_names: Optional[List[str]] = None,
+        env_file_paths: list[str] | None = None,
+        k8s_secret_names: list[str] | None = None,
         k8s_namespace: str = "default",
     ):
         self.repo_path        = repo_path
@@ -214,10 +212,10 @@ class EnvContractValidator:
 
     # ── Required keys (code scan) ─────────────────────────────────────────────
 
-    def required_keys(self, extensions: Optional[List[str]] = None) -> Set[str]:
+    def required_keys(self, extensions: list[str] | None = None) -> set[str]:
         """Scan all source files and return the set of required env keys."""
         exts = extensions or [".py", ".js", ".ts", ".mjs", ".cjs"]
-        found: Set[str] = set()
+        found: set[str] = set()
 
         for ext in exts:
             for path in self.repo_path.rglob(f"*{ext}"):
@@ -230,16 +228,16 @@ class EnvContractValidator:
                         found.update(extract_env_keys_python(src, str(path)))
                     else:
                         found.update(extract_env_keys_js(src))
-                except (IOError, OSError):
+                except OSError:
                     pass
 
         return found - _SYSTEM_ENV_VARS
 
     # ── Available keys (env files + K8s secrets) ──────────────────────────────
 
-    def available_keys(self) -> Set[str]:
+    def available_keys(self) -> set[str]:
         """Return the union of keys from all .env files and K8s secrets."""
-        available: Set[str] = set()
+        available: set[str] = set()
 
         for env_path in self.env_file_paths:
             p = Path(env_path)
@@ -253,7 +251,8 @@ class EnvContractValidator:
 
         for secret_name in self.k8s_secret_names:
             try:
-                from kubernetes import client as k8s_client, config as k8s_config
+                from kubernetes import client as k8s_client
+                from kubernetes import config as k8s_config
                 try:
                     k8s_config.load_incluster_config()
                 except Exception:
@@ -271,7 +270,7 @@ class EnvContractValidator:
 
     # ── Validate ──────────────────────────────────────────────────────────────
 
-    def validate(self) -> Dict:
+    def validate(self) -> dict:
         """
         Run the full contract validation.
 
@@ -326,8 +325,8 @@ class GitAgent(BaseAgent):
         self,
         nats_client: NATSClient,
         repo_path: str,
-        env_file_paths: Optional[List[str]] = None,
-        k8s_secret_names: Optional[List[str]] = None,
+        env_file_paths: list[str] | None = None,
+        k8s_secret_names: list[str] | None = None,
         k8s_namespace: str = "default",
         deployment_name: str = "app",
         poll_interval_seconds: float = 60.0,
@@ -346,11 +345,11 @@ class GitAgent(BaseAgent):
             k8s_secret_names  = k8s_secret_names or [],
             k8s_namespace     = k8s_namespace,
         )
-        self._last_sha: Optional[str] = None
+        self._last_sha: str | None = None
 
     # ── Git helpers ───────────────────────────────────────────────────────────
 
-    def _git(self, *args: str, timeout: int = 15) -> Optional[str]:
+    def _git(self, *args: str, timeout: int = 15) -> str | None:
         """Run a git command in self.repo_path. Returns stdout or None."""
         try:
             result = subprocess.run(
@@ -365,10 +364,10 @@ class GitAgent(BaseAgent):
             logger.warning(f"[GitAgent] git {args[0]} failed: {exc}")
             return None
 
-    def _head_sha(self) -> Optional[str]:
+    def _head_sha(self) -> str | None:
         return self._git("rev-parse", "HEAD")
 
-    def _commit_info(self, sha: str) -> Dict:
+    def _commit_info(self, sha: str) -> dict:
         raw = self._git("log", "-1", "--format=%H|%an|%s|%D", sha)
         if not raw:
             return {"sha": sha, "author": "unknown", "subject": "", "refs": ""}
@@ -383,16 +382,16 @@ class GitAgent(BaseAgent):
     def _get_diff(self, old: str, new: str) -> str:
         return self._git("diff", old, new, timeout=30) or ""
 
-    def _changed_files(self, old: str, new: str) -> List[str]:
+    def _changed_files(self, old: str, new: str) -> list[str]:
         raw = self._git("diff", "--name-only", old, new)
         return raw.splitlines() if raw else []
 
     # ── Per-commit validation ─────────────────────────────────────────────────
 
     async def _validate_commit(
-        self, old_sha: str, new_sha: str, info: Dict
-    ) -> List[IncidentEvent]:
-        events: List[IncidentEvent] = []
+        self, old_sha: str, new_sha: str, info: dict
+    ) -> list[IncidentEvent]:
+        events: list[IncidentEvent] = []
         changed_files = self._changed_files(old_sha, new_sha)
 
         # 1. Always emit DEPLOY_EVENT
@@ -491,8 +490,8 @@ class GitAgent(BaseAgent):
             from nexus.integration.selfheal_config import load_selfheal_config
             sh_config = load_selfheal_config(self.repo_path)
             if sh_config:
+
                 from nexus.integration.token_store import get_token_store
-                import asyncio
                 store = get_token_store()
                 # Register app (idempotent) and get/generate token
                 token = await store.register_app(sh_config.app, tier=sh_config.tier)
@@ -517,7 +516,7 @@ class GitAgent(BaseAgent):
         self._last_sha = self._head_sha()
         logger.info(f"[GitAgent] Watching {self.repo_path} | HEAD={self._last_sha}")
 
-    async def sense(self) -> List[IncidentEvent]:
+    async def sense(self) -> list[IncidentEvent]:
         current = self._head_sha()
         if current is None:
             logger.warning("[GitAgent] Could not read HEAD SHA")
@@ -538,7 +537,7 @@ class GitAgent(BaseAgent):
 
     # ── Synchronous entry point for git pre-push hook ─────────────────────────
 
-    def run_hook_validation(self) -> Dict:
+    def run_hook_validation(self) -> dict:
         """
         Synchronous validation for use in the git pre-push hook script.
         Returns the validator result dict.

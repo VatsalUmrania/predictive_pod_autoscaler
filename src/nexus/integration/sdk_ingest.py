@@ -33,12 +33,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from nexus.integration.token_store import get_token_store
@@ -82,7 +81,7 @@ async def _get_nats():
 # ──────────────────────────────────────────────────────────────────────────────
 
 async def _get_app_name(
-    authorization: Optional[str] = Header(None),
+    authorization: str | None = Header(None),
 ) -> str:
     """Validate Bearer token and return app_name."""
     if not authorization or not authorization.startswith("Bearer "):
@@ -102,11 +101,11 @@ async def _get_app_name(
 class RegisterRequest(BaseModel):
     app_name: str = Field(..., min_length=1)
     tier:     str = Field("production")
-    contact:  Optional[str] = None          # Optional: email / Slack handle of DRI
+    contact:  str | None = None          # Optional: email / Slack handle of DRI
 
 
 @router.post("/apps/register", tags=["integration"])
-async def register_app(req: RegisterRequest) -> Dict[str, str]:
+async def register_app(req: RegisterRequest) -> dict[str, str]:
     """
     Register a new application with NEXUS and receive a SELFHEAL_TOKEN.
 
@@ -132,14 +131,14 @@ async def register_app(req: RegisterRequest) -> Dict[str, str]:
 
 
 @router.get("/apps", tags=["integration"])
-async def list_apps() -> List[Dict[str, Any]]:
+async def list_apps() -> list[dict[str, Any]]:
     """List all registered apps (for ops dashboards — no auth required)."""
     store = get_token_store()
     return await store.list_apps()
 
 
 @router.post("/apps/{app_name}/rotate-token", tags=["integration"])
-async def rotate_token(app_name: str) -> Dict[str, str]:
+async def rotate_token(app_name: str) -> dict[str, str]:
     """Generate a new SELFHEAL_TOKEN for an app, invalidating the old one."""
     store     = get_token_store()
     new_token = await store.rotate_token(app_name)
@@ -173,55 +172,55 @@ def serve_beacon() -> Response:
 
 class GenericEventPayload(BaseModel):
     type:    str
-    message: Optional[str] = None
-    data:    Dict[str, Any] = Field(default_factory=dict)
-    ts:      Optional[float] = None
+    message: str | None = None
+    data:    dict[str, Any] = Field(default_factory=dict)
+    ts:      float | None = None
 
 
 class HeartbeatPayload(BaseModel):
-    memory_mb:   Optional[float] = None
-    cpu_pct:     Optional[float] = None
-    uptime_s:    Optional[float] = None
-    error_rate:  Optional[float] = None
-    rps:         Optional[float] = None
-    version:     Optional[str]   = None
-    ts:          Optional[float]  = None
+    memory_mb:   float | None = None
+    cpu_pct:     float | None = None
+    uptime_s:    float | None = None
+    error_rate:  float | None = None
+    rps:         float | None = None
+    version:     str | None   = None
+    ts:          float | None  = None
 
 
 class RouteErrorPayload(BaseModel):
     route:       str
     method:      str = "GET"
     status_code: int
-    duration_ms: Optional[float] = None
-    error_msg:   Optional[str]   = None
-    ts:          Optional[float]  = None
+    duration_ms: float | None = None
+    error_msg:   str | None   = None
+    ts:          float | None  = None
 
 
 class QueryPayload(BaseModel):
     sql_preview:    str
     duration_ms:    float
-    tables:         List[str]       = Field(default_factory=list)
+    tables:         list[str]       = Field(default_factory=list)
     slow:           bool            = False
-    ts:             Optional[float] = None
+    ts:             float | None = None
 
 
 class FrontendPayload(BaseModel):
     type:    str                       # js_error | web_vital | failed_fetch | failed_xhr | unhandled_rejection
-    message: Optional[str] = None
-    stack:   Optional[str] = None
-    source:  Optional[str] = None
-    url:     Optional[str] = None
-    name:    Optional[str] = None      # Web Vital name (LCP, CLS, FID)
-    value:   Optional[float] = None    # Web Vital value
-    status:  Optional[int]  = None     # HTTP status for failed requests
-    ts:      Optional[float] = None
+    message: str | None = None
+    stack:   str | None = None
+    source:  str | None = None
+    url:     str | None = None
+    name:    str | None = None      # Web Vital name (LCP, CLS, FID)
+    value:   float | None = None    # Web Vital value
+    status:  int | None  = None     # HTTP status for failed requests
+    ts:      float | None = None
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Ingest endpoints
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _ts_to_iso(ts: Optional[float]) -> str:
+def _ts_to_iso(ts: float | None) -> str:
     if ts is None:
         return datetime.now(timezone.utc).isoformat()
     return datetime.fromtimestamp(ts / 1000, tz=timezone.utc).isoformat()
@@ -230,7 +229,7 @@ def _ts_to_iso(ts: Optional[float]) -> str:
 async def _publish_to_nats(
     app_name:   str,
     event_type: str,
-    payload:    Dict[str, Any],
+    payload:    dict[str, Any],
 ) -> None:
     """
     Translate an SDK payload into an IncidentEvent and publish to NATS.
@@ -238,14 +237,14 @@ async def _publish_to_nats(
     orchestrator subscribes to (nexus.incidents.sdk.*).
     """
     # Event types that should NOT trigger the orchestrator
-    _IGNORE = {"heartbeat", "deploy_event", "healing_completed"}
-    if event_type in _IGNORE:
+    _ignore = {"heartbeat", "deploy_event", "healing_completed"}
+    if event_type in _ignore:
         return
 
     try:
         from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
 
-        _TYPE_MAP = {
+        _type_map = {
             # Standard SDK events
             "route_error":             SignalType.HIGH_ERROR_RATE,
             "js_error":                SignalType.HIGH_ERROR_RATE,
@@ -268,7 +267,7 @@ async def _publish_to_nats(
             "code_quality_warning":    SignalType.HIGH_ERROR_RATE,
         }
 
-        signal = _TYPE_MAP.get(event_type)
+        signal = _type_map.get(event_type)
         if signal is None:
             return   # heartbeats and unknown types are not incident events
 
@@ -303,7 +302,7 @@ async def _publish_to_nats(
 async def sdk_event(
     payload:  GenericEventPayload,
     app_name: str = Depends(_get_app_name),
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Accept a generic SDK event from any SDK client."""
     await _publish_to_nats(app_name, payload.type, {
         "message": payload.message, **payload.data,
@@ -317,7 +316,7 @@ async def sdk_event(
 async def sdk_heartbeat(
     payload:  HeartbeatPayload,
     app_name: str = Depends(_get_app_name),
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Accept a heartbeat / health snapshot from the SDK."""
     data = payload.model_dump(exclude_none=True)
     data["ts"] = _ts_to_iso(payload.ts)
@@ -338,7 +337,7 @@ async def sdk_heartbeat(
 async def sdk_route_error(
     payload:  RouteErrorPayload,
     app_name: str = Depends(_get_app_name),
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Accept a per-route HTTP error from backend SDK middleware."""
     await _publish_to_nats(app_name, "route_error", {
         "route":       payload.route,
@@ -359,7 +358,7 @@ async def sdk_route_error(
 async def sdk_query(
     payload:  QueryPayload,
     app_name: str = Depends(_get_app_name),
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Accept a DB query report from SelfHeal.wrapDB()."""
     await _publish_to_nats(app_name, "db_query", {
         "sql_preview": payload.sql_preview,
@@ -379,7 +378,7 @@ async def sdk_query(
 async def sdk_frontend(
     payload:  FrontendPayload,
     app_name: str = Depends(_get_app_name),
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Accept a browser beacon payload (JS errors, Web Vitals, failed requests)."""
     data = payload.model_dump(exclude_none=True)
     data["ts"] = _ts_to_iso(payload.ts)

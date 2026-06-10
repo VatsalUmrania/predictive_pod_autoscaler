@@ -37,10 +37,10 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, List, Optional, Set
+from typing import Any
 
 import aiosqlite
 
@@ -121,7 +121,7 @@ class AdjustmentRecord:
     false_heal_rate: float
     last_updated:    str
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "runbook_id":      self.runbook_id,
             "delta":           self.delta,
@@ -141,14 +141,14 @@ class KnowledgeBase:
                  Reads NEXUS_KNOWLEDGE_DB_PATH from env (default: data/nexus_knowledge.db).
     """
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: str | None = None):
         self._db_path = db_path or os.getenv(
             "NEXUS_KNOWLEDGE_DB_PATH", "data/nexus_knowledge.db"
         )
-        self._db: Optional[aiosqlite.Connection] = None
+        self._db: aiosqlite.Connection | None = None
 
         # In-memory cache of adjustments (refreshed every update cycle)
-        self._cache: Dict[str, float] = {}
+        self._cache: dict[str, float] = {}
 
     async def initialize(self) -> None:
         """Create tables if they don't exist."""
@@ -171,7 +171,7 @@ class KnowledgeBase:
             await self._db.close()
             self._db = None
 
-    async def __aenter__(self) -> "KnowledgeBase":
+    async def __aenter__(self) -> KnowledgeBase:
         await self.initialize()
         return self
 
@@ -188,7 +188,7 @@ class KnowledgeBase:
         """
         return self._cache.get(runbook_id, 0.0)
 
-    async def get_all_adjustments(self) -> Dict[str, float]:
+    async def get_all_adjustments(self) -> dict[str, float]:
         """Return the full cache of runbook_id → delta."""
         return dict(self._cache)
 
@@ -240,15 +240,15 @@ class KnowledgeBase:
 
         return delta
 
-    async def bulk_update(self, all_stats: Dict[str, RunbookStats]) -> Dict[str, float]:
+    async def bulk_update(self, all_stats: dict[str, RunbookStats]) -> dict[str, float]:
         """Update adjustments for all runbooks in one pass."""
-        updates: Dict[str, float] = {}
+        updates: dict[str, float] = {}
         for rb_id, stats in all_stats.items():
             delta = await self.update_from_stats(stats)
             updates[rb_id] = delta
         return updates
 
-    async def get_all_records(self) -> List[AdjustmentRecord]:
+    async def get_all_records(self) -> list[AdjustmentRecord]:
         """Return full adjustment table for dashboard queries."""
         if not self._db:
             return []
@@ -272,7 +272,7 @@ class KnowledgeBase:
 
     async def record_pattern(
         self,
-        signal_types: Set[str],
+        signal_types: set[str],
         runbook_id:   str,
         success:      bool,
     ) -> None:
@@ -308,8 +308,8 @@ class KnowledgeBase:
         await self._db.commit()
 
     async def get_best_runbook_for_pattern(
-        self, signal_types: Set[str]
-    ) -> Optional[str]:
+        self, signal_types: set[str]
+    ) -> str | None:
         """
         Look up which runbook historically worked best for a given signal-type set.
         Returns the runbook_id with highest success_count / total_count.
@@ -332,7 +332,7 @@ class KnowledgeBase:
             row = await cur.fetchone()
             return row["runbook_id"] if row else None
 
-    async def get_working_patterns(self, min_success_rate: float = 0.80) -> List[Dict[str, Any]]:
+    async def get_working_patterns(self, min_success_rate: float = 0.80) -> list[dict[str, Any]]:
         """
         Return signal patterns that reliably led to successful healing.
         Used to enrich RCA prompts and advisor recommendations.

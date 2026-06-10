@@ -239,6 +239,10 @@ def push_models(
 
     success("Loader pod ready")
 
+    # Give container runtime a moment to be fully ready for file operations
+    import time
+    time.sleep(3)
+
     try:
         regen_script = PROJECT_DIR / "src" / "ppa" / "runtime" / "regenerate_scalers.py"
         cp(str(regen_script), f"{namespace}/{pod_name}:/tmp/regenerate.py")

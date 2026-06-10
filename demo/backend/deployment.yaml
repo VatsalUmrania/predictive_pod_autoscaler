@@ -1,0 +1,155 @@
+# demo/backend/deployment.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+# Kubernetes manifests for running the ShopDemo backend inside Minikube
+# as the PPA target workload.
+#
+# What's here:
+#   1. Deployment  — shop-demo pods (http :8001, metrics :9091)
+#   2. Service     — ClusterIP for both ports
+#   3. HPA         — baseline CPU-reactive autoscaler (PPA runs alongside)
+#   4. PodMonitor  — tells Prometheus to scrape :9091/metrics every 15s
+#
+# Apply with:
+#   kubectl apply -f demo/backend/deployment.yaml
+#
+# Or via PPA CLI after `ppa init`:
+#   ppa add --app-name shop-demo --target shop-demo --rps-capacity 50
+# ─────────────────────────────────────────────────────────────────────────────
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop-demo
+  namespace: default
+  labels:
+    app: shop-demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: shop-demo
+  template:
+    metadata:
+      labels:
+        app: shop-demo
+    spec:
+      containers:
+        - name: shop-demo
+          # Built inside Minikube's Docker daemon:
+          #   eval $(minikube docker-env)
+          #   docker build -t shop-demo:latest -f demo/backend/Dockerfile .
+          image: shop-demo:latest
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8001
+              protocol: TCP
+            - name: metrics
+              containerPort: 9091   # prometheus_client HTTP server
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "8001"
+            - name: METRICS_PORT
+              value: "9091"
+            - name: DEMO_DB_PATH
+              value: "/data/shop.db"
+            # ── NEXUS integration ──────────────────────────────────────────
+            # nexus-api is reachable via host.minikube.internal when running
+            # in Docker Compose on the same machine.
+            - name: NEXUS_API_URL
+              value: "http://host.minikube.internal:8080"
+            - name: NATS_URL
+              value: "nats://host.minikube.internal:4222"
+            - name: APP_NAME
+              value: "shop-demo"
+          volumeMounts:
+            - name: shop-data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: shop-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shop-demo
+  namespace: default
+  labels:
+    app: shop-demo
+spec:
+  selector:
+    app: shop-demo
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8001
+      protocol: TCP
+    - name: metrics
+      port: 9091
+      targetPort: 9091
+      protocol: TCP
+---
+# HPA — CPU-reactive baseline (PPA runs in observer/advisory mode alongside)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: shop-demo
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: shop-demo
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
+---
+# PodMonitor — instructs Prometheus (kube-prometheus-stack) to scrape the
+# prometheus_client metrics server on port 9091 every 15 seconds.
+# These metrics (http_requests_total, http_request_duration_seconds) feed
+# the PPA operator's 14-dimensional feature pipeline.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: shop-demo
+  namespace: monitoring
+  labels:
+    release: prometheus   # must match kube-prometheus-stack label selector
+spec:
+  namespaceSelector:
+    matchNames:
+      - default
+  selector:
+    matchLabels:
+      app: shop-demo
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s

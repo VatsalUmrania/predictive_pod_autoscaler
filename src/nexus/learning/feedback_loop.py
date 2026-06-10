@@ -32,12 +32,13 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
 from nexus.bus.nats_client import NATSClient
 from nexus.learning.knowledge_base import KnowledgeBase
 from nexus.learning.outcome_store import OutcomeStore, RunbookStats, SystemKPIs
+from nexus.learning.ppa_outcome_tracker import PpaOutcomeTracker
 from nexus.learning.runbook_advisor import RunbookAdvisor, RunbookRecommendation
 from nexus.reasoning.confidence_scorer import ConfidenceScorer
 
@@ -59,31 +60,33 @@ class FeedbackLoop:
 
     def __init__(
         self,
-        outcome_store:     OutcomeStore,
-        knowledge_base:    KnowledgeBase,
-        confidence_scorer: ConfidenceScorer,
-        nats_client:       Optional[NATSClient] = None,
-        interval_s:        float = 300.0,
-        window_days:       int   = 30,
+        outcome_store:       OutcomeStore,
+        knowledge_base:      KnowledgeBase,
+        confidence_scorer:   ConfidenceScorer,
+        nats_client:         NATSClient | None = None,
+        ppa_outcome_tracker: PpaOutcomeTracker | None = None,
+        interval_s:          float = 300.0,
+        window_days:         int   = 30,
     ):
         import os
         self._store   = outcome_store
         self._kb      = knowledge_base
         self._scorer  = confidence_scorer
         self._nats    = nats_client
+        self._ppa_tracker = ppa_outcome_tracker
         self._interval     = float(os.getenv("NEXUS_FEEDBACK_INTERVAL_S", str(interval_s)))
         self._window_days  = int(os.getenv("NEXUS_FEEDBACK_WINDOW_DAYS", str(window_days)))
         self._advisor      = RunbookAdvisor(outcome_store=outcome_store)
 
         # Background task handle
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
 
         # Observability
         self._cycles_run      = 0
-        self._last_cycle_at:  Optional[float] = None
-        self._last_kpis:      Optional[Dict[str, Any]] = None
-        self._last_recs:      List[Dict[str, Any]] = []
-        self._start_time:     Optional[float] = None
+        self._last_cycle_at:  float | None = None
+        self._last_kpis:      dict[str, Any] | None = None
+        self._last_recs:      list[dict[str, Any]] = []
+        self._start_time:     float | None = None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -149,7 +152,7 @@ class FeedbackLoop:
         )
 
         # ── 1. Query AuditTrail ───────────────────────────────────────────────
-        all_stats:  Dict[str, RunbookStats] = await self._store.get_all_runbook_stats(
+        all_stats:  dict[str, RunbookStats] = await self._store.get_all_runbook_stats(
             days=self._window_days
         )
         system_kpis: SystemKPIs = await self._store.get_system_kpis(
@@ -166,7 +169,7 @@ class FeedbackLoop:
             )
 
         # ── 2. Persist KnowledgeBase adjustments ──────────────────────────────
-        adjustments: Dict[str, float] = {}
+        adjustments: dict[str, float] = {}
         if all_stats:
             adjustments = await self._kb.bulk_update(all_stats)
 
@@ -175,7 +178,7 @@ class FeedbackLoop:
         self._scorer.set_historical_boosts(all_adjustments)
 
         # ── 4. Run RunbookAdvisor ─────────────────────────────────────────────
-        recs: List[RunbookRecommendation] = self._advisor.analyze(all_stats, system_kpis)
+        recs: list[RunbookRecommendation] = self._advisor.analyze(all_stats, system_kpis)
 
         # Also check chronic targets (async)
         chronic = await self._advisor.find_chronic_targets()
@@ -183,6 +186,9 @@ class FeedbackLoop:
 
         # ── 5. Update signal-pattern records ─────────────────────────────────
         await self._update_signal_patterns()
+
+        # ── 4b. Record PPA prediction accuracy ────────────────────────────────
+        await self._update_ppa_outcomes()
 
         # ── 6. Publish NATS event ─────────────────────────────────────────────
         cycle_ms = int((time.monotonic() - cycle_start) * 1000)
@@ -218,11 +224,19 @@ class FeedbackLoop:
                     success      = record.is_success,
                 )
 
+    async def _update_ppa_outcomes(self) -> None:
+        """
+        Flush PPA outcome batch to JSONL for PPA retraining pipeline.
+        Nightly — calls run_batch_flush() on the wired PpaOutcomeTracker.
+        """
+        if self._ppa_tracker is not None:
+            await self._ppa_tracker.run_batch_flush()
+
     async def _publish_summary(
         self,
         kpis:         SystemKPIs,
-        recs:         List[RunbookRecommendation],
-        adjustments:  Dict[str, float],
+        recs:         list[RunbookRecommendation],
+        adjustments:  dict[str, float],
         cycle_ms:     int,
     ) -> None:
         """Publish a LEARNING_CYCLE_COMPLETE event to NATS."""
@@ -249,7 +263,7 @@ class FeedbackLoop:
 
     # ── Manual trigger ────────────────────────────────────────────────────────
 
-    async def run_now(self) -> Dict[str, Any]:
+    async def run_now(self) -> dict[str, Any]:
         """
         Trigger an immediate learning cycle (useful for testing or CLI invocation).
         Returns the cycle summary.
@@ -264,7 +278,7 @@ class FeedbackLoop:
     # ── Observability ─────────────────────────────────────────────────────────
 
     @property
-    def status(self) -> Dict[str, Any]:
+    def status(self) -> dict[str, Any]:
         uptime = time.monotonic() - self._start_time if self._start_time else 0.0
         return {
             "cycles_run":       self._cycles_run,
@@ -280,7 +294,7 @@ class FeedbackLoop:
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _infer_signals_from_runbook(runbook_id: str) -> Optional[set]:
+def _infer_signals_from_runbook(runbook_id: str) -> set | None:
     """
     Infer the likely triggering signal types from a runbook ID.
     Used for Phase 6 pattern recording until Phase 7 links correlation_ids.
@@ -300,21 +314,23 @@ def _infer_signals_from_runbook(runbook_id: str) -> Optional[set]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 async def build_feedback_loop(
-    confidence_scorer: ConfidenceScorer,
-    nats_client:       Optional[NATSClient] = None,
-    audit_db_path:     Optional[str] = None,
-    knowledge_db_path: Optional[str] = None,
-    interval_s:        float = 300.0,
+    confidence_scorer:     ConfidenceScorer,
+    nats_client:           NATSClient | None = None,
+    ppa_outcome_tracker:   PpaOutcomeTracker | None = None,
+    audit_db_path:         str | None = None,
+    knowledge_db_path:     str | None = None,
+    interval_s:            float = 300.0,
 ) -> FeedbackLoop:
     """
     Build and initialize a FeedbackLoop with its dependencies.
 
     Args:
-        confidence_scorer: Phase 4 ConfidenceScorer (will receive historical boosts).
-        nats_client:       Optional NATSClient for publishing learning updates.
-        audit_db_path:     Override for AuditTrail DB path.
-        knowledge_db_path: Override for KnowledgeBase DB path.
-        interval_s:        Polling interval (default 300s / 5 min).
+        confidence_scorer:   Phase 4 ConfidenceScorer (will receive historical boosts).
+        nats_client:        Optional NATSClient for publishing learning updates.
+        ppa_outcome_tracker: Optional PpaOutcomeTracker for PPA prediction tracking.
+        audit_db_path:      Override for AuditTrail DB path.
+        knowledge_db_path:  Override for KnowledgeBase DB path.
+        interval_s:         Polling interval (default 300s / 5 min).
 
     Returns:
         Initialized FeedbackLoop (not yet started — call loop.start()).
@@ -330,5 +346,6 @@ async def build_feedback_loop(
         knowledge_base    = kb,
         confidence_scorer = confidence_scorer,
         nats_client       = nats_client,
+        ppa_outcome_tracker = ppa_outcome_tracker,
         interval_s        = interval_s,
     )

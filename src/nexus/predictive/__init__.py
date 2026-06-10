@@ -2,24 +2,24 @@
 # =============================================
 # DB query pattern → traffic spike prediction → pre-scale recommendation
 
-from nexus.predictive.feature_pipeline       import FeaturePipeline, QuerySnapshot, FeatureVector
-from nexus.predictive.db_traffic_correlator  import DBTrafficCorrelator, TableEndpointMapper
-from nexus.predictive.anomaly_detector       import (
-    AnomalyScore,
-    AnomalyDetector,
-    ZScoreDetector,
-    GRUAutoencoder,
-    AutoAnomalyDetector,
+from nexus.predictive.anomaly_detector import (
     MODEL_FEATURES,
+    AnomalyDetector,
+    AnomalyScore,
+    AutoAnomalyDetector,
+    GRUAutoencoder,
+    ZScoreDetector,
 )
-from nexus.predictive.traffic_model          import EWMATrafficModel, TrafficPrediction, SMAPETracker
-from nexus.predictive.prescaler              import (
-    Prescaler,
-    PrescaleMode,
-    PrescaleDecision,
+from nexus.predictive.db_traffic_correlator import DBTrafficCorrelator, TableEndpointMapper
+from nexus.predictive.feature_pipeline import FeaturePipeline, FeatureVector, QuerySnapshot
+from nexus.predictive.prescaler import (
     PrecisionStats,
     PrecisionTracker,
+    PrescaleDecision,
+    PrescaleMode,
+    Prescaler,
 )
+from nexus.predictive.traffic_model import EWMATrafficModel, SMAPETracker, TrafficPrediction
 
 __all__ = [
     # Feature pipeline

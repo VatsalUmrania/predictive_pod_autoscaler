@@ -21,15 +21,15 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
-import os
 import time
-from typing import Any, Callable, Dict, Optional
+from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # Registry of annotated routes — sent to NEXUS at startup
-_CRITICAL_ROUTES:  Dict[str, Dict] = {}
-_QUERY_LABELS:     Dict[str, Dict] = {}
+_CRITICAL_ROUTES:  dict[str, dict] = {}
+_QUERY_LABELS:     dict[str, dict] = {}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -38,7 +38,7 @@ _QUERY_LABELS:     Dict[str, Dict] = {}
 
 def critical(
     never_shed:          bool         = False,
-    fallback:            Optional[str]= None,
+    fallback:            str | None= None,
     alert_sre_after:     int          = 3,
     max_healing_actions: int          = 5,
     token:               str          = "",
@@ -131,7 +131,9 @@ async def _emit_critical_failure(name: str, error: str, token: str, url: str) ->
 
 def _emit_sync(name: str, error: str, token: str, url: str) -> None:
     try:
-        import threading, requests
+        import threading
+
+        import requests
         def _post():
             requests.post(
                 f"{url}/sdk/route-error",
@@ -152,7 +154,7 @@ def query(
     label:            str           = "",
     spike_indicator:  bool          = False,
     cache_on_failure: bool          = False,
-    timeout_ms:       Optional[int] = None,
+    timeout_ms:       int | None = None,
     token:            str           = "",
     nexus_url:        str           = "http://localhost:8080",
 ) -> Callable:
@@ -164,7 +166,7 @@ def query(
     When cache_on_failure=True, the decorator caches the last successful
     result and returns it if the underlying call raises an exception.
     """
-    _cache: Dict[str, Any] = {}
+    _cache: dict[str, Any] = {}
 
     def decorator(func: Callable) -> Callable:
         query_name = label or func.__name__
@@ -220,7 +222,7 @@ def query(
                 )
                 return result
 
-            except Exception as exc:
+            except Exception:
                 if cache_on_failure and "last" in _cache:
                     return _cache["last"]
                 raise

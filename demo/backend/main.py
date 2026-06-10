@@ -30,8 +30,9 @@ from typing import Any, Dict, List, Optional
 
 import aiosqlite
 import httpx
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from pydantic import BaseModel
 
 # ── NEXUS SDK (installed via: pip install -e ../../.[nexus]) ──────────────────
@@ -43,6 +44,21 @@ DB_PATH        = os.getenv("DEMO_DB_PATH", "shop.db")
 NEXUS_URL      = os.getenv("NEXUS_API_URL", "http://localhost:8080")
 APP_NAME       = os.getenv("APP_NAME", "shop-demo")
 _TOKEN         = os.getenv("SELFHEAL_TOKEN", "")
+
+# ── Prometheus metrics (consumed by PPA's 14-dim feature pipeline) ────────────
+# Scraped by Prometheus on port 9091 via PodMonitor (metrics port).
+_http_requests_total = Counter(
+    "http_requests_total",
+    "Total HTTP requests by route and status code",
+    ["method", "route", "status_code"],
+)
+_http_request_duration = Histogram(
+    "http_request_duration_seconds",
+    "HTTP request latency",
+    ["method", "route"],
+    buckets=[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
+)
+_METRICS_PORT = int(os.getenv("METRICS_PORT", "9091"))
 
 # ── Failure injection state (in-memory flags) ─────────────────────────────────
 _failures: Dict[str, Any] = {
@@ -145,6 +161,13 @@ async def lifespan(app):
     global _TOKEN
     await init_db()
 
+    # Start dedicated Prometheus metrics server on METRICS_PORT (9091)
+    # This is the port scraped by Prometheus via PodMonitor.
+    # The main FastAPI app runs on APP_PORT (8001).
+    from prometheus_client import start_http_server as _start_prom
+    _start_prom(_METRICS_PORT)
+    print(f"[ShopDemo] 📊 Prometheus metrics server started on :{_METRICS_PORT}")
+
     # Auto-register with NEXUS (gets SELFHEAL_TOKEN if not set)
     if not _TOKEN:
         try:
@@ -208,6 +231,32 @@ _inner.add_middleware(
 )
 
 app = _inner   # uvicorn target
+
+
+# ── Prometheus request tracking middleware ────────────────────────────────────
+# Records http_requests_total and http_request_duration_seconds for every
+# request.  These are the metrics Prometheus scrapes (via PodMonitor on :9091)
+# to feed the PPA feature pipeline.
+
+@app.middleware("http")
+async def _track_metrics(request: Request, call_next):
+    route = request.url.path
+    method = request.method
+    start = time.monotonic()
+    response = await call_next(request)
+    duration = time.monotonic() - start
+    _http_requests_total.labels(
+        method=method, route=route, status_code=str(response.status_code)
+    ).inc()
+    _http_request_duration.labels(method=method, route=route).observe(duration)
+    return response
+
+
+# /metrics on the FastAPI port (handy for local curl testing)
+# In Kubernetes the dedicated prometheus_client server on :9091 is used instead.
+@app.get("/metrics", include_in_schema=False)
+def metrics() -> Response:
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 # ── Shop endpoints ────────────────────────────────────────────────────────────

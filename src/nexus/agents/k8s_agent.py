@@ -26,9 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
-from typing import Dict, List, Optional, Set
 
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
@@ -62,7 +60,7 @@ class K8sAgent(BaseAgent):
     def __init__(
         self,
         nats_client: NATSClient,
-        namespaces: Optional[List[str]] = None,
+        namespaces: list[str] | None = None,
         crashloop_threshold: int = 3,
         pending_threshold_min: float = 2.0,
         hpa_maxed_threshold_min: float = 5.0,
@@ -79,15 +77,15 @@ class K8sAgent(BaseAgent):
         self.hpa_maxed_threshold_s   = hpa_maxed_threshold_min * 60.0
 
         # Track when each pod first entered Pending and when HPA first maxed
-        self._pending_since: Dict[str, float]   = {}   # "ns/pod" → monotonic ts
-        self._hpa_maxed_since: Dict[str, float] = {}   # "ns/hpa" → monotonic ts
+        self._pending_since: dict[str, float]   = {}   # "ns/pod" → monotonic ts
+        self._hpa_maxed_since: dict[str, float] = {}   # "ns/hpa" → monotonic ts
 
         # Event de-duplication: track which pod keys we already emitted for this cycle
-        self._emitted_this_cycle: Set[str] = set()
+        self._emitted_this_cycle: set[str] = set()
 
-        self._k8s_core: Optional[k8s_client.CoreV1Api]  = None
-        self._k8s_apps: Optional[k8s_client.AppsV1Api]  = None
-        self._k8s_autoscaling: Optional[k8s_client.AutoscalingV2Api] = None
+        self._k8s_core: k8s_client.CoreV1Api | None  = None
+        self._k8s_apps: k8s_client.AppsV1Api | None  = None
+        self._k8s_autoscaling: k8s_client.AutoscalingV2Api | None = None
 
     async def on_start(self) -> None:
         """Initialize Kubernetes API clients."""
@@ -109,9 +107,9 @@ class K8sAgent(BaseAgent):
 
     # ── Pod inspection ────────────────────────────────────────────────────────
 
-    def _check_pod(self, pod) -> List[IncidentEvent]:
+    def _check_pod(self, pod) -> list[IncidentEvent]:
         """Inspect a single pod object for failure conditions."""
-        events: List[IncidentEvent] = []
+        events: list[IncidentEvent] = []
         name = pod.metadata.name
         ns   = pod.metadata.namespace
         key  = f"{ns}/{name}"
@@ -208,7 +206,7 @@ class K8sAgent(BaseAgent):
         return events
 
     @staticmethod
-    def _get_deployment_name(pod) -> Optional[str]:
+    def _get_deployment_name(pod) -> str | None:
         """Extract the owning ReplicaSet → Deployment name from pod owner refs."""
         for ref in (pod.metadata.owner_references or []):
             if ref.kind == "ReplicaSet":
@@ -228,8 +226,8 @@ class K8sAgent(BaseAgent):
 
     # ── Deployment inspection ─────────────────────────────────────────────────
 
-    def _check_deployment(self, dep) -> List[IncidentEvent]:
-        events: List[IncidentEvent] = []
+    def _check_deployment(self, dep) -> list[IncidentEvent]:
+        events: list[IncidentEvent] = []
         name   = dep.metadata.name
         ns     = dep.metadata.namespace
         spec   = dep.spec
@@ -279,8 +277,8 @@ class K8sAgent(BaseAgent):
 
     # ── HPA inspection ────────────────────────────────────────────────────────
 
-    def _check_hpa(self, hpa) -> List[IncidentEvent]:
-        events: List[IncidentEvent] = []
+    def _check_hpa(self, hpa) -> list[IncidentEvent]:
+        events: list[IncidentEvent] = []
         name   = hpa.metadata.name
         ns     = hpa.metadata.namespace
         key    = f"{ns}/{name}"
@@ -316,11 +314,11 @@ class K8sAgent(BaseAgent):
 
     # ── BaseAgent interface ───────────────────────────────────────────────────
 
-    async def sense(self) -> List[IncidentEvent]:
+    async def sense(self) -> list[IncidentEvent]:
         if not self._k8s_core:
             return []
 
-        events: List[IncidentEvent] = []
+        events: list[IncidentEvent] = []
         self._emitted_this_cycle.clear()
 
         loop = asyncio.get_event_loop()

@@ -26,9 +26,8 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
 
-from nexus.bus.incident_event import IncidentEvent
+from nexus.bus.incident_event import IncidentEvent, SignalType
 from nexus.reasoning.incident_cluster import IncidentCluster
 
 logger = logging.getLogger(__name__)
@@ -72,7 +71,7 @@ class EventCorrelator:
         self._flush_timeout = flush_timeout_s
 
         # namespace → open IncidentCluster
-        self._open: Dict[str, IncidentCluster] = {}
+        self._open: dict[str, IncidentCluster] = {}
 
         # De-duplication set (cluster_id → already emitted)
         self._emitted: set = set()
@@ -83,7 +82,7 @@ class EventCorrelator:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def ingest(self, event: IncidentEvent) -> Optional[IncidentCluster]:
+    def ingest(self, event: IncidentEvent) -> IncidentCluster | None:
         """
         Ingest a single event synchronously.
 
@@ -123,6 +122,10 @@ class EventCorrelator:
             cluster = IncidentCluster.new(event)
             self._open[key] = cluster
             logger.debug(f"[EventCorrelator] New cluster {cluster.cluster_id} for ns={key}")
+            # Propagate ppa_raw_features from TRAFFIC_SPIKE_PREDICTED events
+            if (isinstance(event.context, dict) and "raw_features" in event.context
+                    and event.signal_type == SignalType.TRAFFIC_SPIKE_PREDICTED):
+                cluster.ppa_raw_features = event.context["raw_features"]
             return None
 
         # Check if the window has expired (time since last event)
@@ -132,6 +135,10 @@ class EventCorrelator:
             old_cluster = self._open.pop(key, None)
             cluster = IncidentCluster.new(event)
             self._open[key] = cluster
+            # Propagate ppa_raw_features from TRAFFIC_SPIKE_PREDICTED events
+            if (isinstance(event.context, dict) and "raw_features" in event.context
+                    and event.signal_type == SignalType.TRAFFIC_SPIKE_PREDICTED):
+                cluster.ppa_raw_features = event.context["raw_features"]
             logger.debug(
                 f"[EventCorrelator] Window expired ({gap_s:.0f}s) — "
                 f"old={old_cluster and old_cluster.cluster_id} new={cluster.cluster_id}"
@@ -156,15 +163,15 @@ class EventCorrelator:
 
         return None
 
-    def flush_stale(self) -> List[IncidentCluster]:
+    def flush_stale(self) -> list[IncidentCluster]:
         """
         Return all clusters that have been open longer than flush_timeout_s.
         Called by the orchestrator's background flush loop every 30s.
         Returns a list of IncidentClusters ready for RCA.
         """
         now    = datetime.now(timezone.utc)
-        stale_keys: List[str] = []
-        ready:  List[IncidentCluster] = []
+        stale_keys: list[str] = []
+        ready:  list[IncidentCluster] = []
 
         for key, cluster in self._open.items():
             age = (now - cluster.created_at).total_seconds()

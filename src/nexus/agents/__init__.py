@@ -12,14 +12,20 @@ Import examples:
     from nexus.agents import DBAgent, NetworkAgent, ConfigAgent, NginxAgent
 """
 
-from nexus.agents.base_agent    import BaseAgent
+from nexus.agents.base_agent import BaseAgent
+from nexus.agents.config_agent import ConfigAgent
+from nexus.agents.db_agent import (
+    DBAgent,
+    MongoDBAdapter,
+    MySQLAdapter,
+    PostgresAdapter,
+    db_agent_from_env,
+)
+from nexus.agents.git_agent import EnvContractValidator, GitAgent
+from nexus.agents.k8s_agent import K8sAgent
 from nexus.agents.metrics_agent import MetricsAgent
-from nexus.agents.git_agent     import GitAgent, EnvContractValidator
-from nexus.agents.k8s_agent     import K8sAgent
-from nexus.agents.db_agent      import DBAgent, PostgresAdapter, MySQLAdapter, MongoDBAdapter, db_agent_from_env
 from nexus.agents.network_agent import NetworkAgent
-from nexus.agents.config_agent  import ConfigAgent
-from nexus.agents.nginx_agent   import NginxAgent
+from nexus.agents.nginx_agent import NginxAgent
 
 __all__ = [
     "BaseAgent",

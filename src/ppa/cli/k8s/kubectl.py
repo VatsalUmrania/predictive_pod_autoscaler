@@ -8,12 +8,29 @@ def _run(cmd: list[str], timeout: int = 120) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
 
-def cp(src: str, dest: str) -> None:
-    """Copy file to/from pod. Format: namespace/pod:path"""
-    result = _run(["kubectl", "cp", src, dest])
-    if result.returncode != 0:
+def cp(src: str, dest: str, retries: int = 3) -> None:
+    """Copy file to/from pod. Format: namespace/pod:path
+
+    Retries on failure to handle timing issues with pod readiness.
+    """
+    last_result: subprocess.CompletedProcess | None = None
+    for attempt in range(retries):
+        result = _run(["kubectl", "cp", src, dest])
+        if result.returncode == 0:
+            return
+        last_result = result
+        if attempt < retries - 1:
+            import sys
+            import time
+            print(f" CP retry {attempt+1}/{retries}: {result.stderr.strip()}", file=sys.stderr)
+            time.sleep(2)
+
+    if last_result is not None:
         raise subprocess.CalledProcessError(
-            result.returncode, result.args, result.stdout, result.stderr
+            last_result.returncode,
+            last_result.args,
+            last_result.stdout or "",
+            last_result.stderr or "",
         )
 
 

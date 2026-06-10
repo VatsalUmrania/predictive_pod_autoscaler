@@ -28,8 +28,10 @@ The language used in incident descriptions is intentionally non-technical.
 from __future__ import annotations
 
 import logging
+import os as _os
+import sqlite3 as _sqlite3
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -42,11 +44,11 @@ router = APIRouter()
 # In-memory policy override store (runtime patches on top of selfheal.yaml)
 # ──────────────────────────────────────────────────────────────────────────────
 
-_policy_overrides: Dict[str, Dict[str, Any]] = {}
-_policy_cache:     Dict[str, Dict[str, Any]] = {}   # app_name → resolved SelfhealConfig dict
+_policy_overrides: dict[str, dict[str, Any]] = {}
+_policy_cache:     dict[str, dict[str, Any]] = {}   # app_name → resolved SelfhealConfig dict
 
 
-def cache_policy(app_name: str, policy_dict: Dict[str, Any]) -> None:
+def cache_policy(app_name: str, policy_dict: dict[str, Any]) -> None:
     """Called by GitAgent when a new selfheal.yaml is processed."""
     _policy_cache[app_name] = policy_dict
     logger.info(f"[Dashboard] Policy cached for app='{app_name}'")
@@ -55,9 +57,6 @@ def cache_policy(app_name: str, policy_dict: Dict[str, Any]) -> None:
 # ── SQLite-backed incident store (shared across uvicorn workers) ──────────────
 # Uses a DEDICATED file (/data/dashboard_incidents.db) so the nexus-api user
 # always owns and can write it, independent of nexus_audit.db (owned by orchestrator).
-
-import os as _os
-import sqlite3 as _sqlite3
 
 _INCIDENT_DB = _os.environ.get(
     "NEXUS_DASHBOARD_DB_PATH",
@@ -79,7 +78,7 @@ _CREATE_SQL = """
 """
 
 
-def _write_incident(row: Dict[str, Any]) -> None:
+def _write_incident(row: dict[str, Any]) -> None:
     """Write one incident to SQLite. Creates the table on first write."""
     try:
         con = _sqlite3.connect(_INCIDENT_DB, timeout=10)
@@ -106,7 +105,7 @@ def _write_incident(row: Dict[str, Any]) -> None:
         logger.warning(f"[Dashboard] incident write failed: {_e}")
 
 
-def _read_incidents(n: int, app: Optional[str]) -> List[Dict[str, Any]]:
+def _read_incidents(n: int, app: str | None) -> list[dict[str, Any]]:
     """Read recent incidents from SQLite. Returns [] if file/table don't exist yet."""
     if not _os.path.exists(_INCIDENT_DB):
         return []   # no incidents written yet — file created on first write
@@ -163,7 +162,7 @@ _OUTCOME_SUFFIX = {
 }
 
 
-def _make_plain_english(row: Dict[str, Any]) -> str:
+def _make_plain_english(row: dict[str, Any]) -> str:
     """Turn an AuditTrail row into a plain-English incident description."""
     runbook_id = row.get("runbook_id", "")
     target     = row.get("target") or row.get("resource_name") or "the service"
@@ -196,8 +195,8 @@ def _context():
 @router.get("/developer/incidents", tags=["developer"])
 async def developer_incidents(
     n:   int           = 20,
-    app: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    app: str | None = None,
+) -> list[dict[str, Any]]:
     """
     Plain-English healing incident feed.
     Reads from the shared SQLite store written by POST /developer/incidents.
@@ -236,7 +235,7 @@ async def developer_incidents(
 
 
 @router.post("/developer/incidents", tags=["developer"])
-async def developer_post_incident(payload: Dict[str, Any]) -> Dict[str, str]:
+async def developer_post_incident(payload: dict[str, Any]) -> dict[str, str]:
     """
     Accept an incident from the demo orchestrator or SDK.
     Persisted to SQLite so all uvicorn workers can read it.
@@ -256,7 +255,7 @@ async def developer_post_incident(payload: Dict[str, Any]) -> Dict[str, str]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 @router.get("/developer/predictions", tags=["developer"])
-def developer_predictions(app: Optional[str] = None) -> List[Dict[str, Any]]:
+def developer_predictions(app: str | None = None) -> list[dict[str, Any]]:
     """
     Current traffic predictions from the Prescaler.
 
@@ -322,7 +321,7 @@ def _make_prediction_sentence(d: Any) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 
 @router.get("/developer/policy/{app}", tags=["developer"])
-def developer_get_policy(app: str) -> Dict[str, Any]:
+def developer_get_policy(app: str) -> dict[str, Any]:
     """
     Return the resolved selfheal.yaml policy for an app.
     Includes any runtime overrides applied via PUT.
@@ -383,7 +382,7 @@ def developer_get_policy(app: str) -> Dict[str, Any]:
 
 
 @router.post("/developer/policy/{app}", tags=["developer"])
-def developer_upload_policy(app: str, policy: Dict[str, Any]) -> Dict[str, Any]:
+def developer_upload_policy(app: str, policy: dict[str, Any]) -> dict[str, Any]:
     """
     Upload and cache a selfheal.yaml policy for an app.
 
@@ -403,7 +402,7 @@ class PolicyOverride(BaseModel):
 
 
 @router.put("/developer/policy/{app}", tags=["developer"])
-def developer_put_policy(app: str, override: PolicyOverride) -> Dict[str, Any]:
+def developer_put_policy(app: str, override: PolicyOverride) -> dict[str, Any]:
     """
     Apply a runtime override to an app's selfheal.yaml policy.
 
@@ -434,7 +433,7 @@ def developer_put_policy(app: str, override: PolicyOverride) -> Dict[str, Any]:
 
 
 @router.delete("/developer/policy/{app}/overrides", tags=["developer"])
-def developer_clear_overrides(app: str) -> Dict[str, str]:
+def developer_clear_overrides(app: str) -> dict[str, str]:
     """Clear all runtime overrides for an app, reverting to selfheal.yaml defaults."""
     _policy_overrides.pop(app, None)
     return {"app": app, "message": "All overrides cleared."}

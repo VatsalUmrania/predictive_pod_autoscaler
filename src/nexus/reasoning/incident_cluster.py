@@ -22,12 +22,12 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from nexus.bus.incident_event import IncidentEvent
 
 # Severity ordering map
-_SEV_ORDER: Dict[str, int] = {"info": 0, "warning": 1, "critical": 2, "emergency": 3}
+_SEV_ORDER: dict[str, int] = {"info": 0, "warning": 1, "critical": 2, "emergency": 3}
 
 
 @dataclass
@@ -45,34 +45,35 @@ class IncidentCluster:
     cluster_id: str
     created_at: datetime
     last_event_at: datetime
-    events: List[IncidentEvent] = field(default_factory=list)
+    events: list[IncidentEvent] = field(default_factory=list)
+    ppa_raw_features: dict[str, float] | None = None
 
     # ── Computed properties ───────────────────────────────────────────────────
 
     @property
-    def namespace(self) -> Optional[str]:
+    def namespace(self) -> str | None:
         """Most frequently referenced namespace across all events."""
-        counts: Dict[str, int] = {}
+        counts: dict[str, int] = {}
         for e in self.events:
             if e.namespace:
                 counts[e.namespace] = counts.get(e.namespace, 0) + 1
         return max(counts, key=counts.get) if counts else None
 
     @property
-    def primary_resource(self) -> Optional[str]:
+    def primary_resource(self) -> str | None:
         """Most frequently referenced resource name."""
-        counts: Dict[str, int] = {}
+        counts: dict[str, int] = {}
         for e in self.events:
             if e.resource_name:
                 counts[e.resource_name] = counts.get(e.resource_name, 0) + 1
         return max(counts, key=counts.get) if counts else None
 
     @property
-    def signal_types(self) -> Set[str]:
+    def signal_types(self) -> set[str]:
         return {str(e.signal_type) for e in self.events}
 
     @property
-    def agent_types(self) -> Set[str]:
+    def agent_types(self) -> set[str]:
         return {str(e.agent) for e in self.events}
 
     @property
@@ -100,7 +101,7 @@ class IncidentCluster:
         return best
 
     @property
-    def most_critical_event(self) -> Optional[IncidentEvent]:
+    def most_critical_event(self) -> IncidentEvent | None:
         """The event with the highest severity; ties broken by arrival order (last wins)."""
         if not self.events:
             return None
@@ -171,16 +172,17 @@ class IncidentCluster:
         for i, event in enumerate(self.events, 1):
             ctx_kv = ""
             if isinstance(event.context, dict):
-                _KEY_ORDER = [
-                    "error_rate", "current_value", "threshold", "anomaly_score",
+                _key_order = [
+                    "current_rps", "error_rate", "threshold", "anomaly_score",
                     "latency_p95_ms", "restart_count", "missing_keys",
                     "sha", "author", "reason", "utilization_pct", "active_connections",
+                    "predicted_rps", "confidence", "raw_features",
                 ]
                 relevant = {
                     k: event.context[k]
-                    for k in _KEY_ORDER
+                    for k in _key_order[:3]
                     if k in event.context
-                }[:3]
+                }
                 if relevant:
                     parts = []
                     for k, v in relevant.items():
@@ -199,6 +201,14 @@ class IncidentCluster:
                 f"{ctx_kv}"
             )
 
+            if isinstance(event.context, dict) and "raw_features" in event.context:
+                rf = event.context["raw_features"]
+                lines.append(
+                    f"         raw: rps/rep={rf.get('rps_per_replica', 'N/A'):>7}  "
+                    f"cpu={rf.get('cpu_utilization_pct', 'N/A'):>6}  "
+                    f"rps={rf.get('requests_per_second', 'N/A'):>7}"
+                )
+
         # Deploy event detail block
         if self.has_deploy_event:
             for e in self.events:
@@ -210,7 +220,7 @@ class IncidentCluster:
 
         return "\n".join(lines)
 
-    def to_summary(self) -> Dict[str, Any]:
+    def to_summary(self) -> dict[str, Any]:
         return {
             "cluster_id":        self.cluster_id,
             "created_at":        self.created_at.isoformat(),
@@ -228,7 +238,7 @@ class IncidentCluster:
     # ── Factory ───────────────────────────────────────────────────────────────
 
     @classmethod
-    def new(cls, first_event: IncidentEvent) -> "IncidentCluster":
+    def new(cls, first_event: IncidentEvent) -> IncidentCluster:
         """Create a new cluster seeded with one event."""
         ts  = datetime.now(timezone.utc)
         key = f"{first_event.namespace or 'global'}:{ts.isoformat()}"

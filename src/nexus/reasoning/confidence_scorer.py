@@ -33,7 +33,6 @@ Design decision:
 from __future__ import annotations
 
 import logging
-from typing import Dict, Optional
 
 from nexus.reasoning.incident_cluster import IncidentCluster
 from nexus.reasoning.rca_engine import RCAResult
@@ -93,7 +92,7 @@ class ConfidenceScorer:
 
         # Phase 6: historical boosts injected by FeedbackLoop
         # runbook_id → delta (range ±0.05 from KnowledgeBase)
-        self._historical_boosts: Dict[str, float] = {}
+        self._historical_boosts: dict[str, float] = {}
 
     def score(
         self,
@@ -139,6 +138,10 @@ class ConfidenceScorer:
         hist_boost = self._historical_boosts.get(rca_result.runbook_id or "", 0.0)
         blended   += hist_boost
 
+        # PPA feature boost: +0.05 if cluster was seeded by a high-confidence
+        # LSTM spike prediction with elevated load (rps > 20 OR cpu > 60%)
+        blended += self._compute_ppa_feature_boost(cluster)
+
         # Conservative bias
         blended -= self._bias
 
@@ -160,7 +163,19 @@ class ConfidenceScorer:
         )
         return final
 
-    def set_historical_boosts(self, boosts: Dict[str, float]) -> None:
+    def _compute_ppa_feature_boost(self, cluster: IncidentCluster) -> float:
+        """+0.05 if cluster was seeded by a high-confidence PPA spike prediction."""
+        if not cluster.ppa_raw_features:
+            return 0.0
+        rf = cluster.ppa_raw_features
+        rps = rf.get("rps_per_replica", 0.0)
+        cpu = rf.get("cpu_utilization_pct", 0.0)
+        # Elevated load: rps > 20 OR cpu > 60%
+        if rps > 20.0 or cpu > 60.0:
+            return 0.05
+        return 0.0
+
+    def set_historical_boosts(self, boosts: dict[str, float]) -> None:
         """
         Update the historical boost map from the Learning Plane.
         Called by FeedbackLoop every N minutes after the KnowledgeBase is updated.

@@ -23,7 +23,6 @@ import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
-from typing import List, Optional
 
 from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
 from nexus.bus.nats_client import NATSClient
@@ -59,14 +58,14 @@ class BaseAgent(ABC):
 
         self._running                = False
         self._consecutive_failures   = 0
-        self._last_failure_time: Optional[float] = None
+        self._last_failure_time: float | None = None
         self._total_events_published = 0
-        self._start_time: Optional[float] = None
+        self._start_time: float | None = None
 
     # ── Abstract interface ────────────────────────────────────────────────────
 
     @abstractmethod
-    async def sense(self) -> List[IncidentEvent]:
+    async def sense(self) -> list[IncidentEvent]:
         """
         Observe the agent's domain and return detected IncidentEvents.
 
@@ -81,10 +80,12 @@ class BaseAgent(ABC):
         """
         ...
 
+    @abstractmethod
     async def on_start(self) -> None:
         """Called once before the poll loop begins. Override for setup."""
         pass
 
+    @abstractmethod
     async def on_stop(self) -> None:
         """Called once after the poll loop ends. Override for cleanup."""
         pass

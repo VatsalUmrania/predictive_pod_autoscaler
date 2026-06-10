@@ -6,8 +6,8 @@ ppa.model.train.train_model() for business logic.
 
 from __future__ import annotations
 
-import os
 import inspect
+import os
 import time
 
 import typer
@@ -29,6 +29,7 @@ from ppa.config import (
     DEFAULT_NAMESPACE,
     TRAINING_DATA_DIR,
 )
+
 # Default training horizons for multi-model training
 DEFAULT_TRAIN_HORIZONS = ["rps_t3m", "rps_t5m", "rps_t10m"]
 
@@ -169,7 +170,7 @@ def train_cmd(
                     {
                         "fit_verbose": 0,
                         "show_model_summary": False,
-                        "fit_callbacks": [_build_training_progress_callback(target_horizon)],
+                        "fit_callbacks": [_build_training_progress_callback(target_horizon)],  # type: ignore[dict-item]
                     }
                 )
             result = train_model(**train_kwargs)

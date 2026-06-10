@@ -29,10 +29,8 @@ import asyncio
 import logging
 import os
 import re
-import time
 from collections import defaultdict, deque
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import httpx
 
@@ -61,7 +59,7 @@ _STUB_STATUS_RE = re.compile(
 )
 
 
-def parse_stub_status(text: str) -> Optional[Dict]:
+def parse_stub_status(text: str) -> dict | None:
     m = _STUB_STATUS_RE.search(text)
     if not m:
         return None
@@ -106,7 +104,7 @@ class NginxAgent(BaseAgent):
         self,
         nats_client: NATSClient,
         log_path: str = "/var/log/nginx/access.log",
-        stub_status_url: Optional[str] = None,
+        stub_status_url: str | None = None,
         window_seconds: int = 60,
         poll_interval_seconds: float = 15.0,
     ):
@@ -127,15 +125,15 @@ class NginxAgent(BaseAgent):
         self.min_rps         = float(os.getenv("NEXUS_NGINX_MIN_RPS_FOR_ALERTS",    "0.1"))
 
         # Per-endpoint rolling stats
-        self._stats: Dict[str, EndpointStats] = defaultdict(
+        self._stats: dict[str, EndpointStats] = defaultdict(
             lambda: EndpointStats(window_seconds)
         )
         # Per-endpoint RPS history for spike detection
-        self._rps_history: Dict[str, deque] = defaultdict(lambda: deque(maxlen=20))
+        self._rps_history: dict[str, deque] = defaultdict(lambda: deque(maxlen=20))
 
         # Log file state
         self._log_file_pos: int = 0
-        self._log_task: Optional[asyncio.Task] = None
+        self._log_task: asyncio.Task | None = None
 
     # ── Log tailing ───────────────────────────────────────────────────────────
 
@@ -158,7 +156,7 @@ class NginxAgent(BaseAgent):
                     await asyncio.sleep(5)
                     continue
 
-                with open(self.log_path, "r", errors="replace") as f:
+                with open(self.log_path, errors="replace") as f:
                     f.seek(self._log_file_pos)
                     while True:
                         line = f.readline()
@@ -180,7 +178,7 @@ class NginxAgent(BaseAgent):
 
     # ── NGINX stub_status ─────────────────────────────────────────────────────
 
-    async def _get_stub_status(self) -> Optional[Dict]:
+    async def _get_stub_status(self) -> dict | None:
         if not self.stub_status_url:
             return None
         try:
@@ -194,8 +192,8 @@ class NginxAgent(BaseAgent):
 
     # ── Threshold evaluation ──────────────────────────────────────────────────
 
-    def _evaluate_stats(self) -> List[IncidentEvent]:
-        events: List[IncidentEvent] = []
+    def _evaluate_stats(self) -> list[IncidentEvent]:
+        events: list[IncidentEvent] = []
 
         for endpoint, stats in list(self._stats.items()):
             err_rate = stats.error_rate()
@@ -261,8 +259,8 @@ class NginxAgent(BaseAgent):
 
     # ── BaseAgent interface ───────────────────────────────────────────────────
 
-    async def sense(self) -> List[IncidentEvent]:
-        events: List[IncidentEvent] = []
+    async def sense(self) -> list[IncidentEvent]:
+        events: list[IncidentEvent] = []
 
         # Per-endpoint threshold evaluation (from log tail)
         events.extend(self._evaluate_stats())

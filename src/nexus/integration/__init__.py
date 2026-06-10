@@ -2,9 +2,9 @@
 # ==========================================================
 # selfheal.yaml schema, SDK ingest API, token auth, developer dashboard, Slack notifier
 
+from nexus.integration.notifier import Notifier
 from nexus.integration.selfheal_config import SelfhealConfig, load_selfheal_config
-from nexus.integration.token_store      import TokenStore, get_token_store
-from nexus.integration.notifier         import Notifier
+from nexus.integration.token_store import TokenStore, get_token_store
 
 __all__ = [
     "SelfhealConfig",

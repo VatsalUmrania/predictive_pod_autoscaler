@@ -32,7 +32,6 @@ import asyncio
 import logging
 import os
 from abc import ABC, abstractmethod
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +113,7 @@ class GeminiProvider(LLMProvider):
 
     DEFAULT_MODEL = "gemini-1.5-flash"
 
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+    def __init__(self, api_key: str | None = None, model: str | None = None):
         self._api_key = (
             api_key
             or os.getenv("NEXUS_LLM_API_KEY")
@@ -182,7 +181,7 @@ class OpenAIProvider(LLMProvider):
 
     DEFAULT_MODEL = "gpt-4o-mini"
 
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+    def __init__(self, api_key: str | None = None, model: str | None = None):
         self._api_key    = api_key or os.getenv("NEXUS_LLM_API_KEY") or os.getenv("OPENAI_API_KEY", "")
         self._model_name = model or os.getenv("NEXUS_LLM_MODEL", self.DEFAULT_MODEL)
         self._client     = None
@@ -242,7 +241,7 @@ class AnthropicProvider(LLMProvider):
 
     DEFAULT_MODEL = "claude-3-haiku-20240307"
 
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+    def __init__(self, api_key: str | None = None, model: str | None = None):
         self._api_key    = api_key or os.getenv("NEXUS_LLM_API_KEY") or os.getenv("ANTHROPIC_API_KEY", "")
         self._model_name = model or os.getenv("NEXUS_LLM_MODEL", self.DEFAULT_MODEL)
         self._client     = None
@@ -322,13 +321,13 @@ _PROVIDERS = {
     "none":      NullProvider,
 }
 
-_cached_provider: Optional[LLMProvider] = None
+_cached_provider: LLMProvider | None = None
 
 
 def get_llm_provider(
-    provider: Optional[str] = None,
-    api_key:  Optional[str] = None,
-    model:    Optional[str] = None,
+    provider: str | None = None,
+    api_key:  str | None = None,
+    model:    str | None = None,
 ) -> LLMProvider:
     """
     Return the configured LLM provider singleton.

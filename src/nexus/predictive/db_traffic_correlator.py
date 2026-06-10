@@ -39,16 +39,18 @@ from __future__ import annotations
 import logging
 import math
 import os
-from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any
 
 import yaml
 
 from nexus.bus.incident_event import (
-    AgentType, IncidentEvent, Severity, SignalType,
+    AgentType,
+    IncidentEvent,
+    Severity,
+    SignalType,
     TrafficSpikePredictionContext,
 )
 from nexus.bus.nats_client import NATSClient
@@ -78,9 +80,9 @@ class TableEndpointMapper:
     Falls back to /api/<table_name> if no mapping found.
     """
 
-    def __init__(self, map_path: Optional[Path] = None):
+    def __init__(self, map_path: Path | None = None):
         self._path       = map_path
-        self._mapping:   Dict[str, str] = {}
+        self._mapping:   dict[str, str] = {}
         if self._path and self._path.exists():
             self._load()
 
@@ -121,7 +123,7 @@ class TableRateState:
     roc_ewma:       float = 0.0   # EWMA of rate-of-change
     last_rate:      float = 0.0
     samples:        int   = 0
-    last_spiked_at: Optional[datetime] = None
+    last_spiked_at: datetime | None = None
 
     def update(self, new_rate: float) -> float:
         """
@@ -223,7 +225,7 @@ class DBTrafficCorrelator:
         spike_multiplier: float = 2.5,
         horizon_minutes:  int = 10,
         cooldown_seconds: float = 300.0,
-        map_path:         Optional[Path] = None,
+        map_path:         Path | None = None,
     ):
         self._nats            = nats_client
         self._namespace       = namespace
@@ -236,7 +238,7 @@ class DBTrafficCorrelator:
         )
 
         # Per-table EWMA state
-        self._table_state: Dict[str, TableRateState] = {}
+        self._table_state: dict[str, TableRateState] = {}
 
         # Stats
         self._snapshots_ingested = 0
@@ -265,7 +267,7 @@ class DBTrafficCorrelator:
             return
 
         # Evaluate each table
-        predictions: List[SpikePrediction] = []
+        predictions: list[SpikePrediction] = []
         for table, rate in {
             k[len("table_"):][: -len("_read_rate")]: v
             for k, v in fv.features.items()
@@ -337,7 +339,7 @@ class DBTrafficCorrelator:
     # ── Stats ─────────────────────────────────────────────────────────────────
 
     @property
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         return {
             "snapshots_ingested": self._snapshots_ingested,
             "spikes_predicted":   self._spikes_predicted,

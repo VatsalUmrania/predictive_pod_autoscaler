@@ -25,7 +25,8 @@ import asyncio
 import logging
 import time
 import traceback
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ class SelfHealMiddleware:
         method:      str,
         status_code: int,
         duration_ms: float,
-        error_msg:   Optional[str] = None,
+        error_msg:   str | None = None,
     ) -> None:
         if not self._token:
             return

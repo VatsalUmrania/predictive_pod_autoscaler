@@ -50,7 +50,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -80,14 +80,14 @@ class HealingPolicy(BaseModel):
 
     auto_rollback:              bool                     = True
     max_auto_actions_per_hour:  int                      = Field(10, ge=0, le=100)
-    require_approval_for:       List[Union[str, Dict[str, str]]] = Field(
+    require_approval_for:       list[str | dict[str, str]] = Field(
         default_factory=list,
         description=(
             "List of scenario names that require human approval. "
             "Strings like 'database_migrations', or dicts like {'scaling_above': '10x'}."
         ),
     )
-    never_shed_routes:          List[str] = Field(
+    never_shed_routes:          list[str] = Field(
         default_factory=list,
         description="Routes that should never be load-shed, even under extreme pressure.",
     )
@@ -101,7 +101,7 @@ class HealingPolicy(BaseModel):
                 return True
         return False
 
-    def scaling_approval_threshold(self) -> Optional[float]:
+    def scaling_approval_threshold(self) -> float | None:
         """
         Return the replica-multiple above which scaling requires approval.
         e.g. {'scaling_above': '10x'} → 10.0
@@ -119,7 +119,7 @@ class HealingPolicy(BaseModel):
 class PredictiveConfig(BaseModel):
     """Per-app predictive layer configuration."""
 
-    traffic_spike_tables: List[str] = Field(
+    traffic_spike_tables: list[str] = Field(
         default_factory=list,
         description="DB table names to watch for traffic spike prediction.",
     )
@@ -127,7 +127,7 @@ class PredictiveConfig(BaseModel):
         2.5, ge=1.1, le=20.0,
         description="Replica multiplier at which pre-scaling is triggered (e.g. 2.5 = 2.5x RPS).",
     )
-    spike_indicator_queries: List[str] = Field(
+    spike_indicator_queries: list[str] = Field(
         default_factory=list,
         description="SQL fragments that, when detected, indicate an imminent traffic spike.",
     )
@@ -162,14 +162,14 @@ class SelfhealConfig(BaseModel):
 
     app:             str = Field(..., min_length=1, description="Application name (used for token lookup + incident labelling).")
     tier:            str = Field("production", description="Deployment tier: production | staging | dev")
-    critical_routes: List[str]           = Field(default_factory=list)
+    critical_routes: list[str]           = Field(default_factory=list)
     healing_policy:  HealingPolicy       = Field(default_factory=HealingPolicy)
     predictive:      PredictiveConfig    = Field(default_factory=PredictiveConfig)
     notifications:   NotificationsConfig = Field(default_factory=NotificationsConfig)
 
     # Populated by NEXUS at load time — not present in the YAML itself
-    _token:        Optional[str]        = None
-    _source_path:  Optional[Path]       = None
+    _token:        str | None        = None
+    _source_path:  Path | None       = None
 
     @field_validator("app", mode="before")
     @classmethod
@@ -186,7 +186,7 @@ class SelfhealConfig(BaseModel):
             logger.warning(f"[SelfhealConfig] Unknown tier '{v}' — treating as 'dev'")
         return v
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return self.model_dump()
 
 
@@ -194,7 +194,7 @@ class SelfhealConfig(BaseModel):
 # Loader
 # ──────────────────────────────────────────────────────────────────────────────
 
-def load_selfheal_config(repo_path: Union[str, Path]) -> Optional[SelfhealConfig]:
+def load_selfheal_config(repo_path: str | Path) -> SelfhealConfig | None:
     """
     Load and validate selfheal.yaml from the given repo root.
 

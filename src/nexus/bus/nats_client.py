@@ -27,12 +27,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Awaitable, Callable, List, Optional
+from collections.abc import Awaitable, Callable
 
 import nats
 from nats.aio.client import Client as NATSConnection
 from nats.js import JetStreamContext
-from nats.js.api import StreamConfig, RetentionPolicy, StorageType
+from nats.js.api import RetentionPolicy, StorageType, StreamConfig
 
 from nexus.bus.incident_event import IncidentEvent
 
@@ -81,9 +81,9 @@ class NATSClient:
         self._url               = nats_url
         self._connect_timeout   = connect_timeout
         self._reconnect_attempts = reconnect_attempts
-        self._nc: Optional[NATSConnection] = None
-        self._js: Optional[JetStreamContext] = None
-        self._subscribers: List[asyncio.Task] = []
+        self._nc: NATSConnection | None = None
+        self._js: JetStreamContext | None = None
+        self._subscribers: list[asyncio.Task] = []
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -111,7 +111,7 @@ class NATSClient:
             await self._nc.drain()
         logger.info("[NATS] Connection closed")
 
-    async def __aenter__(self) -> "NATSClient":
+    async def __aenter__(self) -> NATSClient:
         await self.connect()
         return self
 
@@ -166,8 +166,8 @@ class NATSClient:
         handler: HandlerType,
         agent_filter: str = ">",
         signal_filter: str = ">",
-        durable_name: Optional[str] = None,
-        queue_group: Optional[str] = None,
+        durable_name: str | None = None,
+        queue_group: str | None = None,
     ) -> None:
         """
         Subscribe to incident events matching the given filters.
@@ -209,6 +209,47 @@ class NATSClient:
         sub = await self._js.subscribe(subject, cb=_raw_handler, **sub_kwargs)
 
         # Keep subscription task alive
+        task = asyncio.create_task(self._keep_alive(sub))
+        self._subscribers.append(task)
+
+    RawHandlerType = Callable[[dict, str], Awaitable[None]]  # (payload_dict, subject)
+
+    async def subscribe_raw(
+        self,
+        subject_pattern: str,
+        handler: RawHandlerType,
+        durable_name: str | None = None,
+    ) -> None:
+        """
+        Subscribe to raw-dict NATS subjects (non-IncidentEvent payloads).
+        Used for PPA prediction events on ``ppa.predictions.*``.
+
+        Args:
+            subject_pattern: Full NATS subject with optional wildcard, e.g.
+                             ``ppa.predictions.>``
+            handler:         Async callback receiving ``(payload: dict, subject: str)``.
+            durable_name:    JetStream durable consumer name.
+        """
+        if not self._js:
+            raise RuntimeError("NATSClient not connected.")
+
+        logger.info(f"[NATS] Subscribing to raw pattern '{subject_pattern}' durable={durable_name}")
+
+        async def _raw_handler(msg):
+            try:
+                import json
+                data = json.loads(msg.data.decode("utf-8"))
+                await handler(data, msg.subject)
+                await msg.ack()
+            except Exception as exc:
+                logger.error(f"[NATS] Raw handler error on {msg.subject}: {exc}", exc_info=True)
+                await msg.nak()
+
+        sub_kwargs: dict = {}
+        if durable_name:
+            sub_kwargs["durable"] = durable_name
+
+        sub = await self._js.subscribe(subject_pattern, cb=_raw_handler, **sub_kwargs)
         task = asyncio.create_task(self._keep_alive(sub))
         self._subscribers.append(task)
 

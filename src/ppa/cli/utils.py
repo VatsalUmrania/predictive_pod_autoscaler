@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import cast
 
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from ppa.config import PPA_THEME, PROMETHEUS_URL, SESSION_FILE
@@ -79,7 +80,7 @@ def error_block(title: str, cause: str, fix: str, **extra: str) -> None:
     if extra:
         console.print()
     console.print(f"     Cause   {cause}")
-    console.print(f"     Fix     [bold]{fix}[/]")
+    console.print(f"     Fix     [bold]{escape(fix)}[/]")
 
 
 def phase_header(phase_num: int, total: int, title: str) -> None:

@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +41,8 @@ class Notifier:
     """
 
     def __init__(self) -> None:
-        self._fail_counts:  Dict[str, int] = {}   # app_name → consecutive failures
-        self._nats_task:    Optional[asyncio.Task] = None
+        self._fail_counts:  dict[str, int] = {}   # app_name → consecutive failures
+        self._nats_task:    asyncio.Task | None = None
         self._running:      bool = False
 
     # ── Public notification API ───────────────────────────────────────────────
@@ -53,7 +53,7 @@ class Notifier:
         runbook_id:  str,
         outcome:     str,
         description: str,
-        target:      Optional[str] = None,
+        target:      str | None = None,
     ) -> None:
         """Send a healing action notification."""
         webhook = self._get_webhook(app_name)
@@ -186,7 +186,7 @@ class Notifier:
 
     # ── Policy helpers ────────────────────────────────────────────────────────
 
-    def _get_webhook(self, app_name: str) -> Optional[str]:
+    def _get_webhook(self, app_name: str) -> str | None:
         """Return the Slack webhook URL for an app, or None if not configured."""
         try:
             from nexus.integration.dashboard import _policy_cache
@@ -210,7 +210,7 @@ class Notifier:
     async def _send(
         self,
         webhook_url: str,
-        payload:     Dict[str, Any],
+        payload:     dict[str, Any],
         app_name:    str,
     ) -> None:
         """POST a Slack webhook payload asynchronously."""

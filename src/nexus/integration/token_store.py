@@ -36,7 +36,6 @@ import logging
 import os
 import secrets
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
 
 import aiosqlite
 
@@ -50,7 +49,7 @@ class TokenStore:
 
     def __init__(self, db_path: str = _DEFAULT_DB) -> None:
         self._db_path   = db_path
-        self._cache:    Dict[str, str] = {}   # token → app_name (in-memory fast-path)
+        self._cache:    dict[str, str] = {}   # token → app_name (in-memory fast-path)
         self._ready     = False
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -121,7 +120,7 @@ class TokenStore:
 
     # ── Validation ────────────────────────────────────────────────────────────
 
-    async def validate_token(self, token: str) -> Optional[str]:
+    async def validate_token(self, token: str) -> str | None:
         """
         Validate an incoming SDK token.
 
@@ -170,7 +169,7 @@ class TokenStore:
 
     # ── Lookup ────────────────────────────────────────────────────────────────
 
-    async def get_token(self, app_name: str) -> Optional[str]:
+    async def get_token(self, app_name: str) -> str | None:
         """Return the current token for an app (for display / ops use)."""
         async with aiosqlite.connect(self._db_path) as db:
             async with db.execute(
@@ -179,7 +178,7 @@ class TokenStore:
                 row = await cur.fetchone()
         return row[0] if row else None
 
-    async def list_apps(self) -> List[Dict]:
+    async def list_apps(self) -> list[dict]:
         """List all registered apps (for /apps endpoint)."""
         async with aiosqlite.connect(self._db_path) as db:
             async with db.execute(
@@ -242,7 +241,7 @@ def _generate_token() -> str:
 # Module-level singleton
 # ──────────────────────────────────────────────────────────────────────────────
 
-_token_store: Optional[TokenStore] = None
+_token_store: TokenStore | None = None
 
 
 def get_token_store() -> TokenStore:

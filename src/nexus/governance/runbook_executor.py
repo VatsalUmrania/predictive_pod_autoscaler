@@ -41,9 +41,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 import httpx
 from kubernetes import client as k8s_client
@@ -107,8 +108,8 @@ class RunbookExecutor:
         )
 
         # Kubernetes API (initialised lazily on first use)
-        self._k8s_apps: Optional[k8s_client.AppsV1Api] = None
-        self._k8s_core: Optional[k8s_client.CoreV1Api] = None
+        self._k8s_apps: k8s_client.AppsV1Api | None = None
+        self._k8s_core: k8s_client.CoreV1Api | None = None
         self._k8s_ready = False
 
     # ── K8s client init ───────────────────────────────────────────────────────
@@ -126,7 +127,7 @@ class RunbookExecutor:
 
     # ── Pre / Post check execution ────────────────────────────────────────────
 
-    async def _prometheus_query(self, promql: str) -> Optional[float]:
+    async def _prometheus_query(self, promql: str) -> float | None:
         """Execute a PromQL instant query. Returns scalar or None on failure."""
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
@@ -146,7 +147,7 @@ class RunbookExecutor:
     def _compare(value: Any, operator: str, threshold: Any) -> bool:
         if value is None:
             return False
-        ops: Dict[str, Callable] = {
+        ops: dict[str, Callable] = {
             "gt":  lambda a, b: a > b,
             "gte": lambda a, b: a >= b,
             "lt":  lambda a, b: a < b,
@@ -217,13 +218,13 @@ class RunbookExecutor:
 
     async def _execute_action(
         self, action: RunbookAction, event: IncidentEvent
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Execute a single RunbookAction. Returns result dict."""
         action_type = action.type
         params      = action.params
         namespace   = params.get("namespace") or event.namespace or "default"
         name        = params.get("name") or event.resource_name or ""
-        result: Dict[str, Any] = {"type": action_type, "status": "unknown"}
+        result: dict[str, Any] = {"type": action_type, "status": "unknown"}
 
         if self.dry_run:
             logger.info(f"[RunbookExecutor] DRY RUN: {action_type} on {namespace}/{name}")
@@ -320,7 +321,7 @@ class RunbookExecutor:
             return
 
         # ── Per-action governance loop ─────────────────────────────────────────
-        action_results: List[Dict] = []
+        action_results: list[dict] = []
         execution_failed = False
 
         for action in runbook.actions:
@@ -363,7 +364,7 @@ class RunbookExecutor:
 
             # ── Pre-state capture ────────────────────────────────────────────
             self._ensure_k8s()
-            pre_state = await self.rollback_reg.capture(
+            await self.rollback_reg.capture(
                 action_type = action.type,
                 namespace   = event.namespace or "default",
                 name        = event.resource_name or "",
@@ -506,7 +507,7 @@ def build_executor(
     audit_trail: AuditTrail,
     prometheus_url: str = "http://prometheus:9090",
     opa_url: str = "http://localhost:8181",
-    redis_url: Optional[str] = None,
+    redis_url: str | None = None,
     dry_run: bool = False,
     confidence: float = 0.85,
 ) -> RunbookExecutor:

@@ -30,12 +30,11 @@ All queries are:
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import aiosqlite
 
@@ -60,10 +59,10 @@ class OutcomeRecord:
     target:             str
     execution_outcome:  str
     rollback_triggered: bool
-    incident_id:        Optional[str]
+    incident_id:        str | None
 
     @classmethod
-    def from_row(cls, row: Dict[str, Any]) -> "OutcomeRecord":
+    def from_row(cls, row: dict[str, Any]) -> OutcomeRecord:
         return cls(
             action_id          = row["action_id"],
             timestamp          = row["timestamp"],
@@ -126,7 +125,7 @@ class RunbookStats:
             return 0.0
         return self.rolled_back / self.completed
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "runbook_id":      self.runbook_id,
             "window_days":     self.window_days,
@@ -158,11 +157,11 @@ class SystemKPIs:
     total_rollbacks:         int   = 0
     autonomous_success_rate: float = 0.0
     false_heal_rate:         float = 0.0
-    actions_by_level:        Dict[str, int] = field(default_factory=dict)
-    actions_by_runbook:      Dict[str, int] = field(default_factory=dict)
+    actions_by_level:        dict[str, int] = field(default_factory=dict)
+    actions_by_runbook:      dict[str, int] = field(default_factory=dict)
     window_days:             int  = 30
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "total_actions":           self.total_actions,
             "total_successes":         self.total_successes,
@@ -189,10 +188,10 @@ class OutcomeStore:
                  from environment if not provided (default: /tmp/nexus_audit.db).
     """
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: str | None = None):
         import os
         self._db_path = db_path or os.getenv("NEXUS_AUDIT_DB_PATH", "/tmp/nexus_audit.db")
-        self._db: Optional[aiosqlite.Connection] = None
+        self._db: aiosqlite.Connection | None = None
 
     async def connect(self) -> None:
         """Open a read-only connection to the AuditTrail database."""
@@ -215,7 +214,7 @@ class OutcomeStore:
             await self._db.close()
             self._db = None
 
-    async def __aenter__(self) -> "OutcomeStore":
+    async def __aenter__(self) -> OutcomeStore:
         await self.connect()
         return self
 
@@ -229,7 +228,7 @@ class OutcomeStore:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         return cutoff.isoformat()
 
-    async def _execute(self, sql: str, params: tuple = ()) -> List[Dict[str, Any]]:
+    async def _execute(self, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
         """Execute a SELECT and return results as list of dicts."""
         if not self._db:
             return []
@@ -243,7 +242,7 @@ class OutcomeStore:
 
     # ── Queries ───────────────────────────────────────────────────────────────
 
-    async def get_recent_outcomes(self, limit: int = 200) -> List[OutcomeRecord]:
+    async def get_recent_outcomes(self, limit: int = 200) -> list[OutcomeRecord]:
         """Return the N most recent non-pending audit records."""
         rows = await self._execute(
             """
@@ -285,7 +284,7 @@ class OutcomeStore:
 
         return stats
 
-    async def get_all_runbook_stats(self, days: int = 30) -> Dict[str, RunbookStats]:
+    async def get_all_runbook_stats(self, days: int = 30) -> dict[str, RunbookStats]:
         """Compute statistics for every runbook that has any record in the window."""
         since = self._since_ts(days)
         rows  = await self._execute(
@@ -297,7 +296,7 @@ class OutcomeStore:
             (since,),
         )
 
-        agg: Dict[str, RunbookStats] = {}
+        agg: dict[str, RunbookStats] = {}
         for row in rows:
             rb_id = row["runbook_id"]
             if rb_id not in agg:
@@ -357,7 +356,7 @@ class OutcomeStore:
 
     async def get_outcome_timeseries(
         self, runbook_id: str, days: int = 7
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Return a time-series of outcomes for a runbook — useful for detecting
         degradation trends (e.g., success rate falling over the last 7 days).
@@ -374,7 +373,7 @@ class OutcomeStore:
             (runbook_id, since),
         )
 
-    async def get_targets_with_most_heals(self, days: int = 7, limit: int = 10) -> List[Dict[str, Any]]:
+    async def get_targets_with_most_heals(self, days: int = 7, limit: int = 10) -> list[dict[str, Any]]:
         """
         Return the targets (namespace/resource) that received the most healing actions.
         High-count targets indicate chronic issues that runbooks alone cannot fix.
@@ -391,4 +390,16 @@ class OutcomeStore:
             LIMIT ?
             """,
             (since, limit),
+        )
+
+    async def write_ppa_outcome(self, outcome: dict) -> None:
+        """Record a PPA prediction outcome verdict (passthrough / no-op stub).
+
+        In Phase 3 direct persistence is handled by PpaOutcomeTracker which
+        appends JSONL to /data/ppa_outcomes.jsonl. This stub allows FeedbackLoop
+        to call through OutcomeStore without importing the tracker.
+        """
+        logger.debug(
+            f"[OutcomeStore] PPA outcome: verdict={outcome.get('verdict')} "
+            f"for {outcome.get('deployment')}"
         )

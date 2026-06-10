@@ -1,0 +1,19 @@
+apiVersion: ppa.example.com/v1
+kind: PredictiveAutoscaler
+metadata:
+  name: shop-demo-ppa-rps-t3m
+  namespace: default
+spec:
+  targetDeployment: "shop-demo"
+  appName: "shop-demo"
+  horizon: "rps_t3m"
+  minReplicas: 1
+  maxReplicas: 10
+  capacityPerPod: 50
+  scaleUpRate: 2.0
+  scaleDownRate: 0.5
+  safetyFactor: 1.15
+  observerMode: true
+  modelPath: "/models/shop-demo/rps_t3m/ppa_model_rps_t3m.tflite"
+  scalerPath: "/models/shop-demo/rps_t3m/scaler_rps_t3m.pkl"
+  targetScalerPath: "/models/shop-demo/rps_t3m/target_scaler_rps_t3m.pkl"

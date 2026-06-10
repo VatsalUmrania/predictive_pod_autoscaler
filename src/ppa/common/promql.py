@@ -129,9 +129,13 @@ def _base_matchers(target_app: str, namespace: str) -> str:
 
 
 def _usage_matchers(target_app: str, namespace: str) -> str:
-    """Exclude junk containers (pause, empty)."""
+    """Match kubelet usage metrics while excluding pause containers.
+
+    Some kubelet/cAdvisor versions expose pod-level usage without a
+    `container` label. Requiring `container!=""` filters those valid samples out.
+    """
     base = _base_matchers(target_app, namespace)
-    return f'{base},container!="",container!="POD"'
+    return f'{base},container!="POD"'
 
 
 def _resource_matchers(target_app: str, namespace: str, resource: str) -> str:

@@ -23,8 +23,8 @@ Precision Tracker
 -----------------
 Records each shadow decision and the actual RPS observed after the prediction
 horizon. Computes precision as TP / (TP + FP) where:
-    TP = spike was predicted AND actual-RPS ≥ spike_threshold× base-RPS
-    FP = spike was predicted AND actual-RPS < spike_threshold× base-RPS
+    TP = spike was predicted AND actual-RPS ≥ spike_threshold base-RPS
+    FP = spike was predicted AND actual-RPS < spike_threshold base-RPS
 
 SMAPE < 25% AND precision ≥ 0.70 over the last N=20 predictions
 gates graduation from SHADOW → ADVISORY.
@@ -39,7 +39,6 @@ Configuration (environment variables):
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import uuid
@@ -47,7 +46,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any
 
 from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
 from nexus.bus.nats_client import NATSClient
@@ -81,14 +80,14 @@ class PrescaleDecision:
     recommended_replicas: int
     confidence:           float
     mode:                 PrescaleMode
-    db_table_trigger:     Optional[str]
+    db_table_trigger:     str | None
 
     decided_at:           str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
-    verified_at:          Optional[str] = None
-    actual_rps:           Optional[float] = None
-    outcome:              Optional[str]   = None   # "correct" | "false_positive" | "pending"
+    verified_at:          str | None = None
+    actual_rps:           float | None = None
+    outcome:              str | None   = None   # "correct" | "false_positive" | "pending"
     executed:             bool = False
 
     def mark_outcome(self, actual_rps: float, spike_threshold: float = 1.3) -> str:
@@ -144,13 +143,13 @@ class PrecisionTracker:
     def __init__(self, window: int = 20, spike_threshold: float = 1.3):
         self._window     = window
         self._threshold  = spike_threshold
-        self._decisions: Dict[str, PrescaleDecision] = {}
-        self._smape_deque: Deque[float] = deque(maxlen=window)
+        self._decisions: dict[str, PrescaleDecision] = {}
+        self._smape_deque: deque[float] = deque(maxlen=window)
 
     def record_decision(self, decision: PrescaleDecision) -> None:
         self._decisions[decision.decision_id] = decision
 
-    def record_actual(self, decision_id: str, actual_rps: float) -> Optional[str]:
+    def record_actual(self, decision_id: str, actual_rps: float) -> str | None:
         """Record the observed RPS after the horizon. Returns outcome."""
         decision = self._decisions.get(decision_id)
         if not decision:
@@ -172,7 +171,7 @@ class PrecisionTracker:
         return PrecisionStats(true_positives=tp, false_positives=fp, pending=pending)
 
     @property
-    def rolling_smape(self) -> Optional[float]:
+    def rolling_smape(self) -> float | None:
         if not self._smape_deque:
             return None
         return sum(self._smape_deque) / len(self._smape_deque)
@@ -210,37 +209,101 @@ class Prescaler:
         target_rps_per_replica: Used to compute replica target (default: 100).
     """
 
+    # def __init__(
+    #     self,
+    #     nats_client:            NATSClient,
+    #     action_ladder:          ActionLadder | None = None,
+    #     mode:                   PrescaleMode = PrescaleMode(
+    #         os.getenv("NEXUS_PRESCALE_MODE", "shadow")
+    #     ),
+    #     max_replicas:           int   = int(os.getenv("NEXUS_PRESCALE_MAX_REPLICAS", "20")),
+    #     min_confidence:         float = float(os.getenv("NEXUS_PRESCALE_MIN_CONFIDENCE", "0.55")),
+    #     threshold_pct:          float = float(os.getenv("NEXUS_PRESCALE_THRESHOLD_PCT", "30")),
+    #     cooldown_seconds:       float = float(os.getenv("NEXUS_PRESCALE_COOLDOWN_S", "300")),
+    #     target_rps_per_replica: float = 100.0,
+    # ):
+    #     self._nats              = nats_client
+    #     self._ladder            = action_ladder
+    #     self.mode               = mode
+    #     self._max_replicas      = max_replicas
+    #     self._min_confidence    = min_confidence
+    #     self._threshold_pct     = threshold_pct
+    #     self._cooldown          = cooldown_seconds
+    #     self._target_rps        = target_rps_per_replica
+
+    #     # Precision tracking and decision log
+    #     self._tracker           = PrecisionTracker()
+    #     self._all_decisions:    list[PrescaleDecision] = []
+    #     self._cooldowns:        dict[str, float] = {}   # deployment → mono time
+
+    #     # Stats
+    #     self._events_received   = 0
+    #     self._decisions_made    = 0
+    #     self._skipped_cooldown  = 0
+    #     self._skipped_confidence = 0
+    #     self._skipped_threshold = 0
+
+    #     logger.info(
+    #         f"[Prescaler] Started — mode={self.mode.value} "
+    #         f"threshold={self._threshold_pct}% "
+    #         f"min_confidence={self._min_confidence}"
+    #     )
+
     def __init__(
         self,
-        nats_client:            NATSClient,
-        action_ladder:          Optional[ActionLadder] = None,
-        mode:                   PrescaleMode = PrescaleMode(
-            os.getenv("NEXUS_PRESCALE_MODE", "shadow")
-        ),
-        max_replicas:           int   = int(os.getenv("NEXUS_PRESCALE_MAX_REPLICAS", "20")),
-        min_confidence:         float = float(os.getenv("NEXUS_PRESCALE_MIN_CONFIDENCE", "0.55")),
-        threshold_pct:          float = float(os.getenv("NEXUS_PRESCALE_THRESHOLD_PCT", "30")),
-        cooldown_seconds:       float = float(os.getenv("NEXUS_PRESCALE_COOLDOWN_S", "300")),
+        nats_client: NATSClient,
+        action_ladder: ActionLadder | None = None,
+        mode: PrescaleMode | None = None,
+        max_replicas: int | None = None,
+        min_confidence: float | None = None,
+        threshold_pct: float | None = None,
+        cooldown_seconds: float | None = None,
         target_rps_per_replica: float = 100.0,
     ):
-        self._nats              = nats_client
-        self._ladder            = action_ladder
-        self.mode               = mode
-        self._max_replicas      = max_replicas
-        self._min_confidence    = min_confidence
-        self._threshold_pct     = threshold_pct
-        self._cooldown          = cooldown_seconds
-        self._target_rps        = target_rps_per_replica
+        self._nats = nats_client
+        self._ladder = action_ladder
+
+        self.mode = (
+            mode
+            if mode is not None
+            else PrescaleMode(os.getenv("NEXUS_PRESCALE_MODE", "shadow"))
+        )
+
+        self._max_replicas = (
+            max_replicas
+            if max_replicas is not None
+            else int(os.getenv("NEXUS_PRESCALE_MAX_REPLICAS", "20"))
+        )
+
+        self._min_confidence = (
+            min_confidence
+            if min_confidence is not None
+            else float(os.getenv("NEXUS_PRESCALE_MIN_CONFIDENCE", "0.55"))
+        )
+
+        self._threshold_pct = (
+            threshold_pct
+            if threshold_pct is not None
+            else float(os.getenv("NEXUS_PRESCALE_THRESHOLD_PCT", "30"))
+        )
+
+        self._cooldown = (
+            cooldown_seconds
+            if cooldown_seconds is not None
+            else float(os.getenv("NEXUS_PRESCALE_COOLDOWN_S", "300"))
+        )
+
+        self._target_rps = target_rps_per_replica
 
         # Precision tracking and decision log
-        self._tracker           = PrecisionTracker()
-        self._all_decisions:    List[PrescaleDecision] = []
-        self._cooldowns:        Dict[str, float] = {}   # deployment → mono time
+        self._tracker = PrecisionTracker()
+        self._all_decisions: list[PrescaleDecision] = []
+        self._cooldowns: dict[str, float] = {}
 
         # Stats
-        self._events_received   = 0
-        self._decisions_made    = 0
-        self._skipped_cooldown  = 0
+        self._events_received = 0
+        self._decisions_made = 0
+        self._skipped_cooldown = 0
         self._skipped_confidence = 0
         self._skipped_threshold = 0
 
@@ -249,6 +312,52 @@ class Prescaler:
             f"threshold={self._threshold_pct}% "
             f"min_confidence={self._min_confidence}"
         )
+
+    async def subscribe_to_ppa_predictions(self) -> None:
+        """
+        Subscribe to ``ppa.predictions.*`` NATS subject.
+
+        Becomes the primary driver of pre-scaling decisions (DBTrafficCorrelator
+        is the fallback). Falls back to DBTrafficCorrelator in degraded mode.
+        """
+        async def handler(data: dict, subject: str) -> None:
+            if not subject.startswith("ppa.predictions."):
+                return
+
+            deployment = data.get("deployment", subject.split(".")[-1])
+
+            event = IncidentEvent(
+                agent=AgentType.ORCHESTRATOR,
+                signal_type=SignalType.TRAFFIC_SPIKE_PREDICTED,
+                severity=Severity.WARNING,
+                namespace=data.get("namespace", "default"),
+                resource_name=deployment,
+                context={
+                    "current_rps":               data.get("current_rps", 0.0),
+                    "predicted_rps":             data.get("predicted_rps", 0.0),
+                    "confidence":                data.get("confidence", 0.0),
+                    "endpoint":                 f"/{deployment}",
+                    "prediction_horizon_minutes": data.get("horizon_minutes", 10),
+                    "db_table_trigger":          None,
+                    "ppa_model_version":         data.get("model_version", "unknown"),
+                    "raw_features":              data.get("raw_features", {}),
+                },
+                confidence=data.get("confidence", 0.0),
+            )
+            try:
+                await self.handle_spike_prediction(event)
+            except Exception as exc:
+                logger.error(
+                    f"[PreScaler] handle_spike_prediction failed for {subject}: {exc}",
+                    exc_info=True,
+                )
+
+        await self._nats.subscribe_raw(
+            "ppa.predictions.>",
+            handler=handler,
+            durable_name="prescaler-ppa-predictions",
+        )
+        logger.info("[PreScaler] Subscribed to ppa.predictions.*")
 
     # ── NATS handler ──────────────────────────────────────────────────────────
 
@@ -455,7 +564,8 @@ class Prescaler:
 
         # Execute K8s scale via kubernetes client
         try:
-            from kubernetes import client as k8s_client, config as k8s_config
+            from kubernetes import client as k8s_client
+            from kubernetes import config as k8s_config
             try:
                 k8s_config.load_incluster_config()
             except Exception:
@@ -483,7 +593,8 @@ class Prescaler:
     async def _get_current_replicas(self, deployment: str, namespace: str) -> int:
         """Query K8s for current replica count. Returns 1 on error (safe fallback)."""
         try:
-            from kubernetes import client as k8s_client, config as k8s_config
+            from kubernetes import client as k8s_client
+            from kubernetes import config as k8s_config
             try:
                 k8s_config.load_incluster_config()
             except Exception:
@@ -527,7 +638,7 @@ class Prescaler:
     # ── Observability ─────────────────────────────────────────────────────────
 
     @property
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         prec  = self._tracker.stats()
         smape = self._tracker.rolling_smape
         return {
