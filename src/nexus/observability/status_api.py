@@ -109,12 +109,23 @@ context = NexusContext()
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Initialize async resources (TokenStore, NATS, PPA OutcomeTracker) on startup."""
+    """Initialize async resources on startup.
+
+    Skips self-init when NexusContext fields are already populated by NexusServer,
+    to avoid duplicate NATS connections and parallel polling loops.
+    """
     import logging
     import os
     _log = logging.getLogger(__name__)
 
-    # ── TokenStore ─────────────────────────────────────────────────────────────
+    # ── Skip self-init: NexusServer already owns all components ─────────────────
+    if context.orchestrator is not None:
+        _log.info("[StatusAPI] NexusContext pre-populated — skipping self-init")
+        _include_integration_routers(app)
+        yield
+        return
+
+    # ── Self-init path (standalone status_api runs only) ─────────────────────
     try:
         from nexus.integration.token_store import get_token_store
         store = get_token_store()
