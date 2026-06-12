@@ -96,6 +96,9 @@ class K8sAgent(BaseAgent):
             f"{'ALL' if not self.namespaces else self.namespaces}"
         )
 
+    async def on_stop(self) -> None:
+        pass
+
     def _init_k8s(self) -> None:
         try:
             k8s_config.load_incluster_config()

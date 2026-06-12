@@ -253,6 +253,9 @@ class NetworkAgent(BaseAgent):
     async def on_start(self) -> None:
         await self._refresh_services()
 
+    async def on_stop(self) -> None:
+        pass
+
     async def sense(self) -> list[IncidentEvent]:
         self._cycle_count += 1
 

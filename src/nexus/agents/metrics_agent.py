@@ -347,6 +347,12 @@ class MetricsAgent(BaseAgent):
 
     # ── BaseAgent interface ───────────────────────────────────────────────────
 
+    async def on_start(self) -> None:
+        pass
+
+    async def on_stop(self) -> None:
+        pass
+
     async def sense(self) -> list[IncidentEvent]:
         metrics = await self._query_all()
 

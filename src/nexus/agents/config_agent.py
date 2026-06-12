@@ -126,6 +126,9 @@ class ConfigAgent(BaseAgent):
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._init_k8s)
 
+    async def on_stop(self) -> None:
+        pass
+
     def _init_k8s(self) -> None:
         try:
             from kubernetes import client as k8s_client
