@@ -2,9 +2,9 @@
 Tests for status_api NexusContext lifecycle: _lifespan must skip self-init
 when context.orchestrator (or any NexusContext field) is already populated.
 """
-import pytest
 import asyncio
 from unittest.mock import MagicMock, patch
+
 from fastapi import FastAPI
 
 from nexus.observability import status_api as status_api_module

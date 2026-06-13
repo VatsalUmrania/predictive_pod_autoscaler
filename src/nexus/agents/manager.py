@@ -6,13 +6,13 @@ import asyncio
 
 from nexus.agents import (
     BaseAgent,
-    MetricsAgent,
-    K8sAgent,
-    DBAgent,
-    NginxAgent,
-    NetworkAgent,
     ConfigAgent,
+    DBAgent,
     GitAgent,
+    K8sAgent,
+    MetricsAgent,
+    NetworkAgent,
+    NginxAgent,
 )
 
 

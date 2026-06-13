@@ -1,11 +1,9 @@
-import pytest
 import asyncio
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from nexus.agents.manager import AgentManager
-from nexus.agents import (
-    MetricsAgent, K8sAgent, DBAgent, NginxAgent,
-    NetworkAgent, ConfigAgent, GitAgent,
-)
 
 
 def test_agent_manager_instantiates_all_7_agents():

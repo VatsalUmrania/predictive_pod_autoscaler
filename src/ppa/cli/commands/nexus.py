@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.table import Table
 
 from ppa.cli.utils import error, run_cmd, success, warn
-from ppa.config import DEPLOY_DIR, PROJECT_DIR
+from ppa.config import PROJECT_DIR
 
 console = Console()
 app = typer.Typer(
@@ -68,7 +68,6 @@ def status_cmd(
     namespace: str = typer.Option("nexus", "--namespace", "-n", help="Kubernetes namespace"),
 ) -> None:
     """Show status of NEXUS pods and services."""
-    style = "" if not watch else ""
 
     result = subprocess.run(
         ["kubectl", "get", "pods", "-n", namespace, "-o", "wide"],
