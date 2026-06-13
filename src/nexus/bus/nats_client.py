@@ -45,11 +45,12 @@ logger = logging.getLogger(__name__)
 NEXUS_STREAM    = "NEXUS_INCIDENTS"
 NEXUS_SUBJECT   = "nexus.incidents"          # Base subject prefix
 NEXUS_WILDCARD  = f"{NEXUS_SUBJECT}.>"      # Matches all agent/signal combos
+PPA_PREDICTIONS_SUBJECT = "ppa.predictions.>"  # Covers all PPA prediction events
 
 # JetStream stream config: retain 24h of messages, max 50MB
 _STREAM_CONFIG = StreamConfig(
     name=NEXUS_STREAM,
-    subjects=[NEXUS_WILDCARD],
+    subjects=[NEXUS_WILDCARD, PPA_PREDICTIONS_SUBJECT],
     retention=RetentionPolicy.LIMITS,
     storage=StorageType.MEMORY,     # Use FILE in production
     max_age=86_400,                  # 24 hours in seconds

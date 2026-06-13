@@ -248,8 +248,15 @@ class Notifier:
         """Background loop: subscribe to nexus.actions.* and nexus.prescale.*"""
         try:
             nc = self._nats_client
-            await nc.subscribe("nexus.actions.*", cb=self._on_action_message)
-            await nc.subscribe("nexus.prescale.*", cb=self._on_prescale_message)
+
+            async def _action_wrapper(data: dict, subject: str) -> None:
+                await self._on_action_message(data)
+
+            async def _prescale_wrapper(data: dict, subject: str) -> None:
+                await self._on_prescale_message(data)
+
+            await nc.subscribe_raw("nexus.actions.*", handler=_action_wrapper)
+            await nc.subscribe_raw("nexus.prescale.*", handler=_prescale_wrapper)
             logger.info("[Notifier] Subscribed to NATS nexus.actions.* + nexus.prescale.*")
             while self._running:
                 await asyncio.sleep(1)
@@ -258,9 +265,8 @@ class Notifier:
         except Exception as exc:
             logger.error(f"[Notifier] NATS listener error: {exc}")
 
-    async def _on_action_message(self, msg: Any) -> None:
+    async def _on_action_message(self, data: dict) -> None:
         try:
-            data     = json.loads(msg.data.decode())
             app_name = data.get("app") or data.get("resource_name", "unknown")
             await self.notify_heal(
                 app_name    = app_name,
@@ -272,9 +278,8 @@ class Notifier:
         except Exception as exc:
             logger.debug(f"[Notifier] action message error: {exc}")
 
-    async def _on_prescale_message(self, msg: Any) -> None:
+    async def _on_prescale_message(self, data: dict) -> None:
         try:
-            data = json.loads(msg.data.decode())
             await self.notify_prescale(
                 app_name      = data.get("app", "unknown"),
                 deployment    = data.get("deployment", "unknown"),
