@@ -255,9 +255,15 @@ class Notifier:
             async def _prescale_wrapper(data: dict, subject: str) -> None:
                 await self._on_prescale_message(data)
 
-            await nc.subscribe_raw("nexus.actions.*", handler=_action_wrapper)
-            await nc.subscribe_raw("nexus.prescale.*", handler=_prescale_wrapper)
-            logger.info("[Notifier] Subscribed to NATS nexus.actions.* + nexus.prescale.*")
+            try:
+                await nc.subscribe_raw("nexus.actions.*", handler=_action_wrapper)
+                await nc.subscribe_raw("nexus.prescale.*", handler=_prescale_wrapper)
+                logger.info("[Notifier] Subscribed to NATS nexus.actions.* + nexus.prescale.*")
+            except Exception as exc:
+                logger.warning(
+                    f"[Notifier] NATS subscribe failed (subject not yet in stream — "
+                    f"will retry when messages arrive): {exc}"
+                )
             while self._running:
                 await asyncio.sleep(1)
         except asyncio.CancelledError:

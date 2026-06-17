@@ -44,10 +44,11 @@ COPY --from=builder /venv /venv
 # Copy application source
 COPY --from=builder /build/src ./src
 
-# Copy config defaults and provisioning
-COPY deploy/nexus/prometheus.yml    ./config/prometheus.yml
 # Create data directory with correct permissions
-RUN mkdir -p /data /app/logs && chown -R nexus:nexus /data /app
+RUN mkdir -p /data /app/logs /runbooks && chown -R nexus:nexus /data /app /runbooks
+
+# Copy runbooks into image (will be overlay-mounted at runtime via ConfigMap)
+COPY deploy/nexus/runbooks/*.yaml /runbooks/
 
 USER nexus
 
@@ -62,9 +63,10 @@ EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
     CMD wget -qO- http://localhost:8080/health > /dev/null || exit 1
 
-
-CMD ["uvicorn", "nexus.observability.status_api:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8080", \
-     "--workers", "2", \
-     "--log-level", "info"]
+# ENTRYPOINT routes "server start" through the nexus CLI entry point
+ENTRYPOINT ["nexus"]
+CMD ["server", "start", \
+    "--nats-url=nats://nats.nexus.svc.cluster.local:4222", \
+    "--port=8080", \
+    "--runbook-dir=/runbooks", \
+    "--log-level=INFO"]

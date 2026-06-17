@@ -45,13 +45,13 @@ spec:
           args:
             - server
             - start
-            - --nats-url=nats://nats:4222
+            - --nats-url=nats://nats.nexus.svc.cluster.local:4222
             - --port=8080
             - --prometheus-url=http://prometheus:9090
             - --log-level=$(LOG_LEVEL)
           env:
             - name: NATS_URL
-              value: "nats://nats:4222"
+              value: "nats://nats.nexus.svc.cluster.local:4222"
             - name: LOG_LEVEL
               valueFrom:
                 configMapKeyRef:

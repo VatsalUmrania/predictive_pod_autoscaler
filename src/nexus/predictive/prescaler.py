@@ -320,6 +320,21 @@ class Prescaler:
         Becomes the primary driver of pre-scaling decisions (DBTrafficCorrelator
         is the fallback). Falls back to DBTrafficCorrelator in degraded mode.
         """
+        def _parse_horizon(raw) -> int:
+            """Parse PPA horizon field: 'rps_t10m' → 10, 'rps_t5m' → 5, or int passthrough."""
+            if isinstance(raw, int):
+                return raw
+            s = str(raw)  # e.g. 'rps_t10m', 'rps_t5m', 'rps_t3m'
+            # Extract trailing digit(s) before 'm': rps_t10m → '10'
+            import re
+            m = re.search(r'(\d+)m$', s)
+            if m:
+                return int(m.group(1))
+            try:
+                return int(s)
+            except (ValueError, TypeError):
+                return 10  # safe default
+
         async def handler(data: dict, subject: str) -> None:
             if not subject.startswith("ppa.predictions."):
                 return
@@ -337,7 +352,7 @@ class Prescaler:
                     "predicted_rps":             data.get("predicted_rps", 0.0),
                     "confidence":                data.get("confidence", 0.0),
                     "endpoint":                 f"/{deployment}",
-                    "prediction_horizon_minutes": data.get("horizon_minutes", 10),
+                    "prediction_horizon_minutes": _parse_horizon(data.get("horizon_minutes", 10)),
                     "db_table_trigger":          None,
                     "ppa_model_version":         data.get("model_version", "unknown"),
                     "raw_features":              data.get("raw_features", {}),
@@ -356,6 +371,7 @@ class Prescaler:
             "ppa.predictions.>",
             handler=handler,
             durable_name="prescaler-ppa-predictions",
+            stream_name="PPA_PREDICTIONS",
         )
         logger.info("[PreScaler] Subscribed to ppa.predictions.*")
 
@@ -384,22 +400,22 @@ class Prescaler:
 
         if confidence < self._min_confidence:
             self._skipped_confidence += 1
-            logger.debug(
-                f"[Prescaler] Skipped: confidence {confidence:.2f} < {self._min_confidence}"
+            logger.info(
+                f"[Prescaler] Skipped {event.resource_name}: confidence {confidence:.2f} < {self._min_confidence}"
             )
             return
 
         increase_pct = 100.0 * (predicted_rps - current_rps) / max(current_rps, 1.0)
         if increase_pct < self._threshold_pct:
             self._skipped_threshold += 1
-            logger.debug(
-                f"[Prescaler] Skipped: increase {increase_pct:.1f}% < {self._threshold_pct}%"
+            logger.info(
+                f"[Prescaler] Skipped {event.resource_name}: increase {increase_pct:.1f}% < {self._threshold_pct}%"
             )
             return
 
         if self._is_in_cooldown(deployment):
             self._skipped_cooldown += 1
-            logger.debug(f"[Prescaler] Skipped: {deployment} in cooldown")
+            logger.info(f"[Prescaler] Skipped {deployment}: in cooldown")
             return
 
         # ── Compute recommendation ────────────────────────────────────────────
@@ -411,9 +427,9 @@ class Prescaler:
         current_replicas = await self._get_current_replicas(deployment, namespace)
 
         if recommended_replicas <= current_replicas:
-            logger.debug(
-                f"[Prescaler] No action: already at {current_replicas} replicas "
-                f"(recommended same)"
+            logger.info(
+                f"[Prescaler] Skipped {deployment}: already at {current_replicas} replicas "
+                f"(recommended={recommended_replicas}, predicted_rps={predicted_rps:.0f})"
             )
             return
 

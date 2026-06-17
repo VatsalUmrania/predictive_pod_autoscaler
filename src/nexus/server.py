@@ -99,8 +99,42 @@ class NexusServer:
         prescaler = Prescaler(nats_client=nats)
         await prescaler.subscribe_to_ppa_predictions()
 
-        # ── Outcome tracker
+        # ── Outcome tracker — subscribe to ppa.predictions.* to close the loop
         outcome_tracker = PpaOutcomeTracker(nats_client=nats)
+
+        async def _outcome_tracker_handler(data: dict, subject: str) -> None:
+            """Route raw ppa.predictions.* events into the OutcomeTracker."""
+            import re
+            def _parse_horizon(raw) -> int:
+                if isinstance(raw, int):
+                    return raw
+                m = re.search(r'(\d+)m$', str(raw))
+                return int(m.group(1)) if m else 10
+
+            try:
+                parts = subject.split(".")
+                deployment = parts[-1] if len(parts) > 2 else "unknown"
+                await outcome_tracker.on_prediction(
+                    deployment      = data.get("deployment", deployment),
+                    namespace       = data.get("namespace", "default"),
+                    predicted_rps   = float(data.get("predicted_rps", 0)),
+                    current_rps     = float(data.get("current_rps", 0)),
+                    confidence      = float(data.get("confidence", 0)),
+                    horizon_minutes = _parse_horizon(data.get("horizon_minutes", 10)),
+                    model_version   = data.get("model_version", "unknown"),
+                    raw_features    = data.get("raw_features", {}),
+                    event_timestamp = data.get("timestamp", ""),
+                )
+            except Exception as exc:
+                import logging as _log
+                _log.getLogger(__name__).warning(f"[OutcomeTracker] handler error: {exc}")
+
+        await nats.subscribe_raw(
+            "ppa.predictions.>",
+            handler=_outcome_tracker_handler,
+            durable_name="nexus-outcome-tracker",
+            stream_name="PPA_PREDICTIONS",
+        )
         # NOTE: do NOT call outcome_tracker.start() here; see docstring above.
 
         # ── Reasoning components ──────────────────────────────────────────────
@@ -145,7 +179,7 @@ class NexusServer:
         notifier.start_background(nats)  # returns None; _listen loop is internal
 
         # ── Agent manager ────────────────────────────────────────────────────
-        agent_manager = AgentManager(nats_client=nats)
+        agent_manager = AgentManager(nats_client=nats, prometheus_url=prometheus_url)
 
         # ── Pre-populate NexusContext so status_api lifespan skips self-init ───
         context.orchestrator = orchestrator

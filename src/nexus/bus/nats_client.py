@@ -43,14 +43,14 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────────────
 
 NEXUS_STREAM    = "NEXUS_INCIDENTS"
-NEXUS_SUBJECT   = "nexus.incidents"          # Base subject prefix
-NEXUS_WILDCARD  = f"{NEXUS_SUBJECT}.>"      # Matches all agent/signal combos
-PPA_PREDICTIONS_SUBJECT = "ppa.predictions.>"  # Covers all PPA prediction events
+NEXUS_SUBJECT   = "nexus.incidents"     # Subject prefix for incident events  (used by subscribe())
+NEXUS_SUBJECTS  = "nexus.>"             # Subject wildcard for ALL nexus.* events (stream bindings)
+PPA_PREDICTIONS_SUBJECT = "ppa.predictions.>"   # PPA prediction events
 
 # JetStream stream config: retain 24h of messages, max 50MB
 _STREAM_CONFIG = StreamConfig(
     name=NEXUS_STREAM,
-    subjects=[NEXUS_WILDCARD, PPA_PREDICTIONS_SUBJECT],
+    subjects=[NEXUS_SUBJECTS, PPA_PREDICTIONS_SUBJECT],
     retention=RetentionPolicy.LIMITS,
     storage=StorageType.MEMORY,     # Use FILE in production
     max_age=86_400,                  # 24 hours in seconds
@@ -124,7 +124,7 @@ class NATSClient:
     async def _ensure_stream(self) -> None:
         """Create the NEXUS_INCIDENTS stream if it does not already exist."""
         try:
-            await self._js.find_stream(NEXUS_WILDCARD)
+            await self._js.find_stream(NEXUS_STREAM)
             logger.debug(f"[NATS] Stream '{NEXUS_STREAM}' already exists")
         except Exception:
             try:
@@ -220,6 +220,7 @@ class NATSClient:
         subject_pattern: str,
         handler: RawHandlerType,
         durable_name: str | None = None,
+        stream_name: str | None = None,
     ) -> None:
         """
         Subscribe to raw-dict NATS subjects (non-IncidentEvent payloads).
@@ -230,11 +231,15 @@ class NATSClient:
                              ``ppa.predictions.>``
             handler:         Async callback receiving ``(payload: dict, subject: str)``.
             durable_name:    JetStream durable consumer name.
+            stream_name:     Explicit JetStream stream to bind to.
+                             Defaults to NEXUS_INCIDENTS when not provided.
+                             Pass ``'PPA_PREDICTIONS'`` for ppa.predictions.* subjects.
         """
         if not self._js:
             raise RuntimeError("NATSClient not connected.")
 
-        logger.info(f"[NATS] Subscribing to raw pattern '{subject_pattern}' durable={durable_name}")
+        resolved_stream = stream_name or NEXUS_STREAM
+        logger.info(f"[NATS] Subscribing to raw pattern '{subject_pattern}' durable={durable_name} stream={resolved_stream}")
 
         async def _raw_handler(msg):
             try:
@@ -246,7 +251,7 @@ class NATSClient:
                 logger.error(f"[NATS] Raw handler error on {msg.subject}: {exc}", exc_info=True)
                 await msg.nak()
 
-        sub_kwargs: dict = {}
+        sub_kwargs: dict = {"stream": resolved_stream}
         if durable_name:
             sub_kwargs["durable"] = durable_name
 

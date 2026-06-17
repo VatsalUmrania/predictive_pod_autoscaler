@@ -23,10 +23,10 @@ class AgentManager:
     All agents share the same NATSClient (single JetStream connection).
     """
 
-    def __init__(self, nats_client) -> None:
+    def __init__(self, nats_client, prometheus_url: str | None = None) -> None:
         self.nats_client = nats_client
         self.agents: list[BaseAgent] = [
-            MetricsAgent(nats_client),
+            MetricsAgent(nats_client, prometheus_url=prometheus_url),
             K8sAgent(nats_client),
             DBAgent(nats_client, adapters=[]),
             NginxAgent(nats_client),

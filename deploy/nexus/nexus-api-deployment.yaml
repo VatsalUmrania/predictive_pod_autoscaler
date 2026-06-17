@@ -18,6 +18,59 @@ metadata:
     app.kubernetes.io/name: nexus
     app.kubernetes.io/component: self-healing
 ---
+# ServiceAccount for nexus-api pods
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nexus-api
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: nexus-api
+    app.kubernetes.io/component: self-healing
+---
+# ClusterRole: read-only access to cluster resources needed by NEXUS agents
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nexus-api
+  labels:
+    app.kubernetes.io/name: nexus-api
+    app.kubernetes.io/component: self-healing
+rules:
+  # K8sAgent: list/watch pods, nodes, events
+  - apiGroups: [""]
+    resources: ["pods", "nodes", "events", "services", "endpoints", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  # K8sAgent: read deployments/replicasets for scaling context
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+  # Prescaler autonomous mode: scale deployments
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["get", "update", "patch"]
+  # HPA awareness
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+---
+# Bind the ClusterRole to the nexus-api ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nexus-api
+  labels:
+    app.kubernetes.io/name: nexus-api
+    app.kubernetes.io/component: self-healing
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nexus-api
+subjects:
+  - kind: ServiceAccount
+    name: nexus-api
+    namespace: nexus
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -37,6 +90,7 @@ spec:
       labels:
         app: nexus-api
     spec:
+      serviceAccountName: nexus-api
       containers:
         - name: nexus-api
           image: ghcr.io/vatsalumrania/nexus-api:latest
@@ -57,6 +111,9 @@ spec:
               value: /data/nexus_knowledge.db
             - name: NEXUS_LOG_LEVEL
               value: info
+            # Prometheus — kube-prometheus-stack service in monitoring namespace
+            - name: PROMETHEUS_URL
+              value: "http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090"
             # Optional: mount via Secret named "nexus-secrets" with key "gemini-api-key"
             # - name: NEXUS_GEMINI_API_KEY
             #   valueFrom:

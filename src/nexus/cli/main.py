@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 
 
 @click.group()
-@click.version_option(package_name="nexus")
+@click.version_option(package_name="predictive_pod_autoscaler")
 def cli() -> None:
     """NEXUS self-healing infrastructure CLI."""
     pass
