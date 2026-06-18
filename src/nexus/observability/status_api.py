@@ -109,12 +109,28 @@ context = NexusContext()
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Initialize async resources (TokenStore, NATS, PPA OutcomeTracker) on startup."""
+    """Initialize async resources on startup.
+
+    Skips self-init when NexusContext fields are already populated by NexusServer,
+    to avoid duplicate NATS connections and parallel polling loops.
+    """
     import logging
     import os
     _log = logging.getLogger(__name__)
 
-    # ── TokenStore ─────────────────────────────────────────────────────────────
+    # Globals written by both paths — declare at top to satisfy Python's scoping rules
+    global _ppa_outcome_tracker, _nats_client
+
+    # ── Skip self-init: NexusServer already owns all components ─────────────────
+    if context.orchestrator is not None:
+        _log.info("[StatusAPI] NexusContext pre-populated — skipping self-init")
+        # Wire module-level tracker so /ppa/decisions and /ppa/stats work
+        _ppa_outcome_tracker = context.ppa_outcome_tracker
+        _include_integration_routers(app)
+        yield
+        return
+
+    # ── Self-init path (standalone status_api runs only) ─────────────────────
     try:
         from nexus.integration.token_store import get_token_store
         store = get_token_store()
@@ -123,7 +139,6 @@ async def _lifespan(app: FastAPI):
         _log.warning(f"[StatusAPI] TokenStore init skipped: {exc}")
 
     # ── NATS (required for SDK events and PPA outcome tracking) ─────────────────
-    global _nats_client
     try:
         from nexus.bus.nats_client import NATSClient
         _nats_url = os.environ.get("NATS_URL", "nats://localhost:4222")
@@ -135,19 +150,28 @@ async def _lifespan(app: FastAPI):
         _nats_client = None
 
     # ── PPA Outcome Tracker ────────────────────────────────────────────────────
-    global _ppa_outcome_tracker
     _ppa_outcome_tracker = None
     if _nats_client:
         try:
             from nexus.learning.ppa_outcome_tracker import PpaOutcomeTracker
             _ppa_outcome_tracker = PpaOutcomeTracker(nats_client=_nats_client)
             await _ppa_outcome_tracker.start()
-            # Subscribe to PPA prediction events
-            await _nats_client.subscribe(
-                "ppa.predictions.*",
-                cb=_on_ppa_prediction,
+            # Subscribe to PPA prediction events (raw JSON — not IncidentEvent)
+            await _nats_client.subscribe_raw(
+                "ppa.predictions.>",
+                handler=_on_ppa_prediction,
+                stream_name="PPA_PREDICTIONS",
             )
             _log.info("[StatusAPI] ✅ PPA OutcomeTracker started")
+
+            # ── Prescaler (ppa.predictions → pre-scale decision engine) ─────────
+            try:
+                from nexus.predictive.prescaler import Prescaler
+                context.prescaler = Prescaler(nats_client=_nats_client)
+                await context.prescaler.subscribe_to_ppa_predictions()
+                _log.info("[StatusAPI] ✅ Prescaler subscribed to ppa.predictions.*")
+            except Exception as exc:
+                _log.warning(f"[StatusAPI] ⚠️  Prescaler init failed ({exc}) — pre-scale decisions disabled")
         except Exception as exc:
             _log.warning(f"[StatusAPI] ⚠️  PPA OutcomeTracker init failed ({exc})")
 
@@ -171,15 +195,16 @@ async def _lifespan(app: FastAPI):
 _ppa_outcome_tracker = None
 
 
-async def _on_ppa_prediction(msg: Any) -> None:
-    """Handle incoming ppa.predictions.* events — delegate to OutcomeTracker."""
+async def _on_ppa_prediction(data: dict, subject: str) -> None:
+    """Handle incoming ppa.predictions.* events — delegate to OutcomeTracker.
+
+    Called by subscribe_raw() with already-decoded JSON dict + subject string.
+    Subject format: ppa.predictions.<deployment>
+    """
     if _ppa_outcome_tracker is None:
         return
     try:
-        import json
-        data = json.loads(msg.data.decode())
-        # Subject format: ppa.predictions.<deployment>
-        subject_parts = msg.subject.split(".")
+        subject_parts = subject.split(".")
         deployment = subject_parts[-1] if len(subject_parts) > 2 else "unknown"
         await _ppa_outcome_tracker.on_prediction(
             deployment        = deployment,

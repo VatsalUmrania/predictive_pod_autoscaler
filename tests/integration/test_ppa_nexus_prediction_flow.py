@@ -19,17 +19,10 @@ Component units (covered by unit tests):
 from __future__ import annotations
 
 import json as _json
-import sys
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-
-# Ensure src/ is on path for package imports
-_ROOT = Path(__file__).resolve().parents[2]
-if str(_ROOT / "src") not in sys.path:
-    sys.path.insert(0, str(_ROOT / "src"))
 
 from nexus.bus.incident_event import IncidentEvent
 from nexus.learning.feedback_loop import FeedbackLoop

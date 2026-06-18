@@ -169,8 +169,8 @@ class RunbookLibrary:
             - type: restart_pod
     """
 
-    def __init__(self, runbook_dir: Path):
-        self._dir = runbook_dir
+    def __init__(self, runbook_dir: str | Path):
+        self._dir = Path(runbook_dir)
         self._runbooks: dict[str, Runbook] = {}
         self._load_all()
 

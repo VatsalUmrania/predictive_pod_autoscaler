@@ -43,13 +43,14 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────────────
 
 NEXUS_STREAM    = "NEXUS_INCIDENTS"
-NEXUS_SUBJECT   = "nexus.incidents"          # Base subject prefix
-NEXUS_WILDCARD  = f"{NEXUS_SUBJECT}.>"      # Matches all agent/signal combos
+NEXUS_SUBJECT   = "nexus.incidents"     # Subject prefix for incident events  (used by subscribe())
+NEXUS_SUBJECTS  = "nexus.>"             # Subject wildcard for ALL nexus.* events (stream bindings)
+PPA_PREDICTIONS_SUBJECT = "ppa.predictions.>"   # PPA prediction events
 
 # JetStream stream config: retain 24h of messages, max 50MB
 _STREAM_CONFIG = StreamConfig(
     name=NEXUS_STREAM,
-    subjects=[NEXUS_WILDCARD],
+    subjects=[NEXUS_SUBJECTS, PPA_PREDICTIONS_SUBJECT],
     retention=RetentionPolicy.LIMITS,
     storage=StorageType.MEMORY,     # Use FILE in production
     max_age=86_400,                  # 24 hours in seconds
@@ -123,7 +124,7 @@ class NATSClient:
     async def _ensure_stream(self) -> None:
         """Create the NEXUS_INCIDENTS stream if it does not already exist."""
         try:
-            await self._js.find_stream(NEXUS_WILDCARD)
+            await self._js.find_stream(NEXUS_STREAM)
             logger.debug(f"[NATS] Stream '{NEXUS_STREAM}' already exists")
         except Exception:
             try:
@@ -191,25 +192,31 @@ class NATSClient:
 
         logger.info(f"[NATS] Subscribing to '{subject}' durable={durable_name}")
 
-        async def _raw_handler(msg):
-            try:
-                event = IncidentEvent.from_nats_payload(msg.data)
-                await handler(event)
-                await msg.ack()
-            except Exception as exc:
-                logger.error(f"[NATS] Handler error on subject '{msg.subject}': {exc}", exc_info=True)
-                await msg.nak()
-
         sub_kwargs = {"stream": NEXUS_STREAM}
         if durable_name:
             sub_kwargs["durable"] = durable_name
         if queue_group:
             sub_kwargs["queue"] = queue_group
 
-        sub = await self._js.subscribe(subject, cb=_raw_handler, **sub_kwargs)
+        sub = await self._js.subscribe(subject, **sub_kwargs)
 
-        # Keep subscription task alive
-        task = asyncio.create_task(self._keep_alive(sub))
+        async def _run_subscription():
+            try:
+                async for msg in sub.messages:
+                    try:
+                        event = IncidentEvent.from_nats_payload(msg.data)
+                        await handler(event)
+                        await msg.ack()
+                    except Exception as exc:
+                        logger.error(
+                            f"[NATS] Handler error on subject '{msg.subject}': {exc}",
+                            exc_info=True,
+                        )
+                        await msg.nak()
+            except asyncio.CancelledError:
+                await sub.unsubscribe()
+
+        task = asyncio.create_task(_run_subscription())
         self._subscribers.append(task)
 
     RawHandlerType = Callable[[dict, str], Awaitable[None]]  # (payload_dict, subject)
@@ -219,6 +226,7 @@ class NATSClient:
         subject_pattern: str,
         handler: RawHandlerType,
         durable_name: str | None = None,
+        stream_name: str | None = None,
     ) -> None:
         """
         Subscribe to raw-dict NATS subjects (non-IncidentEvent payloads).
@@ -229,38 +237,44 @@ class NATSClient:
                              ``ppa.predictions.>``
             handler:         Async callback receiving ``(payload: dict, subject: str)``.
             durable_name:    JetStream durable consumer name.
+            stream_name:     Explicit JetStream stream to bind to.
+                             Defaults to NEXUS_INCIDENTS when not provided.
+                             Pass ``'PPA_PREDICTIONS'`` for ppa.predictions.* subjects.
         """
         if not self._js:
             raise RuntimeError("NATSClient not connected.")
 
-        logger.info(f"[NATS] Subscribing to raw pattern '{subject_pattern}' durable={durable_name}")
+        resolved_stream = stream_name or NEXUS_STREAM
+        logger.info(f"[NATS] Subscribing to raw pattern '{subject_pattern}' durable={durable_name} stream={resolved_stream}")
 
-        async def _raw_handler(msg):
-            try:
-                import json
-                data = json.loads(msg.data.decode("utf-8"))
-                await handler(data, msg.subject)
-                await msg.ack()
-            except Exception as exc:
-                logger.error(f"[NATS] Raw handler error on {msg.subject}: {exc}", exc_info=True)
-                await msg.nak()
-
-        sub_kwargs: dict = {}
+        sub_kwargs: dict = {"stream": resolved_stream}
         if durable_name:
             sub_kwargs["durable"] = durable_name
 
-        sub = await self._js.subscribe(subject_pattern, cb=_raw_handler, **sub_kwargs)
-        task = asyncio.create_task(self._keep_alive(sub))
+        sub = await self._js.subscribe(subject_pattern, **sub_kwargs)
+
+        async def _run_raw_subscription():
+            try:
+                async for msg in sub.messages:
+                    try:
+                        import json
+                        data = json.loads(msg.data.decode("utf-8"))
+                        await handler(data, msg.subject)
+                        await msg.ack()
+                    except Exception as exc:
+                        logger.error(
+                            f"[NATS] Raw handler error on {msg.subject}: {exc}",
+                            exc_info=True,
+                        )
+                        await msg.nak()
+            except asyncio.CancelledError:
+                await sub.unsubscribe()
+
+        task = asyncio.create_task(_run_raw_subscription())
         self._subscribers.append(task)
 
-    @staticmethod
-    async def _keep_alive(sub) -> None:
-        """Keeps the subscription task alive indefinitely."""
-        try:
-            while True:
-                await asyncio.sleep(60)
-        except asyncio.CancelledError:
-            await sub.unsubscribe()
+    # _keep_alive removed — subscriptions now use async-iterator tasks directly.
+    # (nats-py >= 2.7 dropped the cb= keyword from js.subscribe)
 
     # ── Error callbacks ───────────────────────────────────────────────────────
 

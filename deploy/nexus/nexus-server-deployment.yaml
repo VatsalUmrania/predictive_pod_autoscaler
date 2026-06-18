@@ -1,0 +1,167 @@
+---
+# NexusServer — the NEXUS reasoning-plane entry point.
+# Runs alongside PPA operator and the existing nexus-api deployment.
+# Default mode is shadow (no K8s mutations, all decisions logged).
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nexus-server
+  namespace: default
+data:
+  LOG_LEVEL: "INFO"
+  NEXUS_MODE: "shadow"   # shadow | advisory | autonomous
+  PROMETHEUS_URL: "http://prometheus:9090"
+  NEXUS_RUNBOOK_DIR: "/runbooks"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-server
+  namespace: default
+  labels:
+    app: nexus-server
+    component: reasoning-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nexus-server
+  template:
+    metadata:
+      labels:
+        app: nexus-server
+        component: reasoning-plane
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: nexus-server
+      containers:
+        - name: nexus-server
+          image: nexus:latest           # replace with real image tag in CI
+          imagePullPolicy: IfNotPresent
+          args:
+            - server
+            - start
+            - --nats-url=nats://nats.nexus.svc.cluster.local:4222
+            - --port=8080
+            - --prometheus-url=http://prometheus:9090
+            - --log-level=$(LOG_LEVEL)
+          env:
+            - name: NATS_URL
+              value: "nats://nats.nexus.svc.cluster.local:4222"
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-server
+                  key: LOG_LEVEL
+            - name: NEXUS_MODE
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-server
+                  key: NEXUS_MODE
+            - name: PROMETHEUS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: nexus-server
+                  key: PROMETHEUS_URL
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  # create via: kubectl create secret generic nexus-secrets \
+                  #   --from-literal=GEMINI_API_KEY=your-key
+                  name: nexus-secrets
+                  key: gemini-api-key
+                  optional: true
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          volumeMounts:
+            - name: runbooks
+              mountPath: /runbooks
+              readOnly: true
+      volumes:
+        - name: runbooks
+          configMap:
+            # create separately; maps runbook YAML files
+            name: nexus-runbooks
+      terminationGracePeriodSeconds: 30
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus-server
+  namespace: default
+  labels:
+    app: nexus-server
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+  selector:
+    app: nexus-server
+
+---
+# ServiceAccount (used for K8s API calls in autonomous mode — harmless in shadow mode)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nexus-server
+  namespace: default
+
+---
+# RBAC: read-only access to pods/deployments in autonomous mode.
+# Scope to specific deployments/services as needed for your environment.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nexus-server
+  namespace: default
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "services"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nexus-server
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nexus-server
+subjects:
+  - kind: ServiceAccount
+    name: nexus-server
+    namespace: default

@@ -133,27 +133,30 @@ class MetricsAgent(BaseAgent):
     NEXUS_PROMETHEUS_URL in production.
     """
 
-    # Default PromQL queries
+    # Default PromQL queries — tuned for kube-prometheus-stack
     QUERIES: dict[str, str] = {
+        # Node-level CPU: avg idle → invert to get utilization %
         "cpu_utilization_pct": (
-            'avg(rate(container_cpu_usage_seconds_total{container!=""}[2m])) * 100'
+            '100 - (avg(rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100)'
         ),
+        # Node-level memory: 1 - available/total
         "memory_utilization_pct": (
-            'avg(container_memory_working_set_bytes{container!=""})'
-            ' / avg(container_spec_memory_limit_bytes{container!="",container_spec_memory_limit_bytes>0})'
-            ' * 100'
+            '100 * (1 - (avg(node_memory_MemAvailable_bytes) / avg(node_memory_MemTotal_bytes)))'
         ),
+        # HTTP error rate — falls back to 0 if metric absent
         "error_rate": (
-            'sum(rate(http_requests_total{status=~"5.."}[2m]))'
-            ' / sum(rate(http_requests_total[2m]))'
+            '(sum(rate(http_requests_total{status=~"5.."}[2m])) or vector(0))'
+            ' / (sum(rate(http_requests_total[2m])) > 0 or vector(1))'
         ),
+        # RPS across all services
         "rps": (
-            'sum(rate(http_requests_total[1m]))'
+            'sum(rate(http_requests_total[1m])) or vector(0)'
         ),
+        # P95 latency — falls back to 0 if metric absent
         "latency_p95_ms": (
-            'histogram_quantile(0.95,'
+            '(histogram_quantile(0.95,'
             '  sum(rate(http_request_duration_seconds_bucket[2m])) by (le)'
-            ') * 1000'
+            ') or vector(0)) * 1000'
         ),
     }
 
@@ -346,6 +349,12 @@ class MetricsAgent(BaseAgent):
         return events
 
     # ── BaseAgent interface ───────────────────────────────────────────────────
+
+    async def on_start(self) -> None:
+        pass
+
+    async def on_stop(self) -> None:
+        pass
 
     async def sense(self) -> list[IncidentEvent]:
         metrics = await self._query_all()

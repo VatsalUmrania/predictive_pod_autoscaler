@@ -507,6 +507,9 @@ class DBAgent(BaseAgent):
 
     # ── BaseAgent interface ───────────────────────────────────────────────────
 
+    async def on_start(self) -> None:
+        pass
+
     async def sense(self) -> list[IncidentEvent]:
         results = await asyncio.gather(
             *[self._check_adapter(adapter) for adapter in self.adapters],

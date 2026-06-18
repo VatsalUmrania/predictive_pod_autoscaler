@@ -516,6 +516,9 @@ class GitAgent(BaseAgent):
         self._last_sha = self._head_sha()
         logger.info(f"[GitAgent] Watching {self.repo_path} | HEAD={self._last_sha}")
 
+    async def on_stop(self) -> None:
+        pass
+
     async def sense(self) -> list[IncidentEvent]:
         current = self._head_sha()
         if current is None:

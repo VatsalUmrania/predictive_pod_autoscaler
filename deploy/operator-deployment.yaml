@@ -58,11 +58,9 @@ spec:
               value: "2"
             - name: PPA_PROM_FAILURE_THRESHOLD
               value: "10"
-            # ── NEXUS NATS integration ──────────────────────────────────────────
-            # Override with host.minikube.internal if demo NATS runs in Docker
-            # on the same machine (minikube can reach the host via this alias).
+            # NATS — Kubernetes service DNS inside the cluster (no host.minikube.internal).
             - name: NATS_URL
-              value: "nats://host.minikube.internal:4222"
+              value: "nats://nats.nexus.svc.cluster.local:4222"
           volumeMounts:
             - name: models
               mountPath: /models
