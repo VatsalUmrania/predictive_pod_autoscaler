@@ -94,11 +94,40 @@ class FeedbackLoop:
         """Start the background polling loop (non-blocking)."""
         self._start_time = time.monotonic()
         self._task = asyncio.create_task(self._run(), name="nexus-feedback-loop")
+        # Subscribe to action events to record real signal_type → runbook patterns
+        # (the audit trail only stores runbook_id, so the previous reverse-infer
+        # mapping only knew 5 runbooks and dropped every other pattern on the floor.)
+        if self._nats is not None:
+            try:
+                await self._nats.subscribe_raw(
+                    subject_pattern = "nexus.actions.*",
+                    handler          = self._on_action_event,
+                )
+                logger.info("[FeedbackLoop] Subscribed to nexus.actions.* for pattern recording")
+            except Exception as exc:
+                logger.warning(f"[FeedbackLoop] Pattern subscription failed (non-fatal): {exc}")
         logger.info(
             f"[FeedbackLoop] Started — "
             f"interval={self._interval}s "
             f"window={self._window_days}d"
         )
+
+    async def _on_action_event(self, data: dict, subject: str) -> None:
+        """Record a real signal_type → runbook_id pattern from a healing action."""
+        try:
+            signal_type = data.get("signal_type")
+            runbook_id  = data.get("runbook_id")
+            outcome     = data.get("outcome", "")
+            if not signal_type or not runbook_id:
+                return
+            success = outcome in ("success", "rolled_back")
+            await self._kb.record_pattern(
+                signal_types = {signal_type},
+                runbook_id   = runbook_id,
+                success      = success,
+            )
+        except Exception as exc:
+            logger.debug(f"[FeedbackLoop] action pattern error: {exc}")
 
     async def stop(self) -> None:
         """Graceful shutdown."""
@@ -205,24 +234,14 @@ class FeedbackLoop:
         )
 
     async def _update_signal_patterns(self) -> None:
+        """No-op placeholder kept for backwards compatibility.
+
+        Real signal_type → runbook_id patterns are now recorded inline by
+        :meth:`_on_action_event` (subscribed to nexus.actions.* in start()).
+        The OutcomeRecord table only stores runbook_id so the audit-trail
+        reverse-infer approach could never be exhaustive.
         """
-        Read recent outcomes and record signal_type patterns in the KB.
-        Maps: incident signal_type combination → runbook_id + outcome.
-        """
-        recent = await self._store.get_recent_outcomes(limit=50)
-        for record in recent:
-            if not record.is_completed:
-                continue
-            # We only have the runbook_id here; signal types come from the
-            # incident event. In Phase 7 we'll store correlation_id links.
-            # For now, derive a synthetic single-signal pattern from runbook name.
-            inferred_signals = _infer_signals_from_runbook(record.runbook_id)
-            if inferred_signals:
-                await self._kb.record_pattern(
-                    signal_types = inferred_signals,
-                    runbook_id   = record.runbook_id,
-                    success      = record.is_success,
-                )
+        return
 
     async def _update_ppa_outcomes(self) -> None:
         """
@@ -291,25 +310,6 @@ class FeedbackLoop:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────────────────────────────────────
-
-def _infer_signals_from_runbook(runbook_id: str) -> set | None:
-    """
-    Infer the likely triggering signal types from a runbook ID.
-    Used for Phase 6 pattern recording until Phase 7 links correlation_ids.
-    """
-    mapping = {
-        "runbook_pod_crashloop_v1":                {"pod_crashloop"},
-        "runbook_high_error_rate_post_deploy_v1":  {"high_error_rate", "deploy_event"},
-        "runbook_missing_env_key_v1":              {"env_contract_violation"},
-        "runbook_dns_resolution_failure_v1":       {"dns_resolution_failure"},
-        "runbook_db_connection_exhaustion_v1":     {"db_connection_exhaustion"},
-    }
-    return mapping.get(runbook_id)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Factory
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -319,6 +319,8 @@ async def build_feedback_loop(
     ppa_outcome_tracker:   PpaOutcomeTracker | None = None,
     audit_db_path:         str | None = None,
     knowledge_db_path:     str | None = None,
+    outcome_store:         OutcomeStore | None = None,
+    knowledge_base:        KnowledgeBase | None = None,
     interval_s:            float = 300.0,
 ) -> FeedbackLoop:
     """
@@ -328,18 +330,30 @@ async def build_feedback_loop(
         confidence_scorer:   Phase 4 ConfidenceScorer (will receive historical boosts).
         nats_client:        Optional NATSClient for publishing learning updates.
         ppa_outcome_tracker: Optional PpaOutcomeTracker for PPA prediction tracking.
-        audit_db_path:      Override for AuditTrail DB path.
-        knowledge_db_path:  Override for KnowledgeBase DB path.
+        audit_db_path:      Override for AuditTrail DB path (used only when
+                            outcome_store is not provided).
+        knowledge_db_path:  Override for KnowledgeBase DB path (used only when
+                            knowledge_base is not provided).
+        outcome_store:      Provide to share an already-connected OutcomeStore.
+                            Avoids opening two SQLite handles to the same file when
+                            the caller needs the store on NexusContext too.
+        knowledge_base:     Provide to share an already-initialized KnowledgeBase.
         interval_s:         Polling interval (default 300s / 5 min).
 
     Returns:
         Initialized FeedbackLoop (not yet started — call loop.start()).
     """
-    store = OutcomeStore(db_path=audit_db_path)
-    await store.connect()
+    if outcome_store is None:
+        store = OutcomeStore(db_path=audit_db_path)
+        await store.connect()
+    else:
+        store = outcome_store
 
-    kb = KnowledgeBase(db_path=knowledge_db_path)
-    await kb.initialize()
+    if knowledge_base is None:
+        kb = KnowledgeBase(db_path=knowledge_db_path)
+        await kb.initialize()
+    else:
+        kb = knowledge_base
 
     return FeedbackLoop(
         outcome_store     = store,

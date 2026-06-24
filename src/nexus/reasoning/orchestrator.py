@@ -104,7 +104,10 @@ class NexusOrchestrator:
         await self.nats.subscribe(
             handler      = self._on_event,
             agent_filter = ">",                             # All agents
-            durable_name = "nexus-orchestrator-v4",
+            # No durable_name: ephemeral consumer per-pod.
+            # Durable push consumers are exclusive (one active subscriber) —
+            # during a rolling deploy the new pod would collide with the old pod's
+            # consumer and lose or duplicate messages.
         )
 
         self._flush_task = asyncio.create_task(

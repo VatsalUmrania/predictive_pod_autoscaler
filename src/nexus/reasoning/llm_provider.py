@@ -371,11 +371,19 @@ def get_llm_provider(
 
 
 def _autodetect_provider() -> str:
-    """Return provider name based on which API key is set in the environment."""
-    if os.getenv("NEXUS_GEMINI_API_KEY") or os.getenv("NEXUS_LLM_API_KEY"):
-        return "gemini"
+    """Return provider name based on which API key is set in the environment.
+
+    Provider-specific keys win over the generic NEXUS_LLM_API_KEY. This way,
+    setting both ``NEXUS_LLM_API_KEY`` and ``OPENAI_API_KEY`` will pick OpenAI
+    rather than silently defaulting to Gemini.
+    """
     if os.getenv("OPENAI_API_KEY"):
         return "openai"
     if os.getenv("ANTHROPIC_API_KEY"):
         return "anthropic"
+    if os.getenv("NEXUS_GEMINI_API_KEY"):
+        return "gemini"
+    if os.getenv("NEXUS_LLM_API_KEY"):
+        # Generic key alone — Gemini is the historical default
+        return "gemini"
     return "none"

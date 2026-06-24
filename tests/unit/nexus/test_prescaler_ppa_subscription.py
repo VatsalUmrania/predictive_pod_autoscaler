@@ -37,11 +37,18 @@ class TestSubscribeToPpaPredictions:
         """Build a Prescaler with a spy on subscribe_raw."""
         stored: dict = {}
 
-        async def spy_subscribe_raw(subject_pattern, *, handler, durable_name=None):
+        async def spy_subscribe_raw(
+            subject_pattern,
+            *,
+            handler,
+            durable_name=None,
+            stream_name=None,
+        ):
             stored.update({
                 "subject_pattern": subject_pattern,
                 "handler": handler,
                 "durable_name": durable_name,
+                "stream_name": stream_name,
             })
 
         mock_nats = MagicMock()
@@ -55,7 +62,11 @@ class TestSubscribeToPpaPredictions:
         scaler, stored = await self._make_scaler()
         await scaler.subscribe_to_ppa_predictions()
         assert stored["subject_pattern"] == "ppa.predictions.>"
-        assert stored["durable_name"] == "prescaler-ppa-predictions"
+        # Ephemeral consumer: no durable_name (rolling deploys must NOT collide
+        # on the JetStream exclusive push-consumer lock). stream_name pins the
+        # subscription to the PPA_PREDICTIONS JetStream stream.
+        assert stored["durable_name"] is None
+        assert stored["stream_name"] == "PPA_PREDICTIONS"
         assert callable(stored["handler"])
 
     @pytest.mark.asyncio

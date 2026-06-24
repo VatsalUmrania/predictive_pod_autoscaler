@@ -81,9 +81,9 @@ def server() -> None:
 )
 @click.option(
     "--log-level",
-    default=lambda: os.environ.get("LOG_LEVEL", "INFO"),
+    default=lambda: os.environ.get("NEXUS_LOG_LEVEL") or os.environ.get("LOG_LEVEL", "INFO"),
     type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"], case_sensitive=False),
-    help="Logging level",
+    help="Logging level (NEXUS_LOG_LEVEL env var overrides)",
 )
 def start(
     nats_url: str,

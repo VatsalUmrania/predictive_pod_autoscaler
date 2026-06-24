@@ -8,13 +8,15 @@ load balancer, git repo, Kubernetes pods, metrics, database, and network.
 Package structure:
     nexus/
     ├── bus/           Normalized incident event schema + NATS JetStream client
-    ├── telemetry/     OTel-based log/metric/trace shipping pipelines
+    ├── cli/           Click-based ``nexus server start`` operator entry point
     ├── agents/        Domain-specific observability + first-line action agents
     ├── governance/    Runbook executor, audit trail, OPA policy engine, action ladder
-    ├── orchestrator/  LLM-backed RCA + healing decision engine (Phase 4)
-    ├── kb/            Temporal knowledge graph + incident memory (Phase 4)
-    ├── model/         GRU anomaly detector + DBTrafficCorrelator (Phase 5)
-    └── learning/      Outcome labeling + runbook quality scoring (Phase 6)
+    ├── integration/   Slack notifier, dashboard, SDK ingestion, selfheal config
+    ├── learning/      Outcome labeling, knowledge base, feedback loop, PPA tracker
+    ├── observability/ Status API (FastAPI) + Prometheus metrics
+    ├── predictive/    Pre-scaler + anomaly detector + DB traffic correlator
+    ├── reasoning/     LLM-backed RCA, event correlator, orchestrator
+    └── sdk/           Client SDKs (python + js)
 """
 
 __version__ = "0.1.0"

@@ -39,6 +39,7 @@ Configuration (environment variables):
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import uuid
@@ -209,46 +210,6 @@ class Prescaler:
         target_rps_per_replica: Used to compute replica target (default: 100).
     """
 
-    # def __init__(
-    #     self,
-    #     nats_client:            NATSClient,
-    #     action_ladder:          ActionLadder | None = None,
-    #     mode:                   PrescaleMode = PrescaleMode(
-    #         os.getenv("NEXUS_PRESCALE_MODE", "shadow")
-    #     ),
-    #     max_replicas:           int   = int(os.getenv("NEXUS_PRESCALE_MAX_REPLICAS", "20")),
-    #     min_confidence:         float = float(os.getenv("NEXUS_PRESCALE_MIN_CONFIDENCE", "0.55")),
-    #     threshold_pct:          float = float(os.getenv("NEXUS_PRESCALE_THRESHOLD_PCT", "30")),
-    #     cooldown_seconds:       float = float(os.getenv("NEXUS_PRESCALE_COOLDOWN_S", "300")),
-    #     target_rps_per_replica: float = 100.0,
-    # ):
-    #     self._nats              = nats_client
-    #     self._ladder            = action_ladder
-    #     self.mode               = mode
-    #     self._max_replicas      = max_replicas
-    #     self._min_confidence    = min_confidence
-    #     self._threshold_pct     = threshold_pct
-    #     self._cooldown          = cooldown_seconds
-    #     self._target_rps        = target_rps_per_replica
-
-    #     # Precision tracking and decision log
-    #     self._tracker           = PrecisionTracker()
-    #     self._all_decisions:    list[PrescaleDecision] = []
-    #     self._cooldowns:        dict[str, float] = {}   # deployment → mono time
-
-    #     # Stats
-    #     self._events_received   = 0
-    #     self._decisions_made    = 0
-    #     self._skipped_cooldown  = 0
-    #     self._skipped_confidence = 0
-    #     self._skipped_threshold = 0
-
-    #     logger.info(
-    #         f"[Prescaler] Started — mode={self.mode.value} "
-    #         f"threshold={self._threshold_pct}% "
-    #         f"min_confidence={self._min_confidence}"
-    #     )
-
     def __init__(
         self,
         nats_client: NATSClient,
@@ -370,7 +331,9 @@ class Prescaler:
         await self._nats.subscribe_raw(
             "ppa.predictions.>",
             handler=handler,
-            durable_name="prescaler-ppa-predictions",
+            # No durable_name: ephemeral consumer per-pod.
+            # Durable push consumers are exclusive (one subscriber only) — during
+            # a rolling deploy the new pod would collide with the old pod's consumer.
             stream_name="PPA_PREDICTIONS",
         )
         logger.info("[PreScaler] Subscribed to ppa.predictions.*")
@@ -469,6 +432,9 @@ class Prescaler:
             await self._advisory_execute(decision, event)
         elif self.mode == PrescaleMode.AUTONOMOUS:
             await self._autonomous_execute(decision, event)
+
+        # Notify downstream consumers (e.g. SlackNotifier) on nexus.prescale.*
+        await self._publish_prescale_decision(decision, event)
 
         self._set_cooldown(deployment)
 
@@ -603,6 +569,45 @@ class Prescaler:
         except Exception as exc:
             decision.outcome = "failed"
             logger.error(f"[Prescaler] [AUTONOMOUS] Scale failed: {exc}")
+
+    async def _publish_prescale_decision(
+        self,
+        decision: PrescaleDecision,
+        source_event: IncidentEvent,
+    ) -> None:
+        """Publish the finalized decision on nexus.prescale.* for Notifier/dashboard pickup.
+
+        Subject: nexus.prescale.<deployment>.<mode>
+        Payload includes outcome, replica targets, and confidence so that consumers
+        can render Slack notifications without re-reading the audit trail.
+        """
+        subject = f"nexus.prescale.{decision.deployment_name}.{self.mode.value}"
+        payload = {
+            "type":                 "prescale_decision",
+            "decision_id":          decision.decision_id,
+            "deployment":           decision.deployment_name,
+            "namespace":            decision.namespace,
+            "mode":                 self.mode.value,
+            "executed":             decision.executed,
+            "outcome":              decision.outcome,
+            "current_replicas":     decision.current_replicas,
+            "recommended_replicas": decision.recommended_replicas,
+            "current_rps":          decision.current_rps,
+            "predicted_rps":        decision.predicted_rps,
+            "horizon_minutes":      decision.horizon_minutes,
+            "confidence":           decision.confidence,
+            "db_table_trigger":     decision.db_table_trigger,
+            "incident_id":          source_event.correlation_id or source_event.event_id,
+            "timestamp":            decision.decided_at,
+        }
+        try:
+            js = getattr(self._nats, "_js", None)
+            if js is not None:
+                await js.publish(subject, json.dumps(payload).encode())
+                logger.debug(f"[Prescaler] Published prescale event to {subject}")
+        except Exception as exc:
+            # Notifications are best-effort — never fail prescaler on publish error
+            logger.debug(f"[Prescaler] prescale publish failed: {exc}")
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

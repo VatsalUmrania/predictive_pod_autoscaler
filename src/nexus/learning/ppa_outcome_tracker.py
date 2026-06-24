@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -52,11 +53,13 @@ class PpaOutcomeTracker:
         self,
         nats_client,
         batch_output_path: Path | None = None,
+        prometheus_url: str | None = None,
     ):
         self._nats: object = nats_client
         self._pending: dict[str, PendingPrediction] = {}
         self._recent_outcomes: list[dict] = []
         self._batch_out: Path = batch_output_path or Path("data/ppa_outcomes.jsonl")
+        self._prom_url: str | None = prometheus_url
         self._poll_task: asyncio.Task | None = None
 
     async def start(self) -> None:
@@ -126,13 +129,22 @@ class PpaOutcomeTracker:
         """
         Fetch current RPS for a deployment from Prometheus.
         Returns 0.0 on error (safe fallback).
+
+        Resolution order:
+            1. The URL explicitly injected at construction (NexusServer.create)
+            2. $PROMETHEUS_URL env var
+            3. ppa.config.get_prometheus_url() (legacy fallback)
         """
+        url = self._prom_url or os.environ.get("PROMETHEUS_URL")
+        if url is None:
+            try:
+                from ppa.config import get_prometheus_url
+                url = get_prometheus_url()
+            except Exception:
+                url = "http://prometheus:9090"
         try:
             from prometheus_api_client import PrometheusConnect
 
-            from ppa.config import get_prometheus_url
-
-            url = get_prometheus_url()
             prom = PrometheusConnect(url=url)
             query = (
                 f'sum(rate(nginx_ingress_requests_total'
@@ -181,10 +193,20 @@ class PpaOutcomeTracker:
             }
 
             try:
-                await self._nats.publish(
-                    f"ppa.outcomes.{pred.deployment}",
-                    outcome_event,
-                )
+                import json as _json
+                subject = f"ppa.outcomes.{pred.deployment}"
+                payload = _json.dumps(outcome_event).encode()
+                # NATSClient.publish() only accepts IncidentEvent objects.
+                # PPA outcome events are raw dicts on a non-NEXUS subject, so we
+                # publish directly via the underlying JetStream context.
+                js = getattr(self._nats, "_js", None)
+                if js is not None:
+                    await js.publish(subject, payload)
+                else:
+                    # Fallback: raw NATS core publish (no JetStream persistence)
+                    nc = getattr(self._nats, "_nc", None)
+                    if nc is not None:
+                        await nc.publish(subject, payload)
                 logger.info(
                     f"[PpaOutcomeTracker] Verdict {verdict} for {pred.deployment} "
                     f"(pred={pred.predicted_rps:.0f}, actual={actual_rps:.0f})"

@@ -54,6 +54,47 @@ def cache_policy(app_name: str, policy_dict: dict[str, Any]) -> None:
     logger.info(f"[Dashboard] Policy cached for app='{app_name}'")
 
 
+def refresh_policy_cache() -> int:
+    """Eagerly scan filesystem for selfheal.yaml files and populate _policy_cache.
+
+    Without this, downstream consumers (e.g. Notifier) read an empty cache because
+    `_policy_cache` is only populated lazily on the first dashboard HTTP request.
+    """
+    import os
+    from pathlib import Path
+
+    import yaml as _yaml
+
+    candidates = [
+        os.environ.get("NEXUS_SELFHEAL_YAML_PATH", ""),
+        "/app/selfheal.yaml",
+        "/data/selfheal.yaml",
+    ]
+
+    loaded = 0
+    for path_str in candidates:
+        if not path_str:
+            continue
+        p = Path(path_str)
+        if not p.exists():
+            continue
+        try:
+            data = _yaml.safe_load(p.read_text())
+        except Exception as exc:
+            logger.debug(f"[Dashboard] policy refresh read error at {p}: {exc}")
+            continue
+        if not isinstance(data, dict):
+            continue
+        app_name = data.get("app") or p.stem
+        _policy_cache[app_name] = data
+        loaded += 1
+        logger.info(f"[Dashboard] Pre-cached policy for app='{app_name}' from {p}")
+
+    if loaded == 0:
+        logger.debug("[Dashboard] refresh_policy_cache found no selfheal.yaml files")
+    return loaded
+
+
 # ── SQLite-backed incident store (shared across uvicorn workers) ──────────────
 # Uses a DEDICATED file (/data/dashboard_incidents.db) so the nexus-api user
 # always owns and can write it, independent of nexus_audit.db (owned by orchestrator).

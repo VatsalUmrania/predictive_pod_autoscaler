@@ -39,6 +39,7 @@ Design principles:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -84,10 +85,11 @@ class RunbookExecutor:
     def __init__(
         self,
         nats_client: NATSClient,
-        runbook_dir: Path,
         audit_trail: AuditTrail,
         action_ladder: ActionLadder,
         rollback_registry: RollbackRegistry,
+        runbook_dir: Path | None = None,
+        library: RunbookLibrary | None = None,
         prometheus_url: str = "http://prometheus:9090",
         dry_run: bool = False,
         confidence: float = 0.85,
@@ -100,8 +102,15 @@ class RunbookExecutor:
         self.dry_run          = dry_run
         self.confidence       = confidence
 
-        # RunbookLibrary — validates + indexes all YAML files
-        self.library = RunbookLibrary(runbook_dir)
+        # RunbookLibrary — optional explicit instance; otherwise construct from runbook_dir
+        if library is not None:
+            self.library = library
+        elif runbook_dir is not None:
+            self.library = RunbookLibrary(runbook_dir)
+        else:
+            raise ValueError(
+                "RunbookExecutor requires either `library` or `runbook_dir`"
+            )
         logger.info(
             f"[RunbookExecutor] Ready — "
             f"{self.library.count()} runbooks, dry_run={dry_run}"
@@ -461,6 +470,62 @@ class RunbookExecutor:
             f"outcome={outcome} target={target}"
         )
 
+        await self._publish_action_result(
+            action_id=action_id,
+            runbook=runbook,
+            event=event,
+            target=target,
+            outcome=outcome,
+            rollback_done=rollback_done,
+            action_results=action_results,
+            post_ok=post_ok,
+        )
+
+    async def _publish_action_result(
+        self,
+        *,
+        action_id: str,
+        runbook: Runbook,
+        event: IncidentEvent,
+        target: str,
+        outcome: str,
+        rollback_done: bool,
+        action_results: list[dict],
+        post_ok: bool,
+    ) -> None:
+        """Publish the final action result to nexus.actions.* for Notifier pickup.
+
+        Subject: nexus.actions.<runbook_id>.<outcome>
+        Payload mirrors RunbookExecutor result + audit row so Notifier / dashboards
+        have full context without joining to the AuditTrail.
+        """
+        subject = f"nexus.actions.{runbook.id}.{outcome}"
+        payload = {
+            "type":                 "healing_action",
+            "action_id":            action_id,
+            "runbook_id":           runbook.id,
+            "healing_level":        runbook.healing_level,
+            "target":               target,
+            "namespace":            event.namespace,
+            "resource_name":        event.resource_name,
+            "incident_id":          event.correlation_id or event.event_id,
+            "signal_type":          str(event.signal_type),
+            "outcome":              outcome,
+            "description":          runbook.description,
+            "rollback_triggered":   rollback_done,
+            "post_check_passed":    post_ok,
+            "action_results":       action_results,
+            "timestamp":            datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            js = getattr(self.nats, "_js", None)
+            if js is not None:
+                await js.publish(subject, json.dumps(payload).encode())
+                logger.debug(f"[RunbookExecutor] Published action event to {subject}")
+        except Exception as exc:
+            # Notifications are best-effort — never break healing on publish failure
+            logger.debug(f"[RunbookExecutor] action publish failed: {exc}")
+
     # ── Main event handler ────────────────────────────────────────────────────
 
     async def handle_event(self, event: IncidentEvent) -> None:
@@ -483,18 +548,10 @@ class RunbookExecutor:
             return_exceptions=True,
         )
 
-    # ── Entrypoint ────────────────────────────────────────────────────────────
-
-    async def start(self) -> None:
-        """Subscribe to NATS incident events and begin processing."""
-        logger.info("[RunbookExecutor] Starting — subscribing to all incident events")
-        await self.nats.subscribe(
-            handler       = self.handle_event,
-            agent_filter  = ">",            # Subscribe to all agents
-            durable_name  = "governance-runbook-executor",
-        )
-        logger.info("[RunbookExecutor] Listening ...")
-        await asyncio.Event().wait()  # Block until stopped
+    # NOTE: a NATS-driven ``start()`` was removed here (was previously at this
+    # location). The orchestrator is the sole NATS consumer in production and
+    # invokes ``handle_event()`` directly. Calling both paths would double-fire
+    # every runbook.
 
 
 # ──────────────────────────────────────────────────────────────────────────────

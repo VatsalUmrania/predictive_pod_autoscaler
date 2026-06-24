@@ -237,6 +237,19 @@ class Notifier:
         self._running  = True
         self._nats_client = nats_client
         self._nats_task   = asyncio.create_task(self._listen())
+        self._nats_task.add_done_callback(self._on_listen_done)
+
+    def _on_listen_done(self, task: asyncio.Task) -> None:
+        """If the background loop crashed (not cancelled), surface and restart once."""
+        if self._running and not task.cancelled():
+            exc = task.exception()
+            if exc is not None:
+                logger.error(f"[Notifier] _listen crashed: {exc} — restarting in 5s")
+                try:
+                    self._nats_task = asyncio.create_task(self._listen())
+                    self._nats_task.add_done_callback(self._on_listen_done)
+                except RuntimeError:
+                    pass
 
     def stop(self) -> None:
         """Stop the background NATS listener."""
@@ -245,31 +258,48 @@ class Notifier:
             self._nats_task.cancel()
 
     async def _listen(self) -> None:
-        """Background loop: subscribe to nexus.actions.* and nexus.prescale.*"""
-        try:
-            nc = self._nats_client
+        """Background loop: subscribe to nexus.actions.* and nexus.prescale.*.
 
-            async def _action_wrapper(data: dict, subject: str) -> None:
-                await self._on_action_message(data)
+        Retries the subscription with exponential backoff until both succeed,
+        rather than parking silently when the broker wasn't ready. Survives
+        CancelledError on shutdown.
+        """
+        nc = self._nats_client
 
-            async def _prescale_wrapper(data: dict, subject: str) -> None:
-                await self._on_prescale_message(data)
+        async def _action_wrapper(data: dict, subject: str) -> None:
+            await self._on_action_message(data)
 
-            try:
-                await nc.subscribe_raw("nexus.actions.*", handler=_action_wrapper)
-                await nc.subscribe_raw("nexus.prescale.*", handler=_prescale_wrapper)
+        async def _prescale_wrapper(data: dict, subject: str) -> None:
+            await self._on_prescale_message(data)
+
+        # Retry both subscriptions until both succeed, with capped backoff
+        action_ok = False
+        prescale_ok = False
+        backoff = 1.0
+        while self._running and not (action_ok and prescale_ok):
+            if not action_ok:
+                try:
+                    await nc.subscribe_raw("nexus.actions.*", handler=_action_wrapper)
+                    action_ok = True
+                except Exception as exc:
+                    logger.warning(f"[Notifier] nexus.actions.* subscribe retry: {exc}")
+            if not prescale_ok:
+                try:
+                    await nc.subscribe_raw("nexus.prescale.*", handler=_prescale_wrapper)
+                    prescale_ok = True
+                except Exception as exc:
+                    logger.warning(f"[Notifier] nexus.prescale.* subscribe retry: {exc}")
+            if not (action_ok and prescale_ok):
+                await asyncio.sleep(min(backoff, 30.0))
+                backoff *= 2
+            else:
                 logger.info("[Notifier] Subscribed to NATS nexus.actions.* + nexus.prescale.*")
-            except Exception as exc:
-                logger.warning(
-                    f"[Notifier] NATS subscribe failed (subject not yet in stream — "
-                    f"will retry when messages arrive): {exc}"
-                )
-            while self._running:
-                await asyncio.sleep(1)
-        except asyncio.CancelledError:
-            pass
-        except Exception as exc:
-            logger.error(f"[Notifier] NATS listener error: {exc}")
+
+        # Park until stopped. If the NATS connection is severed the
+        # NATSClient itself handles reconnect; subscription tasks survive
+        # because they are JS consumers with the standard client.
+        while self._running:
+            await asyncio.sleep(1)
 
     async def _on_action_message(self, data: dict) -> None:
         try:

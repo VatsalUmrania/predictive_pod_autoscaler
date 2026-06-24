@@ -115,12 +115,12 @@ spec:
             - name: PROMETHEUS_URL
               value: "http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090"
             # Optional: mount via Secret named "nexus-secrets" with key "gemini-api-key"
-            # - name: NEXUS_GEMINI_API_KEY
-            #   valueFrom:
-            #     secretKeyRef:
-            #       name: nexus-secrets
-            #       key: gemini-api-key
-            #       optional: true
+            - name: NEXUS_GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: gemini-api-key
+                  optional: true
           volumeMounts:
             - name: nexus-data
               mountPath: /data

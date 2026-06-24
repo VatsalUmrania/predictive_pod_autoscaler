@@ -64,6 +64,11 @@ class TestPpaOutcomeTracker:
     def mock_nats(self):
         nats = MagicMock()
         nats.publish = AsyncMock()
+        # PpaOutcomeTracker publishes via getattr(self._nats, "_js", None).
+        # Mirror MockNATS in test_ppa_nexus_integration.py by aliasing
+        # `_js` to self so the production code path calls our AsyncMock
+        # instead of trying to await a bare MagicMock.
+        nats._js = nats
         return nats
 
     @pytest.fixture
@@ -113,10 +118,14 @@ class TestPpaOutcomeTracker:
 
         await tracker._check_and_emit_outcome()
 
-        # Should have published to ppa.outcomes.api
+        # Should have published to ppa.outcomes.api. Production publishes
+        # JSON-encoded bytes (real NATS wire format); decode for assertions.
         mock_nats.publish.assert_called_once()
         subject = mock_nats.publish.call_args[0][0]
         payload = mock_nats.publish.call_args[0][1]
+        if isinstance(payload, (bytes, bytearray)):
+            import json
+            payload = json.loads(payload.decode("utf-8"))
         assert subject == "ppa.outcomes.api"
         assert payload["deployment"] == "api"
         assert payload["actual_rps"] == 480.0
