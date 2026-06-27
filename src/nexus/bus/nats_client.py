@@ -43,10 +43,12 @@ logger = logging.getLogger(__name__)
 # Constants
 # ──────────────────────────────────────────────────────────────────────────────
 
-NEXUS_STREAM    = "NEXUS_INCIDENTS"
-NEXUS_SUBJECT   = "nexus.incidents"     # Subject prefix for incident events  (used by subscribe())
-NEXUS_SUBJECTS  = "nexus.>"             # Subject wildcard for ALL nexus.* events (stream bindings)
-PPA_PREDICTIONS_SUBJECT = "ppa.predictions.>"   # PPA prediction events
+NEXUS_STREAM = "NEXUS_INCIDENTS"
+NEXUS_SUBJECT = (
+    "nexus.incidents"  # Subject prefix for incident events  (used by subscribe())
+)
+NEXUS_SUBJECTS = "nexus.>"  # Subject wildcard for ALL nexus.* events (stream bindings)
+PPA_PREDICTIONS_SUBJECT = "ppa.predictions.>"  # PPA prediction events
 
 # PPA owns its own stream; NEXUS subscribes to it via stream_name="PPA_PREDICTIONS".
 # Mirror PPA's config so either side can create it without a config mismatch (NEXUS first is now safe).
@@ -57,10 +59,10 @@ _STREAM_CONFIG = StreamConfig(
     name=NEXUS_STREAM,
     subjects=[NEXUS_SUBJECTS],
     retention=RetentionPolicy.LIMITS,
-    storage=StorageType.MEMORY,     # Use FILE in production
-    max_age=86_400,                  # 24 hours in seconds
-    max_bytes=50 * 1024 * 1024,     # 50 MB
-    duplicate_window=60,            # De-dupe window: 60s
+    storage=StorageType.MEMORY,  # Use FILE in production
+    max_age=86_400,  # 24 hours in seconds
+    max_bytes=50 * 1024 * 1024,  # 50 MB
+    duplicate_window=60,  # De-dupe window: 60s
 )
 
 # PPA prediction/outcome stream — mirror src/ppa/bus/nats_client.py payload layout.
@@ -69,8 +71,8 @@ _PPA_STREAM_CONFIG = StreamConfig(
     subjects=["ppa.predictions.>", "ppa.outcomes.>"],
     retention=RetentionPolicy.LIMITS,
     storage=StorageType.MEMORY,
-    max_age=3600,                    # 1 hour
-    max_bytes=10 * 1024 * 1024,     # 10 MB
+    max_age=3600,  # 1 hour
+    max_bytes=10 * 1024 * 1024,  # 10 MB
 )
 
 HandlerType = Callable[[IncidentEvent], Awaitable[None]]
@@ -79,6 +81,7 @@ HandlerType = Callable[[IncidentEvent], Awaitable[None]]
 # ──────────────────────────────────────────────────────────────────────────────
 # Client
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class NATSClient:
     """
@@ -94,8 +97,8 @@ class NATSClient:
         connect_timeout: float = 10.0,
         reconnect_attempts: int = 60,
     ):
-        self._url               = nats_url
-        self._connect_timeout   = connect_timeout
+        self._url = nats_url
+        self._connect_timeout = connect_timeout
         self._reconnect_attempts = reconnect_attempts
         self._nc: NATSConnection | None = None
         self._js: JetStreamContext | None = None
@@ -166,7 +169,7 @@ class NATSClient:
         try:
             existing_info = await self._js.stream_info(name)
             existing_subjects = list(existing_info.config.subjects or [])
-            desired_subjects  = list(config.subjects or [])
+            desired_subjects = list(config.subjects or [])
             if existing_subjects != desired_subjects:
                 logger.warning(
                     f"[NATS] Stream '{name}' has drifted subjects "
@@ -211,7 +214,9 @@ class NATSClient:
                 await self._resolve_subject_overlap(config, name)
                 return
 
-            raise RuntimeError(f"[NATS] Stream '{name}' creation failed: {exc}") from exc
+            raise RuntimeError(
+                f"[NATS] Stream '{name}' creation failed: {exc}"
+            ) from exc
         except Exception as exc:
             raise RuntimeError(
                 f"[NATS] Stream '{name}' creation failed unexpectedly: {exc}"
@@ -233,9 +238,9 @@ class NATSClient:
         API that resolves a subject string to the name of the owning stream.
         """
         desired_subjects = list(config.subjects or [])
-        assert desired_subjects, (
-            f"[NATS] Config for '{name}' has no subjects — cannot resolve overlap"
-        )
+        assert (
+            desired_subjects
+        ), f"[NATS] Config for '{name}' has no subjects — cannot resolve overlap"
 
         for subject in desired_subjects:
             try:
@@ -279,7 +284,9 @@ class NATSClient:
         # Retry creation after evicting all overlapping subjects.
         try:
             await self._js.add_stream(config)
-            logger.info(f"[NATS] Created stream '{name}' after resolving subject overlap")
+            logger.info(
+                f"[NATS] Created stream '{name}' after resolving subject overlap"
+            )
         except Exception as retry_exc:
             raise RuntimeError(
                 f"[NATS] Stream '{name}' still failed after subject overlap "
@@ -306,7 +313,9 @@ class NATSClient:
             payload,
             headers={"Nats-Msg-Id": event.event_id},  # JetStream de-dupe key
         )
-        logger.debug(f"[NATS] Published {subject} seq={ack.seq} event_id={event.event_id}")
+        logger.debug(
+            f"[NATS] Published {subject} seq={ack.seq} event_id={event.event_id}"
+        )
 
     # Alias for backwards compat with plan references
     async def publish_incident(self, event: IncidentEvent) -> None:
@@ -397,7 +406,9 @@ class NATSClient:
             raise RuntimeError("NATSClient not connected.")
 
         resolved_stream = stream_name or NEXUS_STREAM
-        logger.info(f"[NATS] Subscribing to raw pattern '{subject_pattern}' durable={durable_name} stream={resolved_stream}")
+        logger.info(
+            f"[NATS] Subscribing to raw pattern '{subject_pattern}' durable={durable_name} stream={resolved_stream}"
+        )
 
         sub_kwargs: dict = {"stream": resolved_stream}
         if durable_name:
@@ -410,6 +421,7 @@ class NATSClient:
                 async for msg in sub.messages:
                     try:
                         import json
+
                         data = json.loads(msg.data.decode("utf-8"))
                         await handler(data, msg.subject)
                         await msg.ack()

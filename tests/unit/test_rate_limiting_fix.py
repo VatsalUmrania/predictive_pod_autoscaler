@@ -28,7 +28,13 @@ class TestRateLimitingBugScenarios:
 
         # Old implementation gets stuck at a hard floor
         replicas_old = calculate_replicas(
-            100, 100, min_replicas, max_replicas, capacity_per_pod, scale_up_rate, scale_down_rate
+            100,
+            100,
+            min_replicas,
+            max_replicas,
+            capacity_per_pod,
+            scale_up_rate,
+            scale_down_rate,
         )
 
         # Should be around 70 (limited by old algorithm's floor)
@@ -70,10 +76,12 @@ class TestRateLimitingBugScenarios:
                 f"Failed to converge to 12 in 10 cycles, stuck at {current}. Cycles: {cycles_log}"
             )
 
-        assert current == 12, f"Converged to {current}, expected 12. Cycles: {cycles_log}"
-        assert _cycle <= 6, (
-            f"Took {_cycle} cycles to converge (expected ~6 with 0.7 scale_down_rate)"
-        )
+        assert (
+            current == 12
+        ), f"Converged to {current}, expected 12. Cycles: {cycles_log}"
+        assert (
+            _cycle <= 6
+        ), f"Took {_cycle} cycles to converge (expected ~6 with 0.7 scale_down_rate)"
 
     def test_90_percent_traffic_drop_convergence_time(self):
         """Test that 90% traffic drop converges quickly (PR#4 requirement)."""
@@ -92,7 +100,13 @@ class TestRateLimitingBugScenarios:
 
         while current > predicted_load and cycle < max_cycles:
             current = calculate_replicas_fixed(
-                predicted_load, current, 1, 200, capacity_per_pod, scale_up_rate, scale_down_rate
+                predicted_load,
+                current,
+                1,
+                200,
+                capacity_per_pod,
+                scale_up_rate,
+                scale_down_rate,
             )
             cycle += 1
 
@@ -208,7 +222,9 @@ class TestRateLimitingCorrectness:
             safety_factor=1.2,
         )
 
-        assert result2 >= result1, f"Safety factor not applied: {result2} should be >= {result1}"
+        assert (
+            result2 >= result1
+        ), f"Safety factor not applied: {result2} should be >= {result1}"
 
 
 class TestRateLimitingEdgeCases:
@@ -378,12 +394,14 @@ class TestComparisonOldVsNew:
             if current_new <= 10:
                 cycles_new = i
                 break
-            current_new = calculate_replicas_fixed(100, current_new, 1, 200, 10, 1.5, 0.7)
+            current_new = calculate_replicas_fixed(
+                100, current_new, 1, 200, 10, 1.5, 0.7
+            )
 
         # New should be significantly faster
-        assert cycles_new < cycles_old or cycles_new == cycles_old, (
-            f"New implementation slower: {cycles_new} vs {cycles_old}"
-        )
+        assert (
+            cycles_new < cycles_old or cycles_new == cycles_old
+        ), f"New implementation slower: {cycles_new} vs {cycles_old}"
 
         if cycles_old > cycles_new:
             improvement = (cycles_old - cycles_new) / cycles_old * 100

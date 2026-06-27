@@ -31,6 +31,8 @@ from ppa.operator.state_machine import ScalerStateMachine
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 logger = logging.getLogger("ppa.operator")
 logging.getLogger("kopf.objects").setLevel(logging.ERROR)
+
+
 # Health endpoint
 class _HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -111,7 +113,7 @@ def _parse_crd_spec(
     target = spec["targetDeployment"]
     target_ns = spec.get("namespace", cr_ns)
     target_app = spec.get("appName", target)
-    target_horizon = spec.get("horizon", "rps_t3m")
+    target_horizon = spec.get("horizon", "normalized_rps_t3m")
 
     max_r = spec.get("maxReplicas")
     if max_r is None:
@@ -176,7 +178,9 @@ def _parse_crd_spec(
         # Load or update predictor
         model_path = str(bundle.model_path)
         scaler_path = str(bundle.scaler_path)
-        target_scaler_path = str(bundle.target_scaler_path) if bundle.target_scaler_path else None
+        target_scaler_path = (
+            str(bundle.target_scaler_path) if bundle.target_scaler_path else None
+        )
         metadata_path = str(bundle.metadata_path) if bundle.metadata_path else None
 
         # Check if we need to reload
@@ -203,7 +207,9 @@ def _parse_crd_spec(
                 version=bundle.version,
             )
             if not new_predictor.is_loaded():
-                raise RuntimeError(new_predictor.last_load_error or "predictor not loaded")
+                raise RuntimeError(
+                    new_predictor.last_load_error or "predictor not loaded"
+                )
 
             # Restore history if upgrading
             if old_history:
@@ -226,8 +232,15 @@ def _parse_crd_spec(
 
         return config, existing
 
+
 # Reconciliation handler
-@kopf.timer("ppa.example.com", "v1", "predictiveautoscalers", interval=TIMER_INTERVAL, initial_delay=INITIAL_DELAY)
+@kopf.timer(
+    "ppa.example.com",
+    "v1",
+    "predictiveautoscalers",
+    interval=TIMER_INTERVAL,
+    initial_delay=INITIAL_DELAY,
+)
 def reconcile(spec, status, meta, patch, **kwargs):
     """Main control loop — delegates to ScalerStateMachine."""
     cr_ns = meta.get("namespace", NAMESPACE)
@@ -273,6 +286,7 @@ def reconcile(spec, status, meta, patch, **kwargs):
     except Exception as e:
         logger.error(f"[{cr_name}] Reconciliation cycle error: {e}", exc_info=True)
 
+
 # Cleanup on CR deletion
 @kopf.on.delete("ppa.example.com", "v1", "predictiveautoscalers")
 def on_delete(meta, **kwargs):
@@ -283,17 +297,20 @@ def on_delete(meta, **kwargs):
         if removed:
             logger.info(f"Cleaned up state for {key}")
 
+
 # Startup hook
 @kopf.on.startup()
 def startup(**kwargs):
     """Operator startup hook."""
     import os
+
     nats_url = os.getenv("NATS_URL", "nats://localhost:4222")
     logger.info("=" * 80)
     logger.info("PPA Operator starting up")
     logger.info(f"DEFAULT_MODEL_DIR: {DEFAULT_MODEL_DIR}")
     logger.info(f"NATS_URL: {nats_url}")
     logger.info("=" * 80)
+
 
 # Model path resolution for CR reconciliation
 def _resolve_paths(config: dict, bundle) -> tuple:
@@ -304,5 +321,7 @@ def _resolve_paths(config: dict, bundle) -> tuple:
     """
     model_path = str(bundle.model_path) if bundle.model_path else None
     scaler_path = str(bundle.scaler_path) if bundle.scaler_path else None
-    target_scaler_path = str(bundle.target_scaler_path) if bundle.target_scaler_path else None
+    target_scaler_path = (
+        str(bundle.target_scaler_path) if bundle.target_scaler_path else None
+    )
     return (model_path, scaler_path, target_scaler_path, bundle.legacy, False)

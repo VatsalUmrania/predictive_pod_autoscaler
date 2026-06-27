@@ -65,32 +65,34 @@ class NexusOrchestrator:
 
     def __init__(
         self,
-        nats_client:       NATSClient,
-        correlator:        EventCorrelator,
-        rca_engine:        RCAEngine,
+        nats_client: NATSClient,
+        correlator: EventCorrelator,
+        rca_engine: RCAEngine,
         confidence_scorer: ConfidenceScorer,
-        executor:          RunbookExecutor,
-        flush_interval_s:  float = 30.0,
-        max_concurrent:    int = 5,
-        dry_run:           bool = False,
+        executor: RunbookExecutor,
+        flush_interval_s: float = 30.0,
+        max_concurrent: int = 5,
+        dry_run: bool = False,
     ):
-        self.nats       = nats_client
+        self.nats = nats_client
         self.correlator = correlator
-        self.rca        = rca_engine
-        self.scorer     = confidence_scorer
-        self.executor   = executor
+        self.rca = rca_engine
+        self.scorer = confidence_scorer
+        self.executor = executor
         self._flush_interval = flush_interval_s
-        self._dry_run   = dry_run
+        self._dry_run = dry_run
         self._semaphore = asyncio.Semaphore(max_concurrent)
 
         # Observability
         self._clusters_processed = 0
         self._actions_dispatched = 0
-        self._rca_results: list[dict[str, Any]] = []   # Last 100 RCA results for inspection
+        self._rca_results: list[dict[str, Any]] = (
+            []
+        )  # Last 100 RCA results for inspection
         self._start_time: float | None = None
 
         # Background task handles
-        self._flush_task:  asyncio.Task | None = None
+        self._flush_task: asyncio.Task | None = None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -102,8 +104,8 @@ class NexusOrchestrator:
         self._start_time = time.monotonic()
 
         await self.nats.subscribe(
-            handler      = self._on_event,
-            agent_filter = ">",                             # All agents
+            handler=self._on_event,
+            agent_filter=">",  # All agents
             # No durable_name: ephemeral consumer per-pod.
             # Durable push consumers are exclusive (one active subscriber) —
             # during a rolling deploy the new pod would collide with the old pod's
@@ -204,8 +206,8 @@ class NexusOrchestrator:
         rca_result = await self.rca.analyze(cluster)
 
         # ── Step 2: Confidence calibration ───────────────────────────────────
-        confidence  = self.scorer.score(cluster, rca_result)
-        max_level   = self.scorer.gate(confidence)
+        confidence = self.scorer.score(cluster, rca_result)
+        max_level = self.scorer.gate(confidence)
         # Don't allow higher healing level than RCA suggested
         effective_level = min(rca_result.healing_level, max_level)
 
@@ -221,19 +223,21 @@ class NexusOrchestrator:
 
         # ── Step 3: Record + publish decision ────────────────────────────────
         rca_record = {
-            "cluster_id":       cluster.cluster_id,
-            "timestamp":        datetime.now(timezone.utc).isoformat(),
-            "rca":              rca_result.to_dict(),
-            "confidence":       round(confidence, 3),
-            "effective_level":  effective_level,
-            "cluster_summary":  cluster.to_summary(),
+            "cluster_id": cluster.cluster_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "rca": rca_result.to_dict(),
+            "confidence": round(confidence, 3),
+            "effective_level": effective_level,
+            "cluster_summary": cluster.to_summary(),
         }
         self._rca_results.append(rca_record)
         if len(self._rca_results) > 100:
             self._rca_results = self._rca_results[-100:]
 
         # Publish ORCHESTRATOR_DECISION to NATS (for external audit/dashboards)
-        await self._publish_decision_event(cluster, rca_result, confidence, effective_level)
+        await self._publish_decision_event(
+            cluster, rca_result, confidence, effective_level
+        )
 
         # ── Step 4: Route to RunbookExecutor ─────────────────────────────────
         if not rca_result.runbook_id and effective_level == 0:
@@ -252,7 +256,9 @@ class NexusOrchestrator:
 
         # Build an enriched event from the most critical signal in the cluster
         primary_event = self._build_enriched_event(cluster, rca_result, confidence)
-        self.executor.confidence = confidence   # Update executor's confidence for this decision
+        self.executor.confidence = (
+            confidence  # Update executor's confidence for this decision
+        )
 
         self._actions_dispatched += 1
         await self.executor.handle_event(primary_event)
@@ -276,27 +282,27 @@ class NexusOrchestrator:
         enriched_context = {
             **(primary.context if isinstance(primary.context, dict) else {}),
             "_rca": {
-                "root_cause":    rca.root_cause,
+                "root_cause": rca.root_cause,
                 "failure_class": rca.failure_class,
-                "reasoning":     rca.reasoning,
-                "source":        rca.source,
-                "cluster_id":    cluster.cluster_id,
+                "reasoning": rca.reasoning,
+                "source": rca.source,
+                "cluster_id": cluster.cluster_id,
             },
         }
 
         return IncidentEvent(
-            agent                  = primary.agent,
-            signal_type            = primary.signal_type,
-            severity               = primary.severity,
-            namespace              = cluster.namespace or primary.namespace,
-            resource_name          = cluster.primary_resource or primary.resource_name,
-            resource_kind          = primary.resource_kind,
-            deploy_sha             = primary.deploy_sha,
-            correlation_id         = cluster.cluster_id,
-            context                = enriched_context,
-            suggested_runbook      = rca.runbook_id,
-            suggested_healing_level = rca.healing_level,
-            confidence             = confidence,
+            agent=primary.agent,
+            signal_type=primary.signal_type,
+            severity=primary.severity,
+            namespace=cluster.namespace or primary.namespace,
+            resource_name=cluster.primary_resource or primary.resource_name,
+            resource_kind=primary.resource_kind,
+            deploy_sha=primary.deploy_sha,
+            correlation_id=cluster.cluster_id,
+            context=enriched_context,
+            suggested_runbook=rca.runbook_id,
+            suggested_healing_level=rca.healing_level,
+            confidence=confidence,
         )
 
     async def _publish_decision_event(
@@ -309,26 +315,30 @@ class NexusOrchestrator:
         """Publish an ORCHESTRATOR_DECISION event to NATS for observability."""
         try:
             decision_event = IncidentEvent(
-                agent       = AgentType.ORCHESTRATOR,
-                signal_type = SignalType.THRESHOLD_BREACH,   # Closest fitting type
-                severity    = Severity.CRITICAL if cluster.highest_severity == "critical" else Severity.WARNING,
-                namespace   = cluster.namespace,
-                resource_name = cluster.primary_resource,
-                correlation_id = cluster.cluster_id,
-                context = {
-                    "type":                 "orchestrator_decision",
-                    "cluster_id":           cluster.cluster_id,
-                    "failure_class":        rca.failure_class,
-                    "root_cause":           rca.root_cause[:200],
-                    "healing_level":        effective_level,
-                    "runbook_id":           rca.runbook_id,
-                    "confidence":           round(confidence, 3),
-                    "rca_source":           rca.source,
-                    "signal_count":         len(cluster.events),
-                    "agent_count":          len(cluster.agent_types),
-                    "actions_to_avoid":     rca.actions_to_avoid,
+                agent=AgentType.ORCHESTRATOR,
+                signal_type=SignalType.THRESHOLD_BREACH,  # Closest fitting type
+                severity=(
+                    Severity.CRITICAL
+                    if cluster.highest_severity == "critical"
+                    else Severity.WARNING
+                ),
+                namespace=cluster.namespace,
+                resource_name=cluster.primary_resource,
+                correlation_id=cluster.cluster_id,
+                context={
+                    "type": "orchestrator_decision",
+                    "cluster_id": cluster.cluster_id,
+                    "failure_class": rca.failure_class,
+                    "root_cause": rca.root_cause[:200],
+                    "healing_level": effective_level,
+                    "runbook_id": rca.runbook_id,
+                    "confidence": round(confidence, 3),
+                    "rca_source": rca.source,
+                    "signal_count": len(cluster.events),
+                    "agent_count": len(cluster.agent_types),
+                    "actions_to_avoid": rca.actions_to_avoid,
                 },
-                confidence = confidence,
+                confidence=confidence,
             )
             await self.nats.publish(decision_event)
         except Exception as exc:
@@ -340,12 +350,12 @@ class NexusOrchestrator:
     def status(self) -> dict:
         uptime = time.monotonic() - self._start_time if self._start_time else 0.0
         return {
-            "uptime_seconds":     round(uptime, 1),
+            "uptime_seconds": round(uptime, 1),
             "clusters_processed": self._clusters_processed,
             "actions_dispatched": self._actions_dispatched,
-            "correlator_stats":   self.correlator.stats,
-            "rca_stats":          self.rca.stats,
-            "governance_cb":      self.executor.ladder.governance_cb.status_dict(),
+            "correlator_stats": self.correlator.stats,
+            "rca_stats": self.rca.stats,
+            "governance_cb": self.executor.ladder.governance_cb.status_dict(),
         }
 
     def last_rca_results(self, n: int = 10) -> list[dict[str, Any]]:
@@ -356,6 +366,7 @@ class NexusOrchestrator:
 # ──────────────────────────────────────────────────────────────────────────────
 # Factory
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def build_orchestrator(
     nats_client: NATSClient,
@@ -379,19 +390,19 @@ def build_orchestrator(
         dry_run:              Don't call executor — only log decisions.
     """
     correlator = EventCorrelator(
-        correlation_window_s = correlation_window_s,
-        quorum_events        = quorum_events,
-        flush_timeout_s      = flush_interval_s * 1.5,
+        correlation_window_s=correlation_window_s,
+        quorum_events=quorum_events,
+        flush_timeout_s=flush_interval_s * 1.5,
     )
     rca_engine = RCAEngine(api_key=gemini_api_key)
-    scorer     = ConfidenceScorer()
+    scorer = ConfidenceScorer()
 
     return NexusOrchestrator(
-        nats_client       = nats_client,
-        correlator        = correlator,
-        rca_engine        = rca_engine,
-        confidence_scorer = scorer,
-        executor          = executor,
-        flush_interval_s  = flush_interval_s,
-        dry_run           = dry_run,
+        nats_client=nats_client,
+        correlator=correlator,
+        rca_engine=rca_engine,
+        confidence_scorer=scorer,
+        executor=executor,
+        flush_interval_s=flush_interval_s,
+        dry_run=dry_run,
     )

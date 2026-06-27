@@ -54,7 +54,9 @@ def should_promote(
         return True, "no champion found (bootstrap promotion)"
 
     champion_metric = float(champion_metrics.get(metric, float("inf")))
-    rel_improve = (champion_metric - challenger_metric) / max(abs(champion_metric), 1e-9)
+    rel_improve = (champion_metric - challenger_metric) / max(
+        abs(champion_metric), 1e-9
+    )
     if rel_improve < min_relative_improvement:
         return False, (
             f"insufficient improvement: {metric} {champion_metric:.2f} -> {challenger_metric:.2f} "
@@ -73,5 +75,6 @@ def should_promote(
         f"better {metric}: {champion_metric:.2f} -> {challenger_metric:.2f} "
         f"and under-provisioning acceptable"
     )
+
 
 __all__ = ["load_json", "should_promote"]

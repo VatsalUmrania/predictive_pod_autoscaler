@@ -66,8 +66,12 @@ class TestThreadLocalPromUrl:
         t2.join()
 
         # Each thread should see its own URL, not the other's
-        assert results["thread1"] == url1, f"Thread1 got {results['thread1']}, expected {url1}"
-        assert results["thread2"] == url2, f"Thread2 got {results['thread2']}, expected {url2}"
+        assert (
+            results["thread1"] == url1
+        ), f"Thread1 got {results['thread1']}, expected {url1}"
+        assert (
+            results["thread2"] == url2
+        ), f"Thread2 got {results['thread2']}, expected {url2}"
 
     def test_thread_local_isolation_multiple_threads(self):
         """Test thread isolation with many threads simultaneously."""
@@ -100,9 +104,9 @@ class TestThreadLocalPromUrl:
         # Verify each thread saw its own URL
         for thread_id in range(num_threads):
             expected_url = f"http://prom-{thread_id}:9090"
-            assert results[thread_id] == expected_url, (
-                f"Thread {thread_id} got {results[thread_id]}, expected {expected_url}"
-            )
+            assert (
+                results[thread_id] == expected_url
+            ), f"Thread {thread_id} got {results[thread_id]}, expected {expected_url}"
 
     def test_thread_local_isolation_with_threadpoolexecutor(self):
         """Test thread isolation with ThreadPoolExecutor (as used in prom_query_parallel)."""
@@ -130,9 +134,9 @@ class TestThreadLocalPromUrl:
         # Verify each thread saw its own URL
         for thread_id in range(10):
             expected_url = f"http://prom-region-{thread_id}:9090"
-            assert custom_urls[thread_id] == expected_url, (
-                f"Worker {thread_id} got {custom_urls[thread_id]}, expected {expected_url}"
-            )
+            assert (
+                custom_urls[thread_id] == expected_url
+            ), f"Worker {thread_id} got {custom_urls[thread_id]}, expected {expected_url}"
 
     def test_main_thread_unaffected_by_worker_threads(self):
         """Test that main thread's URL is not affected by worker thread changes."""
@@ -154,9 +158,9 @@ class TestThreadLocalPromUrl:
 
         # Main thread should still see its own URL, not the worker's
         main_thread_url = get_current_prometheus_url()
-        assert main_thread_url == main_url, (
-            f"Main thread got {main_thread_url}, expected {main_url}"
-        )
+        assert (
+            main_thread_url == main_url
+        ), f"Main thread got {main_thread_url}, expected {main_url}"
         assert worker_results[0] == "http://prom-worker:9090"
 
     def test_url_persistence_within_thread(self):
@@ -168,13 +172,15 @@ class TestThreadLocalPromUrl:
         urls = [get_current_prometheus_url() for _ in range(5)]
 
         # All should return the same URL
-        assert all(url == custom_url for url in urls), (
-            f"Expected all URLs to be {custom_url}, got {urls}"
-        )
+        assert all(
+            url == custom_url for url in urls
+        ), f"Expected all URLs to be {custom_url}, got {urls}"
 
     @patch("ppa.infrastructure.prometheus.requests.get")
     @patch("ppa.infrastructure.prometheus.prom_query")
-    def test_prom_query_parallel_respects_thread_local_url(self, mock_prom_query, mock_requests):
+    def test_prom_query_parallel_respects_thread_local_url(
+        self, mock_prom_query, mock_requests
+    ):
         """Test that prom_query_parallel uses thread-local URLs correctly."""
         custom_url = "http://parallel-test-prom:9090"
         set_prometheus_url(custom_url)
@@ -200,9 +206,9 @@ class TestThreadLocalPromUrl:
 
         # Verify all queries were executed
         assert len(captured_urls) >= 1, "prom_query should have been called"
-        assert all(url == custom_url for url in captured_urls), (
-            f"Expected all queries to use {custom_url}"
-        )
+        assert all(
+            url == custom_url for url in captured_urls
+        ), f"Expected all queries to use {custom_url}"
 
     def test_resetting_url_to_default(self):
         """Test resetting Prometheus URL back to default."""
@@ -253,7 +259,9 @@ class TestThreadLocalPromUrl:
             actual_url = get_current_prometheus_url()
             results[thread_id] = (expected_url, actual_url)
 
-        threads = [threading.Thread(target=rapid_url_changes, args=(i,)) for i in range(5)]
+        threads = [
+            threading.Thread(target=rapid_url_changes, args=(i,)) for i in range(5)
+        ]
         for t in threads:
             t.start()
         for t in threads:
@@ -262,4 +270,6 @@ class TestThreadLocalPromUrl:
         # Verify each thread's final URL is what it set (not affected by other threads)
         for thread_id in range(5):
             expected, actual = results[thread_id]
-            assert expected == actual, f"Thread {thread_id}: expected {expected}, got {actual}"
+            assert (
+                expected == actual
+            ), f"Thread {thread_id}: expected {expected}, got {actual}"

@@ -39,25 +39,27 @@ from nexus.predictive.feature_pipeline import _guard, _safe_div
 
 logger = logging.getLogger(__name__)
 
-_ALPHA = 0.25   # EWMA smoothing factor for RPS series
+_ALPHA = 0.25  # EWMA smoothing factor for RPS series
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Prediction result
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class TrafficPrediction:
     """A point-in-time prediction for one endpoint."""
-    deployment_name:  str
-    endpoint:         str
-    current_rps:      float
-    predicted_rps:    float
-    horizon_minutes:  int
-    confidence:       float
-    model_type:       str              # "ewma" | "gru"
-    smape:            float | None = None   # Rolling SMAPE from past predictions
-    predicted_at:     str = field(
+
+    deployment_name: str
+    endpoint: str
+    current_rps: float
+    predicted_rps: float
+    horizon_minutes: int
+    confidence: float
+    model_type: str  # "ewma" | "gru"
+    smape: float | None = None  # Rolling SMAPE from past predictions
+    predicted_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
 
@@ -78,6 +80,7 @@ class TrafficPrediction:
 # ──────────────────────────────────────────────────────────────────────────────
 # SMAPE accuracy tracker
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class SMAPETracker:
     """
@@ -117,14 +120,16 @@ class SMAPETracker:
 # Per-endpoint EWMA state
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class EndpointState:
     """EWMA state for one endpoint's RPS."""
-    rps_ewma:    float = 0.0
-    roc_ewma:    float = 0.0    # EWMA of rate-of-change
-    last_rps:    float = 0.0
-    samples:     int   = 0
-    tracker:     SMAPETracker = field(default_factory=SMAPETracker)
+
+    rps_ewma: float = 0.0
+    roc_ewma: float = 0.0  # EWMA of rate-of-change
+    last_rps: float = 0.0
+    samples: int = 0
+    tracker: SMAPETracker = field(default_factory=SMAPETracker)
 
     def update(self, rps: float) -> float:
         """Update EWMAs. Returns current rate-of-change."""
@@ -155,7 +160,7 @@ class EndpointState:
         Range: [0.40, 0.82] — never fully confident, never below 40%.
         """
         if self.samples < 5:
-            return 0.40      # Cold start
+            return 0.40  # Cold start
 
         # Base: inversely proportional to horizon
         base = max(0.40, 0.85 - (horizon_minutes / 60.0) * 0.30)
@@ -177,6 +182,7 @@ class EndpointState:
 # ──────────────────────────────────────────────────────────────────────────────
 # EWMA Traffic Model (always available)
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class EWMATrafficModel:
     """
@@ -201,9 +207,9 @@ class EWMATrafficModel:
 
     def predict(
         self,
-        deployment:     str,
-        endpoint:       str,
-        current_rps:    float,
+        deployment: str,
+        endpoint: str,
+        current_rps: float,
         horizon_minutes: int = 10,
     ) -> TrafficPrediction:
         """
@@ -211,23 +217,23 @@ class EWMATrafficModel:
 
         Automatically ingests current_rps as the latest observation.
         """
-        rps   = _guard(current_rps)
+        rps = _guard(current_rps)
         state = self._states.setdefault(deployment, EndpointState())
         state.update(rps)
 
         predicted = state.predict_rps(horizon_minutes)
-        conf      = state.confidence(horizon_minutes)
-        smape     = state.tracker.rolling_smape
+        conf = state.confidence(horizon_minutes)
+        smape = state.tracker.rolling_smape
 
         return TrafficPrediction(
-            deployment_name = deployment,
-            endpoint        = endpoint,
-            current_rps     = round(rps, 2),
-            predicted_rps   = round(predicted, 2),
-            horizon_minutes = horizon_minutes,
-            confidence      = round(conf, 3),
-            model_type      = "ewma",
-            smape           = round(smape, 2) if smape is not None else None,
+            deployment_name=deployment,
+            endpoint=endpoint,
+            current_rps=round(rps, 2),
+            predicted_rps=round(predicted, 2),
+            horizon_minutes=horizon_minutes,
+            confidence=round(conf, 3),
+            model_type="ewma",
+            smape=round(smape, 2) if smape is not None else None,
         )
 
     def record_outcome(self, deployment: str, actual_rps: float) -> float | None:
@@ -239,7 +245,7 @@ class EWMATrafficModel:
         state = self._states.get(deployment)
         if state is None:
             return None
-        predicted = state.predict_rps(0)   # Current EWMA as the "committed prediction"
+        predicted = state.predict_rps(0)  # Current EWMA as the "committed prediction"
         return state.tracker.record(predicted=predicted, actual=_guard(actual_rps))
 
     def smape_for(self, deployment: str) -> float | None:
@@ -248,11 +254,14 @@ class EWMATrafficModel:
     def all_stats(self) -> dict[str, Any]:
         return {
             name: {
-                "rps_ewma":    round(s.rps_ewma, 2),
-                "roc_ewma":    round(s.roc_ewma, 2),
-                "samples":     s.samples,
-                "smape":       round(s.tracker.rolling_smape, 2)
-                               if s.tracker.rolling_smape else None,
+                "rps_ewma": round(s.rps_ewma, 2),
+                "roc_ewma": round(s.roc_ewma, 2),
+                "samples": s.samples,
+                "smape": (
+                    round(s.tracker.rolling_smape, 2)
+                    if s.tracker.rolling_smape
+                    else None
+                ),
             }
             for name, s in self._states.items()
         }

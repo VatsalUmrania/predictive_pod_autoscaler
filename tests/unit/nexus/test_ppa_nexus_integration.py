@@ -27,6 +27,7 @@ from nexus.predictive.prescaler import PrescaleMode, Prescaler
 
 # ── Test fixtures ──────────────────────────────────────────────────────────────
 
+
 def make_ppa_payload(
     deployment="payments-api",
     namespace="production",
@@ -132,6 +133,7 @@ class MockNATS:
 
 # ── Prescaler + PPA prediction integration ─────────────────────────────────────
 
+
 class TestPpaPredictionToPrescalerDecision:
     """Simulate the full flow: PPA publishes prediction → Prescaler handles it."""
 
@@ -176,7 +178,7 @@ class TestPpaPredictionToPrescalerDecision:
             deployment="api",
             current_rps=100.0,
             predicted_rps=130.0,  # only 30% increase
-            confidence=0.30,       # below 0.55 threshold
+            confidence=0.30,  # below 0.55 threshold
         )
 
         await nats.emit("ppa.predictions.api", payload)
@@ -251,6 +253,7 @@ class TestPpaPredictionToPrescalerDecision:
 
 
 # ── Prescaler → PpaOutcomeTracker integration ──────────────────────────────────
+
 
 class TestPrescalerToPpaOutcomeTracker:
     """PpaOutcomeTracker receives predictions and emits outcomes after horizon."""
@@ -346,7 +349,9 @@ class TestPrescalerToPpaOutcomeTracker:
         tracker._fetch_actual_rps.assert_not_called()
         assert "FRESH1" in tracker._pending
 
+
 # ── Full end-to-end: PPA → NATS → Prescaler → OutcomeTracker ──────────────────
+
 
 class TestFullPpaNexusPredictionFlow:
     """
@@ -432,7 +437,9 @@ class TestFullPpaNexusPredictionFlow:
         await outcome_tracker._check_and_emit_outcome()
 
         # Verdict published to ppa.outcomes
-        ppa_outcome_calls = [(s, p) for s, p in nats._published if s.startswith("ppa.outcomes.")]
+        ppa_outcome_calls = [
+            (s, p) for s, p in nats._published if s.startswith("ppa.outcomes.")
+        ]
         assert len(ppa_outcome_calls) >= 1
         subject, outcome_payload = ppa_outcome_calls[0]
         assert outcome_payload["verdict"] == "spike_hit"
@@ -549,11 +556,14 @@ class TestFullPpaNexusPredictionFlow:
 
 # ── FeedbackLoop integration with PpaOutcomeTracker ─────────────────────────────
 
+
 class TestFeedbackLoopWithPpaOutcomeTracker:
     """Verify FeedbackLoop calls run_batch_flush on each learning cycle."""
 
     @pytest.mark.asyncio
-    async def test_feedback_loop_calls_ppa_tracker_batch_flush(self, tmp_path, monkeypatch):
+    async def test_feedback_loop_calls_ppa_tracker_batch_flush(
+        self, tmp_path, monkeypatch
+    ):
         """On each _update_cycle, FeedbackLoop should call run_batch_flush."""
         # Capture whether run_batch_flush was called
         flushed = []
@@ -568,19 +578,25 @@ class TestFeedbackLoopWithPpaOutcomeTracker:
         class FakeOutcomeStore:
             async def get_all_runbook_stats(self, days=30):
                 return {}
+
             async def get_system_kpis(self, days=30):
                 from nexus.learning.outcome_store import SystemKPIs
+
                 return SystemKPIs(window_days=days)
+
             async def get_recent_outcomes(self, limit=50):
                 return []
+
             async def get_targets_with_most_heals(self, days=7, limit=10):
                 return []
 
         class FakeKnowledgeBase:
             async def bulk_update(self, stats):
                 return {}
+
             async def get_all_adjustments(self):
                 return {}
+
             async def record_pattern(self, **kwargs):
                 pass
 

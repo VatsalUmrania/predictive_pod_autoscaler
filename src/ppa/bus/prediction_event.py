@@ -25,27 +25,27 @@ class PpaPredictionEvent:
         timestamp:        ISO-8601 UTC timestamp of emission.
     """
 
-    deployment:       str
-    namespace:        str
-    predicted_rps:    float
-    current_rps:      float
-    confidence:       float
-    horizon_minutes:  int
-    model_version:    str
-    raw_features:     dict[str, float]
-    timestamp:        str
+    deployment: str
+    namespace: str
+    predicted_rps: float
+    current_rps: float
+    confidence: float
+    horizon_minutes: int
+    model_version: str
+    raw_features: dict[str, float]
+    timestamp: str
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "deployment":       self.deployment,
-            "namespace":        self.namespace,
-            "predicted_rps":    self.predicted_rps,
-            "current_rps":       self.current_rps,
-            "confidence":        self.confidence,
-            "horizon_minutes":  self.horizon_minutes,
-            "model_version":    self.model_version,
-            "raw_features":     self.raw_features,
-            "timestamp":        self.timestamp,
+            "deployment": self.deployment,
+            "namespace": self.namespace,
+            "predicted_rps": self.predicted_rps,
+            "current_rps": self.current_rps,
+            "confidence": self.confidence,
+            "horizon_minutes": self.horizon_minutes,
+            "model_version": self.model_version,
+            "raw_features": self.raw_features,
+            "timestamp": self.timestamp,
         }
 
     def to_nats_payload(self) -> bytes:

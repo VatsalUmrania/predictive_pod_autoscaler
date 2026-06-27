@@ -66,7 +66,7 @@ class NexusServer:
         outcome_tracker: PpaOutcomeTracker,
         notifier: Notifier,
         agent_manager: AgentManager,
-        feedback_loop,   # FeedbackLoop | None
+        feedback_loop,  # FeedbackLoop | None
         status_api,  # FastAPI app
     ) -> None:
         self.nats_client = nats_client
@@ -107,20 +107,32 @@ class NexusServer:
         # would never be created unless we do it here.
         try:
             from nexus.integration.token_store import get_token_store
+
             _ts = get_token_store()
             await _ts.init()
         except Exception as _ts_exc:
-            logger.warning(f"[NexusServer] TokenStore init failed (non-fatal): {_ts_exc}")
+            logger.warning(
+                f"[NexusServer] TokenStore init failed (non-fatal): {_ts_exc}"
+            )
 
         # ── Reasoning components ──────────────────────────────────────────────
         if runbook_dir is None:
             import pathlib
-            runbook_dir = pathlib.Path(__file__).parent.parent.parent / "deploy" / "nexus" / "runbooks"
+
+            runbook_dir = (
+                pathlib.Path(__file__).parent.parent.parent
+                / "deploy"
+                / "nexus"
+                / "runbooks"
+            )
 
         # ── AuditTrail — must be initialized so /audit/* endpoints work ──────
         import os as _os
+
         audit_db_path = _os.getenv("NEXUS_AUDIT_DB_PATH", "/data/nexus_audit.db")
-        knowledge_db_path = _os.getenv("NEXUS_KNOWLEDGE_DB_PATH", "/data/nexus_knowledge.db")
+        knowledge_db_path = _os.getenv(
+            "NEXUS_KNOWLEDGE_DB_PATH", "/data/nexus_knowledge.db"
+        )
         audit_trail = AuditTrail(db_path=audit_db_path)
         await audit_trail.initialize()
 
@@ -147,34 +159,40 @@ class NexusServer:
         await prescaler.subscribe_to_ppa_predictions()
 
         # ── Outcome tracker — subscribe to ppa.predictions.* to close the loop
-        outcome_tracker = PpaOutcomeTracker(nats_client=nats, prometheus_url=prometheus_url)
+        outcome_tracker = PpaOutcomeTracker(
+            nats_client=nats, prometheus_url=prometheus_url
+        )
 
         async def _outcome_tracker_handler(data: dict, subject: str) -> None:
             """Route raw ppa.predictions.* events into the OutcomeTracker."""
             import re
+
             def _parse_horizon(raw) -> int:
                 if isinstance(raw, int):
                     return raw
-                m = re.search(r'(\d+)m$', str(raw))
+                m = re.search(r"(\d+)m$", str(raw))
                 return int(m.group(1)) if m else 10
 
             try:
                 parts = subject.split(".")
                 deployment = parts[-1] if len(parts) > 2 else "unknown"
                 await outcome_tracker.on_prediction(
-                    deployment      = data.get("deployment", deployment),
-                    namespace       = data.get("namespace", "default"),
-                    predicted_rps   = float(data.get("predicted_rps", 0)),
-                    current_rps     = float(data.get("current_rps", 0)),
-                    confidence      = float(data.get("confidence", 0)),
-                    horizon_minutes = _parse_horizon(data.get("horizon_minutes", 10)),
-                    model_version   = data.get("model_version", "unknown"),
-                    raw_features    = data.get("raw_features", {}),
-                    event_timestamp = data.get("timestamp", ""),
+                    deployment=data.get("deployment", deployment),
+                    namespace=data.get("namespace", "default"),
+                    predicted_rps=float(data.get("predicted_rps", 0)),
+                    current_rps=float(data.get("current_rps", 0)),
+                    confidence=float(data.get("confidence", 0)),
+                    horizon_minutes=_parse_horizon(data.get("horizon_minutes", 10)),
+                    model_version=data.get("model_version", "unknown"),
+                    raw_features=data.get("raw_features", {}),
+                    event_timestamp=data.get("timestamp", ""),
                 )
             except Exception as exc:
                 import logging as _log
-                _log.getLogger(__name__).warning(f"[OutcomeTracker] handler error: {exc}")
+
+                _log.getLogger(__name__).warning(
+                    f"[OutcomeTracker] handler error: {exc}"
+                )
 
         await nats.subscribe_raw(
             "ppa.predictions.>",
@@ -213,10 +231,15 @@ class NexusServer:
         # dashboard, so Slack notifications stay silent.
         try:
             from nexus.integration.dashboard import refresh_policy_cache
+
             _loaded = refresh_policy_cache()
-            logger.info(f"[NexusServer] Pre-cached {_loaded} selfheal.yaml policies for Notifier")
+            logger.info(
+                f"[NexusServer] Pre-cached {_loaded} selfheal.yaml policies for Notifier"
+            )
         except Exception as _pc_exc:
-            logger.warning(f"[NexusServer] Policy cache refresh failed (non-fatal): {_pc_exc}")
+            logger.warning(
+                f"[NexusServer] Policy cache refresh failed (non-fatal): {_pc_exc}"
+            )
 
         notifier = Notifier()
         notifier.start_background(nats)  # returns None; _listen loop is internal
@@ -225,31 +248,31 @@ class NexusServer:
         # Open OutcomeStore + KnowledgeBase ONCE and share between FeedbackLoop and
         # NexusContext — earlier opening them twice led to two SQLite connections
         # racing on the same database file.
-        outcome_store  = OutcomeStore(db_path=audit_db_path)
+        outcome_store = OutcomeStore(db_path=audit_db_path)
         await outcome_store.connect()
         knowledge_base = KnowledgeBase(db_path=knowledge_db_path)
         await knowledge_base.initialize()
 
         feedback_loop = await build_feedback_loop(
-            confidence_scorer   = confidence_scorer,
-            nats_client         = nats,
-            ppa_outcome_tracker = outcome_tracker,
-            outcome_store       = outcome_store,
-            knowledge_base      = knowledge_base,
+            confidence_scorer=confidence_scorer,
+            nats_client=nats,
+            ppa_outcome_tracker=outcome_tracker,
+            outcome_store=outcome_store,
+            knowledge_base=knowledge_base,
         )
 
         # ── Agent manager ────────────────────────────────────────────────────
         agent_manager = AgentManager(nats_client=nats, prometheus_url=prometheus_url)
 
         # ── Pre-populate NexusContext so status_api lifespan skips self-init ───
-        context.orchestrator        = orchestrator
-        context.prescaler           = prescaler
+        context.orchestrator = orchestrator
+        context.prescaler = prescaler
         context.ppa_outcome_tracker = outcome_tracker
-        context.audit_trail         = audit_trail
-        context.feedback_loop       = feedback_loop
-        context.outcome_store       = outcome_store
-        context.knowledge_base      = knowledge_base
-        context.runbook_library     = runbook_library
+        context.audit_trail = audit_trail
+        context.feedback_loop = feedback_loop
+        context.outcome_store = outcome_store
+        context.knowledge_base = knowledge_base
+        context.runbook_library = runbook_library
 
         return cls(
             nats_client=nats,
@@ -290,7 +313,7 @@ class NexusServer:
                 ).serve(),
                 name="status-api",
             ),
-            *self.agent_manager._tasks,                       # agent run-loop handles
+            *self.agent_manager._tasks,  # agent run-loop handles
         ]
 
     async def stop(self) -> None:
@@ -306,7 +329,7 @@ class NexusServer:
         await self.outcome_tracker.stop()
         if self.feedback_loop is not None:
             await self.feedback_loop.stop()
-        self.notifier.stop()          # cancels Notifier._nats_task — never skip this
+        self.notifier.stop()  # cancels Notifier._nats_task — never skip this
         await self.nats_client.close()
 
     async def run_forever(self) -> NoReturn:

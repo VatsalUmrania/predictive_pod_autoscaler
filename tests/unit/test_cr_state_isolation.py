@@ -127,10 +127,14 @@ class TestCRStateIsolation:
 
                 # Verify paths_match works correctly
                 assert predictor_1.paths_match(str(model_path_1), str(scaler_path_1))
-                assert not predictor_1.paths_match(str(model_path_2), str(scaler_path_2))
+                assert not predictor_1.paths_match(
+                    str(model_path_2), str(scaler_path_2)
+                )
 
                 assert predictor_2.paths_match(str(model_path_2), str(scaler_path_2))
-                assert not predictor_2.paths_match(str(model_path_1), str(scaler_path_1))
+                assert not predictor_2.paths_match(
+                    str(model_path_1), str(scaler_path_1)
+                )
 
     def test_lookback_can_differ_per_model(self):
         """Different models might have different lookback values."""

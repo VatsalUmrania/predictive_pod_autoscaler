@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 # Governance Circuit Breaker
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class GovernanceCircuitBreaker:
     """
     Stops autonomous healing when consecutive post-check failures indicate
@@ -60,13 +61,13 @@ class GovernanceCircuitBreaker:
     """
 
     CLOSED = "CLOSED"
-    OPEN   = "OPEN"
+    OPEN = "OPEN"
 
     def __init__(self, failure_threshold: int = 3, nats_client=None):
-        self._threshold   = failure_threshold
-        self._failures    = 0
-        self._state       = self.CLOSED
-        self._nats        = nats_client
+        self._threshold = failure_threshold
+        self._failures = 0
+        self._state = self.CLOSED
+        self._nats = nats_client
         self._tripped_at: str | None = None
 
     @property
@@ -85,7 +86,7 @@ class GovernanceCircuitBreaker:
         """Call after a runbook's post-checks pass."""
         prev = self._failures
         self._failures = 0
-        self._state    = self.CLOSED
+        self._state = self.CLOSED
         if prev > 0:
             logger.info(f"[GovernanceCB] RESET after {prev} consecutive failure(s)")
 
@@ -103,17 +104,17 @@ class GovernanceCircuitBreaker:
 
     def reset(self) -> None:
         """Manually reset the circuit breaker (human operator action)."""
-        self._failures   = 0
-        self._state      = self.CLOSED
+        self._failures = 0
+        self._state = self.CLOSED
         self._tripped_at = None
         logger.warning("[GovernanceCB] Manually RESET by operator")
 
     def status_dict(self) -> dict:
         return {
-            "state":               self._state,
+            "state": self._state,
             "consecutive_failures": self._failures,
-            "threshold":           self._threshold,
-            "tripped_at":          self._tripped_at,
+            "threshold": self._threshold,
+            "tripped_at": self._tripped_at,
         }
 
 
@@ -121,17 +122,18 @@ class GovernanceCircuitBreaker:
 # Human Approval Queue
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class PendingApproval:
-    approval_id:   str
-    runbook_id:    str
-    action_type:   str
-    target:        str
-    incident_id:   str
+    approval_id: str
+    runbook_id: str
+    action_type: str
+    target: str
+    incident_id: str
     healing_level: int
-    confidence:    float
-    enqueued_at:   str
-    context:       dict = field(default_factory=dict)
+    confidence: float
+    enqueued_at: str
+    context: dict = field(default_factory=dict)
 
 
 class HumanApprovalQueue:
@@ -144,7 +146,7 @@ class HumanApprovalQueue:
     """
 
     def __init__(self):
-        self._pending:  dict[str, PendingApproval] = {}
+        self._pending: dict[str, PendingApproval] = {}
         self._approved: set[str] = set()
         self._rejected: set[str] = set()
 
@@ -164,15 +166,15 @@ class HumanApprovalQueue:
         """
         approval_id = str(uuid.uuid4())[:8].upper()
         self._pending[approval_id] = PendingApproval(
-            approval_id   = approval_id,
-            runbook_id    = runbook_id,
-            action_type   = action_type,
-            target        = target,
-            incident_id   = incident_id,
-            healing_level = healing_level,
-            confidence    = confidence,
-            enqueued_at   = datetime.now(timezone.utc).isoformat(),
-            context       = context or {},
+            approval_id=approval_id,
+            runbook_id=runbook_id,
+            action_type=action_type,
+            target=target,
+            incident_id=incident_id,
+            healing_level=healing_level,
+            confidence=confidence,
+            enqueued_at=datetime.now(timezone.utc).isoformat(),
+            context=context or {},
         )
         logger.warning(
             f"[HumanApprovalQueue] L3 action staged — approval_id={approval_id} "
@@ -205,7 +207,8 @@ class HumanApprovalQueue:
 
     def pending_list(self) -> list[PendingApproval]:
         return [
-            p for approval_id, p in self._pending.items()
+            p
+            for approval_id, p in self._pending.items()
             if approval_id not in self._approved and approval_id not in self._rejected
         ]
 
@@ -220,19 +223,21 @@ class HumanApprovalQueue:
 # Ladder Decision
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class LadderDecision:
-    can_proceed:          bool
-    requires_approval:    bool = False
-    approval_id:          str | None = None
-    denial_reason:        str | None = None
-    policy_decision:      PolicyDecision | None = None
+    can_proceed: bool
+    requires_approval: bool = False
+    approval_id: str | None = None
+    denial_reason: str | None = None
+    policy_decision: PolicyDecision | None = None
     cooldown_remaining_s: float = 0.0
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Action Ladder
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class ActionLadder:
     """
@@ -260,11 +265,11 @@ class ActionLadder:
         governance_cb: GovernanceCircuitBreaker,
         l3_confidence_gate: float = 0.85,
     ):
-        self._policy       = policy_engine
-        self._cooldown     = cooldown_store
-        self._approval     = approval_queue
-        self._cb           = governance_cb
-        self._l3_gate      = l3_confidence_gate
+        self._policy = policy_engine
+        self._cooldown = cooldown_store
+        self._approval = approval_queue
+        self._cb = governance_cb
+        self._l3_gate = l3_confidence_gate
 
     async def evaluate(
         self,
@@ -283,7 +288,7 @@ class ActionLadder:
             LadderDecision(requires_approval=True)   — stage for human approval
             LadderDecision(can_proceed=False)         — blocked (reason included)
         """
-        level       = runbook.healing_level
+        level = runbook.healing_level
         action_type = action.type
         blast_radius = runbook.blast_radius
 
@@ -309,8 +314,10 @@ class ActionLadder:
 
         # ── Cooldown check ────────────────────────────────────────────────────
         cooldown_key = CooldownStore.make_key(runbook.id, target)
-        in_cooldown  = await self._cooldown.is_in_cooldown(cooldown_key)
-        remaining    = await self._cooldown.remaining_seconds(cooldown_key) if in_cooldown else 0.0
+        in_cooldown = await self._cooldown.is_in_cooldown(cooldown_key)
+        remaining = (
+            await self._cooldown.remaining_seconds(cooldown_key) if in_cooldown else 0.0
+        )
 
         if in_cooldown:
             logger.info(
@@ -325,38 +332,38 @@ class ActionLadder:
 
         # ── OPA policy check ──────────────────────────────────────────────────
         policy = await self._policy.evaluate(
-            action_type          = action_type,
-            healing_level        = level,
-            blast_radius         = blast_radius,
-            in_cooldown          = in_cooldown,
-            governance_cb_open   = self._cb.is_open,
-            confidence           = confidence,
-            human_approved       = human_approved,
-            override_blast_radius= getattr(event, "override_blast_radius", False),
+            action_type=action_type,
+            healing_level=level,
+            blast_radius=blast_radius,
+            in_cooldown=in_cooldown,
+            governance_cb_open=self._cb.is_open,
+            confidence=confidence,
+            human_approved=human_approved,
+            override_blast_radius=getattr(event, "override_blast_radius", False),
         )
 
         # ── L3 + confidence gate → human approval ────────────────────────────
         if policy.requires_approval and not human_approved:
             approval_id = self._approval.enqueue(
-                runbook_id    = runbook.id,
-                action_type   = action_type,
-                target        = target,
-                incident_id   = event.correlation_id or event.event_id,
-                healing_level = level,
-                confidence    = confidence,
-                context       = {
-                    "event_id":    event.event_id,
+                runbook_id=runbook.id,
+                action_type=action_type,
+                target=target,
+                incident_id=event.correlation_id or event.event_id,
+                healing_level=level,
+                confidence=confidence,
+                context={
+                    "event_id": event.event_id,
                     "signal_type": event.signal_type,
-                    "namespace":   event.namespace,
-                    "resource":    event.resource_name,
+                    "namespace": event.namespace,
+                    "resource": event.resource_name,
                 },
             )
             return LadderDecision(
-                can_proceed       = False,
-                requires_approval = True,
-                approval_id       = approval_id,
-                policy_decision   = policy,
-                denial_reason     = "requires_human_approval",
+                can_proceed=False,
+                requires_approval=True,
+                approval_id=approval_id,
+                policy_decision=policy,
+                denial_reason="requires_human_approval",
             )
 
         # ── Policy denied ─────────────────────────────────────────────────────
@@ -366,9 +373,9 @@ class ActionLadder:
                 f"— {policy.deny_reasons}"
             )
             return LadderDecision(
-                can_proceed     = False,
-                denial_reason   = "; ".join(policy.deny_reasons),
-                policy_decision = policy,
+                can_proceed=False,
+                denial_reason="; ".join(policy.deny_reasons),
+                policy_decision=policy,
             )
 
         logger.info(

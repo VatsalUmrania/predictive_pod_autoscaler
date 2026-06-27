@@ -61,6 +61,7 @@ async def test_send_event_timeout_with_retry(reset_client):
     # Mock the persistent client
     mock_client = AsyncMock()
     from httpx import TimeoutException
+
     mock_post = AsyncMock(side_effect=TimeoutException("Timeout"))
     mock_client.post = mock_post
     client._persistent_client = mock_client
@@ -79,6 +80,7 @@ async def test_send_event_connect_error_no_retry(reset_client):
     # Mock the persistent client
     mock_client = AsyncMock()
     from httpx import ConnectError
+
     mock_post = AsyncMock(side_effect=ConnectError("Connection refused"))
     mock_client.post = mock_post
     client._persistent_client = mock_client
@@ -96,6 +98,7 @@ async def test_circuit_breaker_opens(reset_client):
     # Mock the persistent client
     mock_client = AsyncMock()
     from httpx import ConnectError
+
     mock_post = AsyncMock(side_effect=ConnectError("Connection refused"))
     mock_client.post = mock_post
     client._persistent_client = mock_client
@@ -122,6 +125,7 @@ async def test_circuit_breaker_resets_after_cooldown(reset_client):
     # Mock the persistent client
     mock_client = AsyncMock()
     from httpx import ConnectError
+
     mock_post = AsyncMock(side_effect=ConnectError("Connection refused"))
     mock_client.post = mock_post
     client._persistent_client = mock_client
@@ -156,20 +160,28 @@ async def test_event_deduplication(reset_client):
     client._persistent_client = mock_client
 
     # Send first event
-    await client.send_event("test_event", {"deployment": "test", "namespace": "default"})
+    await client.send_event(
+        "test_event", {"deployment": "test", "namespace": "default"}
+    )
     assert mock_post.call_count == 1
 
     # Send identical event immediately (should be deduplicated)
-    await client.send_event("test_event", {"deployment": "test", "namespace": "default"})
+    await client.send_event(
+        "test_event", {"deployment": "test", "namespace": "default"}
+    )
     assert mock_post.call_count == 1  # No new call
 
     # Simulate cooldown by backdating cache entry
     cache_key = "test_event:default:test"
     if cache_key in client._last_event_cache:
-        client._last_event_cache[cache_key] = time.monotonic() - client._event_cooldown_seconds - 1
+        client._last_event_cache[cache_key] = (
+            time.monotonic() - client._event_cooldown_seconds - 1
+        )
 
     # Send again (should go through)
-    await client.send_event("test_event", {"deployment": "test", "namespace": "default"})
+    await client.send_event(
+        "test_event", {"deployment": "test", "namespace": "default"}
+    )
     assert mock_post.call_count == 2  # New call
 
 
@@ -191,7 +203,9 @@ async def test_cache_max_size(reset_client):
 
     # Fill cache beyond max size
     for i in range(10):
-        await client.send_event("test_event", {"deployment": f"test{i}", "namespace": "default"})
+        await client.send_event(
+            "test_event", {"deployment": f"test{i}", "namespace": "default"}
+        )
 
     # Cache should be limited to max_size
     assert len(client._last_event_cache) <= client._max_cache_size

@@ -22,7 +22,11 @@ def cp(src: str, dest: str, retries: int = 3) -> None:
         if attempt < retries - 1:
             import sys
             import time
-            print(f" CP retry {attempt+1}/{retries}: {result.stderr.strip()}", file=sys.stderr)
+
+            print(
+                f" CP retry {attempt+1}/{retries}: {result.stderr.strip()}",
+                file=sys.stderr,
+            )
             time.sleep(2)
 
     if last_result is not None:

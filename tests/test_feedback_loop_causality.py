@@ -9,7 +9,6 @@ Validates:
 - _handle_improved reinforces signal sources
 """
 
-
 import pytest
 
 from nexus.learning.feedback_loop import (

@@ -1,19 +1,17 @@
-# Schema Version: v2 — normalized universal features
+# Schema Version: v3 — foundation model: scale-invariant normalized features
 # Requires: CPU + memory limits set on target deployment
 # Requires: Istio sidecar or /metrics HTTP endpoint
-# Breaking change from v1: do not mix v1 and v2 CSVs
+# Breaking change from v2: normalized RPS/latency replace raw values; target is multiplier
 """Shared feature ordering used across export, training, and online inference."""
 
 QUERIED_FEATURES = [
-    "rps_per_replica",
+    "normalized_rps",
     "cpu_utilization_pct",
     "memory_utilization_pct",
-    "latency_p95_ms",
-    "active_connections",
+    "latency_normalized",
     "error_rate",
-    "cpu_acceleration",
     "rps_acceleration",
-    "replicas_normalized",
+    "cpu_acceleration",
 ]
 
 TEMPORAL_FEATURES = [
@@ -26,12 +24,9 @@ TEMPORAL_FEATURES = [
 
 FEATURE_COLUMNS = QUERIED_FEATURES + TEMPORAL_FEATURES
 TARGET_COLUMNS = [
-    "rps_t3m",
-    "rps_t5m",
-    "rps_t10m",
-    "replicas_t3m",
-    "replicas_t5m",
-    "replicas_t10m",
+    "normalized_rps_t3m",
+    "normalized_rps_t5m",
+    "normalized_rps_t10m",
 ]
 
 NUM_FEATURES = len(FEATURE_COLUMNS)

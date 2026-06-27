@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 # K8s Service discovery
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def discover_k8s_service_hostnames(namespaces: list[str] | None = None) -> list[str]:
     """
     Return a list of DNS names for all Kubernetes Services in the given namespaces.
@@ -61,6 +62,7 @@ def discover_k8s_service_hostnames(namespaces: list[str] | None = None) -> list[
     try:
         from kubernetes import client as k8s_client
         from kubernetes import config as k8s_config
+
         try:
             k8s_config.load_incluster_config()
         except Exception:
@@ -77,11 +79,11 @@ def discover_k8s_service_hostnames(namespaces: list[str] | None = None) -> list[
 
         for svc in services:
             name = svc.metadata.name
-            ns   = svc.metadata.namespace
+            ns = svc.metadata.namespace
             # Skip system / headless services
             if ns in ("kube-system", "kube-public", "kube-node-lease"):
                 continue
-            if svc.spec.cluster_ip == "None":   # headless
+            if svc.spec.cluster_ip == "None":  # headless
                 continue
             hostnames.append(f"{name}.{ns}.svc.cluster.local")
 
@@ -94,6 +96,7 @@ def discover_k8s_service_hostnames(namespaces: list[str] | None = None) -> list[
 # ──────────────────────────────────────────────────────────────────────────────
 # Network Agent
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class NetworkAgent(BaseAgent):
     """
@@ -125,16 +128,22 @@ class NetworkAgent(BaseAgent):
         poll_interval_seconds: float = 30.0,
     ):
         super().__init__(
-            nats_client           = nats_client,
-            agent_type            = AgentType.NETWORK,
-            poll_interval_seconds = poll_interval_seconds,
+            nats_client=nats_client,
+            agent_type=AgentType.NETWORK,
+            poll_interval_seconds=poll_interval_seconds,
         )
-        self.namespaces             = namespaces
-        self.extra_endpoints        = extra_endpoints or []
-        self.dns_timeout_s          = float(os.getenv("NEXUS_NETWORK_DNS_TIMEOUT_S",        str(dns_timeout_s)))
-        self.http_timeout_s         = float(os.getenv("NEXUS_NETWORK_HTTP_TIMEOUT_S",       str(http_timeout_s)))
-        self.latency_threshold_ms   = float(os.getenv("NEXUS_NETWORK_LATENCY_THRESHOLD_MS", str(latency_threshold_ms)))
-        self.refresh_every          = refresh_services_every
+        self.namespaces = namespaces
+        self.extra_endpoints = extra_endpoints or []
+        self.dns_timeout_s = float(
+            os.getenv("NEXUS_NETWORK_DNS_TIMEOUT_S", str(dns_timeout_s))
+        )
+        self.http_timeout_s = float(
+            os.getenv("NEXUS_NETWORK_HTTP_TIMEOUT_S", str(http_timeout_s))
+        )
+        self.latency_threshold_ms = float(
+            os.getenv("NEXUS_NETWORK_LATENCY_THRESHOLD_MS", str(latency_threshold_ms))
+        )
+        self.refresh_every = refresh_services_every
 
         self._service_hostnames: list[str] = []
         self._cycle_count = 0
@@ -165,11 +174,18 @@ class NetworkAgent(BaseAgent):
         if latency is None:
             self._dns_failures[hostname] = self._dns_failures.get(hostname, 0) + 1
             # Only emit on first failure or every 3rd consecutive failure
-            if self._dns_failures[hostname] == 1 or self._dns_failures[hostname] % 3 == 0:
+            if (
+                self._dns_failures[hostname] == 1
+                or self._dns_failures[hostname] % 3 == 0
+            ):
                 return IncidentEvent(
                     agent=AgentType.NETWORK,
                     signal_type=SignalType.DNS_RESOLUTION_FAILURE,
-                    severity=Severity.CRITICAL if self._dns_failures[hostname] >= 3 else Severity.WARNING,
+                    severity=(
+                        Severity.CRITICAL
+                        if self._dns_failures[hostname] >= 3
+                        else Severity.WARNING
+                    ),
                     context=DNSFailureContext(
                         hostname=hostname,
                         resolvers_tried=["cluster-dns"],
@@ -194,7 +210,7 @@ class NetworkAgent(BaseAgent):
         try:
             async with httpx.AsyncClient(timeout=self.http_timeout_s) as client:
                 start = time.monotonic()
-                resp  = await client.get(url, follow_redirects=True)
+                resp = await client.get(url, follow_redirects=True)
                 latency_ms = (time.monotonic() - start) * 1000.0
                 if resp.status_code >= 500:
                     return None
@@ -207,35 +223,39 @@ class NetworkAgent(BaseAgent):
         events: list[IncidentEvent] = []
 
         for path in ("/healthz", "/health", "/ready", "/"):
-            url     = f"http://{hostname}{path}"
+            url = f"http://{hostname}{path}"
             latency = await self._probe_http(url)
 
             if latency is None:
-                events.append(IncidentEvent(
-                    agent=AgentType.NETWORK,
-                    signal_type=SignalType.SERVICE_UNREACHABLE,
-                    severity=Severity.WARNING,
-                    context={
-                        "hostname": hostname,
-                        "url":      url,
-                        "timeout_s": self.http_timeout_s,
-                    },
-                ))
-                break   # Don't probe more paths if host is unreachable
+                events.append(
+                    IncidentEvent(
+                        agent=AgentType.NETWORK,
+                        signal_type=SignalType.SERVICE_UNREACHABLE,
+                        severity=Severity.WARNING,
+                        context={
+                            "hostname": hostname,
+                            "url": url,
+                            "timeout_s": self.http_timeout_s,
+                        },
+                    )
+                )
+                break  # Don't probe more paths if host is unreachable
 
             if latency > self.latency_threshold_ms:
-                events.append(IncidentEvent(
-                    agent=AgentType.NETWORK,
-                    signal_type=SignalType.INTER_SERVICE_LATENCY,
-                    severity=Severity.WARNING,
-                    context={
-                        "hostname":    hostname,
-                        "url":         url,
-                        "latency_ms":  latency,
-                        "threshold_ms": self.latency_threshold_ms,
-                    },
-                ))
-            break   # One successful path is enough
+                events.append(
+                    IncidentEvent(
+                        agent=AgentType.NETWORK,
+                        signal_type=SignalType.INTER_SERVICE_LATENCY,
+                        severity=Severity.WARNING,
+                        context={
+                            "hostname": hostname,
+                            "url": url,
+                            "latency_ms": latency,
+                            "threshold_ms": self.latency_threshold_ms,
+                        },
+                    )
+                )
+            break  # One successful path is enough
 
         return events
 
@@ -246,7 +266,9 @@ class NetworkAgent(BaseAgent):
         self._service_hostnames = await loop.run_in_executor(
             None, discover_k8s_service_hostnames, self.namespaces
         )
-        logger.info(f"[NetworkAgent] Discovered {len(self._service_hostnames)} K8s services")
+        logger.info(
+            f"[NetworkAgent] Discovered {len(self._service_hostnames)} K8s services"
+        )
 
     # ── BaseAgent interface ───────────────────────────────────────────────────
 

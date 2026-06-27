@@ -42,7 +42,10 @@ class TestPromQL:
         # build_queries() returns raw PromQL keys. Two features (rps_per_replica,
         # replicas_normalized) are derived in the collector from the raw queries
         # requests_per_second and current_replicas respectively.
-        raw_query_keys = set(QUERIED_FEATURES) - {"rps_per_replica", "replicas_normalized"} | {
+        raw_query_keys = set(QUERIED_FEATURES) - {
+            "rps_per_replica",
+            "replicas_normalized",
+        } | {
             "requests_per_second",
             "current_replicas",
         }
@@ -51,14 +54,18 @@ class TestPromQL:
     def test_queries_are_namespace_scoped(self):
         queries = build_queries("my-app", "production", "my-app")
         for name, query in queries.items():
-            assert 'namespace="production"' in query, f"Query {name} is not namespace-scoped"
+            assert (
+                'namespace="production"' in query
+            ), f"Query {name} is not namespace-scoped"
 
     def test_cpu_uses_avg(self):
         query = build_queries("test-app", "default", "test-app")["cpu_utilization_pct"]
         assert "container_cpu_usage_seconds_total" in query
 
     def test_memory_uses_avg(self):
-        query = build_queries("test-app", "default", "test-app")["memory_utilization_pct"]
+        query = build_queries("test-app", "default", "test-app")[
+            "memory_utilization_pct"
+        ]
         assert "container_memory_working_set_bytes" in query
 
     def test_rps_uses_sum(self):

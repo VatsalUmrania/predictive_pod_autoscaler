@@ -102,7 +102,9 @@ class TestInferenceExceptionHandling:
                 predictor.scaler.transform.return_value = np.zeros((60, NUM_FEATURES))
 
                 # Make get_tensor raise exception
-                predictor.interpreter.get_tensor.side_effect = RuntimeError("Interpreter error")
+                predictor.interpreter.get_tensor.side_effect = RuntimeError(
+                    "Interpreter error"
+                )
 
                 # predict() should catch exception and not crash
                 # Since we can't catch it inside predict(), it relies on being called
@@ -137,7 +139,9 @@ class TestInferenceExceptionHandling:
                     predictor.history.append(row)
 
                 # Make scaler.transform raise
-                predictor.scaler.transform.side_effect = ValueError("Scaler state corrupted")
+                predictor.scaler.transform.side_effect = ValueError(
+                    "Scaler state corrupted"
+                )
 
                 # predict() should fail at scaler.transform line
                 with pytest.raises(ValueError, match="Scaler state corrupted"):

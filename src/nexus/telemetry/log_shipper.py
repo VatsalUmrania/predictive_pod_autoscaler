@@ -57,14 +57,14 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────────────
 
 _COMBINED_RE = re.compile(
-    r'(?P<remote_addr>\S+)\s+-\s+\S+\s+'
-    r'\[(?P<time_local>[^\]]+)\]\s+'
+    r"(?P<remote_addr>\S+)\s+-\s+\S+\s+"
+    r"\[(?P<time_local>[^\]]+)\]\s+"
     r'"(?P<method>\S+)\s+(?P<path>\S+)\s+\S+"\s+'
-    r'(?P<status>\d+)\s+'
-    r'(?P<bytes_sent>\d+)\s+'
+    r"(?P<status>\d+)\s+"
+    r"(?P<bytes_sent>\d+)\s+"
     r'"(?P<referer>[^"]*)"\s+'
     r'"(?P<user_agent>[^"]*)"'
-    r'(?:\s+(?P<request_time>\d+\.\d+))?'  # Optional: $request_time
+    r"(?:\s+(?P<request_time>\d+\.\d+))?"  # Optional: $request_time
 )
 
 _NGINX_TIME_FMT = "%d/%b/%Y:%H:%M:%S %z"
@@ -77,10 +77,10 @@ def parse_nginx_line(line: str) -> dict | None:
         return None
     d = m.groupdict()
     try:
-        d["status"]     = int(d["status"])
+        d["status"] = int(d["status"])
         d["bytes_sent"] = int(d["bytes_sent"])
         d["request_time"] = float(d["request_time"]) if d.get("request_time") else None
-        d["timestamp"]  = datetime.strptime(d["time_local"], _NGINX_TIME_FMT)
+        d["timestamp"] = datetime.strptime(d["time_local"], _NGINX_TIME_FMT)
     except (ValueError, TypeError):
         return None
     return d
@@ -90,11 +90,12 @@ def parse_nginx_line(line: str) -> dict | None:
 # Endpoint statistics (rolling window for anomaly detection)
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class EndpointStats:
     """Rolling-window per-endpoint statistics for anomaly detection."""
 
     def __init__(self, window_seconds: int = 60):
-        self.window   = window_seconds
+        self.window = window_seconds
         # deque of (timestamp, status_code, request_time_or_None)
         self._records: deque = deque()
 
@@ -131,6 +132,7 @@ class EndpointStats:
 # Log Shipper
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class NginxLogShipper:
     """
     Async NGINX access log tailer with OTel shipping and NATS anomaly events.
@@ -155,13 +157,13 @@ class NginxLogShipper:
         window_seconds: int = 60,
         check_interval: int = 15,
     ):
-        self.log_path            = Path(log_path)
-        self.nats                = nats_client
-        self.otel_endpoint       = otel_endpoint
+        self.log_path = Path(log_path)
+        self.nats = nats_client
+        self.otel_endpoint = otel_endpoint
         self.error_rate_threshold = error_rate_threshold
-        self.latency_p95_ms      = latency_p95_ms
-        self.window_seconds      = window_seconds
-        self.check_interval      = check_interval
+        self.latency_p95_ms = latency_p95_ms
+        self.window_seconds = window_seconds
+        self.check_interval = check_interval
 
         # Per-endpoint rolling stats
         self._stats: dict[str, EndpointStats] = defaultdict(
@@ -173,11 +175,13 @@ class NginxLogShipper:
 
     def _setup_otel(self) -> logging.Logger:
         """Configure OTel SDK to export logs to Collector via OTLP/HTTP."""
-        resource = Resource.create({
-            "service.name":      "nexus-nginx-log-shipper",
-            "service.version":   "0.1.0",
-            "service.namespace": "nexus",
-        })
+        resource = Resource.create(
+            {
+                "service.name": "nexus-nginx-log-shipper",
+                "service.version": "0.1.0",
+                "service.namespace": "nexus",
+            }
+        )
         exporter = OTLPLogExporter(endpoint=f"{self.otel_endpoint}/v1/logs")
         provider = LoggerProvider(resource=resource)
         provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
@@ -194,7 +198,9 @@ class NginxLogShipper:
     async def _tail(self) -> AsyncIterator[str]:
         """Async generator that yields new lines as NGINX writes them."""
         if not self.log_path.exists():
-            logger.warning(f"[LogShipper] Log file not found: {self.log_path}. Waiting ...")
+            logger.warning(
+                f"[LogShipper] Log file not found: {self.log_path}. Waiting ..."
+            )
             while not self.log_path.exists():
                 await asyncio.sleep(5)
 
@@ -214,22 +220,22 @@ class NginxLogShipper:
         if not record:
             return
 
-        endpoint = record["path"].split("?")[0]   # Strip query string
+        endpoint = record["path"].split("?")[0]  # Strip query string
         self._stats[endpoint].record(record["status"], record.get("request_time"))
 
         # Ship to OTel Loki via structured log
         self._otel_logger.info(
             f'{record["method"]} {record["path"]} {record["status"]}',
             extra={
-                "otelSpanID":   "0000000000000000",
-                "otelTraceID":  "00000000000000000000000000000000",
-                "remote_addr":  record["remote_addr"],
-                "method":       record["method"],
-                "path":         record["path"],
-                "status":       record["status"],
-                "bytes_sent":   record["bytes_sent"],
+                "otelSpanID": "0000000000000000",
+                "otelTraceID": "00000000000000000000000000000000",
+                "remote_addr": record["remote_addr"],
+                "method": record["method"],
+                "path": record["path"],
+                "status": record["status"],
+                "bytes_sent": record["bytes_sent"],
                 "request_time": record.get("request_time"),
-                "agent":        "nexus.nginx_log_shipper",
+                "agent": "nexus.nginx_log_shipper",
             },
         )
 
@@ -240,58 +246,66 @@ class NginxLogShipper:
 
         for endpoint, stats in list(self._stats.items()):
             err_rate = stats.error_rate()
-            rps      = stats.rps()
-            p95      = stats.p95_latency()
+            rps = stats.rps()
+            p95 = stats.p95_latency()
 
             if err_rate > self.error_rate_threshold and rps > 0.1:
                 logger.warning(
                     f"[LogShipper] HIGH_ERROR_RATE on {endpoint}: "
                     f"{err_rate:.1%} errors over {self.window_seconds}s"
                 )
-                await self.nats.publish(IncidentEvent(
-                    agent=AgentType.NGINX,
-                    signal_type=SignalType.HIGH_ERROR_RATE,
-                    severity=Severity.CRITICAL if err_rate > 0.20 else Severity.WARNING,
-                    context=NginxHighErrorContext(
-                        endpoint=endpoint,
-                        error_rate=err_rate,
-                        baseline_rate=0.02,
-                        rps=rps,
-                        window_seconds=self.window_seconds,
-                    ).model_dump(),
-                    suggested_runbook="runbook_high_error_rate_post_deploy_v1",
-                    suggested_healing_level=2,
-                ))
+                await self.nats.publish(
+                    IncidentEvent(
+                        agent=AgentType.NGINX,
+                        signal_type=SignalType.HIGH_ERROR_RATE,
+                        severity=(
+                            Severity.CRITICAL if err_rate > 0.20 else Severity.WARNING
+                        ),
+                        context=NginxHighErrorContext(
+                            endpoint=endpoint,
+                            error_rate=err_rate,
+                            baseline_rate=0.02,
+                            rps=rps,
+                            window_seconds=self.window_seconds,
+                        ).model_dump(),
+                        suggested_runbook="runbook_high_error_rate_post_deploy_v1",
+                        suggested_healing_level=2,
+                    )
+                )
 
             if p95 is not None and p95 * 1000 > self.latency_p95_ms:
                 logger.warning(
                     f"[LogShipper] HIGH_LATENCY on {endpoint}: "
                     f"P95={p95*1000:.0f}ms > {self.latency_p95_ms}ms"
                 )
-                await self.nats.publish(IncidentEvent(
-                    agent=AgentType.NGINX,
-                    signal_type=SignalType.HIGH_LATENCY,
-                    severity=Severity.WARNING,
-                    context={
-                        "endpoint":       endpoint,
-                        "p95_latency_ms": p95 * 1000,
-                        "threshold_ms":   self.latency_p95_ms,
-                        "rps":            rps,
-                    },
-                ))
+                await self.nats.publish(
+                    IncidentEvent(
+                        agent=AgentType.NGINX,
+                        signal_type=SignalType.HIGH_LATENCY,
+                        severity=Severity.WARNING,
+                        context={
+                            "endpoint": endpoint,
+                            "p95_latency_ms": p95 * 1000,
+                            "threshold_ms": self.latency_p95_ms,
+                            "rps": rps,
+                        },
+                    )
+                )
 
     # ── Run ───────────────────────────────────────────────────────────────────
 
     async def run(self) -> None:
         """Start tailing and shipping. Runs indefinitely."""
-        logger.info(f"[LogShipper] Tailing {self.log_path}, shipping to {self.otel_endpoint}")
+        logger.info(
+            f"[LogShipper] Tailing {self.log_path}, shipping to {self.otel_endpoint}"
+        )
 
         async def threshold_loop():
             while True:
                 await asyncio.sleep(self.check_interval)
                 await self._check_thresholds()
 
-        tail_task      = asyncio.create_task(self._tail_loop())
+        tail_task = asyncio.create_task(self._tail_loop())
         threshold_task = asyncio.create_task(threshold_loop())
 
         await asyncio.gather(tail_task, threshold_task)
@@ -305,12 +319,13 @@ class NginxLogShipper:
 # Entrypoint (for running as a standalone sidecar / process)
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 async def _main() -> None:
     import os
 
-    log_path     = os.getenv("NGINX_LOG_PATH",    "/var/log/nginx/access.log")
-    otel_ep      = os.getenv("OTEL_ENDPOINT",     "http://localhost:4318")
-    nats_url     = os.getenv("NATS_URL",          "nats://localhost:4222")
+    log_path = os.getenv("NGINX_LOG_PATH", "/var/log/nginx/access.log")
+    otel_ep = os.getenv("OTEL_ENDPOINT", "http://localhost:4318")
+    nats_url = os.getenv("NATS_URL", "nats://localhost:4222")
 
     logging.basicConfig(level=logging.INFO)
 

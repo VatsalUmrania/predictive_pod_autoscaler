@@ -160,9 +160,15 @@ class TestEvaluateModel:
             assert eval_result["test_samples"] > 0
 
             # Check files created
-            assert os.path.exists(os.path.join(output_dir, f"eval_pred_vs_actual_{target}.png"))
-            assert os.path.exists(os.path.join(output_dir, f"eval_ppa_vs_hpa_{target}.png"))
-            assert os.path.exists(os.path.join(output_dir, f"eval_summary_{target}.json"))
+            assert os.path.exists(
+                os.path.join(output_dir, f"eval_pred_vs_actual_{target}.png")
+            )
+            assert os.path.exists(
+                os.path.join(output_dir, f"eval_ppa_vs_hpa_{target}.png")
+            )
+            assert os.path.exists(
+                os.path.join(output_dir, f"eval_summary_{target}.json")
+            )
 
     def test_returns_none_for_missing_model(self):
         result = evaluate_model(
@@ -195,7 +201,9 @@ class TestEvaluateModel:
                 lambda path: DummyModel(),
             )
             monkeypatch.setattr(evaluate_module.joblib, "load", lambda path: object())
-            monkeypatch.setattr(evaluate_module.pd, "read_csv", lambda *args, **kwargs: df)
+            monkeypatch.setattr(
+                evaluate_module.pd, "read_csv", lambda *args, **kwargs: df
+            )
             monkeypatch.setattr(
                 evaluate_module,
                 "create_dataset_from_segments",
@@ -216,9 +224,15 @@ class TestEvaluateModel:
             )
 
             assert result is not None
-            assert os.path.exists(os.path.join(output_dir, f"eval_summary_{target}.json"))
-            assert not os.path.exists(os.path.join(output_dir, f"eval_pred_vs_actual_{target}.png"))
-            assert not os.path.exists(os.path.join(output_dir, f"eval_ppa_vs_hpa_{target}.png"))
+            assert os.path.exists(
+                os.path.join(output_dir, f"eval_summary_{target}.json")
+            )
+            assert not os.path.exists(
+                os.path.join(output_dir, f"eval_pred_vs_actual_{target}.png")
+            )
+            assert not os.path.exists(
+                os.path.join(output_dir, f"eval_ppa_vs_hpa_{target}.png")
+            )
 
             with open(os.path.join(output_dir, f"eval_summary_{target}.json")) as f:
                 summary = json.load(f)

@@ -145,7 +145,9 @@ def reconciliation_request_factory(feature_vector_factory, prediction_factory):
     ) -> ReconciliationRequest:
         """Build ReconciliationRequest."""
         if features is None:
-            features = feature_vector_factory(rps_per_replica=predicted_rps / current_replicas)
+            features = feature_vector_factory(
+                rps_per_replica=predicted_rps / current_replicas
+            )
 
         prediction = prediction_factory(predicted_rps=predicted_rps)
 

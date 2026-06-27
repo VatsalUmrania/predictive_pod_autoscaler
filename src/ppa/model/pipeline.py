@@ -2,8 +2,8 @@
 """Train → Evaluate → Convert for one or more prediction horizons.
 
 Usage:
-    python model/pipeline.py --csv data/training-data/training_data_v2.csv
-    python model/pipeline.py --csv ... --horizons rps_t3m,rps_t10m --epochs 20
+    python model/pipeline.py --csv data/training-data/training_data_v3.csv
+    python model/pipeline.py --csv ... --horizons normalized_rps_t3m,normalized_rps_t10m --epochs 20
     python model/pipeline.py --csv ... --quality-gate 30
 """
 
@@ -88,7 +88,9 @@ def promote_artifacts(
 
     shutil.copy2(challenger_paths["tflite"], dst_model)
     shutil.copy2(challenger_paths["scaler"], dst_scaler)
-    if challenger_paths.get("target_scaler") and os.path.exists(challenger_paths["target_scaler"]):
+    if challenger_paths.get("target_scaler") and os.path.exists(
+        challenger_paths["target_scaler"]
+    ):
         shutil.copy2(challenger_paths["target_scaler"], dst_target_scaler)
     shutil.copy2(eval_summary_path, dst_summary)
 
@@ -109,7 +111,9 @@ def promote_artifacts(
     return {
         "model": dst_model,
         "scaler": dst_scaler,
-        "target_scaler": (dst_target_scaler if os.path.exists(dst_target_scaler) else None),
+        "target_scaler": (
+            dst_target_scaler if os.path.exists(dst_target_scaler) else None
+        ),
         "summary": dst_summary,
     }
 
@@ -326,7 +330,9 @@ def _handle_promotion(
     paths = result_dict["paths"]
     tflite_path = result_dict["tflite_path"]
 
-    champion_summary_path = os.path.join(champion_dir, app_name, target, "eval_summary.json")
+    champion_summary_path = os.path.join(
+        champion_dir, app_name, target, "eval_summary.json"
+    )
     champion_metrics = _load_json(champion_summary_path)
 
     promote, reason = should_promote(
@@ -351,7 +357,9 @@ def _handle_promotion(
             "scaler": paths["scaler"],
             "target_scaler": paths.get("target_scaler"),
         },
-        eval_summary_path=os.path.join(os.path.dirname(tflite_path), f"eval_summary_{target}.json"),
+        eval_summary_path=os.path.join(
+            os.path.dirname(tflite_path), f"eval_summary_{target}.json"
+        ),
         champion_dir=champion_dir,
     )
 
@@ -415,13 +423,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--csv",
         type=str,
-        default="data/training-data/training_data_v2.csv",
+        default="data/training-data/training_data_v3.csv",
         help="Path to training CSV",
     )
     parser.add_argument(
         "--horizons",
         type=str,
-        default="rps_t3m,rps_t5m,rps_t10m",
+        default="normalized_rps_t3m,normalized_rps_t5m,normalized_rps_t10m",
         help="Comma-separated target columns to train",
     )
     parser.add_argument("--epochs", type=int, default=50)
@@ -453,7 +461,9 @@ if __name__ == "__main__":
         default=5.0,
         help="Minimum target RPS floor for rps_* targets during training",
     )
-    parser.add_argument("--patience", type=int, default=15, help="Early stopping patience")
+    parser.add_argument(
+        "--patience", type=int, default=15, help="Early stopping patience"
+    )
     parser.add_argument("--no-quantize", action="store_true")
     parser.add_argument(
         "--promote-if-better",

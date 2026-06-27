@@ -139,6 +139,7 @@ class PpaOutcomeTracker:
         if url is None:
             try:
                 from ppa.config import get_prometheus_url
+
                 url = get_prometheus_url()
             except Exception:
                 url = "http://prometheus:9090"
@@ -147,7 +148,7 @@ class PpaOutcomeTracker:
 
             prom = PrometheusConnect(url=url)
             query = (
-                f'sum(rate(nginx_ingress_requests_total'
+                f"sum(rate(nginx_ingress_requests_total"
                 f'{{backend=~"{deployment}.*"}}[1m])) * 60'
             )
             result = prom.custom_query(query=query)
@@ -194,6 +195,7 @@ class PpaOutcomeTracker:
 
             try:
                 import json as _json
+
                 subject = f"ppa.outcomes.{pred.deployment}"
                 payload = _json.dumps(outcome_event).encode()
                 # NATSClient.publish() only accepts IncidentEvent objects.
@@ -212,9 +214,7 @@ class PpaOutcomeTracker:
                     f"(pred={pred.predicted_rps:.0f}, actual={actual_rps:.0f})"
                 )
             except Exception as exc:
-                logger.error(
-                    f"[PpaOutcomeTracker] Failed to publish outcome: {exc}"
-                )
+                logger.error(f"[PpaOutcomeTracker] Failed to publish outcome: {exc}")
 
             self._recent_outcomes.append(outcome_event)
             del self._pending[decision_id]

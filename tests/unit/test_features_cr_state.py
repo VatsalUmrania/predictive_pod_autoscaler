@@ -69,12 +69,16 @@ class TestPromQueryWithCRState:
 
     @patch("ppa.infrastructure.prometheus.requests.get")
     @patch("ppa.infrastructure.prometheus.get_current_prometheus_url")
-    def test_successful_query_resets_cr_state_circuit_breaker(self, mock_get_url, mock_requests):
+    def test_successful_query_resets_cr_state_circuit_breaker(
+        self, mock_get_url, mock_requests
+    ):
         """Test that successful query resets CR state circuit breaker."""
         cr_state = MockCRState(prom_failures=2, prom_last_failure_time=100.0)
         mock_get_url.return_value = "http://prom:9090"
         mock_response = MagicMock()
-        mock_response.json.return_value = {"data": {"result": [{"value": [1000, "42.5"]}]}}
+        mock_response.json.return_value = {
+            "data": {"result": [{"value": [1000, "42.5"]}]}
+        }
         mock_requests.return_value = mock_response
 
         result = prom_query("test_query", cr_state=cr_state)
@@ -86,7 +90,9 @@ class TestPromQueryWithCRState:
 
     @patch("ppa.infrastructure.prometheus.requests.get")
     @patch("ppa.infrastructure.prometheus.get_current_prometheus_url")
-    def test_failed_query_increments_cr_state_failures(self, mock_get_url, mock_requests):
+    def test_failed_query_increments_cr_state_failures(
+        self, mock_get_url, mock_requests
+    ):
         """Test that failed query increments CR state failure counter (returns None, not exception)."""
         cr_state = MockCRState(prom_failures=0, prom_last_failure_time=0.0)
         mock_get_url.return_value = "http://prom:9090"
@@ -102,7 +108,9 @@ class TestPromQueryWithCRState:
 
     @patch("ppa.infrastructure.prometheus.requests.get")
     @patch("ppa.infrastructure.prometheus.get_current_prometheus_url")
-    def test_circuit_breaker_isolation_cr1_fails_cr2_succeeds(self, mock_get_url, mock_requests):
+    def test_circuit_breaker_isolation_cr1_fails_cr2_succeeds(
+        self, mock_get_url, mock_requests
+    ):
         """Test that CR1's circuit breaker failure doesn't affect CR2."""
         # CR1 state: circuit breaker active (too many failures, recent last_failure_time)
         # Set last_failure_time to very recently (current time) so backoff hasn't elapsed
@@ -116,7 +124,9 @@ class TestPromQueryWithCRState:
 
         mock_get_url.return_value = "http://prom:9090"
         mock_response = MagicMock()
-        mock_response.json.return_value = {"data": {"result": [{"value": [1000, "100.0"]}]}}
+        mock_response.json.return_value = {
+            "data": {"result": [{"value": [1000, "100.0"]}]}
+        }
         mock_requests.return_value = mock_response
 
         # CR1 should raise circuit breaker error (backoff active)
@@ -188,7 +198,9 @@ class TestMultipleCRsIsolation:
 
     @patch("ppa.infrastructure.prometheus.requests.get")
     @patch("ppa.infrastructure.prometheus.get_current_prometheus_url")
-    def test_multiple_crs_independent_failure_tracking(self, mock_get_url, mock_requests):
+    def test_multiple_crs_independent_failure_tracking(
+        self, mock_get_url, mock_requests
+    ):
         """Test that multiple CRs track failures independently."""
         cr1 = MockCRState(prom_failures=0)
         cr2 = MockCRState(prom_failures=0)
@@ -259,7 +271,7 @@ class TestBuildFeatureVectorValidation:
             )
 
     @patch("ppa.operator.features.prom_query_parallel")
-    def test_scale_from_zero_uses_raw_rps_per_replica(self, mock_parallel):
+    def test_scale_from_zero_uses_normalized_rps(self, mock_parallel):
         mock_parallel.return_value = {
             "requests_per_second": 42.0,
             "cpu_utilization_pct": 0.0,
@@ -282,8 +294,49 @@ class TestBuildFeatureVectorValidation:
 
         assert replicas == 0.0
         assert raw["requests_per_second"] == 42.0
-        assert features["rps_per_replica"] == 42.0
+        # v3 schema: normalized_rps is rps / sliding-window-max; first probe warms
+        # the deque so rps == max, collapsing to 1.0 (still inside trained [0, 1]).
+        assert features["normalized_rps"] == pytest.approx(1.0)
         assert degraded == []
+
+    @patch("ppa.operator.features.prom_query_parallel")
+    def test_sub_one_rps_normalized_rps_matches_training_floor(self, mock_parallel):
+        """Regression: sub-1 RPS traffic must NOT collapse normalized_rps to 1.0.
+
+        Training uses np.maximum(rolling_max_rps, 1.0) as the denominator floor.
+        If inference used a smaller floor (1e-6), at 0.5333 req/s:
+            normalized_rps = 0.5333 / 0.5333 = 1.0  (WRONG)
+        The target_scaler then inverse-transforms 1.0 → ~345 req/s, triggering
+        spurious scale-out from 2 → 4 replicas even at near-zero traffic.
+        With floor=1.0 the correct value is 0.5333 / 1.0 = 0.5333.
+        """
+        mock_parallel.return_value = {
+            "requests_per_second": 0.5333,
+            "cpu_utilization_pct": 0.6,
+            "memory_utilization_pct": 18.5,
+            "latency_p95_ms": 4.75,
+            "active_connections": 0.0,
+            "error_rate": float("nan"),
+            "cpu_acceleration": -0.057,
+            "rps_acceleration": 0.0,
+            "current_replicas": 2.0,
+        }
+
+        features, _, _, _ = build_feature_vector(
+            target_app="shop-demo",
+            namespace="default",
+            reference_replicas=2,
+            max_replicas=10,
+            cr_state=MockCRState(),
+        )
+
+        # With floor=1.0: 0.5333 / max(0.5333, 1.0) = 0.5333 / 1.0 = 0.5333
+        assert features["normalized_rps"] == pytest.approx(0.5333, abs=1e-4), (
+            f"Got normalized_rps={features['normalized_rps']:.4f}; expected ~0.53. "
+            "A value of 1.0 means the training/inference floor is mismatched "
+            "and the target_scaler will return the training-time peak load."
+        )
+        assert features["normalized_rps"] < 1.0
 
     @patch("ppa.operator.features.time_now")
     @patch("ppa.operator.features.prom_query_parallel")

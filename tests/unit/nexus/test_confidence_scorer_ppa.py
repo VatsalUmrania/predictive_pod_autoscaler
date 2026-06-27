@@ -29,7 +29,7 @@ def make_event(
 
 def make_cluster(events=None):
     cluster = IncidentCluster.new(make_event())
-    for evt in (events or []):
+    for evt in events or []:
         cluster.add_event(evt)
     return cluster
 
@@ -73,9 +73,9 @@ class TestPpaAlignmentBonus:
         score_without = scorer.score(no_spike_cluster, rca_result)
 
         # PPA bonus (+0.05) should make score_with > score_without
-        assert score_with_spike > score_without, (
-            f"PPA bonus should increase score: {score_with_spike:.3f} vs {score_without:.3f}"
-        )
+        assert (
+            score_with_spike > score_without
+        ), f"PPA bonus should increase score: {score_with_spike:.3f} vs {score_without:.3f}"
 
     @pytest.mark.asyncio
     async def test_ppa_low_confidence_no_boost(self):
@@ -107,11 +107,13 @@ class TestPpaAlignmentBonus:
         rca_result.runbook_id = None
 
         score = scorer.score(cluster, rca_result)
-        baseline = sum([
-            0.55 * 0.65,
-            0.35 * cluster.signal_agreement_score(),
-            0.10 * ((0.0 + 0.20) / 0.25),
-        ])
+        baseline = sum(
+            [
+                0.55 * 0.65,
+                0.35 * cluster.signal_agreement_score(),
+                0.10 * ((0.0 + 0.20) / 0.25),
+            ]
+        )
         assert abs(score - (baseline - scorer._bias)) < 0.01
 
     @pytest.mark.asyncio

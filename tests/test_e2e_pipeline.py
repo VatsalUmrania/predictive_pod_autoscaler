@@ -211,7 +211,9 @@ class TestConvertPipeline:
         with open(tflite_path, "rb") as f:
             tflite_bytes = f.read()
             # TFLite files contain "TFL3" within the first 16 bytes (FlatBuffers format)
-            assert b"TFL3" in tflite_bytes[:20], "Invalid TFLite file (missing TFL3 magic bytes)"
+            assert (
+                b"TFL3" in tflite_bytes[:20]
+            ), "Invalid TFLite file (missing TFL3 magic bytes)"
 
     def test_quantized_smaller_than_unquantized(self, synthetic_csv):
         """Quantized model should be smaller."""

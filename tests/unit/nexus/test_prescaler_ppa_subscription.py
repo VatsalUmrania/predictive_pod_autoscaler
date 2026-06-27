@@ -44,12 +44,14 @@ class TestSubscribeToPpaPredictions:
             durable_name=None,
             stream_name=None,
         ):
-            stored.update({
-                "subject_pattern": subject_pattern,
-                "handler": handler,
-                "durable_name": durable_name,
-                "stream_name": stream_name,
-            })
+            stored.update(
+                {
+                    "subject_pattern": subject_pattern,
+                    "handler": handler,
+                    "durable_name": durable_name,
+                    "stream_name": stream_name,
+                }
+            )
 
         mock_nats = MagicMock()
         mock_nats.subscribe_raw = spy_subscribe_raw

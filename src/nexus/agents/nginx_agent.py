@@ -65,18 +65,19 @@ def parse_stub_status(text: str) -> dict | None:
         return None
     return {
         "active_connections": int(m.group(1)),
-        "accepts":            int(m.group(2)),
-        "handled":            int(m.group(3)),
-        "requests":           int(m.group(4)),
-        "reading":            int(m.group(5)),
-        "writing":            int(m.group(6)),
-        "waiting":            int(m.group(7)),
+        "accepts": int(m.group(2)),
+        "handled": int(m.group(3)),
+        "requests": int(m.group(4)),
+        "reading": int(m.group(5)),
+        "writing": int(m.group(6)),
+        "waiting": int(m.group(7)),
     }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # NGINX Agent
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class NginxAgent(BaseAgent):
     """
@@ -109,20 +110,24 @@ class NginxAgent(BaseAgent):
         poll_interval_seconds: float = 15.0,
     ):
         super().__init__(
-            nats_client           = nats_client,
-            agent_type            = AgentType.NGINX,
-            poll_interval_seconds = poll_interval_seconds,
+            nats_client=nats_client,
+            agent_type=AgentType.NGINX,
+            poll_interval_seconds=poll_interval_seconds,
         )
-        self.log_path        = Path(log_path)
-        self.stub_status_url = stub_status_url or os.getenv("NEXUS_NGINX_STUB_STATUS_URL")
-        self.window_s        = window_seconds
-        self.http_timeout    = 5.0
+        self.log_path = Path(log_path)
+        self.stub_status_url = stub_status_url or os.getenv(
+            "NEXUS_NGINX_STUB_STATUS_URL"
+        )
+        self.window_s = window_seconds
+        self.http_timeout = 5.0
 
         # Thresholds
-        self.error_threshold = float(os.getenv("NEXUS_NGINX_ERROR_RATE_THRESHOLD", "0.05"))
-        self.latency_p95_ms  = float(os.getenv("NEXUS_NGINX_LATENCY_P95_MS",       "500.0"))
-        self.rps_spike_mult  = float(os.getenv("NEXUS_NGINX_RPS_SPIKE_MULT",        "3.0"))
-        self.min_rps         = float(os.getenv("NEXUS_NGINX_MIN_RPS_FOR_ALERTS",    "0.1"))
+        self.error_threshold = float(
+            os.getenv("NEXUS_NGINX_ERROR_RATE_THRESHOLD", "0.05")
+        )
+        self.latency_p95_ms = float(os.getenv("NEXUS_NGINX_LATENCY_P95_MS", "500.0"))
+        self.rps_spike_mult = float(os.getenv("NEXUS_NGINX_RPS_SPIKE_MULT", "3.0"))
+        self.min_rps = float(os.getenv("NEXUS_NGINX_MIN_RPS_FOR_ALERTS", "0.1"))
 
         # Per-endpoint rolling stats
         self._stats: dict[str, EndpointStats] = defaultdict(
@@ -197,43 +202,49 @@ class NginxAgent(BaseAgent):
 
         for endpoint, stats in list(self._stats.items()):
             err_rate = stats.error_rate()
-            rps      = stats.rps()
-            p95      = stats.p95_latency()
+            rps = stats.rps()
+            p95 = stats.p95_latency()
 
             if rps < self.min_rps:
-                continue   # Not enough traffic to be meaningful
+                continue  # Not enough traffic to be meaningful
 
             # Error rate breach
             if err_rate > self.error_threshold:
-                events.append(IncidentEvent(
-                    agent=AgentType.NGINX,
-                    signal_type=SignalType.HIGH_ERROR_RATE,
-                    severity=Severity.CRITICAL if err_rate > 0.20 else Severity.WARNING,
-                    context=NginxHighErrorContext(
-                        endpoint=endpoint,
-                        error_rate=err_rate,
-                        baseline_rate=0.02,
-                        rps=rps,
-                        window_seconds=self.window_s,
-                    ).model_dump(),
-                    suggested_runbook="runbook_high_error_rate_post_deploy_v1",
-                    suggested_healing_level=2,
-                    confidence=0.88,
-                ))
+                events.append(
+                    IncidentEvent(
+                        agent=AgentType.NGINX,
+                        signal_type=SignalType.HIGH_ERROR_RATE,
+                        severity=(
+                            Severity.CRITICAL if err_rate > 0.20 else Severity.WARNING
+                        ),
+                        context=NginxHighErrorContext(
+                            endpoint=endpoint,
+                            error_rate=err_rate,
+                            baseline_rate=0.02,
+                            rps=rps,
+                            window_seconds=self.window_s,
+                        ).model_dump(),
+                        suggested_runbook="runbook_high_error_rate_post_deploy_v1",
+                        suggested_healing_level=2,
+                        confidence=0.88,
+                    )
+                )
 
             # P95 latency breach
             if p95 is not None and (p95 * 1000) > self.latency_p95_ms:
-                events.append(IncidentEvent(
-                    agent=AgentType.NGINX,
-                    signal_type=SignalType.HIGH_LATENCY,
-                    severity=Severity.WARNING,
-                    context={
-                        "endpoint":        endpoint,
-                        "p95_latency_ms":  p95 * 1000,
-                        "threshold_ms":    self.latency_p95_ms,
-                        "rps":             rps,
-                    },
-                ))
+                events.append(
+                    IncidentEvent(
+                        agent=AgentType.NGINX,
+                        signal_type=SignalType.HIGH_LATENCY,
+                        severity=Severity.WARNING,
+                        context={
+                            "endpoint": endpoint,
+                            "p95_latency_ms": p95 * 1000,
+                            "threshold_ms": self.latency_p95_ms,
+                            "rps": rps,
+                        },
+                    )
+                )
 
             # RPS spike
             self._rps_history[endpoint].append(rps)
@@ -241,19 +252,21 @@ class NginxAgent(BaseAgent):
             if len(history) >= 5:
                 median = sorted(history)[len(history) // 2]
                 if median > 0 and rps > median * self.rps_spike_mult:
-                    events.append(IncidentEvent(
-                        agent=AgentType.NGINX,
-                        signal_type=SignalType.TRAFFIC_SPIKE,
-                        severity=Severity.WARNING,
-                        context={
-                            "endpoint":          endpoint,
-                            "current_rps":       rps,
-                            "baseline_rps":      median,
-                            "spike_multiplier":  rps / median,
-                            "threshold_mult":    self.rps_spike_mult,
-                        },
-                        confidence=0.75,
-                    ))
+                    events.append(
+                        IncidentEvent(
+                            agent=AgentType.NGINX,
+                            signal_type=SignalType.TRAFFIC_SPIKE,
+                            severity=Severity.WARNING,
+                            context={
+                                "endpoint": endpoint,
+                                "current_rps": rps,
+                                "baseline_rps": median,
+                                "spike_multiplier": rps / median,
+                                "threshold_mult": self.rps_spike_mult,
+                            },
+                            confidence=0.75,
+                        )
+                    )
 
         return events
 
@@ -270,16 +283,18 @@ class NginxAgent(BaseAgent):
         if stub:
             # Upstream "down" heuristic: all connections waiting, none active
             if stub["active_connections"] > 0 and stub["writing"] == 0:
-                events.append(IncidentEvent(
-                    agent=AgentType.NGINX,
-                    signal_type=SignalType.UPSTREAM_DOWN,
-                    severity=Severity.CRITICAL,
-                    context={
-                        "active_connections": stub["active_connections"],
-                        "writing":            stub["writing"],
-                        "waiting":            stub["waiting"],
-                        "note":               "All connections waiting — possible upstream failure",
-                    },
-                ))
+                events.append(
+                    IncidentEvent(
+                        agent=AgentType.NGINX,
+                        signal_type=SignalType.UPSTREAM_DOWN,
+                        severity=Severity.CRITICAL,
+                        context={
+                            "active_connections": stub["active_connections"],
+                            "writing": stub["writing"],
+                            "waiting": stub["waiting"],
+                            "note": "All connections waiting — possible upstream failure",
+                        },
+                    )
+                )
 
         return events

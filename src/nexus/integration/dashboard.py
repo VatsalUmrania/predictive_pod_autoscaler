@@ -45,7 +45,7 @@ router = APIRouter()
 # ──────────────────────────────────────────────────────────────────────────────
 
 _policy_overrides: dict[str, dict[str, Any]] = {}
-_policy_cache:     dict[str, dict[str, Any]] = {}   # app_name → resolved SelfhealConfig dict
+_policy_cache: dict[str, dict[str, Any]] = {}  # app_name → resolved SelfhealConfig dict
 
 
 def cache_policy(app_name: str, policy_dict: dict[str, Any]) -> None:
@@ -101,7 +101,7 @@ def refresh_policy_cache() -> int:
 
 _INCIDENT_DB = _os.environ.get(
     "NEXUS_DASHBOARD_DB_PATH",
-    "/data/dashboard_incidents.db",   # separate from nexus_audit.db
+    "/data/dashboard_incidents.db",  # separate from nexus_audit.db
 )
 
 _CREATE_SQL = """
@@ -129,9 +129,14 @@ def _write_incident(row: dict[str, Any]) -> None:
                (incident_id, runbook_id, target, level, outcome, description, confidence, timestamp)
                VALUES (?,?,?,?,?,?,?,?)""",
             (
-                row.get("incident_id"), row.get("runbook_id"), row.get("target"),
-                row.get("level"),       row.get("outcome"),    row.get("description"),
-                row.get("confidence"),  row.get("timestamp"),
+                row.get("incident_id"),
+                row.get("runbook_id"),
+                row.get("target"),
+                row.get("level"),
+                row.get("outcome"),
+                row.get("description"),
+                row.get("confidence"),
+                row.get("timestamp"),
             ),
         )
         con.execute("""
@@ -141,7 +146,9 @@ def _write_incident(row: dict[str, Any]) -> None:
         """)
         con.commit()
         con.close()
-        logger.info(f"[Dashboard] ✅ Incident stored: {row.get('incident_id')} outcome={row.get('outcome')}")
+        logger.info(
+            f"[Dashboard] ✅ Incident stored: {row.get('incident_id')} outcome={row.get('outcome')}"
+        )
     except Exception as _e:
         logger.warning(f"[Dashboard] incident write failed: {_e}")
 
@@ -149,7 +156,7 @@ def _write_incident(row: dict[str, Any]) -> None:
 def _read_incidents(n: int, app: str | None) -> list[dict[str, Any]]:
     """Read recent incidents from SQLite. Returns [] if file/table don't exist yet."""
     if not _os.path.exists(_INCIDENT_DB):
-        return []   # no incidents written yet — file created on first write
+        return []  # no incidents written yet — file created on first write
     try:
         con = _sqlite3.connect(_INCIDENT_DB, timeout=10)
         con.row_factory = _sqlite3.Row
@@ -183,39 +190,33 @@ def _read_incidents(n: int, app: str | None) -> list[dict[str, Any]]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 _RUNBOOK_DESCRIPTIONS = {
-    "runbook_pod_crashloop_v1":
-        "Restarted {target} which was crash-looping",
-    "runbook_high_error_rate_post_deploy_v1":
-        "Rolled back deployment {target} — error rate spiked after a code push",
-    "runbook_missing_env_key_v1":
-        "Blocked deployment of {target} — required environment variables were missing",
-    "runbook_dns_resolution_failure_v1":
-        "Triggered DNS refresh for {target} — DNS resolution was failing",
-    "runbook_db_connection_exhaustion_v1":
-        "Reset the database connection pool for {target} — connections were exhausted",
+    "runbook_pod_crashloop_v1": "Restarted {target} which was crash-looping",
+    "runbook_high_error_rate_post_deploy_v1": "Rolled back deployment {target} — error rate spiked after a code push",
+    "runbook_missing_env_key_v1": "Blocked deployment of {target} — required environment variables were missing",
+    "runbook_dns_resolution_failure_v1": "Triggered DNS refresh for {target} — DNS resolution was failing",
+    "runbook_db_connection_exhaustion_v1": "Reset the database connection pool for {target} — connections were exhausted",
 }
 
 _OUTCOME_SUFFIX = {
-    "success":     "✅ Successfully resolved.",
-    "failed":      "❌ Healing attempt failed — may need manual review.",
+    "success": "✅ Successfully resolved.",
+    "failed": "❌ Healing attempt failed — may need manual review.",
     "rolled_back": "↩️  Action was rolled back (post-check failed).",
-    "pending":     "⏳ Action is in progress.",
+    "pending": "⏳ Action is in progress.",
 }
 
 
 def _make_plain_english(row: dict[str, Any]) -> str:
     """Turn an AuditTrail row into a plain-English incident description."""
     runbook_id = row.get("runbook_id", "")
-    target     = row.get("target") or row.get("resource_name") or "the service"
-    outcome    = row.get("execution_outcome", "pending")
-    ts         = (row.get("timestamp") or "")[:19].replace("T", " ")
+    target = row.get("target") or row.get("resource_name") or "the service"
+    outcome = row.get("execution_outcome", "pending")
+    ts = (row.get("timestamp") or "")[:19].replace("T", " ")
 
     template = _RUNBOOK_DESCRIPTIONS.get(
-        runbook_id,
-        f"Performed healing action '{runbook_id}' on {{target}}"
+        runbook_id, f"Performed healing action '{runbook_id}' on {{target}}"
     )
-    action  = template.format(target=target)
-    suffix  = _OUTCOME_SUFFIX.get(outcome, "")
+    action = template.format(target=target)
+    suffix = _OUTCOME_SUFFIX.get(outcome, "")
 
     return f"At {ts} UTC — {action}. {suffix}".strip()
 
@@ -224,8 +225,10 @@ def _make_plain_english(row: dict[str, Any]) -> str:
 # Context proxy (avoids circular import with status_api)
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def _context():
     from nexus.observability.status_api import context
+
     return context
 
 
@@ -233,9 +236,10 @@ def _context():
 # Incidents
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @router.get("/developer/incidents", tags=["developer"])
 async def developer_incidents(
-    n:   int           = 20,
+    n: int = 20,
     app: str | None = None,
 ) -> list[dict[str, Any]]:
     """
@@ -253,18 +257,23 @@ async def developer_incidents(
             rows = await ctx.audit_trail.query_recent(limit=max(n * 3, 60))
             for row in rows:
                 if app:
-                    target = (row.get("target") or row.get("resource_name") or "").lower()
+                    target = (
+                        row.get("target") or row.get("resource_name") or ""
+                    ).lower()
                     if app.lower() not in target:
                         continue
-                results.append({
-                    "timestamp":   (row.get("timestamp") or "")[:19],
-                    "runbook_id":  row.get("runbook_id"),
-                    "target":      row.get("target") or row.get("resource_name"),
-                    "level":       row.get("healing_level"),
-                    "outcome":     row.get("execution_outcome", "pending"),
-                    "description": _make_plain_english(row),
-                    "incident_id": row.get("incident_id") or row.get("correlation_id"),
-                })
+                results.append(
+                    {
+                        "timestamp": (row.get("timestamp") or "")[:19],
+                        "runbook_id": row.get("runbook_id"),
+                        "target": row.get("target") or row.get("resource_name"),
+                        "level": row.get("healing_level"),
+                        "outcome": row.get("execution_outcome", "pending"),
+                        "description": _make_plain_english(row),
+                        "incident_id": row.get("incident_id")
+                        or row.get("correlation_id"),
+                    }
+                )
                 if len(results) >= n:
                     break
         except Exception as _e:
@@ -282,18 +291,20 @@ async def developer_post_incident(payload: dict[str, Any]) -> dict[str, str]:
     Persisted to SQLite so all uvicorn workers can read it.
     """
     import uuid
+
     payload.setdefault("incident_id", str(uuid.uuid4())[:8])
     payload.setdefault("timestamp", datetime.now(timezone.utc).isoformat()[:19])
     _write_incident(payload)
-    logger.info(f"[Dashboard] Incident stored: {payload.get('incident_id')} outcome={payload.get('outcome')}")
+    logger.info(
+        f"[Dashboard] Incident stored: {payload.get('incident_id')} outcome={payload.get('outcome')}"
+    )
     return {"status": "ok", "incident_id": payload["incident_id"]}
-
-
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Predictions
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 @router.get("/developer/predictions", tags=["developer"])
 def developer_predictions(app: str | None = None) -> list[dict[str, Any]]:
@@ -322,18 +333,20 @@ def developer_predictions(app: str | None = None) -> list[dict[str, Any]]:
 
         multiplier = (d.predicted_rps / d.current_rps) if d.current_rps > 0 else 1.0
 
-        predictions.append({
-            "deployment":      d.deployment_name,
-            "namespace":       d.namespace,
-            "current_rps":     round(d.current_rps, 1),
-            "predicted_rps":   round(d.predicted_rps, 1),
-            "multiplier":      round(multiplier, 2),
-            "confidence":      round(d.confidence, 3),
-            "mode":            ctx.prescaler.stats.get("mode", "shadow"),
-            "outcome":         d.outcome or "pending",
-            "decided_at":      d.decided_at,
-            "description":     _make_prediction_sentence(d),
-        })
+        predictions.append(
+            {
+                "deployment": d.deployment_name,
+                "namespace": d.namespace,
+                "current_rps": round(d.current_rps, 1),
+                "predicted_rps": round(d.predicted_rps, 1),
+                "multiplier": round(multiplier, 2),
+                "confidence": round(d.confidence, 3),
+                "mode": ctx.prescaler.stats.get("mode", "shadow"),
+                "outcome": d.outcome or "pending",
+                "decided_at": d.decided_at,
+                "description": _make_prediction_sentence(d),
+            }
+        )
 
     return predictions
 
@@ -341,11 +354,12 @@ def developer_predictions(app: str | None = None) -> list[dict[str, Any]]:
 def _make_prediction_sentence(d: Any) -> str:
     """Build a plain-English prediction sentence from a PrescaleDecision."""
     try:
-        mult   = d.predicted_rps / d.current_rps if d.current_rps > 0 else 1.0
+        mult = d.predicted_rps / d.current_rps if d.current_rps > 0 else 1.0
         tables = getattr(d, "trigger_tables", []) or []
         table_clause = (
             f" — driven by reads to {', '.join(f'`{t}`' for t in tables[:3])}"
-            if tables else ""
+            if tables
+            else ""
         )
         return (
             f"{d.deployment_name} is predicted to receive "
@@ -361,6 +375,7 @@ def _make_prediction_sentence(d: Any) -> str:
 # Policy
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @router.get("/developer/policy/{app}", tags=["developer"])
 def developer_get_policy(app: str) -> dict[str, Any]:
     """
@@ -374,7 +389,7 @@ def developer_get_policy(app: str) -> dict[str, Any]:
     import os
     from pathlib import Path
 
-    base     = _policy_cache.get(app)
+    base = _policy_cache.get(app)
     override = _policy_overrides.get(app, {})
 
     # ── Filesystem fallback ──────────────────────────────────────────────────
@@ -384,8 +399,8 @@ def developer_get_policy(app: str) -> dict[str, Any]:
     if base is None:
         _candidates = [
             os.environ.get("NEXUS_SELFHEAL_YAML_PATH", ""),
-            "/app/selfheal.yaml",           # mounted by docker-compose
-            "/data/selfheal.yaml",          # alternate mount point
+            "/app/selfheal.yaml",  # mounted by docker-compose
+            "/data/selfheal.yaml",  # alternate mount point
         ]
         for _path_str in _candidates:
             if not _path_str:
@@ -394,6 +409,7 @@ def developer_get_policy(app: str) -> dict[str, Any]:
             if _p.exists():
                 try:
                     import yaml as _yaml
+
                     _data = _yaml.safe_load(_p.read_text())
                     if isinstance(_data, dict):
                         # If app matches OR no app filter given, cache and use it
@@ -413,12 +429,11 @@ def developer_get_policy(app: str) -> dict[str, Any]:
                 f"No selfheal.yaml found for app '{app}'. "
                 "Commit a selfheal.yaml to your repo root and push to register."
             ),
-
         )
 
     result = {**(base or {}), **override}
     result["_overrides_active"] = bool(override)
-    result["_app"]              = app
+    result["_app"] = app
     return result
 
 
@@ -434,11 +449,15 @@ def developer_upload_policy(app: str, policy: dict[str, Any]) -> dict[str, Any]:
     (which only works in-process).
     """
     cache_policy(app, policy)
-    return {"app": app, "message": "Policy uploaded and cached.", "fields": list(policy.keys())}
+    return {
+        "app": app,
+        "message": "Policy uploaded and cached.",
+        "fields": list(policy.keys()),
+    }
 
 
 class PolicyOverride(BaseModel):
-    field: str   # dot-path e.g. "healing_policy.auto_rollback"
+    field: str  # dot-path e.g. "healing_policy.auto_rollback"
     value: Any
 
 
@@ -464,9 +483,9 @@ def developer_put_policy(app: str, override: PolicyOverride) -> dict[str, Any]:
         f"field={override.field} value={override.value}"
     )
     return {
-        "app":       app,
+        "app": app,
         "overrides": _policy_overrides[app],
-        "message":   (
+        "message": (
             f"Override applied: {override.field} = {override.value}. "
             "This is temporary — commit selfheal.yaml to make it permanent."
         ),

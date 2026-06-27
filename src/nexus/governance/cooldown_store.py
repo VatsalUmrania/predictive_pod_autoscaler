@@ -50,8 +50,8 @@ class CooldownStore:
         key_prefix: str = "nexus:cooldown",
     ):
         self._redis_url = redis_url
-        self._prefix    = key_prefix
-        self._redis     = None
+        self._prefix = key_prefix
+        self._redis = None
 
         # In-memory fallback: key → expiry monotonic timestamp
         self._memory: dict[str, float] = {}
@@ -64,11 +64,14 @@ class CooldownStore:
         Falls back to in-memory silently if Redis is unavailable.
         """
         if not self._redis_url:
-            logger.info("[CooldownStore] No Redis URL configured — using in-memory cooldowns")
+            logger.info(
+                "[CooldownStore] No Redis URL configured — using in-memory cooldowns"
+            )
             return
 
         try:
             import redis.asyncio as aioredis
+
             self._redis = aioredis.from_url(
                 self._redis_url,
                 socket_connect_timeout=3.0,
@@ -107,7 +110,9 @@ class CooldownStore:
             try:
                 return await self._redis.exists(self._full_key(key)) > 0
             except Exception as exc:
-                logger.warning(f"[CooldownStore] Redis read error: {exc} — using memory")
+                logger.warning(
+                    f"[CooldownStore] Redis read error: {exc} — using memory"
+                )
 
         # In-memory fallback
         expiry = self._memory.get(key)
@@ -128,7 +133,9 @@ class CooldownStore:
                 await self._redis.setex(self._full_key(key), seconds, "1")
                 return
             except Exception as exc:
-                logger.warning(f"[CooldownStore] Redis write error: {exc} — using memory")
+                logger.warning(
+                    f"[CooldownStore] Redis write error: {exc} — using memory"
+                )
 
         # In-memory fallback
         self._memory[key] = time.monotonic() + seconds

@@ -262,7 +262,9 @@ def mock_cr_object(mock_cr_spec):
         cr["spec"]["maxReplicas"] = 20
     """
 
-    def _create(name: str = "test-app", namespace: str = "default", **spec_overrides) -> dict:
+    def _create(
+        name: str = "test-app", namespace: str = "default", **spec_overrides
+    ) -> dict:
         """Build mock CR with metadata and spec."""
 
         spec = mock_cr_spec(**spec_overrides)

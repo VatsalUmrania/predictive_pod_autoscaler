@@ -15,19 +15,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-# Feature schema (v2 - normalized universal features)
-# Requires: CPU + memory limits set on target deployment
-# Requires: Istio sidecar or /metrics HTTP endpoint
+# Feature schema (v3 - foundation model: scale-invariant normalized features)
+# Breaking change from v2: normalized_rps replaces rps_per_replica, latency_normalized replaces latency_p95_ms
 QUERIED_FEATURES = [
-    "rps_per_replica",
+    "normalized_rps",
     "cpu_utilization_pct",
     "memory_utilization_pct",
-    "latency_p95_ms",
-    "active_connections",
+    "latency_normalized",
     "error_rate",
-    "cpu_acceleration",
     "rps_acceleration",
-    "replicas_normalized",
+    "cpu_acceleration",
 ]
 
 TEMPORAL_FEATURES = [
@@ -123,8 +120,10 @@ MINIKUBE_DRIVER = get_minikube_driver()
 # Default values
 DEFAULT_APP_NAME = os.getenv("PPA_DEFAULT_APP_NAME", "test-app")
 DEFAULT_NAMESPACE = os.getenv("PPA_NAMESPACE", os.getenv("NAMESPACE", "default"))
-DEFAULT_HORIZON = os.getenv("PPA_DEFAULT_HORIZON", "rps_t10m")
-DEFAULT_CSV = os.getenv("PPA_DEFAULT_CSV", str(TRAINING_DATA_DIR / "training_data_v2.csv"))
+DEFAULT_HORIZON = os.getenv("PPA_DEFAULT_HORIZON", "normalized_rps_t10m")
+DEFAULT_CSV = os.getenv(
+    "PPA_DEFAULT_CSV", str(TRAINING_DATA_DIR / "training_data_v3.csv")
+)
 DEFAULT_LOOKBACK = int(os.getenv("PPA_LOOKBACK_STEPS", "60"))
 DEFAULT_EPOCHS = int(os.getenv("PPA_EPOCHS", "50"))
 NAMESPACE = "default"
@@ -164,7 +163,9 @@ class PrometheusConfig:
             timeout_seconds=int(os.getenv("PROMETHEUS_TIMEOUT", "2")),
             query_resolution_seconds=int(os.getenv("QUERY_RESOLUTION_SECONDS", "30")),
             circuit_breaker_threshold=int(os.getenv("CIRCUIT_BREAKER_THRESHOLD", "10")),
-            circuit_breaker_rest_seconds=int(os.getenv("CIRCUIT_BREAKER_REST_SECONDS", "60")),
+            circuit_breaker_rest_seconds=int(
+                os.getenv("CIRCUIT_BREAKER_REST_SECONDS", "60")
+            ),
         )
 
 
@@ -189,7 +190,9 @@ class OperatorConfig:
             timer_interval=int(os.getenv("PPA_TIMER_INTERVAL", "30")),
             initial_delay=int(os.getenv("PPA_INITIAL_DELAY", "60")),
             stabilization_steps=int(os.getenv("PPA_STABILIZATION_STEPS", "2")),
-            stabilization_tolerance=float(os.getenv("PPA_STABILIZATION_TOLERANCE", "0.5")),
+            stabilization_tolerance=float(
+                os.getenv("PPA_STABILIZATION_TOLERANCE", "0.5")
+            ),
             lookback_steps=int(os.getenv("PPA_LOOKBACK_STEPS", "60")),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             health_port=int(os.getenv("HEALTH_PORT", "8080")),
@@ -202,14 +205,14 @@ class ModelConfig:
     """ML model training and inference configuration."""
 
     model_dir: str = "/models"
-    default_horizon: str = "rps_t10m"
+    default_horizon: str = "normalized_rps_t10m"
     lookback_steps: int = 60
 
     @classmethod
     def from_env(cls) -> ModelConfig:
         return cls(
             model_dir=os.getenv("PPA_MODEL_DIR", "/models"),
-            default_horizon=os.getenv("PPA_DEFAULT_HORIZON", "rps_t10m"),
+            default_horizon=os.getenv("PPA_DEFAULT_HORIZON", "normalized_rps_t10m"),
             lookback_steps=int(os.getenv("PPA_LOOKBACK_STEPS", "60")),
         )
 
@@ -287,7 +290,9 @@ class CLIConfig:
 class PathsConfig:
     """Project directory paths (computed at runtime)."""
 
-    project_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parents[2])
+    project_dir: Path = field(
+        default_factory=lambda: Path(__file__).resolve().parents[2]
+    )
     deploy_dir: Path = field(init=False)
     model_dir: Path = field(init=False)
     data_dir: Path = field(init=False)
@@ -429,10 +434,9 @@ def _build_dataflow_queries() -> dict:
 QUERIES = _build_dataflow_queries()
 
 # Only features that MUST be present (non-null) in every row for training to proceed.
-# Derived columns (rps_per_replica, cpu/rps_acceleration, replicas_normalized) and
-# optional metrics (requests_per_second, cpu/memory_utilization_pct, active_connections,
-# error_rate) are intentionally excluded — they are filled or skipped gracefully.
-REQUIRED_QUERY_FEATURES = ["latency_p95_ms", "current_replicas"]
+# Derived columns (normalized_rps, accelerations) and optional metrics are
+# intentionally excluded — they are filled or skipped gracefully.
+REQUIRED_QUERY_FEATURES = ["latency_normalized", "current_replicas"]
 
 # Dataflow-specific constants for backward compatibility
 TARGET_APP = os.getenv("TARGET_APP", "test-app")

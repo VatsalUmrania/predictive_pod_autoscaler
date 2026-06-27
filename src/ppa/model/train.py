@@ -14,7 +14,12 @@ from sklearn.preprocessing import MinMaxScaler
 
 from ppa.common.constants import CAPACITY_PER_POD
 from ppa.common.feature_spec import FEATURE_COLUMNS, TARGET_COLUMNS
-from ppa.model.artifacts import artifact_dir, keras_model_path, scaler_path, target_scaler_path
+from ppa.model.artifacts import (
+    artifact_dir,
+    keras_model_path,
+    scaler_path,
+    target_scaler_path,
+)
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -163,7 +168,9 @@ def train_model(
 
     scaler = MinMaxScaler()
     scaler.fit(df[FEATURE_COLUMNS])
-    x, y = create_dataset_from_segments(df, FEATURE_COLUMNS, target_col, scaler, lookback)
+    x, y = create_dataset_from_segments(
+        df, FEATURE_COLUMNS, target_col, scaler, lookback
+    )
 
     # Shuffle windows before splitting so val/test see patterns from all
     # segments/time-periods.  Each window is self-contained (lookback steps)
@@ -188,7 +195,9 @@ def train_model(
     y_val = target_scaler.transform(y_val_raw.reshape(-1, 1)).flatten()
 
     if not suppress_info:
-        print(f"Split sizes — train: {len(x_train)}, val: {len(x_val)}, test: {len(x_test)}")
+        print(
+            f"Split sizes — train: {len(x_train)}, val: {len(x_val)}, test: {len(x_test)}"
+        )
 
     # Fire on_data_loaded callback
     if on_data_loaded:
@@ -207,9 +216,7 @@ def train_model(
     # Fire on_model_created callback
     if on_model_created:
         total_params = model.count_params()
-        trainable_params = sum(
-            np.prod(w.shape) for w in model.trainable_weights
-        )
+        trainable_params = sum(np.prod(w.shape) for w in model.trainable_weights)
         on_model_created(total_params=total_params, trainable_params=trainable_params)
 
     if not suppress_info:
@@ -264,7 +271,9 @@ def train_model(
     out_dir.mkdir(parents=True, exist_ok=True)
     model_path = keras_model_path(app_name, namespace, target_col, Path(output_dir))
     scaler_file = scaler_path(app_name, namespace, target_col, Path(output_dir))
-    target_scaler_file = target_scaler_path(app_name, namespace, target_col, Path(output_dir))
+    target_scaler_file = target_scaler_path(
+        app_name, namespace, target_col, Path(output_dir)
+    )
     meta_path = out_dir / f"split_meta_{target_col}.json"
 
     model.save(model_path)
@@ -312,9 +321,11 @@ def train_model(
 
     # Inverse transform predictions and actuals to original scale
     y_val_actual = target_scaler.inverse_transform(y_val.reshape(-1, 1)).flatten()
-    y_val_pred_scaled = target_scaler.inverse_transform(y_val_pred.reshape(-1, 1)).flatten()
+    y_val_pred_scaled = target_scaler.inverse_transform(
+        y_val_pred.reshape(-1, 1)
+    ).flatten()
 
-# Import metric functions here to avoid circular import
+    # Import metric functions here to avoid circular import
     from ppa.model.evaluate import (
         compute_mae,
         compute_mape,
@@ -331,7 +342,9 @@ def train_model(
     rmse = compute_rmse(y_val_actual, y_val_pred_scaled)
 
     # PPA vs HPA comparison on validation set
-    ppa_replicas = rps_to_replicas(y_val_pred_scaled, capacity, min_replicas, max_replicas)
+    ppa_replicas = rps_to_replicas(
+        y_val_pred_scaled, capacity, min_replicas, max_replicas
+    )
     hpa_replicas = rps_to_replicas(y_val_actual, capacity, min_replicas, max_replicas)
     ppa_stats = compute_scaling_stats(y_val_actual, ppa_replicas, capacity, "ppa")
     hpa_stats = compute_scaling_stats(y_val_actual, hpa_replicas, capacity, "hpa")
@@ -382,10 +395,18 @@ def train_model(
         # Print HPA vs PPA comparison table
         print(f"\n  {'Metric':<30} {'PPA':>10} {'HPA':>10}")
         print(f"  {'─' * 52}")
-        print(f"  {'Avg Replicas':<30} {ppa_stats['ppa_avg_replicas']:>10.2f} {hpa_stats['hpa_avg_replicas']:>10.2f}")
-        print(f"  {'Over-provisioning %':<30} {ppa_stats['ppa_over_prov_pct']:>10.1f} {hpa_stats['hpa_over_prov_pct']:>10.1f}")
-        print(f"  {'Under-provisioning %':<30} {ppa_stats['ppa_under_prov_pct']:>10.1f} {hpa_stats['hpa_under_prov_pct']:>10.1f}")
-        print(f"  {'Wasted Capacity (avg RPS)':<30} {ppa_stats['ppa_wasted_capacity_avg']:>10.1f} {hpa_stats['hpa_wasted_capacity_avg']:>10.1f}")
+        print(
+            f"  {'Avg Replicas':<30} {ppa_stats['ppa_avg_replicas']:>10.2f} {hpa_stats['hpa_avg_replicas']:>10.2f}"
+        )
+        print(
+            f"  {'Over-provisioning %':<30} {ppa_stats['ppa_over_prov_pct']:>10.1f} {hpa_stats['hpa_over_prov_pct']:>10.1f}"
+        )
+        print(
+            f"  {'Under-provisioning %':<30} {ppa_stats['ppa_under_prov_pct']:>10.1f} {hpa_stats['hpa_under_prov_pct']:>10.1f}"
+        )
+        print(
+            f"  {'Wasted Capacity (avg RPS)':<30} {ppa_stats['ppa_wasted_capacity_avg']:>10.1f} {hpa_stats['hpa_wasted_capacity_avg']:>10.1f}"
+        )
         print(f"  {'Replica Savings':<30} {replica_savings:>10.1f}%")
 
     return {
@@ -405,10 +426,14 @@ def train_model(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train LSTM model for a target horizon")
+    parser = argparse.ArgumentParser(
+        description="Train LSTM model for a target horizon"
+    )
     parser.add_argument("--app-name", type=str, default="test-app")
     parser.add_argument("--namespace", type=str, default="default")
-    parser.add_argument("--csv", type=str, default="data/training-data/training_data_v2.csv")
+    parser.add_argument(
+        "--csv", type=str, default="data/training-data/training_data_v2.csv"
+    )
     parser.add_argument("--lookback", type=int, default=LOOKBACK_STEPS)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument(
@@ -431,7 +456,9 @@ if __name__ == "__main__":
         default=5.0,
         help="Minimum target RPS for rps_* targets to reduce near-zero noise",
     )
-    parser.add_argument("--patience", type=int, default=15, help="Early stopping patience")
+    parser.add_argument(
+        "--patience", type=int, default=15, help="Early stopping patience"
+    )
     args = parser.parse_args()
 
     result = train_model(

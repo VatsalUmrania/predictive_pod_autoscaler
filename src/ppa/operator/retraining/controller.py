@@ -125,7 +125,7 @@ def create_retraining_job(cr_info: dict) -> bool:
                                 "--app",
                                 cr_info["cr_name"],
                                 "--horizon",
-                                "rps_t3m",
+                                "normalized_rps_t3m",
                                 "--evaluate-before-promote",
                                 "true",
                                 "--rollback-on-failure",

@@ -60,33 +60,36 @@ class FeedbackLoop:
 
     def __init__(
         self,
-        outcome_store:       OutcomeStore,
-        knowledge_base:      KnowledgeBase,
-        confidence_scorer:   ConfidenceScorer,
-        nats_client:         NATSClient | None = None,
+        outcome_store: OutcomeStore,
+        knowledge_base: KnowledgeBase,
+        confidence_scorer: ConfidenceScorer,
+        nats_client: NATSClient | None = None,
         ppa_outcome_tracker: PpaOutcomeTracker | None = None,
-        interval_s:          float = 300.0,
-        window_days:         int   = 30,
+        interval_s: float = 300.0,
+        window_days: int = 30,
     ):
         import os
-        self._store   = outcome_store
-        self._kb      = knowledge_base
-        self._scorer  = confidence_scorer
-        self._nats    = nats_client
+
+        self._store = outcome_store
+        self._kb = knowledge_base
+        self._scorer = confidence_scorer
+        self._nats = nats_client
         self._ppa_tracker = ppa_outcome_tracker
-        self._interval     = float(os.getenv("NEXUS_FEEDBACK_INTERVAL_S", str(interval_s)))
-        self._window_days  = int(os.getenv("NEXUS_FEEDBACK_WINDOW_DAYS", str(window_days)))
-        self._advisor      = RunbookAdvisor(outcome_store=outcome_store)
+        self._interval = float(os.getenv("NEXUS_FEEDBACK_INTERVAL_S", str(interval_s)))
+        self._window_days = int(
+            os.getenv("NEXUS_FEEDBACK_WINDOW_DAYS", str(window_days))
+        )
+        self._advisor = RunbookAdvisor(outcome_store=outcome_store)
 
         # Background task handle
         self._task: asyncio.Task | None = None
 
         # Observability
-        self._cycles_run      = 0
-        self._last_cycle_at:  float | None = None
-        self._last_kpis:      dict[str, Any] | None = None
-        self._last_recs:      list[dict[str, Any]] = []
-        self._start_time:     float | None = None
+        self._cycles_run = 0
+        self._last_cycle_at: float | None = None
+        self._last_kpis: dict[str, Any] | None = None
+        self._last_recs: list[dict[str, Any]] = []
+        self._start_time: float | None = None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -100,12 +103,16 @@ class FeedbackLoop:
         if self._nats is not None:
             try:
                 await self._nats.subscribe_raw(
-                    subject_pattern = "nexus.actions.*",
-                    handler          = self._on_action_event,
+                    subject_pattern="nexus.actions.*",
+                    handler=self._on_action_event,
                 )
-                logger.info("[FeedbackLoop] Subscribed to nexus.actions.* for pattern recording")
+                logger.info(
+                    "[FeedbackLoop] Subscribed to nexus.actions.* for pattern recording"
+                )
             except Exception as exc:
-                logger.warning(f"[FeedbackLoop] Pattern subscription failed (non-fatal): {exc}")
+                logger.warning(
+                    f"[FeedbackLoop] Pattern subscription failed (non-fatal): {exc}"
+                )
         logger.info(
             f"[FeedbackLoop] Started — "
             f"interval={self._interval}s "
@@ -116,15 +123,15 @@ class FeedbackLoop:
         """Record a real signal_type → runbook_id pattern from a healing action."""
         try:
             signal_type = data.get("signal_type")
-            runbook_id  = data.get("runbook_id")
-            outcome     = data.get("outcome", "")
+            runbook_id = data.get("runbook_id")
+            outcome = data.get("outcome", "")
             if not signal_type or not runbook_id:
                 return
             success = outcome in ("success", "rolled_back")
             await self._kb.record_pattern(
-                signal_types = {signal_type},
-                runbook_id   = runbook_id,
-                success      = success,
+                signal_types={signal_type},
+                runbook_id=runbook_id,
+                success=success,
             )
         except Exception as exc:
             logger.debug(f"[FeedbackLoop] action pattern error: {exc}")
@@ -137,10 +144,7 @@ class FeedbackLoop:
                 await self._task
             except asyncio.CancelledError:
                 pass
-        logger.info(
-            f"[FeedbackLoop] Stopped — "
-            f"cycles_run={self._cycles_run}"
-        )
+        logger.info(f"[FeedbackLoop] Stopped — " f"cycles_run={self._cycles_run}")
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
@@ -181,7 +185,7 @@ class FeedbackLoop:
         )
 
         # ── 1. Query AuditTrail ───────────────────────────────────────────────
-        all_stats:  dict[str, RunbookStats] = await self._store.get_all_runbook_stats(
+        all_stats: dict[str, RunbookStats] = await self._store.get_all_runbook_stats(
             days=self._window_days
         )
         system_kpis: SystemKPIs = await self._store.get_system_kpis(
@@ -189,7 +193,9 @@ class FeedbackLoop:
         )
 
         if not all_stats:
-            logger.info("[FeedbackLoop] No healing records in window — skipping adjustments")
+            logger.info(
+                "[FeedbackLoop] No healing records in window — skipping adjustments"
+            )
         else:
             logger.info(
                 f"[FeedbackLoop] Found stats for {len(all_stats)} runbook(s) — "
@@ -207,7 +213,9 @@ class FeedbackLoop:
         self._scorer.set_historical_boosts(all_adjustments)
 
         # ── 4. Run RunbookAdvisor ─────────────────────────────────────────────
-        recs: list[RunbookRecommendation] = self._advisor.analyze(all_stats, system_kpis)
+        recs: list[RunbookRecommendation] = self._advisor.analyze(
+            all_stats, system_kpis
+        )
 
         # Also check chronic targets (async)
         chronic = await self._advisor.find_chronic_targets()
@@ -221,8 +229,8 @@ class FeedbackLoop:
 
         # ── 6. Publish NATS event ─────────────────────────────────────────────
         cycle_ms = int((time.monotonic() - cycle_start) * 1000)
-        self._last_kpis    = system_kpis.to_dict()
-        self._last_recs    = [r.to_dict() for r in recs]
+        self._last_kpis = system_kpis.to_dict()
+        self._last_recs = [r.to_dict() for r in recs]
         self._last_cycle_at = time.monotonic()
 
         await self._publish_summary(system_kpis, recs, adjustments, cycle_ms)
@@ -253,27 +261,27 @@ class FeedbackLoop:
 
     async def _publish_summary(
         self,
-        kpis:         SystemKPIs,
-        recs:         list[RunbookRecommendation],
-        adjustments:  dict[str, float],
-        cycle_ms:     int,
+        kpis: SystemKPIs,
+        recs: list[RunbookRecommendation],
+        adjustments: dict[str, float],
+        cycle_ms: int,
     ) -> None:
         """Publish a LEARNING_CYCLE_COMPLETE event to NATS."""
         if not self._nats:
             return
         try:
             evt = IncidentEvent(
-                agent       = AgentType.ORCHESTRATOR,
-                signal_type = SignalType.ANOMALY_DETECTED,   # Closest available type
-                severity    = Severity.INFO,
-                context     = {
-                    "type":           "learning_cycle_complete",
-                    "cycle_number":   self._cycles_run,
-                    "cycle_ms":       cycle_ms,
-                    "system_kpis":    kpis.to_dict(),
-                    "adjustments":    {k: round(v, 4) for k, v in adjustments.items()},
+                agent=AgentType.ORCHESTRATOR,
+                signal_type=SignalType.ANOMALY_DETECTED,  # Closest available type
+                severity=Severity.INFO,
+                context={
+                    "type": "learning_cycle_complete",
+                    "cycle_number": self._cycles_run,
+                    "cycle_ms": cycle_ms,
+                    "system_kpis": kpis.to_dict(),
+                    "adjustments": {k: round(v, 4) for k, v in adjustments.items()},
                     "recommendations": [r.to_dict() for r in recs[:10]],
-                    "timestamp":      datetime.now(timezone.utc).isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             )
             await self._nats.publish(evt)
@@ -290,8 +298,8 @@ class FeedbackLoop:
         await self._update_cycle()
         return {
             "cycles_run": self._cycles_run,
-            "last_kpis":  self._last_kpis,
-            "last_recs":  self._last_recs,
+            "last_kpis": self._last_kpis,
+            "last_recs": self._last_recs,
         }
 
     # ── Observability ─────────────────────────────────────────────────────────
@@ -300,11 +308,11 @@ class FeedbackLoop:
     def status(self) -> dict[str, Any]:
         uptime = time.monotonic() - self._start_time if self._start_time else 0.0
         return {
-            "cycles_run":       self._cycles_run,
-            "uptime_seconds":   round(uptime, 1),
-            "interval_s":       self._interval,
-            "window_days":      self._window_days,
-            "last_kpis":        self._last_kpis,
+            "cycles_run": self._cycles_run,
+            "uptime_seconds": round(uptime, 1),
+            "interval_s": self._interval,
+            "window_days": self._window_days,
+            "last_kpis": self._last_kpis,
             "last_recommendations": len(self._last_recs),
         }
 
@@ -313,15 +321,16 @@ class FeedbackLoop:
 # Factory
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 async def build_feedback_loop(
-    confidence_scorer:     ConfidenceScorer,
-    nats_client:           NATSClient | None = None,
-    ppa_outcome_tracker:   PpaOutcomeTracker | None = None,
-    audit_db_path:         str | None = None,
-    knowledge_db_path:     str | None = None,
-    outcome_store:         OutcomeStore | None = None,
-    knowledge_base:        KnowledgeBase | None = None,
-    interval_s:            float = 300.0,
+    confidence_scorer: ConfidenceScorer,
+    nats_client: NATSClient | None = None,
+    ppa_outcome_tracker: PpaOutcomeTracker | None = None,
+    audit_db_path: str | None = None,
+    knowledge_db_path: str | None = None,
+    outcome_store: OutcomeStore | None = None,
+    knowledge_base: KnowledgeBase | None = None,
+    interval_s: float = 300.0,
 ) -> FeedbackLoop:
     """
     Build and initialize a FeedbackLoop with its dependencies.
@@ -356,10 +365,10 @@ async def build_feedback_loop(
         kb = knowledge_base
 
     return FeedbackLoop(
-        outcome_store     = store,
-        knowledge_base    = kb,
-        confidence_scorer = confidence_scorer,
-        nats_client       = nats_client,
-        ppa_outcome_tracker = ppa_outcome_tracker,
-        interval_s        = interval_s,
+        outcome_store=store,
+        knowledge_base=kb,
+        confidence_scorer=confidence_scorer,
+        nats_client=nats_client,
+        ppa_outcome_tracker=ppa_outcome_tracker,
+        interval_s=interval_s,
     )

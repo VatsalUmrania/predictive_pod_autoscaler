@@ -37,7 +37,9 @@ class CRState:
     observer_mode: bool = False
     stable_count: int = 0
     last_prediction: float = 0.0
-    last_desired: float = -1.0  # Replica target from previous cycle (stabilization anchor)
+    last_desired: float = (
+        -1.0
+    )  # Replica target from previous cycle (stabilization anchor)
     # Graceful degradation tracking
     last_known_good_replicas: int = 0
     last_known_good_prediction: float = 0.0

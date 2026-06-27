@@ -52,12 +52,18 @@ class TestDriftDetectionThresholds:
     def test_warning_threshold_20_percent(self, drift_config):
         """Drift warning triggers at MAPE > 20%."""
         assert drift_config["warning_threshold_pct"] == 20
-        assert drift_config["warning_threshold_pct"] < drift_config["critical_threshold_pct"]
+        assert (
+            drift_config["warning_threshold_pct"]
+            < drift_config["critical_threshold_pct"]
+        )
 
     def test_critical_threshold_50_percent(self, drift_config):
         """Drift critical triggers at MAPE > 50%."""
         assert drift_config["critical_threshold_pct"] == 50
-        assert drift_config["critical_threshold_pct"] > drift_config["warning_threshold_pct"]
+        assert (
+            drift_config["critical_threshold_pct"]
+            > drift_config["warning_threshold_pct"]
+        )
 
     def test_thresholds_allow_model_degradation_detection(self, drift_config):
         """Thresholds should detect significant model degradation."""
@@ -131,8 +137,12 @@ class TestMAPECalculation:
         actuals_large = np.array([1000, 2000, 1500])
         predicted_large = np.array([900, 2100, 1450])
 
-        mape_small = np.mean(np.abs(actuals_small - predicted_small) / actuals_small) * 100
-        mape_large = np.mean(np.abs(actuals_large - predicted_large) / actuals_large) * 100
+        mape_small = (
+            np.mean(np.abs(actuals_small - predicted_small) / actuals_small) * 100
+        )
+        mape_large = (
+            np.mean(np.abs(actuals_large - predicted_large) / actuals_large) * 100
+        )
 
         assert abs(mape_small - mape_large) < 0.01, "MAPE should be scale-invariant"
 
@@ -150,11 +160,13 @@ class TestDriftDetectionLogic:
         mape_values = [5, 8, 6, 10, 45, 12, 9, 11]  # Single spike to 45%
 
         # Drift should NOT be detected with only 1 interval above threshold
-        drift_count = sum(1 for m in mape_values if m > drift_config["warning_threshold_pct"])
-        assert drift_count == 1, f"Expected 1 high value, got {drift_count}"
-        assert drift_count < drift_config["drift_duration_required"], (
-            "Single spike should not trigger drift"
+        drift_count = sum(
+            1 for m in mape_values if m > drift_config["warning_threshold_pct"]
         )
+        assert drift_count == 1, f"Expected 1 high value, got {drift_count}"
+        assert (
+            drift_count < drift_config["drift_duration_required"]
+        ), "Single spike should not trigger drift"
 
     def test_drift_triggered_on_persistent_degradation(self, drift_config):
         """Drift should trigger after configured consecutive high-MAPE intervals."""
@@ -167,10 +179,12 @@ class TestDriftDetectionLogic:
             27,  # Interval 5 - warning
         ]
 
-        drift_count = sum(1 for m in mape_values if m > drift_config["warning_threshold_pct"])
-        assert drift_count >= drift_config["drift_duration_required"], (
-            "Should detect drift after 5 consecutive high-MAPE intervals"
+        drift_count = sum(
+            1 for m in mape_values if m > drift_config["warning_threshold_pct"]
         )
+        assert (
+            drift_count >= drift_config["drift_duration_required"]
+        ), "Should detect drift after 5 consecutive high-MAPE intervals"
 
     def test_drift_recovered_after_improvement(self, drift_config):
         """Drift alert should clear after MAPE returns to normal."""
@@ -261,7 +275,9 @@ class TestDriftRecovery:
         """Critical drift (MAPE > 50%) should trigger automatic retraining."""
         current_mape = 55  # Above critical threshold
 
-        should_trigger_retraining = current_mape > drift_config["critical_threshold_pct"]
+        should_trigger_retraining = (
+            current_mape > drift_config["critical_threshold_pct"]
+        )
         assert should_trigger_retraining, "Critical drift should trigger retraining"
 
     def test_retraining_not_triggered_on_warning_drift(self, drift_config):
@@ -348,7 +364,9 @@ class TestDriftDashboardVisualization:
 class TestDriftDetectionE2E:
     """End-to-end tests for drift detection workflow."""
 
-    def test_complete_drift_detection_flow(self, drift_config, sample_predictions_with_drift):
+    def test_complete_drift_detection_flow(
+        self, drift_config, sample_predictions_with_drift
+    ):
         """Complete flow: good predictions → degradation → drift detected → alert."""
         good = sample_predictions_with_drift["good_period"]
         drift = sample_predictions_with_drift["drift_period"]
@@ -361,17 +379,19 @@ class TestDriftDetectionE2E:
         # Calculate MAPE for drift period
         drift_actuals = np.array(drift["actual"])
         drift_predicted = np.array(drift["predicted"])
-        drift_mape = np.mean(np.abs(drift_actuals - drift_predicted) / drift_actuals) * 100
+        drift_mape = (
+            np.mean(np.abs(drift_actuals - drift_predicted) / drift_actuals) * 100
+        )
 
         # Verify good period MAPE is reasonable
-        assert good_mape < drift_config["warning_threshold_pct"], (
-            f"Good period MAPE {good_mape}% should be < {drift_config['warning_threshold_pct']}%"
-        )
+        assert (
+            good_mape < drift_config["warning_threshold_pct"]
+        ), f"Good period MAPE {good_mape}% should be < {drift_config['warning_threshold_pct']}%"
 
         # Verify drift period shows high MAPE
-        assert drift_mape > drift_config["critical_threshold_pct"], (
-            f"Drift period MAPE {drift_mape}% should be > {drift_config['critical_threshold_pct']}%"
-        )
+        assert (
+            drift_mape > drift_config["critical_threshold_pct"]
+        ), f"Drift period MAPE {drift_mape}% should be > {drift_config['critical_threshold_pct']}%"
 
     def test_drift_alert_and_recovery_workflow(self):
         """Test complete alert → investigation → retraining → recovery flow."""

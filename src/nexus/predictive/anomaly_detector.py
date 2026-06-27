@@ -56,14 +56,14 @@ logger = logging.getLogger(__name__)
 
 # Feature order — MUST be consistent across training and inference
 MODEL_FEATURES = ["cpu_utilization_pct", "memory_utilization_pct", "rps", "error_rate"]
-N_FEATURES     = len(MODEL_FEATURES)
+N_FEATURES = len(MODEL_FEATURES)
 
 # Normalization bounds for GRU model input (matches feature_pipeline FEATURE_BOUNDS)
 _NORM_MAX: dict[str, float] = {
-    "cpu_utilization_pct":    100.0,
+    "cpu_utilization_pct": 100.0,
     "memory_utilization_pct": 100.0,
-    "rps":                    10_000.0,   # Clip at 10k for normalization (not clamp)
-    "error_rate":             1.0,
+    "rps": 10_000.0,  # Clip at 10k for normalization (not clamp)
+    "error_rate": 1.0,
 }
 
 
@@ -71,14 +71,16 @@ _NORM_MAX: dict[str, float] = {
 # Anomaly score result
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class AnomalyScore:
     """Output of the anomaly detector for one feature vector."""
-    score:           float    # 0.0 = normal, 1.0 = highly anomalous
-    detector:        str      # "gru" | "zscore"
-    contributing:    dict[str, float]   # Per-feature contribution scores
-    is_anomaly:      bool              # score >= threshold
-    threshold:       float
+
+    score: float  # 0.0 = normal, 1.0 = highly anomalous
+    detector: str  # "gru" | "zscore"
+    contributing: dict[str, float]  # Per-feature contribution scores
+    is_anomaly: bool  # score >= threshold
+    threshold: float
 
     @property
     def severity_label(self) -> str:
@@ -93,6 +95,7 @@ class AnomalyScore:
 # Base class
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class AnomalyDetector(ABC):
     """Abstract anomaly detector interface."""
 
@@ -103,8 +106,7 @@ class AnomalyDetector(ABC):
 
     @property
     @abstractmethod
-    def name(self) -> str:
-        ...
+    def name(self) -> str: ...
 
     @property
     @abstractmethod
@@ -116,6 +118,7 @@ class AnomalyDetector(ABC):
 # ──────────────────────────────────────────────────────────────────────────────
 # Z-Score detector (always available, stateless)
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class ZScoreDetector(AnomalyDetector):
     """
@@ -132,14 +135,14 @@ class ZScoreDetector(AnomalyDetector):
     def __init__(
         self,
         window_size: int = 60,
-        threshold:   float = 3.0,
+        threshold: float = 3.0,
     ):
-        self._window    = window_size
+        self._window = window_size
         self._threshold = threshold
-        self._history:  dict[str, deque[float]] = {
+        self._history: dict[str, deque[float]] = {
             f: deque(maxlen=window_size) for f in MODEL_FEATURES
         }
-        self._samples   = 0
+        self._samples = 0
 
     @property
     def name(self) -> str:
@@ -159,22 +162,25 @@ class ZScoreDetector(AnomalyDetector):
 
         if not self.is_ready:
             return AnomalyScore(
-                score=0.0, detector=self.name,
-                contributing={}, is_anomaly=False, threshold=self._threshold
+                score=0.0,
+                detector=self.name,
+                contributing={},
+                is_anomaly=False,
+                threshold=self._threshold,
             )
 
         contributing: dict[str, float] = {}
         max_score = 0.0
 
         for feat in MODEL_FEATURES:
-            hist  = list(self._history[feat])
+            hist = list(self._history[feat])
             if len(hist) < 2:
                 continue
             mean = sum(hist) / len(hist)
-            var  = sum((x - mean) ** 2 for x in hist) / len(hist)
-            std  = math.sqrt(var) if var > 0 else 1.0
-            val  = hist[-1]
-            z    = abs(val - mean) / std
+            var = sum((x - mean) ** 2 for x in hist) / len(hist)
+            std = math.sqrt(var) if var > 0 else 1.0
+            val = hist[-1]
+            z = abs(val - mean) / std
             feat_score = min(z / self._threshold, 1.0)
             contributing[feat] = round(feat_score, 3)
             max_score = max(max_score, feat_score)
@@ -183,7 +189,7 @@ class ZScoreDetector(AnomalyDetector):
             score=round(max_score, 3),
             detector=self.name,
             contributing=contributing,
-            is_anomaly=max_score >= 1.0,     # 1.0 = z >= threshold
+            is_anomaly=max_score >= 1.0,  # 1.0 = z >= threshold
             threshold=self._threshold,
         )
 
@@ -196,6 +202,7 @@ class ZScoreDetector(AnomalyDetector):
 # ──────────────────────────────────────────────────────────────────────────────
 # GRU Autoencoder (requires torch)
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class GRUAutoencoder(AnomalyDetector):
     """
@@ -223,20 +230,20 @@ class GRUAutoencoder(AnomalyDetector):
     def __init__(
         self,
         checkpoint_path: Path | None = None,
-        hidden_dim:      int = 64,
-        seq_len:         int = 30,
+        hidden_dim: int = 64,
+        seq_len: int = 30,
         error_threshold: float = 0.05,
     ):
-        self._checkpoint    = checkpoint_path or Path(
+        self._checkpoint = checkpoint_path or Path(
             os.getenv("NEXUS_GRU_CHECKPOINT_PATH", "data/gru_ae.pt")
         )
-        self._hidden_dim    = int(os.getenv("NEXUS_GRU_HIDDEN_DIM", str(hidden_dim)))
-        self._seq_len       = int(os.getenv("NEXUS_GRU_SEQ_LEN", str(seq_len)))
-        self._error_thresh  = error_threshold
-        self._model         = None
+        self._hidden_dim = int(os.getenv("NEXUS_GRU_HIDDEN_DIM", str(hidden_dim)))
+        self._seq_len = int(os.getenv("NEXUS_GRU_SEQ_LEN", str(seq_len)))
+        self._error_thresh = error_threshold
+        self._model = None
         self._buffer: deque[list[float]] = deque(maxlen=self._seq_len)
-        self._ready         = False
-        self._torch_ok      = False
+        self._ready = False
+        self._torch_ok = False
 
         self._init_model()
 
@@ -245,14 +252,15 @@ class GRUAutoencoder(AnomalyDetector):
         try:
             import torch
             import torch.nn as nn
+
             self._torch_ok = True
-            self._model    = self._build_model(nn)
+            self._model = self._build_model(nn)
 
             if self._checkpoint.exists():
                 state = torch.load(self._checkpoint, map_location="cpu")
                 self._model.load_state_dict(state["model"])
                 self._error_thresh = state.get("error_threshold", self._error_thresh)
-                self._ready        = True
+                self._ready = True
                 logger.info(
                     f"[GRUAutoencoder] Loaded checkpoint {self._checkpoint} "
                     f"error_thresh={self._error_thresh:.4f}"
@@ -278,17 +286,21 @@ class GRUAutoencoder(AnomalyDetector):
         class _GRUAutoencoder(nn.Module):
             def __init__(self, n_features: int, hidden_dim: int, seq_len: int):
                 super().__init__()
-                self.seq_len    = seq_len
+                self.seq_len = seq_len
                 self.hidden_dim = hidden_dim
-                self.encoder    = nn.GRU(n_features, hidden_dim, num_layers=2, batch_first=True)
-                self.decoder    = nn.GRU(hidden_dim, hidden_dim, num_layers=2, batch_first=True)
+                self.encoder = nn.GRU(
+                    n_features, hidden_dim, num_layers=2, batch_first=True
+                )
+                self.decoder = nn.GRU(
+                    hidden_dim, hidden_dim, num_layers=2, batch_first=True
+                )
                 self.output_layer = nn.Linear(hidden_dim, n_features)
 
             def forward(self, x: torch.Tensor) -> torch.Tensor:
                 # x: (batch, seq_len, n_features)
-                _, hidden  = self.encoder(x)
+                _, hidden = self.encoder(x)
                 # Use last hidden state as initial decoder input
-                dec_input  = hidden[-1].unsqueeze(1).repeat(1, self.seq_len, 1)
+                dec_input = hidden[-1].unsqueeze(1).repeat(1, self.seq_len, 1)
                 decoded, _ = self.decoder(dec_input, hidden)
                 return self.output_layer(decoded)
 
@@ -305,16 +317,26 @@ class GRUAutoencoder(AnomalyDetector):
     def detect(self, features: dict[str, float]) -> AnomalyScore:
         """Score a single feature vector (buffers into sequence window internally)."""
         if not self._torch_ok:
-            return AnomalyScore(score=0.0, detector=self.name, contributing={},
-                                is_anomaly=False, threshold=self._error_thresh)
+            return AnomalyScore(
+                score=0.0,
+                detector=self.name,
+                contributing={},
+                is_anomaly=False,
+                threshold=self._error_thresh,
+            )
 
         # Normalize and buffer
         vec = self._normalize(features)
         self._buffer.append(vec)
 
         if len(self._buffer) < self._seq_len:
-            return AnomalyScore(score=0.0, detector=self.name, contributing={},
-                                is_anomaly=False, threshold=self._error_thresh)
+            return AnomalyScore(
+                score=0.0,
+                detector=self.name,
+                contributing={},
+                is_anomaly=False,
+                threshold=self._error_thresh,
+            )
 
         return self._score_buffer()
 
@@ -332,18 +354,21 @@ class GRUAutoencoder(AnomalyDetector):
     def _score_buffer(self) -> AnomalyScore:
         try:
             import torch
+
             self._model.eval()
             with torch.no_grad():
-                seq    = torch.tensor(list(self._buffer), dtype=torch.float32).unsqueeze(0)
-                recon  = self._model(seq)
+                seq = torch.tensor(list(self._buffer), dtype=torch.float32).unsqueeze(0)
+                recon = self._model(seq)
                 # Per-feature MSE
                 mse_per_feat = ((seq - recon) ** 2).mean(dim=1).squeeze(0)
-                total_mse    = mse_per_feat.mean().item()
+                total_mse = mse_per_feat.mean().item()
 
             score = min(total_mse / max(self._error_thresh, 1e-6), 1.0)
 
             contributing = {
-                feat: round(float(mse_per_feat[i].item()) / max(self._error_thresh, 1e-6), 3)
+                feat: round(
+                    float(mse_per_feat[i].item()) / max(self._error_thresh, 1e-6), 3
+                )
                 for i, feat in enumerate(MODEL_FEATURES)
             }
 
@@ -356,14 +381,19 @@ class GRUAutoencoder(AnomalyDetector):
             )
         except Exception as exc:
             logger.warning(f"[GRUAutoencoder] Inference error: {exc}")
-            return AnomalyScore(score=0.0, detector=self.name, contributing={},
-                                is_anomaly=False, threshold=self._error_thresh)
+            return AnomalyScore(
+                score=0.0,
+                detector=self.name,
+                contributing={},
+                is_anomaly=False,
+                threshold=self._error_thresh,
+            )
 
     def train_from_data(
         self,
         data: list[dict[str, float]],
         epochs: int = 50,
-        lr:     float = 1e-3,
+        lr: float = 1e-3,
         batch_size: int = 32,
     ) -> dict[str, float]:
         """
@@ -380,7 +410,9 @@ class GRUAutoencoder(AnomalyDetector):
         if not self._torch_ok:
             raise RuntimeError("PyTorch not installed — cannot train GRU Autoencoder")
         if len(data) < self._seq_len + 10:
-            raise ValueError(f"Need at least {self._seq_len + 10} samples, got {len(data)}")
+            raise ValueError(
+                f"Need at least {self._seq_len + 10} samples, got {len(data)}"
+            )
 
         import torch
         import torch.nn as nn
@@ -390,10 +422,12 @@ class GRUAutoencoder(AnomalyDetector):
         sequences = []
         vecs = [self._normalize(d) for d in data]
         for i in range(len(vecs) - self._seq_len):
-            sequences.append(vecs[i: i + self._seq_len])
+            sequences.append(vecs[i : i + self._seq_len])
 
         dataset = torch.tensor(sequences, dtype=torch.float32)
-        loader  = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        loader = torch.utils.data.DataLoader(
+            dataset, batch_size=batch_size, shuffle=True
+        )
         optimizer = Adam(self._model.parameters(), lr=lr)
         criterion = nn.MSELoss()
 
@@ -404,7 +438,7 @@ class GRUAutoencoder(AnomalyDetector):
             for batch in loader:
                 optimizer.zero_grad()
                 recon = self._model(batch)
-                loss  = criterion(recon, batch)
+                loss = criterion(recon, batch)
                 loss.backward()
                 optimizer.step()
                 epoch_loss += loss.item()
@@ -419,18 +453,21 @@ class GRUAutoencoder(AnomalyDetector):
             recon_errors = []
             for batch in loader:
                 recon = self._model(batch)
-                mse   = ((batch - recon) ** 2).mean(dim=(1, 2))
+                mse = ((batch - recon) ** 2).mean(dim=(1, 2))
                 recon_errors.extend(mse.tolist())
         self._error_thresh = 3.0 * (sum(recon_errors) / len(recon_errors))
 
         # Save checkpoint
         self._checkpoint.parent.mkdir(parents=True, exist_ok=True)
-        torch.save({
-            "model":           self._model.state_dict(),
-            "error_threshold": self._error_thresh,
-            "hidden_dim":      self._hidden_dim,
-            "seq_len":         self._seq_len,
-        }, self._checkpoint)
+        torch.save(
+            {
+                "model": self._model.state_dict(),
+                "error_threshold": self._error_thresh,
+                "hidden_dim": self._hidden_dim,
+                "seq_len": self._seq_len,
+            },
+            self._checkpoint,
+        )
         self._ready = True
 
         logger.info(
@@ -446,6 +483,7 @@ class GRUAutoencoder(AnomalyDetector):
 # Auto-detector (picks best available)
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class AutoAnomalyDetector:
     """
     Selects the best available detector at runtime.
@@ -458,11 +496,13 @@ class AutoAnomalyDetector:
     def __init__(
         self,
         checkpoint_path: Path | None = None,
-        zscore_window:   int = int(os.getenv("NEXUS_ZSCORE_WINDOW", "60")),
+        zscore_window: int = int(os.getenv("NEXUS_ZSCORE_WINDOW", "60")),
         zscore_threshold: float = float(os.getenv("NEXUS_ZSCORE_THRESHOLD", "3.0")),
     ):
-        self._gru    = GRUAutoencoder(checkpoint_path=checkpoint_path)
-        self._zscore = ZScoreDetector(window_size=zscore_window, threshold=zscore_threshold)
+        self._gru = GRUAutoencoder(checkpoint_path=checkpoint_path)
+        self._zscore = ZScoreDetector(
+            window_size=zscore_window, threshold=zscore_threshold
+        )
 
     def detect(self, features: dict[str, float]) -> AnomalyScore:
         """Score using GRU if ready, otherwise ZScore."""
@@ -476,9 +516,10 @@ class AutoAnomalyDetector:
             return AnomalyScore(
                 score=round(blended, 3),
                 detector="gru+zscore",
-                contributing={**zscore_result.contributing, **{
-                    f"gru_{k}": v for k, v in gru_result.contributing.items()
-                }},
+                contributing={
+                    **zscore_result.contributing,
+                    **{f"gru_{k}": v for k, v in gru_result.contributing.items()},
+                },
                 is_anomaly=blended >= 0.5,
                 threshold=gru_result.threshold,
             )

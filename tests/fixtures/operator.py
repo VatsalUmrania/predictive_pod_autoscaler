@@ -205,7 +205,9 @@ def reconciliation_context_factory(
     ) -> dict:
         """Build complete reconciliation context."""
 
-        features = feature_vector_factory(rps_per_replica=predicted_rps / current_replicas)
+        features = feature_vector_factory(
+            rps_per_replica=predicted_rps / current_replicas
+        )
         prediction = prediction_factory(predicted_rps=predicted_rps)
         cr_state = cr_state_factory(
             cr_name=cr_name,

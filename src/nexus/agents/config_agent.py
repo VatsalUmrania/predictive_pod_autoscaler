@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def _checksum(data: dict) -> str:
     """Stable SHA-256 of a dict (sorted keys for determinism)."""
     canonical = json.dumps(data, sort_keys=True, default=str)
@@ -57,23 +58,22 @@ def _normalise_deployment(dep_dict: dict) -> dict:
     spec = dep_dict.get("spec", {})
     template = spec.get("template", {}).get("spec", {})
     return {
-        "replicas":          spec.get("replicas"),
-        "image":             [
-            c.get("image") for c in template.get("containers", [])
+        "replicas": spec.get("replicas"),
+        "image": [c.get("image") for c in template.get("containers", [])],
+        "env": [
+            {e.get("name"): e.get("value")}
+            for c in template.get("containers", [])
+            for e in c.get("env", [])
+            if "value" in e
         ],
-        "env":               [
-            {e.get("name"): e.get("value")} for c in template.get("containers", [])
-            for e in c.get("env", []) if "value" in e
-        ],
-        "resources":         [
-            c.get("resources") for c in template.get("containers", [])
-        ],
+        "resources": [c.get("resources") for c in template.get("containers", [])],
     }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Config Agent
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class ConfigAgent(BaseAgent):
     """
@@ -107,13 +107,13 @@ class ConfigAgent(BaseAgent):
         poll_interval_seconds: float = 60.0,
     ):
         super().__init__(
-            nats_client           = nats_client,
-            agent_type            = AgentType.CONFIG,
-            poll_interval_seconds = poll_interval_seconds,
+            nats_client=nats_client,
+            agent_type=AgentType.CONFIG,
+            poll_interval_seconds=poll_interval_seconds,
         )
-        self.manifests_dir      = Path(manifests_dir) if manifests_dir else None
-        self.required_env_keys  = required_env_keys or set()
-        self.namespaces         = namespaces or ["default"]
+        self.manifests_dir = Path(manifests_dir) if manifests_dir else None
+        self.required_env_keys = required_env_keys or set()
+        self.namespaces = namespaces or ["default"]
 
         # Cache of last-known checksums per resource key "ns/kind/name"
         self._baseline_checksums: dict[str, str] = {}
@@ -123,6 +123,7 @@ class ConfigAgent(BaseAgent):
 
     async def on_start(self) -> None:
         import asyncio
+
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._init_k8s)
 
@@ -133,6 +134,7 @@ class ConfigAgent(BaseAgent):
         try:
             from kubernetes import client as k8s_client
             from kubernetes import config as k8s_config
+
             try:
                 k8s_config.load_incluster_config()
             except Exception:
@@ -165,13 +167,15 @@ class ConfigAgent(BaseAgent):
                     kind = doc.get("kind", "")
                     meta = doc.get("metadata", {})
                     name = meta.get("name", "")
-                    ns   = meta.get("namespace", "default")
+                    ns = meta.get("namespace", "default")
                     if kind and name:
                         key = f"{ns}/{kind}/{name}"
                         if kind == "Deployment":
                             manifests[key] = _normalise_deployment(doc)
                         else:
-                            manifests[key] = {"raw_checksum": _checksum(doc.get("spec", {}))}
+                            manifests[key] = {
+                                "raw_checksum": _checksum(doc.get("spec", {}))
+                            }
             except Exception as exc:
                 logger.debug(f"[ConfigAgent] Could not parse {path}: {exc}")
 
@@ -204,13 +208,14 @@ class ConfigAgent(BaseAgent):
             if live_spec is None:
                 continue
 
-            git_checksum  = _checksum(git_spec)
+            git_checksum = _checksum(git_spec)
             live_checksum = _checksum(live_spec)
 
             if git_checksum != live_checksum:
                 # Find which fields drifted
                 drifted_fields = [
-                    f for f in git_spec
+                    f
+                    for f in git_spec
                     if json.dumps(git_spec.get(f), sort_keys=True)
                     != json.dumps(live_spec.get(f), sort_keys=True)
                 ]
@@ -223,29 +228,31 @@ class ConfigAgent(BaseAgent):
 
                 # Cache baseline after first detection (avoid repeat storms)
                 if self._baseline_checksums.get(key) == live_checksum:
-                    continue   # Already reported this drift
+                    continue  # Already reported this drift
                 self._baseline_checksums[key] = live_checksum
 
                 severity_score = min(len(drifted_fields) / 5.0, 1.0)
 
-                events.append(IncidentEvent(
-                    agent=AgentType.CONFIG,
-                    signal_type=SignalType.IAC_DRIFT,
-                    severity=Severity.WARNING,
-                    namespace=ns,
-                    resource_name=name,
-                    resource_kind=kind,
-                    context=ConfigDriftContext(
-                        resource_kind=kind,
-                        resource_name=name,
+                events.append(
+                    IncidentEvent(
+                        agent=AgentType.CONFIG,
+                        signal_type=SignalType.IAC_DRIFT,
+                        severity=Severity.WARNING,
                         namespace=ns,
-                        drift_fields=drifted_fields,
-                        expected_hash=git_checksum,
-                        actual_hash=live_checksum,
-                        drift_severity_score=severity_score,
-                    ).model_dump(),
-                    confidence=0.87,
-                ))
+                        resource_name=name,
+                        resource_kind=kind,
+                        context=ConfigDriftContext(
+                            resource_kind=kind,
+                            resource_name=name,
+                            namespace=ns,
+                            drift_fields=drifted_fields,
+                            expected_hash=git_checksum,
+                            actual_hash=live_checksum,
+                            drift_severity_score=severity_score,
+                        ).model_dump(),
+                        confidence=0.87,
+                    )
+                )
             else:
                 # Drift resolved — remove from baseline
                 self._baseline_checksums.pop(key, None)
@@ -277,8 +284,8 @@ class ConfigAgent(BaseAgent):
                 pod_name = pod.metadata.name
                 present_keys: set[str] = set()
 
-                for container in (pod.spec.containers or []):
-                    for env_var in (container.env or []):
+                for container in pod.spec.containers or []:
+                    for env_var in container.env or []:
                         if env_var.name:
                             present_keys.add(env_var.name)
                     # Note: envFrom (ConfigMap / Secret refs) can't be introspected
@@ -286,24 +293,28 @@ class ConfigAgent(BaseAgent):
 
                 missing = self.required_env_keys - present_keys
                 for key in missing:
-                    logger.warning(f"[ConfigAgent] Pod {ns}/{pod_name} missing env key: {key}")
-                    events.append(IncidentEvent(
-                        agent=AgentType.CONFIG,
-                        signal_type=SignalType.ENV_KEY_MISSING,
-                        severity=Severity.WARNING,
-                        namespace=ns,
-                        resource_name=pod_name,
-                        resource_kind="Pod",
-                        context={
-                            "pod_name":    pod_name,
-                            "namespace":   ns,
-                            "missing_key": key,
-                            "note": "Key may be injected via envFrom (ConfigMap/Secret) — verify manually",
-                        },
-                        suggested_runbook="runbook_missing_env_key_v1",
-                        suggested_healing_level=0,
-                        confidence=0.60,  # Lower confidence — envFrom not introspectable
-                    ))
+                    logger.warning(
+                        f"[ConfigAgent] Pod {ns}/{pod_name} missing env key: {key}"
+                    )
+                    events.append(
+                        IncidentEvent(
+                            agent=AgentType.CONFIG,
+                            signal_type=SignalType.ENV_KEY_MISSING,
+                            severity=Severity.WARNING,
+                            namespace=ns,
+                            resource_name=pod_name,
+                            resource_kind="Pod",
+                            context={
+                                "pod_name": pod_name,
+                                "namespace": ns,
+                                "missing_key": key,
+                                "note": "Key may be injected via envFrom (ConfigMap/Secret) — verify manually",
+                            },
+                            suggested_runbook="runbook_missing_env_key_v1",
+                            suggested_healing_level=0,
+                            confidence=0.60,  # Lower confidence — envFrom not introspectable
+                        )
+                    )
 
         return events
 
@@ -311,7 +322,8 @@ class ConfigAgent(BaseAgent):
 
     async def sense(self) -> list[IncidentEvent]:
         import asyncio
-        loop   = asyncio.get_event_loop()
+
+        loop = asyncio.get_event_loop()
         events: list[IncidentEvent] = []
 
         # IaC drift (file I/O + K8s API — run in thread)

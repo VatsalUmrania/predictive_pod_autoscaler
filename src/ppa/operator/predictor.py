@@ -97,7 +97,9 @@ class Predictor:
                 model_dir / f"{Path(self.model_path).stem}_metadata.json",
             ]
         )
-        metadata_path = next((path for path in metadata_candidates if path.exists()), None)
+        metadata_path = next(
+            (path for path in metadata_candidates if path.exists()), None
+        )
 
         if metadata_path is None:
             logger.warning(
@@ -133,7 +135,10 @@ class Predictor:
                     f"but operator configured for {LOOKBACK_STEPS}. Using model's value."
                 )
 
-        if "accuracy_loss_pct" in metadata and metadata["accuracy_loss_pct"] is not None:
+        if (
+            "accuracy_loss_pct" in metadata
+            and metadata["accuracy_loss_pct"] is not None
+        ):
             if metadata["accuracy_loss_pct"] > 5.0:
                 logger.warning(
                     f"Model has high quantization loss: {metadata['accuracy_loss_pct']:.2f}% "
@@ -154,7 +159,9 @@ class Predictor:
         # FIX (PR#10): Implement exponential backoff to prevent disk thrashing
         if self._load_failed:
             elapsed = time.time() - self._last_load_attempt
-            backoff = min(300, 2 ** min(self._load_failures, 10))  # Cap at 5 min, 2^10 = 1024
+            backoff = min(
+                300, 2 ** min(self._load_failures, 10)
+            )  # Cap at 5 min, 2^10 = 1024
             if elapsed < backoff:
                 return  # Don't retry yet, still in backoff period
 
@@ -181,7 +188,9 @@ class Predictor:
                 ("tensorflow.lite", lambda: __import__("tensorflow").lite.Interpreter),
                 (
                     "tflite_runtime",
-                    lambda: __import__("tflite_runtime.interpreter", fromlist=["Interpreter"]).Interpreter,
+                    lambda: __import__(
+                        "tflite_runtime.interpreter", fromlist=["Interpreter"]
+                    ).Interpreter,
                 ),
             ]:
                 try:
@@ -205,7 +214,9 @@ class Predictor:
                 detailed_errors = "\n  ".join(loader_attempts)
                 # FIX (PR#20): Run comprehensive diagnostics on first load failure
                 if self._load_failures == 1:
-                    logger.warning("First load failure detected - running diagnostics...")
+                    logger.warning(
+                        "First load failure detected - running diagnostics..."
+                    )
                     try:
                         diagnostic_report = diagnose_model_load_issue(
                             self.model_path, self.scaler_path, self.target_scaler_path
@@ -214,7 +225,9 @@ class Predictor:
                     except Exception as diag_exc:
                         logger.warning(f"Diagnostics failed: {diag_exc}")
 
-                raise RuntimeError(f"No TFLite runtime found. Attempted:\n  {detailed_errors}")
+                raise RuntimeError(
+                    f"No TFLite runtime found. Attempted:\n  {detailed_errors}"
+                )
 
             # Load scaler
             load_step = "scaler_load"
@@ -229,7 +242,9 @@ class Predictor:
             load_step = "target_scaler_load"
             if self.target_scaler_path:
                 try:
-                    logger.debug(f"Loading target scaler from: {self.target_scaler_path}")
+                    logger.debug(
+                        f"Loading target scaler from: {self.target_scaler_path}"
+                    )
                     self.target_scaler = joblib.load(self.target_scaler_path)
                     logger.info(f"✓ {load_step} succeeded: {self.target_scaler_path}")
                 except Exception as e:
@@ -244,19 +259,52 @@ class Predictor:
             logger.debug("Getting tensor details...")
             try:
                 self.input_details = self.interpreter.get_input_details()
-                logger.debug(f"Input details retrieved: {len(self.input_details)} tensors")
+                logger.debug(
+                    f"Input details retrieved: {len(self.input_details)} tensors"
+                )
                 self.output_details = self.interpreter.get_output_details()
-                logger.debug(f"Output details retrieved: {len(self.output_details)} tensors")
+                logger.debug(
+                    f"Output details retrieved: {len(self.output_details)} tensors"
+                )
                 input_shape = list(self.input_details[0].get("shape", []))
-                expected_shapes = [
-                    [1, LOOKBACK_STEPS, NUM_FEATURES],
-                    [-1, LOOKBACK_STEPS, NUM_FEATURES],
-                ]
-                if input_shape not in expected_shapes:
+                # Validate shape has exactly 3 dims: [batch, lookback, features]
+                if len(input_shape) != 3 or input_shape[1] != LOOKBACK_STEPS:
                     raise RuntimeError(
-                        f"Model input shape mismatch: {input_shape} not in {expected_shapes}"
+                        f"Model input shape {input_shape} incompatible: "
+                        f"expected [batch, {LOOKBACK_STEPS}, N_features]"
                     )
-                logger.info(f"✓ {load_step} succeeded")
+                # Store the model's actual feature count — may differ from the
+                # current codebase's NUM_FEATURES when model was trained on an
+                # older/newer schema. The scaler must be regenerated to match.
+                self.model_num_features = int(input_shape[2])
+                if self.model_num_features != NUM_FEATURES:
+                    logger.warning(
+                        f"Model has {self.model_num_features} features but codebase "
+                        f"FEATURE_COLUMNS has {NUM_FEATURES}. "
+                        f"Scaler must be fit on the same {self.model_num_features} features "
+                        f"the model was trained on."
+                    )
+                logger.info(
+                    f"✓ {load_step} succeeded "
+                    f"(model features={self.model_num_features}, schema features={NUM_FEATURES})"
+                )
+
+                # Now that model_num_features is known, validate the scaler matches
+                load_step = "scaler_feature_check"
+                scaler_features = getattr(self.scaler, "n_features_in_", None)
+                if (
+                    scaler_features is not None
+                    and scaler_features != self.model_num_features
+                ):
+                    raise RuntimeError(
+                        f"Scaler/model feature mismatch: "
+                        f"scaler was fit on {scaler_features} features but "
+                        f"model expects {self.model_num_features}. "
+                        f"Re-run 'ppa model push' to regenerate scalers for this model."
+                    )
+                logger.info(
+                    f"✓ {load_step} succeeded (scaler_features={scaler_features})"
+                )
             except Exception as e:
                 logger.error(f"Failed to get tensor details: {e}")
                 import traceback
@@ -312,7 +360,9 @@ class Predictor:
         self.history.clear()
         for row in history_snapshot:
             self.history.append(row)
-        logger.info(f"Restored history: {len(self.history)}/{self.history.maxlen} steps")
+        logger.info(
+            f"Restored history: {len(self.history)}/{self.history.maxlen} steps"
+        )
 
     def update(self, features: dict):
         row = np.array([features[name] for name in FEATURE_COLUMNS], dtype=np.float32)
@@ -322,26 +372,49 @@ class Predictor:
         # Retry loading if previous attempt failed (e.g. missing dependency installed later)
         if self._load_failed:
             self._try_load()
-        return (
-            len(self.history) >= self.lookback
-            and self.is_loaded()
-        )
+        return len(self.history) >= self.lookback and self.is_loaded()
 
-    def predict(self) -> float:
+    def predict(self, rolling_max_rps: float | None = None) -> float:
+        """Run inference and return predicted load in req/s.
+
+        The foundation model (alibaba_foundation_model.ipynb) outputs a
+        normalized ratio in [0, 1] — ``target_normalized_rps_t3m``.
+        To recover actual req/s the ratio is multiplied by the caller-supplied
+        ``rolling_max_rps`` (the same denominator used during training).
+
+        ``target_scaler`` is intentionally bypassed: the Colab training pipeline
+        never created a target scaler.  Any ``target_scaler.pkl`` on disk was
+        produced by ``regenerate_scalers.py`` fitting on a raw-RPS column
+        (data_max ≈ 345), which turns a correct 0.53 ratio into a phantom
+        345 req/s prediction.  See GitHub issue: scaling hallucination.
+        """
         if not self.ready():
             return 0.0
 
         # Type narrowing: guarantee non-None after ready() check
         assert self.scaler is not None, "Scaler must be loaded after ready() check"
-        assert self.interpreter is not None, "Interpreter must be loaded after ready() check"
+        assert (
+            self.interpreter is not None
+        ), "Interpreter must be loaded after ready() check"
         assert (
             self.input_details is not None and self.output_details is not None
         ), "Input/output details must be available after ready() check"
 
         window = np.array(self.history, dtype=np.float32)[-self.lookback :]
-        scaled = self.scaler.transform(window)
-        input_data = scaled.reshape(1, self.lookback, NUM_FEATURES).astype(np.float32)
+        # Use model's actual feature count (may differ from schema NUM_FEATURES)
+        model_features = getattr(self, "model_num_features", NUM_FEATURES)
+        history_features = window.shape[1]
 
+        if history_features != model_features:
+            raise RuntimeError(
+                f"Feature count mismatch at inference: "
+                f"history has {history_features} features but model expects {model_features}. "
+                f"Ensure operator FEATURE_COLUMNS matches the model's training schema "
+                f"and re-run 'ppa model push' to regenerate scalers."
+            )
+
+        scaled = self.scaler.transform(window)
+        input_data = scaled.reshape(1, self.lookback, model_features).astype(np.float32)
         # FIX (PR#13): Track inference latency
         start_time = time.time()
         self.interpreter.set_tensor(self.input_details[0]["index"], input_data)
@@ -356,13 +429,45 @@ class Predictor:
 
         predicted_scaled = float(output[0][0])
 
-        # Inverse-transform model output using target scaler
-        if self.target_scaler is not None:
-            result = self.target_scaler.inverse_transform(np.array([[predicted_scaled]]))
+        # --- Denormalization ---
+        # The foundation model (Colab) was trained on target_normalized_rps_t3m
+        # which is a [0, 1] ratio (= future_rps / rolling_max_rps).  It outputs
+        # a normalized ratio, NOT raw req/s.
+        #
+        # Correct denormalization: predicted_rps = ratio × rolling_max_rps
+        # WRONG denormalization: target_scaler.inverse_transform(ratio)
+        #   — the target_scaler on disk was fit on a raw-RPS column (max≈345)
+        #     so it maps a valid 0.53 ratio → 344 req/s (hallucination).
+        #
+        # We bypass target_scaler entirely and use the caller-supplied
+        # rolling_max_rps (floor 1.0, matching training) for denormalization.
+        if rolling_max_rps is not None and rolling_max_rps > 0:
+            predicted_rps = predicted_scaled * rolling_max_rps
+            logger.debug(
+                f"[predict] ratio={predicted_scaled:.4f}  "
+                f"rolling_max_rps={rolling_max_rps:.2f}  "
+                f"→ predicted_rps={predicted_rps:.2f}"
+            )
+        elif self.target_scaler is not None:
+            # Fallback for old-style models that genuinely used a target scaler
+            # fit on the correct target distribution.  Log a warning because this
+            # path should not be reached for the foundation model.
+            result = self.target_scaler.inverse_transform(
+                np.array([[predicted_scaled]])
+            )
             predicted_rps = result[0, 0]
+            logger.warning(
+                f"[predict] Using target_scaler fallback (no rolling_max_rps supplied). "
+                f"raw={predicted_scaled:.4f} → {predicted_rps:.4f}. "
+                f"target_scaler data_max={getattr(self.target_scaler, 'data_max_', '?')}"
+            )
         else:
-            # Legacy fallback: model was trained without target scaling
+            # No denormalization available — return ratio as-is (legacy path).
             predicted_rps = predicted_scaled
+            logger.debug(
+                f"[predict] No denormalization (no rolling_max_rps, no target_scaler). "
+                f"Returning raw model output={predicted_scaled:.4f}"
+            )
 
         return max(0.0, float(predicted_rps))
 
@@ -385,7 +490,9 @@ class Predictor:
             self.history.clear()
             for row in serialized:
                 self.history.append(np.array(row, dtype=np.float32))
-            logger.info(f"Deserialized history: {len(self.history)}/{self.history.maxlen} steps")
+            logger.info(
+                f"Deserialized history: {len(self.history)}/{self.history.maxlen} steps"
+            )
             return True
         except Exception as exc:
             logger.warning(f"Failed to deserialize history: {exc}")
@@ -401,7 +508,9 @@ class Predictor:
             "max_steps": self.history.maxlen,
             "ready": self.ready(),
             "last_drift_check": (
-                datetime.fromtimestamp(self.last_drift_check_time, tz=timezone.utc).isoformat()
+                datetime.fromtimestamp(
+                    self.last_drift_check_time, tz=timezone.utc
+                ).isoformat()
                 if self.last_drift_check_time > 0
                 else None
             ),
@@ -411,7 +520,9 @@ class Predictor:
     def prefill_history(self, feature_rows: list) -> None:
         """Populate history deque from a list of feature dictionaries (e.g. from Prometheus range query)."""
         for features in feature_rows:
-            row = np.array([features.get(name, 0.0) for name in FEATURE_COLUMNS], dtype=np.float32)
+            row = np.array(
+                [features.get(name, 0.0) for name in FEATURE_COLUMNS], dtype=np.float32
+            )
             self.history.append(row)
         filled = len(self.history)
         logger.info(
@@ -486,7 +597,9 @@ class Predictor:
             "detected": drift_detected,
             "error_pct": mean_error_pct,
             "severity": (
-                "severe" if severe_drift else ("moderate" if drift_detected else "normal")
+                "severe"
+                if severe_drift
+                else ("moderate" if drift_detected else "normal")
             ),
             "checked": True,
         }

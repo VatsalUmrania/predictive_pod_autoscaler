@@ -33,21 +33,25 @@ from nexus.reasoning.incident_cluster import IncidentCluster
 logger = logging.getLogger(__name__)
 
 # Events that carry information but should not trigger RCA on their own
-_SKIP_CLUSTERING = frozenset({
-    "db_query_spike",
-    "metric_unavailable",
-    "circuit_breaker_tripped",
-    "deploy_event",       # Informational — but will be merged if co-clustered
-})
+_SKIP_CLUSTERING = frozenset(
+    {
+        "db_query_spike",
+        "metric_unavailable",
+        "circuit_breaker_tripped",
+        "deploy_event",  # Informational — but will be merged if co-clustered
+    }
+)
 
 # Single-event signals severe enough to emit a cluster immediately without quorum
-_IMMEDIATE_EMIT = frozenset({
-    "env_contract_violation",   # Deterministic — always critical, no wait
-    "secret_committed",         # Security — always critical, no wait
-    "pod_crashloop",            # Clear actionable signal on its own
-    "pod_oomkilled",            # Clear actionable signal on its own
-    "dns_resolution_failure",   # Dependency failure — time-sensitive
-})
+_IMMEDIATE_EMIT = frozenset(
+    {
+        "env_contract_violation",  # Deterministic — always critical, no wait
+        "secret_committed",  # Security — always critical, no wait
+        "pod_crashloop",  # Clear actionable signal on its own
+        "pod_oomkilled",  # Clear actionable signal on its own
+        "dns_resolution_failure",  # Dependency failure — time-sensitive
+    }
+)
 
 
 class EventCorrelator:
@@ -66,8 +70,8 @@ class EventCorrelator:
         quorum_events: int = 3,
         flush_timeout_s: float = 45.0,
     ):
-        self._window        = correlation_window_s
-        self._quorum        = quorum_events
+        self._window = correlation_window_s
+        self._quorum = quorum_events
         self._flush_timeout = flush_timeout_s
 
         # namespace → open IncidentCluster
@@ -77,8 +81,8 @@ class EventCorrelator:
         self._emitted: set = set()
 
         # Stats
-        self._total_ingested  = 0
-        self._total_emitted   = 0
+        self._total_ingested = 0
+        self._total_emitted = 0
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -121,10 +125,15 @@ class EventCorrelator:
         if cluster is None:
             cluster = IncidentCluster.new(event)
             self._open[key] = cluster
-            logger.debug(f"[EventCorrelator] New cluster {cluster.cluster_id} for ns={key}")
+            logger.debug(
+                f"[EventCorrelator] New cluster {cluster.cluster_id} for ns={key}"
+            )
             # Propagate ppa_raw_features from TRAFFIC_SPIKE_PREDICTED events
-            if (isinstance(event.context, dict) and "raw_features" in event.context
-                    and event.signal_type == SignalType.TRAFFIC_SPIKE_PREDICTED):
+            if (
+                isinstance(event.context, dict)
+                and "raw_features" in event.context
+                and event.signal_type == SignalType.TRAFFIC_SPIKE_PREDICTED
+            ):
                 cluster.ppa_raw_features = event.context["raw_features"]
             return None
 
@@ -136,8 +145,11 @@ class EventCorrelator:
             cluster = IncidentCluster.new(event)
             self._open[key] = cluster
             # Propagate ppa_raw_features from TRAFFIC_SPIKE_PREDICTED events
-            if (isinstance(event.context, dict) and "raw_features" in event.context
-                    and event.signal_type == SignalType.TRAFFIC_SPIKE_PREDICTED):
+            if (
+                isinstance(event.context, dict)
+                and "raw_features" in event.context
+                and event.signal_type == SignalType.TRAFFIC_SPIKE_PREDICTED
+            ):
                 cluster.ppa_raw_features = event.context["raw_features"]
             logger.debug(
                 f"[EventCorrelator] Window expired ({gap_s:.0f}s) — "
@@ -169,9 +181,9 @@ class EventCorrelator:
         Called by the orchestrator's background flush loop every 30s.
         Returns a list of IncidentClusters ready for RCA.
         """
-        now    = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
         stale_keys: list[str] = []
-        ready:  list[IncidentCluster] = []
+        ready: list[IncidentCluster] = []
 
         for key, cluster in self._open.items():
             age = (now - cluster.created_at).total_seconds()
@@ -215,10 +227,10 @@ class EventCorrelator:
     @property
     def stats(self) -> dict:
         return {
-            "total_ingested":  self._total_ingested,
-            "total_emitted":   self._total_emitted,
-            "open_clusters":   len(self._open),
+            "total_ingested": self._total_ingested,
+            "total_emitted": self._total_emitted,
+            "open_clusters": len(self._open),
             "correlation_window_s": self._window,
-            "quorum_events":   self._quorum,
+            "quorum_events": self._quorum,
             "flush_timeout_s": self._flush_timeout,
         }

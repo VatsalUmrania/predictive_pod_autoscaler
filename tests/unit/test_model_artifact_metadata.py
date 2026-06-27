@@ -45,7 +45,10 @@ def test_promote_artifacts_copies_metadata(tmp_path):
     assert (promoted_dir / "scaler.pkl").exists()
     assert (promoted_dir / "target_scaler.pkl").exists()
     assert (promoted_dir / "ppa_model_metadata.json").exists()
-    assert json.loads((promoted_dir / "ppa_model_metadata.json").read_text()) == metadata_payload
+    assert (
+        json.loads((promoted_dir / "ppa_model_metadata.json").read_text())
+        == metadata_payload
+    )
 
 
 def test_push_models_copies_metadata_to_horizon_path(tmp_path, monkeypatch):
@@ -86,10 +89,17 @@ def test_push_models_copies_metadata_to_horizon_path(tmp_path, monkeypatch):
     )
 
     assert result.success is True
-    assert any(dst.endswith("/models/rps_t10m/ppa_model.tflite") for _, dst in copy_calls)
-    assert any(dst.endswith("/models/rps_t10m/ppa_model_metadata.json") for _, dst in copy_calls)
+    assert any(
+        dst.endswith("/models/rps_t10m/ppa_model.tflite") for _, dst in copy_calls
+    )
+    assert any(
+        dst.endswith("/models/rps_t10m/ppa_model_metadata.json")
+        for _, dst in copy_calls
+    )
     assert any(dst.endswith("/models/rps_t10m/scaler.pkl") for _, dst in copy_calls)
-    assert any(dst.endswith("/models/rps_t10m/target_scaler.pkl") for _, dst in copy_calls)
+    assert any(
+        dst.endswith("/models/rps_t10m/target_scaler.pkl") for _, dst in copy_calls
+    )
 
 
 def test_push_models_uses_pipeline_output_when_champion_missing(tmp_path, monkeypatch):
@@ -103,11 +113,12 @@ def test_push_models_uses_pipeline_output_when_champion_missing(tmp_path, monkey
     (artifacts_dir / "ppa_model_metadata.json").write_text(json.dumps(metadata_payload))
 
     csv_path = tmp_path / "training.csv"
-    csv_path.write_text("timestamp,rps_t10m\n2026-04-09T00:00:00Z,1\n")
+    csv_path.write_text("timestamp,normalized_rps_t10m\n2026-04-09T00:00:00Z,1\n")
 
     copy_calls: list[tuple[str, str]] = []
 
     monkeypatch.setattr(push, "PROJECT_DIR", project_root)
+    monkeypatch.setattr(push, "MODEL_DIR", project_root / "models")
     monkeypatch.setattr(push, "CHAMPION_DIR", tmp_path / "champions")
     monkeypatch.setattr(push, "validate_cluster", lambda: True)
     monkeypatch.setattr(push, "ensure_exists", lambda *args, **kwargs: True)
@@ -126,13 +137,22 @@ def test_push_models_uses_pipeline_output_when_champion_missing(tmp_path, monkey
 
     result = push.push_models(
         app_name="test-app",
-        horizons=["rps_t10m"],
+        horizons=["normalized_rps_t10m"],
         data_csv=str(csv_path),
     )
 
     assert result.success is True
     # Canonical filenames: no horizon suffix
     assert any("model/artifacts/ppa_model.tflite" in src for src, _ in copy_calls)
-    assert any("model/artifacts/ppa_model_metadata.json" in src for src, _ in copy_calls)
-    assert (push.CHAMPION_DIR / "test-app" / "rps_t10m" / "ppa_model.tflite").exists()
-    assert (push.CHAMPION_DIR / "test-app" / "rps_t10m" / "ppa_model_metadata.json").exists()
+    assert any(
+        "model/artifacts/ppa_model_metadata.json" in src for src, _ in copy_calls
+    )
+    assert (
+        push.CHAMPION_DIR / "test-app" / "normalized_rps_t10m" / "ppa_model.tflite"
+    ).exists()
+    assert (
+        push.CHAMPION_DIR
+        / "test-app"
+        / "normalized_rps_t10m"
+        / "ppa_model_metadata.json"
+    ).exists()
