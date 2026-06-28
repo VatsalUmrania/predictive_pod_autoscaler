@@ -1,0 +1,68 @@
+runbook:
+  id: "runbook_sqs_dlq_v1"
+  version: "1.0.0"
+  description: >
+    Responds to SQS dead-letter queue (DLQ) depth exceeding threshold.
+    Strategy:
+      1. Alert immediately with DLQ depth and sampled messages.
+      2. Replay DLQ messages back to the source queue (L2).
+         This is only safe if the consumer's bug has been fixed.
+         NEXUS will replay automatically if confidence >= 0.70;
+         otherwise stage for human review.
+      3. Verify DLQ depth drops after replay.
+  failure_class: "dependency_failure"
+  healing_level: 2
+
+  trigger:
+    signal_types:
+      - "sqs_dlq_depth_high"
+    severity_minimum: "warning"
+
+  pre_checks:
+    - type: "event_field"
+      field: "dlq_depth"
+      operator: "gte"
+      threshold: 10
+      description: "Only trigger if DLQ depth >= 10"
+
+  actions:
+    - type: "emit_alert"
+      description: "Alert team — DLQ is filling up."
+      abort_on_failure: false
+      params:
+        message: >
+          📬 NEXUS: SQS DLQ depth elevated.
+          Queue: {resource_name} | DLQ depth: {context.dlq_depth} messages
+          Consumer Lambda: {context.consumer_lambda}
+          Sample messages included in incident context.
+          NEXUS will attempt DLQ replay if consumer is healthy.
+
+    - type: "replay_sqs_dlq"
+      description: >
+        Move DLQ messages back to the source queue for reprocessing.
+        NEXUS only executes this if the consumer Lambda is healthy (error rate < 5%).
+        Max 1000 messages per runbook execution.
+      abort_on_failure: false
+      params:
+        max_messages: 1000
+        # dlq_url and source_queue_url injected from event context
+
+  post_checks:
+    - metric_query: "sqs_dlq_depth_post_replay"
+      operator: "lt"
+      threshold: 5
+      window_seconds: 120
+      timeout_seconds: 180
+      description: "DLQ depth must drop below 5 within 3 minutes of replay"
+
+  rollback_if_post_check_fails: false
+  rollback_actions:
+    - type: "emit_alert"
+      params:
+        message: >
+          ⚠️  NEXUS: SQS DLQ replay inconclusive.
+          DLQ depth still elevated — messages may be failing again.
+          Root cause likely still present — manual investigation required.
+
+  cooldown_seconds: 900    # 15 minutes — don't replay again too quickly
+  blast_radius: "single_database"

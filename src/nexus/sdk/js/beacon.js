@@ -53,12 +53,16 @@
     var body = JSON.stringify(payload);
 
     // Try sendBeacon (non-blocking, survives page close)
+    // NOTE: sendBeacon does not support custom headers, so it drops the Authorization token.
+    // We rely entirely on fetch() with keepalive: true instead.
+    /*
     if (w.navigator && w.navigator.sendBeacon) {
       try {
         var blob = new Blob([body], { type: 'application/json' });
         if (w.navigator.sendBeacon(ENDPOINT, blob)) return;
-      } catch (e) { /* fall through */ }
+      } catch (e) { }
     }
+    */
 
     // Fallback: fetch with keepalive
     if (w.fetch) {

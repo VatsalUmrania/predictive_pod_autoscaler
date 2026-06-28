@@ -1,0 +1,63 @@
+runbook:
+  id: "runbook_lambda_oom_v1"
+  version: "1.0.0"
+  description: >
+    Responds to Lambda function OOM (Out of Memory) signals.
+    Detected via CloudWatch Logs pattern "Runtime exited with error" or
+    "Process exited before completing request".
+    Strategy:
+      1. Alert immediately.
+      2. Increase Lambda memory by 50% (L2, bounded to 3008 MB by policy).
+      3. Verify memory errors no longer appear in logs.
+  failure_class: "resource_exhaustion"
+  healing_level: 2
+
+  trigger:
+    signal_types:
+      - "lambda_oom"
+    severity_minimum: "warning"
+
+  actions:
+    - type: "emit_alert"
+      description: "Notify team — Lambda OOM detected."
+      abort_on_failure: false
+      params:
+        message: >
+          💾 NEXUS: Lambda OOM detected.
+          Function: {resource_name}
+          Runtime exited before completing request (OOM).
+          NEXUS will increase memory allocation.
+
+    - type: "increase_lambda_memory"
+      description: "Increase Lambda memory by 50% (bounded to 3008 MB)."
+      abort_on_failure: true
+      params:
+        memory_mb: 512   # RunbookExecutor calculates 1.5x current from pre_state
+
+    - type: "emit_alert"
+      description: "Confirm memory increase was applied."
+      abort_on_failure: false
+      params:
+        message: >
+          🔧 NEXUS: Lambda memory increased for {resource_name}.
+          Monitoring for 2 minutes to confirm OOM resolved.
+
+  post_checks:
+    - metric_query: "lambda_errors_post_oom_heal"
+      operator: "lt"
+      threshold: 5
+      window_seconds: 120
+      timeout_seconds: 180
+      description: "Error count should drop below 5 within 3 minutes"
+
+  rollback_if_post_check_fails: false
+  rollback_actions:
+    - type: "emit_alert"
+      params:
+        message: >
+          ⚠️  NEXUS: Lambda OOM mitigation inconclusive.
+          Errors still present after memory increase.
+          Possible memory leak — manual code investigation needed.
+
+  cooldown_seconds: 600
+  blast_radius: "single_deployment"

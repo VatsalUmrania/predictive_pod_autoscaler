@@ -13,6 +13,8 @@ if TYPE_CHECKING:
     import uvicorn
 
 from nexus.agents.manager import AgentManager
+from nexus.agents.aws.manager import AWSAgentManager
+from nexus.agents.aws.config import AWSConfig
 from nexus.bus.nats_client import NATSClient
 from nexus.governance.action_ladder import (
     ActionLadder,
@@ -25,6 +27,7 @@ from nexus.governance.policy_engine import PolicyEngine
 from nexus.governance.rollback_registry import RollbackRegistry
 from nexus.governance.runbook_executor import RunbookExecutor
 from nexus.integration.notifier import Notifier
+from nexus.integration.aws_eventbridge import router as eventbridge_router, set_nats_client
 from nexus.learning.ppa_outcome_tracker import PpaOutcomeTracker
 from nexus.observability.status_api import app as status_api
 from nexus.observability.status_api import context
@@ -62,6 +65,7 @@ class NexusServer:
         outcome_tracker: PpaOutcomeTracker,
         notifier: Notifier,
         agent_manager: AgentManager,
+        aws_agent_manager: AWSAgentManager,
         status_api,  # FastAPI app
     ) -> None:
         self.nats_client = nats_client
@@ -70,6 +74,7 @@ class NexusServer:
         self.outcome_tracker = outcome_tracker
         self.notifier = notifier
         self.agent_manager = agent_manager
+        self.aws_agent_manager = aws_agent_manager
         self.status_api = status_api
         self._tasks: list[asyncio.Task] = []
 
@@ -82,6 +87,7 @@ class NexusServer:
         prometheus_url: str = "http://prometheus:9090",
         gemini_api_key: str | None = None,
         status_port: int = 8080,
+        aws_config: AWSConfig | None = None,
     ) -> NexusServer:
         """
         Async factory: connects to NATS, creates and wires all components.
@@ -174,12 +180,24 @@ class NexusServer:
             executor=executor,
         )
 
-        # ── Notifier (sync — manages its own background task internally) ────────
+        # ── Notifier (sync — manages its own background task internally) ──────────
         notifier = Notifier()
         notifier.start_background(nats)  # returns None; _listen loop is internal
 
-        # ── Agent manager ────────────────────────────────────────────────────
+        # ── Agent manager (K8s domain agents) ───────────────────────────────
         agent_manager = AgentManager(nats_client=nats, prometheus_url=prometheus_url)
+
+        # ── AWS Agent Manager (serverless domain agents) ─────────────────────
+        aws_cfg = aws_config or AWSConfig.from_env()
+        aws_agent_manager = AWSAgentManager(nats_client=nats, config=aws_cfg)
+
+        # ── Mount EventBridge webhook on the status API FastAPI app ────────────
+        try:
+            status_api.include_router(eventbridge_router)
+            set_nats_client(nats)
+            logger.info("[NexusServer] EventBridge webhook mounted at /webhooks/aws/eventbridge")
+        except Exception as exc:
+            logger.warning(f"[NexusServer] EventBridge router mount failed (non-fatal): {exc}")
 
         # ── Pre-populate NexusContext so status_api lifespan skips self-init ───
         context.orchestrator = orchestrator
@@ -198,6 +216,7 @@ class NexusServer:
             outcome_tracker=outcome_tracker,
             notifier=notifier,
             agent_manager=agent_manager,
+            aws_agent_manager=aws_agent_manager,
             status_api=status_api,
         )
 
@@ -217,6 +236,9 @@ class NexusServer:
         # outcome_tracker.start() must be here, NOT in create(), to avoid a double loop.
         await self.outcome_tracker.start()
 
+        # Start AWS agents (no-op if NEXUS_AWS_ENABLED=false)
+        await self.aws_agent_manager.start()
+
         self._tasks = [
             asyncio.create_task(self.orchestrator.start(), name="orchestrator"),
             asyncio.create_task(
@@ -225,7 +247,8 @@ class NexusServer:
                 ).serve(),
                 name="status-api",
             ),
-            *self.agent_manager._tasks,                       # agent run-loop handles
+            *self.agent_manager._tasks,                       # K8s agent run-loop handles
+            *self.aws_agent_manager._tasks,                   # AWS agent run-loop handles
         ]
 
     async def stop(self) -> None:
@@ -238,6 +261,7 @@ class NexusServer:
         self._tasks = []
 
         self.agent_manager.stop()
+        self.aws_agent_manager.stop()  # No-op if AWS was not enabled
         await self.outcome_tracker.stop()
         self.notifier.stop()          # cancels Notifier._nats_task — never skip this
         await self.nats_client.close()

@@ -240,3 +240,6 @@ __marimo__/
 #.code-review-graph/
 # Added by code-review-graph
 .code-review-graph/
+
+demo/backend/shop.db
+research/*

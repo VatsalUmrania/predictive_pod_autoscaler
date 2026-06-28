@@ -1,0 +1,54 @@
+runbook:
+  id: "runbook_lambda_timeout_v1"
+  version: "1.0.0"
+  description: >
+    Responds to Lambda functions approaching or hitting their configured timeout.
+    Strategy:
+      1. Alert.
+      2. Increase the timeout by 50% up to policy maximum of 900 seconds (L2).
+      3. Verify average duration no longer approaches timeout after 2 minutes.
+  failure_class: "resource_exhaustion"
+  healing_level: 2
+
+  trigger:
+    signal_types:
+      - "lambda_timeout"
+    severity_minimum: "warning"
+
+  actions:
+    - type: "emit_alert"
+      description: "Notify team of timeout proximity."
+      abort_on_failure: false
+      params:
+        message: >
+          ⏱ NEXUS: Lambda timeout proximity detected.
+          Function: {resource_name}
+          Average duration is > 80% of configured timeout.
+          NEXUS will increase the timeout.
+
+    - type: "increase_lambda_timeout"
+      description: >
+        Increase Lambda timeout by 50% (max 900s per policy).
+        This is a bounded L2 action — always safe.
+      abort_on_failure: true
+      params:
+        timeout_seconds: 30   # RunbookExecutor calculates 1.5x current from pre_state
+
+  post_checks:
+    - metric_query: "lambda_duration_p99_post_heal"
+      operator: "lt"
+      threshold: 0.80   # duration / timeout ratio should drop below 80%
+      window_seconds: 120
+      timeout_seconds: 180
+
+  rollback_if_post_check_fails: false
+  rollback_actions:
+    - type: "emit_alert"
+      params:
+        message: >
+          ⚠️  NEXUS: Lambda timeout mitigation inconclusive.
+          Duration still elevated after timeout increase.
+          May indicate a slow external dependency — manual investigation needed.
+
+  cooldown_seconds: 600
+  blast_radius: "single_deployment"

@@ -37,6 +37,12 @@ class AgentType(str, Enum):
     CONFIG      = "config"
     K8S         = "k8s"
     ORCHESTRATOR = "orchestrator"  # for system-level internal events
+    # ── AWS Serverless Agents ─────────────────────────────────────────────────
+    LAMBDA      = "lambda"
+    APIGW       = "apigw"
+    SQS         = "sqs"
+    DYNAMODB    = "dynamodb"
+    CLOUDWATCH  = "cloudwatch"    # catch-all CloudWatch Alarm agent
 
 
 class SignalType(str, Enum):
@@ -89,6 +95,33 @@ class SignalType(str, Enum):
     # ── Predictive Layer ──────────────────────────────────────────────────────
     TRAFFIC_SPIKE_PREDICTED = "traffic_spike_predicted"
     ANOMALY_PREDICTED       = "anomaly_predicted"
+
+    # ── AWS Lambda ───────────────────────────────────────────────────────────
+    LAMBDA_ERROR_RATE_HIGH   = "lambda_error_rate_high"
+    LAMBDA_THROTTLE_SPIKE    = "lambda_throttle_spike"
+    LAMBDA_TIMEOUT           = "lambda_timeout"
+    LAMBDA_OOM               = "lambda_oom"
+    LAMBDA_COLD_START_HIGH   = "lambda_cold_start_high"
+    LAMBDA_CONCURRENCY_MAXED = "lambda_concurrency_maxed"
+
+    # ── AWS API Gateway ───────────────────────────────────────────────────────
+    APIGW_5XX_SPIKE          = "apigw_5xx_spike"
+    APIGW_LATENCY_HIGH       = "apigw_latency_high"
+    APIGW_4XX_SPIKE          = "apigw_4xx_spike"
+
+    # ── AWS SQS ──────────────────────────────────────────────────────────────
+    SQS_DLQ_DEPTH_HIGH       = "sqs_dlq_depth_high"
+    SQS_QUEUE_DEPTH_HIGH     = "sqs_queue_depth_high"
+    SQS_CONSUMER_LAG         = "sqs_consumer_lag"
+
+    # ── AWS DynamoDB ──────────────────────────────────────────────────────────
+    DYNAMO_THROTTLE_READ     = "dynamo_throttle_read"
+    DYNAMO_THROTTLE_WRITE    = "dynamo_throttle_write"
+    DYNAMO_SYSTEM_ERROR      = "dynamo_system_error"
+    DYNAMO_CONSUMED_RCU_HIGH = "dynamo_consumed_rcu_high"
+
+    # ── AWS CloudWatch (catch-all) ─────────────────────────────────────────────
+    AWS_ALARM_FIRED          = "aws_alarm_fired"
 
 
 class Severity(str, Enum):
@@ -291,3 +324,89 @@ class TrafficSpikePredictionContext(BaseModel):
     db_table_trigger:           str | None = None  # Which DB table drove this prediction
     model_smape:                float | None = None
     confidence:                 float = 0.0
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# AWS Typed Context Models
+# ──────────────────────────────────────────────────────────────────────────────
+
+class LambdaErrorContext(BaseModel):
+    """Context for Lambda error-rate / timeout / OOM / throttle incidents."""
+    function_name:      str
+    function_arn:       str | None = None
+    error_rate:         float                              # 0.0 – 1.0
+    error_count:        int = 0
+    invocation_count:   int = 0
+    window_minutes:     int = 5
+    runtime:            str | None = None                  # python3.12, nodejs20.x, etc.
+    memory_mb:          int | None = None
+    timeout_seconds:    int | None = None
+    last_modified:      str | None = None
+    current_version:    str | None = None
+    current_alias:      str | None = None
+    previous_version:   str | None = None
+    last_log_lines:     list[str] = Field(default_factory=list)  # up to 200 lines
+    recent_error_messages: list[str] = Field(default_factory=list)  # sampled errors
+    concurrency_limit:  int | None = None
+    cold_start_count:   int = 0
+    throttle_count:     int = 0
+
+
+class SqsDLQContext(BaseModel):
+    """Context for SQS dead-letter queue depth incidents."""
+    queue_name:         str
+    queue_url:          str
+    dlq_name:           str | None = None
+    dlq_url:            str | None = None
+    dlq_depth:          int = 0                            # ApproximateNumberOfMessages
+    queue_depth:        int = 0
+    oldest_message_age_seconds: int | None = None
+    consumer_lambda:    str | None = None                  # Lambda function consuming the queue
+    visibility_timeout: int | None = None
+    message_retention:  int | None = None
+    sample_messages:    list[str] = Field(default_factory=list)  # up to 5 message bodies
+
+
+class DynamoThrottleContext(BaseModel):
+    """Context for DynamoDB throttling / system error incidents."""
+    table_name:         str
+    region:             str
+    throttle_read:      int = 0                            # ReadThrottleEvents count
+    throttle_write:     int = 0                            # WriteThrottleEvents count
+    system_errors:      int = 0
+    capacity_mode:      str = "PROVISIONED"                # PROVISIONED | PAY_PER_REQUEST
+    provisioned_rcu:    float | None = None
+    provisioned_wcu:    float | None = None
+    consumed_rcu:       float | None = None
+    consumed_wcu:       float | None = None
+    table_status:       str | None = None
+    gsi_names:          list[str] = Field(default_factory=list)
+
+
+class ApiGwContext(BaseModel):
+    """Context for API Gateway error rate / latency incidents."""
+    api_id:             str
+    api_name:           str | None = None
+    stage:              str
+    error_5xx_rate:     float = 0.0                        # 0.0 – 1.0
+    error_4xx_rate:     float = 0.0
+    latency_p99_ms:     float | None = None
+    integration_latency_p99_ms: float | None = None
+    request_count:      int = 0
+    window_minutes:     int = 5
+    backend_lambda_arn: str | None = None
+
+
+class CloudWatchAlarmContext(BaseModel):
+    """Context for a catch-all CloudWatch Alarm in ALARM state."""
+    alarm_name:         str
+    alarm_arn:          str | None = None
+    metric_name:        str | None = None
+    namespace:          str | None = None
+    state:              str = "ALARM"                      # ALARM | INSUFFICIENT_DATA | OK
+    state_reason:       str | None = None
+    threshold:          float | None = None
+    comparison_operator: str | None = None
+    evaluation_periods: int | None = None
+    period_seconds:     int | None = None
+    dimensions:         dict[str, str] = Field(default_factory=dict)
