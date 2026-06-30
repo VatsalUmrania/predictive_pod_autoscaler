@@ -11,7 +11,11 @@ This module is responsible for:
 """
 
 # Re-export domain scaling functions for backward compatibility
-from ppa.domain.scaling import calculate_replicas, calculate_replicas_fixed, calculate_replicas_old
+from ppa.domain.scaling import (
+    calculate_replicas,
+    calculate_replicas_fixed,
+    calculate_replicas_old,
+)
 
 # Private re-exports for backward compatibility with old private function names
 # (in case any internal code still uses these)
@@ -19,7 +23,9 @@ from ppa.domain.scaling import calculate_replicas, calculate_replicas_fixed, cal
 from ppa.infrastructure.kubernetes import scale_deployment as _scale_deployment_impl
 
 
-def scale_deployment(deployment: str, replicas: int, namespace: str = "default") -> bool:
+def scale_deployment(
+    deployment: str, replicas: int, namespace: str = "default"
+) -> bool:
     """Patch the Deployment's replica count.
 
     Public wrapper around infrastructure.kubernetes.scale_deployment.

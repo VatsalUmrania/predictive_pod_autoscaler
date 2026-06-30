@@ -181,7 +181,9 @@ class TestPipelineOrchestrator:
             )
 
             # Pipeline should exit with code 1 for quality gate failure
-            assert result.returncode == 1, "Pipeline should fail when quality gate is exceeded"
+            assert (
+                result.returncode == 1
+            ), "Pipeline should fail when quality gate is exceeded"
             assert "WARN" in result.stdout or "quality gate" in result.stdout.lower()
 
     def test_pipeline_with_real_data_if_available(self):

@@ -48,31 +48,33 @@ _COMPLETED = ("success", "failed", "rolled_back", "skipped")
 # Data structures
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class OutcomeRecord:
     """Normalized view of one AuditTrail row."""
-    action_id:          str
-    timestamp:          str
-    triggered_by:       str
-    runbook_id:         str
-    healing_level:      int
-    target:             str
-    execution_outcome:  str
+
+    action_id: str
+    timestamp: str
+    triggered_by: str
+    runbook_id: str
+    healing_level: int
+    target: str
+    execution_outcome: str
     rollback_triggered: bool
-    incident_id:        str | None
+    incident_id: str | None
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> OutcomeRecord:
         return cls(
-            action_id          = row["action_id"],
-            timestamp          = row["timestamp"],
-            triggered_by       = row["triggered_by"],
-            runbook_id         = row["runbook_id"],
-            healing_level      = int(row.get("healing_level", 0)),
-            target             = row.get("target") or "",
-            execution_outcome  = row.get("execution_outcome", "unknown"),
-            rollback_triggered = bool(row.get("rollback_triggered", 0)),
-            incident_id        = row.get("incident_id"),
+            action_id=row["action_id"],
+            timestamp=row["timestamp"],
+            triggered_by=row["triggered_by"],
+            runbook_id=row["runbook_id"],
+            healing_level=int(row.get("healing_level", 0)),
+            target=row.get("target") or "",
+            execution_outcome=row.get("execution_outcome", "unknown"),
+            rollback_triggered=bool(row.get("rollback_triggered", 0)),
+            incident_id=row.get("incident_id"),
         )
 
     @property
@@ -91,14 +93,15 @@ class OutcomeRecord:
 @dataclass
 class RunbookStats:
     """Aggregated healing statistics for one runbook over a time window."""
-    runbook_id:      str
-    window_days:     int
-    total:           int = 0
-    successes:       int = 0
-    failures:        int = 0
-    rolled_back:     int = 0
-    skipped:         int = 0
-    pending:         int = 0
+
+    runbook_id: str
+    window_days: int
+    total: int = 0
+    successes: int = 0
+    failures: int = 0
+    rolled_back: int = 0
+    skipped: int = 0
+    pending: int = 0
 
     @property
     def completed(self) -> int:
@@ -127,17 +130,17 @@ class RunbookStats:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "runbook_id":      self.runbook_id,
-            "window_days":     self.window_days,
-            "total":           self.total,
-            "completed":       self.completed,
-            "successes":       self.successes,
-            "failures":        self.failures,
-            "rolled_back":     self.rolled_back,
-            "pending":         self.pending,
-            "success_rate":    round(self.success_rate, 3),
+            "runbook_id": self.runbook_id,
+            "window_days": self.window_days,
+            "total": self.total,
+            "completed": self.completed,
+            "successes": self.successes,
+            "failures": self.failures,
+            "rolled_back": self.rolled_back,
+            "pending": self.pending,
+            "success_rate": round(self.success_rate, 3),
             "false_heal_rate": round(self.false_heal_rate, 3),
-            "rollback_rate":   round(self.rollback_rate, 3),
+            "rollback_rate": round(self.rollback_rate, 3),
         }
 
     def __str__(self) -> str:
@@ -151,33 +154,35 @@ class RunbookStats:
 @dataclass
 class SystemKPIs:
     """System-level healing performance KPIs."""
-    total_actions:           int   = 0
-    total_successes:         int   = 0
-    total_false_heals:       int   = 0
-    total_rollbacks:         int   = 0
+
+    total_actions: int = 0
+    total_successes: int = 0
+    total_false_heals: int = 0
+    total_rollbacks: int = 0
     autonomous_success_rate: float = 0.0
-    false_heal_rate:         float = 0.0
-    actions_by_level:        dict[str, int] = field(default_factory=dict)
-    actions_by_runbook:      dict[str, int] = field(default_factory=dict)
-    window_days:             int  = 30
+    false_heal_rate: float = 0.0
+    actions_by_level: dict[str, int] = field(default_factory=dict)
+    actions_by_runbook: dict[str, int] = field(default_factory=dict)
+    window_days: int = 30
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "total_actions":           self.total_actions,
-            "total_successes":         self.total_successes,
-            "total_false_heals":       self.total_false_heals,
-            "total_rollbacks":         self.total_rollbacks,
+            "total_actions": self.total_actions,
+            "total_successes": self.total_successes,
+            "total_false_heals": self.total_false_heals,
+            "total_rollbacks": self.total_rollbacks,
             "autonomous_success_rate": round(self.autonomous_success_rate, 3),
-            "false_heal_rate":         round(self.false_heal_rate, 3),
-            "actions_by_level":        self.actions_by_level,
-            "actions_by_runbook":      self.actions_by_runbook,
-            "window_days":             self.window_days,
+            "false_heal_rate": round(self.false_heal_rate, 3),
+            "actions_by_level": self.actions_by_level,
+            "actions_by_runbook": self.actions_by_runbook,
+            "window_days": self.window_days,
         }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Outcome Store
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class OutcomeStore:
     """
@@ -190,7 +195,10 @@ class OutcomeStore:
 
     def __init__(self, db_path: str | None = None):
         import os
-        self._db_path = db_path or os.getenv("NEXUS_AUDIT_DB_PATH", "/tmp/nexus_audit.db")
+
+        self._db_path = db_path or os.getenv(
+            "NEXUS_AUDIT_DB_PATH", "/tmp/nexus_audit.db"
+        )
         self._db: aiosqlite.Connection | None = None
 
     async def connect(self) -> None:
@@ -258,7 +266,7 @@ class OutcomeStore:
     async def get_runbook_stats(self, runbook_id: str, days: int = 30) -> RunbookStats:
         """Compute aggregated statistics for one runbook over the last N days."""
         since = self._since_ts(days)
-        rows  = await self._execute(
+        rows = await self._execute(
             """
             SELECT execution_outcome, rollback_triggered
             FROM audit_trail
@@ -287,7 +295,7 @@ class OutcomeStore:
     async def get_all_runbook_stats(self, days: int = 30) -> dict[str, RunbookStats]:
         """Compute statistics for every runbook that has any record in the window."""
         since = self._since_ts(days)
-        rows  = await self._execute(
+        rows = await self._execute(
             """
             SELECT runbook_id, execution_outcome, rollback_triggered
             FROM audit_trail
@@ -301,7 +309,7 @@ class OutcomeStore:
             rb_id = row["runbook_id"]
             if rb_id not in agg:
                 agg[rb_id] = RunbookStats(runbook_id=rb_id, window_days=days)
-            stats   = agg[rb_id]
+            stats = agg[rb_id]
             outcome = row.get("execution_outcome", "unknown")
             stats.total += 1
             if outcome == "success":
@@ -320,7 +328,7 @@ class OutcomeStore:
     async def get_system_kpis(self, days: int = 30) -> SystemKPIs:
         """Compute system-level KPIs across all runbooks."""
         since = self._since_ts(days)
-        rows  = await self._execute(
+        rows = await self._execute(
             """
             SELECT runbook_id, healing_level, execution_outcome
             FROM audit_trail
@@ -334,8 +342,8 @@ class OutcomeStore:
         for row in rows:
             kpis.total_actions += 1
             outcome = row.get("execution_outcome", "unknown")
-            level   = str(row.get("healing_level", "?"))
-            rb_id   = row.get("runbook_id", "unknown")
+            level = str(row.get("healing_level", "?"))
+            rb_id = row.get("runbook_id", "unknown")
 
             if outcome == "success":
                 kpis.total_successes += 1
@@ -344,13 +352,15 @@ class OutcomeStore:
             if outcome == "rolled_back":
                 kpis.total_rollbacks += 1
 
-            kpis.actions_by_level[f"L{level}"]  = kpis.actions_by_level.get(f"L{level}", 0) + 1
-            kpis.actions_by_runbook[rb_id]       = kpis.actions_by_runbook.get(rb_id, 0) + 1
+            kpis.actions_by_level[f"L{level}"] = (
+                kpis.actions_by_level.get(f"L{level}", 0) + 1
+            )
+            kpis.actions_by_runbook[rb_id] = kpis.actions_by_runbook.get(rb_id, 0) + 1
 
         completed = kpis.total_successes + kpis.total_false_heals
         if completed > 0:
             kpis.autonomous_success_rate = kpis.total_successes / completed
-            kpis.false_heal_rate         = kpis.total_false_heals / completed
+            kpis.false_heal_rate = kpis.total_false_heals / completed
 
         return kpis
 
@@ -373,7 +383,9 @@ class OutcomeStore:
             (runbook_id, since),
         )
 
-    async def get_targets_with_most_heals(self, days: int = 7, limit: int = 10) -> list[dict[str, Any]]:
+    async def get_targets_with_most_heals(
+        self, days: int = 7, limit: int = 10
+    ) -> list[dict[str, Any]]:
         """
         Return the targets (namespace/resource) that received the most healing actions.
         High-count targets indicate chronic issues that runbooks alone cannot fix.

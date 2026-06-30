@@ -20,7 +20,7 @@ from ppa.common.promql import (
 
 class TestFeatureSpec:
     def test_feature_count(self):
-        assert NUM_FEATURES == 14
+        assert NUM_FEATURES == 12
 
     def test_num_features_matches(self):
         assert len(FEATURE_COLUMNS) == NUM_FEATURES
@@ -109,7 +109,9 @@ class TestConstants:
 
 
 class TestTestAppManifest:
-    MANIFEST_PATH = Path(__file__).resolve().parents[2] / "data" / "test-app" / "deployment.yaml"
+    MANIFEST_PATH = (
+        Path(__file__).resolve().parents[2] / "data" / "test-app" / "deployment.yaml"
+    )
 
     def _load_docs(self):
         with self.MANIFEST_PATH.open() as handle:

@@ -52,29 +52,48 @@ logger = logging.getLogger(__name__)
 
 _SECRET_PATTERNS: list[tuple] = [
     (r'(?i)(api_key|api-key|apikey)\s*[=:]\s*["\'][a-zA-Z0-9_\-]{20,}["\']', "api_key"),
-    (r'(?i)(secret|password|passwd|pwd)\s*[=:]\s*["\'][^"\']{8,}["\']',      "password"),
-    (r'(?i)(token)\s*[=:]\s*["\'][a-zA-Z0-9_\-\.]{20,}["\']',               "token"),
-    (r'AKIA[0-9A-Z]{16}',                                                     "aws_access_key"),
-    (r'-----BEGIN (RSA|EC|DSA|OPENSSH) PRIVATE KEY-----',                     "private_key_pem"),
-    (r'ghp_[a-zA-Z0-9]{36}',                                                  "github_token"),
-    (r'sk-[a-zA-Z0-9]{48}',                                                   "openai_key"),
-    (r'(?i)postgres://[^:]+:[^@]{8,}@',                                       "db_connection_string"),
+    (r'(?i)(secret|password|passwd|pwd)\s*[=:]\s*["\'][^"\']{8,}["\']', "password"),
+    (r'(?i)(token)\s*[=:]\s*["\'][a-zA-Z0-9_\-\.]{20,}["\']', "token"),
+    (r"AKIA[0-9A-Z]{16}", "aws_access_key"),
+    (r"-----BEGIN (RSA|EC|DSA|OPENSSH) PRIVATE KEY-----", "private_key_pem"),
+    (r"ghp_[a-zA-Z0-9]{36}", "github_token"),
+    (r"sk-[a-zA-Z0-9]{48}", "openai_key"),
+    (r"(?i)postgres://[^:]+:[^@]{8,}@", "db_connection_string"),
 ]
 
 _SECRET_RES = [(re.compile(p), label) for p, label in _SECRET_PATTERNS]
 
 # System/CI environment variables to exclude from the required contract
 _SYSTEM_ENV_VARS: set[str] = {
-    "PATH", "HOME", "USER", "SHELL", "PWD", "LANG", "TERM", "TMPDIR",
-    "PYTHONPATH", "PYTHONDONTWRITEBYTECODE", "VIRTUAL_ENV", "CONDA_PREFIX",
-    "NODE_ENV", "NODE_PATH", "DEBUG", "LOG_LEVEL", "PORT", "HOST",
-    "CI", "CI_COMMIT_SHA", "GITHUB_ACTIONS", "RUNNER_OS",
+    "PATH",
+    "HOME",
+    "USER",
+    "SHELL",
+    "PWD",
+    "LANG",
+    "TERM",
+    "TMPDIR",
+    "PYTHONPATH",
+    "PYTHONDONTWRITEBYTECODE",
+    "VIRTUAL_ENV",
+    "CONDA_PREFIX",
+    "NODE_ENV",
+    "NODE_PATH",
+    "DEBUG",
+    "LOG_LEVEL",
+    "PORT",
+    "HOST",
+    "CI",
+    "CI_COMMIT_SHA",
+    "GITHUB_ACTIONS",
+    "RUNNER_OS",
 }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # AST-based env key extraction (Python)
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def extract_env_keys_python(source: str, filepath: str = "<unknown>") -> set[str]:
     """
@@ -103,18 +122,22 @@ def extract_env_keys_python(source: str, filepath: str = "<unknown>") -> set[str
             arg0 = node.args[0] if node.args else None
 
             # os.getenv("KEY")
-            if (isinstance(func, ast.Attribute)
-                    and func.attr == "getenv"
-                    and isinstance(func.value, ast.Name)
-                    and func.value.id == "os"):
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr == "getenv"
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "os"
+            ):
                 if isinstance(arg0, ast.Constant) and isinstance(arg0.value, str):
                     keys.add(arg0.value)
 
             # os.environ.get("KEY")
-            elif (isinstance(func, ast.Attribute)
-                    and func.attr == "get"
-                    and isinstance(func.value, ast.Attribute)
-                    and func.value.attr == "environ"):
+            elif (
+                isinstance(func, ast.Attribute)
+                and func.attr == "get"
+                and isinstance(func.value, ast.Attribute)
+                and func.value.attr == "environ"
+            ):
                 if isinstance(arg0, ast.Constant) and isinstance(arg0.value, str):
                     keys.add(arg0.value)
 
@@ -125,10 +148,11 @@ def extract_env_keys_python(source: str, filepath: str = "<unknown>") -> set[str
 
         # Subscript form: os.environ["KEY"]
         elif isinstance(node, ast.Subscript):
-            if (isinstance(node.value, ast.Attribute)
-                    and node.value.attr == "environ"):
+            if isinstance(node.value, ast.Attribute) and node.value.attr == "environ":
                 slice_node = node.slice
-                if isinstance(slice_node, ast.Constant) and isinstance(slice_node.value, str):
+                if isinstance(slice_node, ast.Constant) and isinstance(
+                    slice_node.value, str
+                ):
                     keys.add(slice_node.value)
 
     return keys
@@ -138,7 +162,7 @@ def extract_env_keys_python(source: str, filepath: str = "<unknown>") -> set[str
 # Regex-based env key extraction (JavaScript / TypeScript)
 # ──────────────────────────────────────────────────────────────────────────────
 
-_ENV_JS_DOT     = re.compile(r'process\.env\.([A-Z_][A-Z0-9_]*)')
+_ENV_JS_DOT = re.compile(r"process\.env\.([A-Z_][A-Z0-9_]*)")
 _ENV_JS_BRACKET = re.compile(r'process\.env\[[\'"]([\w]+)[\'"]\]')
 
 
@@ -161,6 +185,7 @@ def extract_env_keys_js(source: str) -> set[str]:
 # Secret scanner
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def scan_diff_for_secrets(diff: str) -> list[dict]:
     """
     Scan a git diff for accidentally committed secrets.
@@ -173,17 +198,20 @@ def scan_diff_for_secrets(diff: str) -> list[dict]:
             continue
         for regex, label in _SECRET_RES:
             if regex.search(line):
-                findings.append({
-                    "line_number": i,
-                    "label":       label,
-                    "snippet":     line[:100],
-                })
+                findings.append(
+                    {
+                        "line_number": i,
+                        "label": label,
+                        "snippet": line[:100],
+                    }
+                )
     return findings
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # .env Contract Validator
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class EnvContractValidator:
     """
@@ -195,8 +223,18 @@ class EnvContractValidator:
         2. Kubernetes Secrets (by name, via K8s Python client)
     """
 
-    _SKIP_DIRS = {"venv", ".venv", "node_modules", ".git", "__pycache__",
-                  "dist", "build", ".next", "target", "vendor"}
+    _SKIP_DIRS = {
+        "venv",
+        ".venv",
+        "node_modules",
+        ".git",
+        "__pycache__",
+        "dist",
+        "build",
+        ".next",
+        "target",
+        "vendor",
+    }
 
     def __init__(
         self,
@@ -205,10 +243,10 @@ class EnvContractValidator:
         k8s_secret_names: list[str] | None = None,
         k8s_namespace: str = "default",
     ):
-        self.repo_path        = repo_path
-        self.env_file_paths   = env_file_paths or []
+        self.repo_path = repo_path
+        self.env_file_paths = env_file_paths or []
         self.k8s_secret_names = k8s_secret_names or []
-        self.k8s_namespace    = k8s_namespace
+        self.k8s_namespace = k8s_namespace
 
     # ── Required keys (code scan) ─────────────────────────────────────────────
 
@@ -253,18 +291,21 @@ class EnvContractValidator:
             try:
                 from kubernetes import client as k8s_client
                 from kubernetes import config as k8s_config
+
                 try:
                     k8s_config.load_incluster_config()
                 except Exception:
                     k8s_config.load_kube_config()
-                v1     = k8s_client.CoreV1Api()
+                v1 = k8s_client.CoreV1Api()
                 secret = v1.read_namespaced_secret(secret_name, self.k8s_namespace)
                 if secret.data:
                     available.update(secret.data.keys())
                 if secret.string_data:
                     available.update(secret.string_data.keys())
             except Exception as exc:
-                logger.warning(f"[GitAgent] Cannot read K8s secret '{secret_name}': {exc}")
+                logger.warning(
+                    f"[GitAgent] Cannot read K8s secret '{secret_name}': {exc}"
+                )
 
         return available
 
@@ -282,9 +323,9 @@ class EnvContractValidator:
                 "passed":         True if no keys are missing
             }
         """
-        required  = self.required_keys()
+        required = self.required_keys()
         available = self.available_keys()
-        missing   = required - available
+        missing = required - available
 
         logger.info(
             f"[GitAgent] Contract: {len(required)} required, "
@@ -292,16 +333,17 @@ class EnvContractValidator:
         )
 
         return {
-            "required_keys":  sorted(required),
+            "required_keys": sorted(required),
             "available_keys": sorted(available),
-            "missing_keys":   sorted(missing),
-            "passed":         len(missing) == 0,
+            "missing_keys": sorted(missing),
+            "passed": len(missing) == 0,
         }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Git Agent
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class GitAgent(BaseAgent):
     """
@@ -332,18 +374,18 @@ class GitAgent(BaseAgent):
         poll_interval_seconds: float = 60.0,
     ):
         super().__init__(
-            nats_client           = nats_client,
-            agent_type            = AgentType.GIT,
-            poll_interval_seconds = poll_interval_seconds,
+            nats_client=nats_client,
+            agent_type=AgentType.GIT,
+            poll_interval_seconds=poll_interval_seconds,
         )
-        self.repo_path       = Path(repo_path)
+        self.repo_path = Path(repo_path)
         self.deployment_name = deployment_name
-        self.k8s_namespace   = k8s_namespace
-        self.validator       = EnvContractValidator(
-            repo_path         = self.repo_path,
-            env_file_paths    = env_file_paths or [],
-            k8s_secret_names  = k8s_secret_names or [],
-            k8s_namespace     = k8s_namespace,
+        self.k8s_namespace = k8s_namespace
+        self.validator = EnvContractValidator(
+            repo_path=self.repo_path,
+            env_file_paths=env_file_paths or [],
+            k8s_secret_names=k8s_secret_names or [],
+            k8s_namespace=k8s_namespace,
         )
         self._last_sha: str | None = None
 
@@ -373,10 +415,10 @@ class GitAgent(BaseAgent):
             return {"sha": sha, "author": "unknown", "subject": "", "refs": ""}
         parts = raw.split("|", 3)
         return {
-            "sha":     parts[0] if len(parts) > 0 else sha,
-            "author":  parts[1] if len(parts) > 1 else "unknown",
+            "sha": parts[0] if len(parts) > 0 else sha,
+            "author": parts[1] if len(parts) > 1 else "unknown",
             "subject": parts[2] if len(parts) > 2 else "",
-            "refs":    parts[3] if len(parts) > 3 else "",
+            "refs": parts[3] if len(parts) > 3 else "",
         }
 
     def _get_diff(self, old: str, new: str) -> str:
@@ -395,24 +437,26 @@ class GitAgent(BaseAgent):
         changed_files = self._changed_files(old_sha, new_sha)
 
         # 1. Always emit DEPLOY_EVENT
-        events.append(IncidentEvent(
-            agent=AgentType.GIT,
-            signal_type=SignalType.DEPLOY_EVENT,
-            severity=Severity.INFO,
-            namespace=self.k8s_namespace,
-            resource_name=self.deployment_name,
-            resource_kind="Deployment",
-            deploy_sha=new_sha,
-            context=DeployEventContext(
-                sha=new_sha,
-                branch=info.get("refs", "unknown"),
-                author=info.get("author", "unknown"),
-                deployment_name=self.deployment_name,
+        events.append(
+            IncidentEvent(
+                agent=AgentType.GIT,
+                signal_type=SignalType.DEPLOY_EVENT,
+                severity=Severity.INFO,
                 namespace=self.k8s_namespace,
-                previous_sha=old_sha,
-                changed_files=changed_files[:50],
-            ).model_dump(),
-        ))
+                resource_name=self.deployment_name,
+                resource_kind="Deployment",
+                deploy_sha=new_sha,
+                context=DeployEventContext(
+                    sha=new_sha,
+                    branch=info.get("refs", "unknown"),
+                    author=info.get("author", "unknown"),
+                    deployment_name=self.deployment_name,
+                    namespace=self.k8s_namespace,
+                    previous_sha=old_sha,
+                    changed_files=changed_files[:50],
+                ).model_dump(),
+            )
+        )
 
         # 2. Secret scan
         diff = self._get_diff(old_sha, new_sha)
@@ -422,23 +466,25 @@ class GitAgent(BaseAgent):
                 f"[GitAgent] SECRET detected in {new_sha[:8]} — "
                 f"labels: {[f['label'] for f in findings]}"
             )
-            events.append(IncidentEvent(
-                agent=AgentType.GIT,
-                signal_type=SignalType.SECRET_COMMITTED,
-                severity=Severity.CRITICAL,
-                namespace=self.k8s_namespace,
-                resource_name=self.deployment_name,
-                deploy_sha=new_sha,
-                context={
-                    "sha":            new_sha,
-                    "author":         info.get("author"),
-                    "findings":       findings[:10],
-                    "total_findings": len(findings),
-                },
-            ))
+            events.append(
+                IncidentEvent(
+                    agent=AgentType.GIT,
+                    signal_type=SignalType.SECRET_COMMITTED,
+                    severity=Severity.CRITICAL,
+                    namespace=self.k8s_namespace,
+                    resource_name=self.deployment_name,
+                    deploy_sha=new_sha,
+                    context={
+                        "sha": new_sha,
+                        "author": info.get("author"),
+                        "findings": findings[:10],
+                        "total_findings": len(findings),
+                    },
+                )
+            )
 
         # 3. .env contract validation (CPU-bound — run in thread pool)
-        loop       = asyncio.get_event_loop()
+        loop = asyncio.get_event_loop()
         validation = await loop.run_in_executor(None, self.validator.validate)
 
         if not validation["passed"]:
@@ -447,37 +493,41 @@ class GitAgent(BaseAgent):
                 f"[GitAgent] ENV contract FAIL: {len(missing)} missing keys: "
                 f"{missing[:5]}{'...' if len(missing) > 5 else ''}"
             )
-            events.append(IncidentEvent(
-                agent=AgentType.GIT,
-                signal_type=SignalType.ENV_CONTRACT_VIOLATION,
-                severity=Severity.CRITICAL,
-                namespace=self.k8s_namespace,
-                resource_name=self.deployment_name,
-                resource_kind="Deployment",
-                deploy_sha=new_sha,
-                context=EnvContractViolationContext(
-                    missing_keys=missing,
-                    present_keys=validation["available_keys"][:50],
-                    deployment_name=self.deployment_name,
+            events.append(
+                IncidentEvent(
+                    agent=AgentType.GIT,
+                    signal_type=SignalType.ENV_CONTRACT_VIOLATION,
+                    severity=Severity.CRITICAL,
                     namespace=self.k8s_namespace,
-                ).model_dump(),
-                suggested_runbook="runbook_missing_env_key_v1",
-                suggested_healing_level=0,
-                confidence=0.99,  # Deterministic check — always certain
-            ))
-            events.append(IncidentEvent(
-                agent=AgentType.GIT,
-                signal_type=SignalType.DEPLOY_BLOCKED,
-                severity=Severity.WARNING,
-                namespace=self.k8s_namespace,
-                resource_name=self.deployment_name,
-                deploy_sha=new_sha,
-                context={
-                    "reason":       "env_contract_violation",
-                    "missing_keys": missing,
-                    "author":       info.get("author"),
-                },
-            ))
+                    resource_name=self.deployment_name,
+                    resource_kind="Deployment",
+                    deploy_sha=new_sha,
+                    context=EnvContractViolationContext(
+                        missing_keys=missing,
+                        present_keys=validation["available_keys"][:50],
+                        deployment_name=self.deployment_name,
+                        namespace=self.k8s_namespace,
+                    ).model_dump(),
+                    suggested_runbook="runbook_missing_env_key_v1",
+                    suggested_healing_level=0,
+                    confidence=0.99,  # Deterministic check — always certain
+                )
+            )
+            events.append(
+                IncidentEvent(
+                    agent=AgentType.GIT,
+                    signal_type=SignalType.DEPLOY_BLOCKED,
+                    severity=Severity.WARNING,
+                    namespace=self.k8s_namespace,
+                    resource_name=self.deployment_name,
+                    deploy_sha=new_sha,
+                    context={
+                        "reason": "env_contract_violation",
+                        "missing_keys": missing,
+                        "author": info.get("author"),
+                    },
+                )
+            )
         else:
             logger.info(
                 f"[GitAgent] .env contract OK for {new_sha[:8]} — "
@@ -488,10 +538,12 @@ class GitAgent(BaseAgent):
         sh_config = None
         try:
             from nexus.integration.selfheal_config import load_selfheal_config
+
             sh_config = load_selfheal_config(self.repo_path)
             if sh_config:
 
                 from nexus.integration.token_store import get_token_store
+
                 store = get_token_store()
                 # Register app (idempotent) and get/generate token
                 token = await store.register_app(sh_config.app, tier=sh_config.tier)
@@ -502,6 +554,7 @@ class GitAgent(BaseAgent):
                 # Cache policy in Dashboard for /developer/policy/{app}
                 try:
                     from nexus.integration.dashboard import cache_policy
+
                     cache_policy(sh_config.app, sh_config.to_dict())
                 except Exception:
                     pass
@@ -530,10 +583,10 @@ class GitAgent(BaseAgent):
             return []
 
         if current == self._last_sha:
-            return []   # No new commits
+            return []  # No new commits
 
         logger.info(f"[GitAgent] New commit: {self._last_sha[:8]} → {current[:8]}")
-        info   = self._commit_info(current)
+        info = self._commit_info(current)
         events = await self._validate_commit(self._last_sha, current, info)
         self._last_sha = current
         return events

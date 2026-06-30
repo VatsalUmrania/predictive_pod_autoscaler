@@ -48,7 +48,9 @@ def _jittered_delay(attempt: int) -> float:
         LOAD_RETRY_MAX_DELAY_SECONDS,
         LOAD_RETRY_INITIAL_DELAY_SECONDS * (2**attempt),
     )
-    return float(base * random.uniform(1.0 - LOAD_RETRY_JITTER, 1.0 + LOAD_RETRY_JITTER))
+    return float(
+        base * random.uniform(1.0 - LOAD_RETRY_JITTER, 1.0 + LOAD_RETRY_JITTER)
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -67,7 +69,9 @@ def _read_metadata(path: Path | None) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise BundleValidationError(f"metadata corrupted: {path}: {exc}") from exc
     except OSError as exc:
-        raise BundlePendingError(f"metadata temporarily unreadable: {path}: {exc}") from exc
+        raise BundlePendingError(
+            f"metadata temporarily unreadable: {path}: {exc}"
+        ) from exc
 
 
 def _find_metadata(base: Path, model_path: Path, canonical: bool) -> Path | None:
@@ -102,19 +106,34 @@ def _validate_metadata(bundle: ModelBundle, app: str, horizon: str) -> None:
     metadata = bundle.metadata
     missing = [
         field
-        for field in ("app", "horizon", "version", "feature_columns", "lookback", "input_shape")
+        for field in (
+            "app",
+            "horizon",
+            "version",
+            "feature_columns",
+            "lookback",
+            "input_shape",
+        )
         if field not in metadata
     ]
     if missing:
-        raise BundleValidationError(f"metadata missing required fields: {', '.join(missing)}")
+        raise BundleValidationError(
+            f"metadata missing required fields: {', '.join(missing)}"
+        )
     if metadata["app"] != app:
-        raise BundleValidationError(f"metadata app mismatch: {metadata['app']} != {app}")
+        raise BundleValidationError(
+            f"metadata app mismatch: {metadata['app']} != {app}"
+        )
     if metadata["horizon"] != horizon:
-        raise BundleValidationError(f"metadata horizon mismatch: {metadata['horizon']} != {horizon}")
+        raise BundleValidationError(
+            f"metadata horizon mismatch: {metadata['horizon']} != {horizon}"
+        )
     if metadata["feature_columns"] != FEATURE_COLUMNS:
         raise BundleValidationError("metadata feature_columns mismatch")
     if int(metadata["lookback"]) != LOOKBACK_STEPS:
-        raise BundleValidationError(f"metadata lookback mismatch: {metadata['lookback']}")
+        raise BundleValidationError(
+            f"metadata lookback mismatch: {metadata['lookback']}"
+        )
 
     expected_shapes = [
         [1, LOOKBACK_STEPS, NUM_FEATURES],
@@ -186,7 +205,9 @@ def resolve_model_bundle(model_dir: str, app: str, horizon: str) -> ModelBundle:
     raise last_pending
 
 
-def validate_prediction_sample(predictions: list[float], min_allowed: float, max_allowed: float) -> None:
+def validate_prediction_sample(
+    predictions: list[float], min_allowed: float, max_allowed: float
+) -> None:
     if not predictions:
         raise BundleValidationError("semantic validation produced no predictions")
     for pred in predictions:
@@ -197,7 +218,9 @@ def validate_prediction_sample(predictions: list[float], min_allowed: float, max
                 f"semantic prediction out of bounds: {pred} not in [{min_allowed}, {max_allowed}]"
             )
     if len(predictions) >= 3 and max(predictions) - min(predictions) < 1e-6:
-        raise BundleValidationError("semantic validation detected constant model output")
+        raise BundleValidationError(
+            "semantic validation detected constant model output"
+        )
 
 
 __all__ = [

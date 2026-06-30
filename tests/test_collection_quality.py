@@ -16,9 +16,11 @@ def test_drop_rows_missing_required_features():
         index=idx,
     )
 
-    pruned, missing_counts, dropped = export_training_data.drop_rows_missing_required_features(
-        df,
-        ["requests_per_second", "current_replicas"],
+    pruned, missing_counts, dropped = (
+        export_training_data.drop_rows_missing_required_features(
+            df,
+            ["requests_per_second", "current_replicas"],
+        )
     )
 
     assert dropped == 1

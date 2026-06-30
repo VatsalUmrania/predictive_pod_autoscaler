@@ -1,187 +1,667 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>NEXUS Developer Dashboard</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<style>
-:root{--bg:#07070f;--s1:#0f0f1c;--s2:#161626;--s3:#1e1e32;--border:rgba(255,255,255,0.07);--text:#e0e0f0;--muted:#5a5a78;--green:#00ff88;--red:#ff4d6a;--amber:#ffaa00;--blue:#4488ff;--purple:#a78bfa;--r:12px}
-*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
-/* Header */
-header{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;background:var(--s1);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:50}
-.logo{font-size:17px;font-weight:700}.logo span{color:var(--green)}
-.hdr-r{display:flex;align-items:center;gap:12px}
-select{background:var(--s2);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:8px;font-family:inherit;font-size:13px;cursor:pointer}
-.pill{display:flex;align-items:center;gap:5px;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600;border:1px solid}
-.pill.ok{background:rgba(0,255,136,.08);border-color:rgba(0,255,136,.25);color:var(--green)}
-.pill.err{background:rgba(255,77,106,.08);border-color:rgba(255,77,106,.25);color:var(--red)}
-.dot{width:6px;height:6px;border-radius:50%;background:currentColor;animation:blink 2s infinite}
-@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
-/* Tabs */
-.tabs{display:flex;gap:0;padding:0 28px;background:var(--s1);border-bottom:1px solid var(--border)}
-.tab{padding:12px 20px;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;transition:.2s}
-.tab.active{color:var(--text);border-bottom-color:var(--purple)}
-.tab:hover:not(.active){color:var(--text)}
-/* Panels */
-.panel{display:none;padding:28px;max-width:1100px;margin:0 auto}.panel.active{display:block}
-/* Cards */
-.card{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:20px;margin-bottom:14px;transition:.2s}
-.card:hover{border-color:rgba(167,139,250,.2)}
-.card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}
-.card-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.badge{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:6px;font-size:11px;font-weight:700}
-.badge.success{background:rgba(0,255,136,.12);color:var(--green)}
-.badge.failed{background:rgba(255,77,106,.12);color:var(--red)}
-.badge.pending{background:rgba(255,170,0,.12);color:var(--amber)}
-.badge.info{background:rgba(68,136,255,.12);color:var(--blue)}
-.badge.lv0{background:rgba(0,255,136,.08);color:var(--green)}
-.badge.lv1{background:rgba(255,170,0,.08);color:var(--amber)}
-.badge.lv2{background:rgba(255,77,106,.08);color:var(--red)}
-.ts{font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace}
-.desc{font-size:14px;line-height:1.6;color:var(--text);margin-bottom:10px}
-.inc-id{font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace}
-.btn-row{display:flex;gap:8px}
-button{font-family:inherit;cursor:pointer;border:none;border-radius:8px;font-size:12px;font-weight:600;padding:6px 14px;transition:.2s}
-.btn-approve{background:rgba(0,255,136,.12);color:var(--green);border:1px solid rgba(0,255,136,.3)}
-.btn-approve:hover{background:rgba(0,255,136,.25)}
-.btn-reject{background:rgba(255,77,106,.12);color:var(--red);border:1px solid rgba(255,77,106,.3)}
-.btn-reject:hover{background:rgba(255,77,106,.25)}
-.btn-primary{background:var(--purple);color:#fff;padding:8px 18px;font-size:13px}
-.btn-primary:hover{filter:brightness(1.15)}
-.btn-ghost{background:var(--s3);color:var(--muted);border:1px solid var(--border)}
-.btn-ghost:hover{color:var(--text)}
-/* Predictions */
-.pred-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
-.pred-card{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:20px}
-.pred-mult{font-size:36px;font-weight:700;color:var(--amber);margin-bottom:4px}
-.pred-mult.high{color:var(--red)}.pred-mult.ok{color:var(--green)}
-.pred-name{font-size:15px;font-weight:600;margin-bottom:8px}
-.pred-desc{font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:14px}
-.pred-stats{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.stat{background:var(--s2);border-radius:8px;padding:10px 12px}
-.stat-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px}
-.stat-val{font-size:15px;font-weight:700}
-.conf-bar{height:4px;background:var(--s3);border-radius:4px;margin-top:10px;overflow:hidden}
-.conf-fill{height:100%;background:var(--green);border-radius:4px;transition:width .5s}
-/* Policy Editor */
-.policy-wrap{display:grid;grid-template-columns:1fr 1fr;gap:20px}
-@media(max-width:700px){.policy-wrap{grid-template-columns:1fr}}
-.policy-section{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:20px}
-.section-title{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:16px}
-.field{margin-bottom:14px}
-.field label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:5px}
-.field input,.field select{width:100%;background:var(--s2);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:8px;font-family:inherit;font-size:13px}
-.field input:focus,.field select:focus{outline:none;border-color:rgba(167,139,250,.5)}
-.toggle{display:flex;align-items:center;gap:10px;cursor:pointer}
-.toggle input[type=checkbox]{width:16px;height:16px;accent-color:var(--purple);cursor:pointer}
-.override-list{margin-top:12px;display:flex;flex-direction:column;gap:6px}
-.override-item{display:flex;justify-content:space-between;align-items:center;background:rgba(255,170,0,.06);border:1px solid rgba(255,170,0,.2);border-radius:8px;padding:8px 12px;font-size:12px}
-.override-key{font-family:'JetBrains Mono',monospace;color:var(--amber)}
-.override-val{color:var(--text)}
-.note{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.5;padding:8px 12px;background:rgba(68,136,255,.06);border:1px solid rgba(68,136,255,.15);border-radius:8px}
-/* Empty state */
-.empty{text-align:center;color:var(--muted);padding:60px 20px;font-size:14px}
-/* Toast */
-.toast{position:fixed;bottom:24px;right:24px;padding:12px 18px;border-radius:10px;font-size:13px;font-weight:600;background:var(--s2);border:1px solid var(--border);transform:translateY(60px);opacity:0;transition:.3s;z-index:100;border-left:3px solid var(--green)}
-.toast.show{transform:translateY(0);opacity:1}.toast.err{border-left-color:var(--red)}
-/* Spinner */
-.spin{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.1);border-top-color:var(--purple);border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px}
-@keyframes spin{to{transform:rotate(360deg)}}
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>NEXUS Developer Dashboard</title>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap"
+    rel="stylesheet">
+  <style>
+    :root {
+      --bg: #07070f;
+      --s1: #0f0f1c;
+      --s2: #161626;
+      --s3: #1e1e32;
+      --border: rgba(255, 255, 255, 0.07);
+      --text: #e0e0f0;
+      --muted: #5a5a78;
+      --green: #00ff88;
+      --red: #ff4d6a;
+      --amber: #ffaa00;
+      --blue: #4488ff;
+      --purple: #a78bfa;
+      --r: 12px
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh
+    }
+
+    /* Header */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 28px;
+      background: var(--s1);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 50
+    }
+
+    .logo {
+      font-size: 17px;
+      font-weight: 700
+    }
+
+    .logo span {
+      color: var(--green)
+    }
+
+    .hdr-r {
+      display: flex;
+      align-items: center;
+      gap: 12px
+    }
+
+    select {
+      background: var(--s2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 13px;
+      cursor: pointer
+    }
+
+    .pill {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 5px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      border: 1px solid
+    }
+
+    .pill.ok {
+      background: rgba(0, 255, 136, .08);
+      border-color: rgba(0, 255, 136, .25);
+      color: var(--green)
+    }
+
+    .pill.err {
+      background: rgba(255, 77, 106, .08);
+      border-color: rgba(255, 77, 106, .25);
+      color: var(--red)
+    }
+
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      animation: blink 2s infinite
+    }
+
+    @keyframes blink {
+
+      0%,
+      100% {
+        opacity: 1
+      }
+
+      50% {
+        opacity: .3
+      }
+    }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 0;
+      padding: 0 28px;
+      background: var(--s1);
+      border-bottom: 1px solid var(--border)
+    }
+
+    .tab {
+      padding: 12px 20px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: .2s
+    }
+
+    .tab.active {
+      color: var(--text);
+      border-bottom-color: var(--purple)
+    }
+
+    .tab:hover:not(.active) {
+      color: var(--text)
+    }
+
+    /* Panels */
+    .panel {
+      display: none;
+      padding: 28px;
+      max-width: 1100px;
+      margin: 0 auto
+    }
+
+    .panel.active {
+      display: block
+    }
+
+    /* Cards */
+    .card {
+      background: var(--s1);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 20px;
+      margin-bottom: 14px;
+      transition: .2s
+    }
+
+    .card:hover {
+      border-color: rgba(167, 139, 250, .2)
+    }
+
+    .card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px
+    }
+
+    .card-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 9px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700
+    }
+
+    .badge.success {
+      background: rgba(0, 255, 136, .12);
+      color: var(--green)
+    }
+
+    .badge.failed {
+      background: rgba(255, 77, 106, .12);
+      color: var(--red)
+    }
+
+    .badge.pending {
+      background: rgba(255, 170, 0, .12);
+      color: var(--amber)
+    }
+
+    .badge.info {
+      background: rgba(68, 136, 255, .12);
+      color: var(--blue)
+    }
+
+    .badge.lv0 {
+      background: rgba(0, 255, 136, .08);
+      color: var(--green)
+    }
+
+    .badge.lv1 {
+      background: rgba(255, 170, 0, .08);
+      color: var(--amber)
+    }
+
+    .badge.lv2 {
+      background: rgba(255, 77, 106, .08);
+      color: var(--red)
+    }
+
+    .ts {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace
+    }
+
+    .desc {
+      font-size: 14px;
+      line-height: 1.6;
+      color: var(--text);
+      margin-bottom: 10px
+    }
+
+    .inc-id {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 8px
+    }
+
+    button {
+      font-family: inherit;
+      cursor: pointer;
+      border: none;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 14px;
+      transition: .2s
+    }
+
+    .btn-approve {
+      background: rgba(0, 255, 136, .12);
+      color: var(--green);
+      border: 1px solid rgba(0, 255, 136, .3)
+    }
+
+    .btn-approve:hover {
+      background: rgba(0, 255, 136, .25)
+    }
+
+    .btn-reject {
+      background: rgba(255, 77, 106, .12);
+      color: var(--red);
+      border: 1px solid rgba(255, 77, 106, .3)
+    }
+
+    .btn-reject:hover {
+      background: rgba(255, 77, 106, .25)
+    }
+
+    .btn-primary {
+      background: var(--purple);
+      color: #fff;
+      padding: 8px 18px;
+      font-size: 13px
+    }
+
+    .btn-primary:hover {
+      filter: brightness(1.15)
+    }
+
+    .btn-ghost {
+      background: var(--s3);
+      color: var(--muted);
+      border: 1px solid var(--border)
+    }
+
+    .btn-ghost:hover {
+      color: var(--text)
+    }
+
+    /* Predictions */
+    .pred-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 14px
+    }
+
+    .pred-card {
+      background: var(--s1);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 20px
+    }
+
+    .pred-mult {
+      font-size: 36px;
+      font-weight: 700;
+      color: var(--amber);
+      margin-bottom: 4px
+    }
+
+    .pred-mult.high {
+      color: var(--red)
+    }
+
+    .pred-mult.ok {
+      color: var(--green)
+    }
+
+    .pred-name {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 8px
+    }
+
+    .pred-desc {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.6;
+      margin-bottom: 14px
+    }
+
+    .pred-stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px
+    }
+
+    .stat {
+      background: var(--s2);
+      border-radius: 8px;
+      padding: 10px 12px
+    }
+
+    .stat-label {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      margin-bottom: 3px
+    }
+
+    .stat-val {
+      font-size: 15px;
+      font-weight: 700
+    }
+
+    .conf-bar {
+      height: 4px;
+      background: var(--s3);
+      border-radius: 4px;
+      margin-top: 10px;
+      overflow: hidden
+    }
+
+    .conf-fill {
+      height: 100%;
+      background: var(--green);
+      border-radius: 4px;
+      transition: width .5s
+    }
+
+    /* Policy Editor */
+    .policy-wrap {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px
+    }
+
+    @media(max-width:700px) {
+      .policy-wrap {
+        grid-template-columns: 1fr
+      }
+    }
+
+    .policy-section {
+      background: var(--s1);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 20px
+    }
+
+    .section-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 16px
+    }
+
+    .field {
+      margin-bottom: 14px
+    }
+
+    .field label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 5px
+    }
+
+    .field input,
+    .field select {
+      width: 100%;
+      background: var(--s2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 13px
+    }
+
+    .field input:focus,
+    .field select:focus {
+      outline: none;
+      border-color: rgba(167, 139, 250, .5)
+    }
+
+    .toggle {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer
+    }
+
+    .toggle input[type=checkbox] {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--purple);
+      cursor: pointer
+    }
+
+    .override-list {
+      margin-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px
+    }
+
+    .override-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(255, 170, 0, .06);
+      border: 1px solid rgba(255, 170, 0, .2);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 12px
+    }
+
+    .override-key {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--amber)
+    }
+
+    .override-val {
+      color: var(--text)
+    }
+
+    .note {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 8px;
+      line-height: 1.5;
+      padding: 8px 12px;
+      background: rgba(68, 136, 255, .06);
+      border: 1px solid rgba(68, 136, 255, .15);
+      border-radius: 8px
+    }
+
+    /* Empty state */
+    .empty {
+      text-align: center;
+      color: var(--muted);
+      padding: 60px 20px;
+      font-size: 14px
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      padding: 12px 18px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      background: var(--s2);
+      border: 1px solid var(--border);
+      transform: translateY(60px);
+      opacity: 0;
+      transition: .3s;
+      z-index: 100;
+      border-left: 3px solid var(--green)
+    }
+
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1
+    }
+
+    .toast.err {
+      border-left-color: var(--red)
+    }
+
+    /* Spinner */
+    .spin {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255, 255, 255, .1);
+      border-top-color: var(--purple);
+      border-radius: 50%;
+      animation: spin .6s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg)
+      }
+    }
+  </style>
 </head>
+
 <body>
 
-<header>
-  <div class="logo">⬡ NEXUS <span>Developer Dashboard</span></div>
-  <div class="hdr-r">
-    <select id="appSelect" onchange="onAppChange()"><option value="">All apps</option></select>
-    <div class="pill ok" id="statusPill"><div class="dot"></div><span id="statusText">Connecting…</span></div>
+  <header>
+    <div class="logo">⬡ NEXUS <span>Developer Dashboard</span></div>
+    <div class="hdr-r">
+      <select id="appSelect" onchange="onAppChange()">
+        <option value="">All apps</option>
+      </select>
+      <div class="pill ok" id="statusPill">
+        <div class="dot"></div><span id="statusText">Connecting…</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="tabs">
+    <div class="tab active" id="tab-incidents" onclick="showTab('incidents')">🔧 Incident Feed</div>
+    <div class="tab" id="tab-predictions" onclick="showTab('predictions')">📈 Predictions</div>
+    <div class="tab" id="tab-policy" onclick="showTab('policy')">⚙️ Policy Editor</div>
   </div>
-</header>
 
-<div class="tabs">
-  <div class="tab active" id="tab-incidents" onclick="showTab('incidents')">🔧 Incident Feed</div>
-  <div class="tab" id="tab-predictions" onclick="showTab('predictions')">📈 Predictions</div>
-  <div class="tab" id="tab-policy" onclick="showTab('policy')">⚙️ Policy Editor</div>
-</div>
+  <!-- INCIDENTS -->
+  <div class="panel active" id="panel-incidents">
+    <div id="incidentsList">
+      <div class="empty"><span class="spin"></span> Loading incidents…</div>
+    </div>
+  </div>
 
-<!-- INCIDENTS -->
-<div class="panel active" id="panel-incidents">
-  <div id="incidentsList"><div class="empty"><span class="spin"></span> Loading incidents…</div></div>
-</div>
+  <!-- PREDICTIONS -->
+  <div class="panel" id="panel-predictions">
+    <div class="pred-grid" id="predGrid">
+      <div class="empty" style="grid-column:1/-1"><span class="spin"></span> Loading predictions…</div>
+    </div>
+  </div>
 
-<!-- PREDICTIONS -->
-<div class="panel" id="panel-predictions">
-  <div class="pred-grid" id="predGrid"><div class="empty" style="grid-column:1/-1"><span class="spin"></span> Loading predictions…</div></div>
-</div>
+  <!-- POLICY EDITOR -->
+  <div class="panel" id="panel-policy">
+    <div id="policyWrap">
+      <div class="empty">Select an app above to view and edit its policy.</div>
+    </div>
+  </div>
 
-<!-- POLICY EDITOR -->
-<div class="panel" id="panel-policy">
-  <div id="policyWrap"><div class="empty">Select an app above to view and edit its policy.</div></div>
-</div>
+  <div class="toast" id="toast"></div>
 
-<div class="toast" id="toast"></div>
+  <script>
+    const NEXUS = 'http://192.168.49.2:30081';
+    let currentApp = '', allApps = [];
 
-<script>
-const NEXUS = 'http://localhost:8080';
-let currentApp = '', allApps = [];
+    // ── Tab navigation ─────────────────────────────────────────────────────────
+    function showTab(t) {
+      document.querySelectorAll('.tab,.panel').forEach(el => el.classList.remove('active'));
+      document.getElementById('tab-' + t).classList.add('active');
+      document.getElementById('panel-' + t).classList.add('active');
+      if (t === 'incidents') loadIncidents();
+      if (t === 'predictions') loadPredictions();
+      if (t === 'policy') loadPolicy();
+    }
 
-// ── Tab navigation ─────────────────────────────────────────────────────────
-function showTab(t) {
-  document.querySelectorAll('.tab,.panel').forEach(el => el.classList.remove('active'));
-  document.getElementById('tab-' + t).classList.add('active');
-  document.getElementById('panel-' + t).classList.add('active');
-  if (t === 'incidents')   loadIncidents();
-  if (t === 'predictions') loadPredictions();
-  if (t === 'policy')      loadPolicy();
-}
+    // ── App selector ───────────────────────────────────────────────────────────
+    async function loadApps() {
+      try {
+        const r = await fetch(`${NEXUS}/apps`);
+        allApps = await r.json();
+        const sel = document.getElementById('appSelect');
+        allApps.forEach(a => {
+          const opt = document.createElement('option');
+          opt.value = a.app_name; opt.textContent = a.app_name;
+          sel.appendChild(opt);
+        });
+      } catch { }
+    }
+    function onAppChange() {
+      currentApp = document.getElementById('appSelect').value;
+      loadIncidents(); loadPredictions(); loadPolicy();
+    }
 
-// ── App selector ───────────────────────────────────────────────────────────
-async function loadApps() {
-  try {
-    const r = await fetch(`${NEXUS}/apps`);
-    allApps = await r.json();
-    const sel = document.getElementById('appSelect');
-    allApps.forEach(a => {
-      const opt = document.createElement('option');
-      opt.value = a.app_name; opt.textContent = a.app_name;
-      sel.appendChild(opt);
-    });
-  } catch {}
-}
-function onAppChange() {
-  currentApp = document.getElementById('appSelect').value;
-  loadIncidents(); loadPredictions(); loadPolicy();
-}
+    // ── Status check ───────────────────────────────────────────────────────────
+    async function checkStatus() {
+      try {
+        const r = await fetch(`${NEXUS}/health`);
+        const ok = r.ok;
+        document.getElementById('statusPill').className = `pill ${ok ? 'ok' : 'err'}`;
+        document.getElementById('statusText').textContent = ok ? 'NEXUS Connected' : 'NEXUS Offline';
+      } catch {
+        document.getElementById('statusPill').className = 'pill err';
+        document.getElementById('statusText').textContent = 'NEXUS Offline';
+      }
+    }
 
-// ── Status check ───────────────────────────────────────────────────────────
-async function checkStatus() {
-  try {
-    const r = await fetch(`${NEXUS}/health`);
-    const ok = r.ok;
-    document.getElementById('statusPill').className = `pill ${ok ? 'ok' : 'err'}`;
-    document.getElementById('statusText').textContent = ok ? 'NEXUS Connected' : 'NEXUS Offline';
-  } catch {
-    document.getElementById('statusPill').className = 'pill err';
-    document.getElementById('statusText').textContent = 'NEXUS Offline';
-  }
-}
-
-// ── INCIDENTS ──────────────────────────────────────────────────────────────
-async function loadIncidents() {
-  const box = document.getElementById('incidentsList');
-  try {
-    const url = `${NEXUS}/developer/incidents?n=30${currentApp ? '&app=' + currentApp : ''}`;
-    const r = await fetch(url);
-    const data = await r.json();
-    if (!data.length) { box.innerHTML = '<div class="empty">No incidents yet. Trigger a failure to see NEXUS in action.</div>'; return; }
-    box.innerHTML = data.map(inc => {
-      const lvl   = inc.level;
-      const lvCls = lvl === 0 ? 'lv0' : lvl === 1 ? 'lv1' : 'lv2';
-      const outCls= inc.outcome === 'success' ? 'success' : inc.outcome === 'pending' ? 'pending' : 'failed';
-      const icon  = inc.outcome === 'success' ? '✅' : inc.outcome === 'pending' ? '⏳' : '❌';
-      const hasPending = inc.outcome === 'pending' && inc.incident_id;
-      return `<div class="card">
+    // ── INCIDENTS ──────────────────────────────────────────────────────────────
+    async function loadIncidents() {
+      const box = document.getElementById('incidentsList');
+      try {
+        const url = `${NEXUS}/developer/incidents?n=30${currentApp ? '&app=' + currentApp : ''}`;
+        const r = await fetch(url);
+        const data = await r.json();
+        if (!data.length) { box.innerHTML = '<div class="empty">No incidents yet. Trigger a failure to see NEXUS in action.</div>'; return; }
+        box.innerHTML = data.map(inc => {
+          const lvl = inc.level;
+          const lvCls = lvl === 0 ? 'lv0' : lvl === 1 ? 'lv1' : 'lv2';
+          const outCls = inc.outcome === 'success' ? 'success' : inc.outcome === 'pending' ? 'pending' : 'failed';
+          const icon = inc.outcome === 'success' ? '✅' : inc.outcome === 'pending' ? '⏳' : '❌';
+          const hasPending = inc.outcome === 'pending' && inc.incident_id;
+          return `<div class="card">
         <div class="card-top">
           <div class="card-meta">
             <span class="badge ${outCls}">${icon} ${inc.outcome || 'unknown'}</span>
@@ -196,35 +676,35 @@ async function loadIncidents() {
         <div class="desc">${inc.description || ''}</div>
         <div class="inc-id">${inc.runbook_id || ''} ${inc.incident_id ? '· ' + inc.incident_id : ''} ${inc.target ? '· ' + inc.target : ''}</div>
       </div>`;
-    }).join('');
-  } catch(e) { box.innerHTML = `<div class="empty">⚠️ Could not load incidents — is NEXUS running?<br><span style="font-size:12px;margin-top:6px;display:block">${e.message}</span></div>`; }
-}
-
-async function approve(id) {
-  try { await fetch(`${NEXUS}/approve/${id}`, {method:'POST'}); toast('✅ Action approved'); loadIncidents(); }
-  catch { toast('Failed to approve', true); }
-}
-async function reject(id) {
-  try { await fetch(`${NEXUS}/approve/${id}`, {method:'DELETE'}); toast('↩️ Action rejected'); loadIncidents(); }
-  catch { toast('Failed to reject', true); }
-}
-
-// ── PREDICTIONS ────────────────────────────────────────────────────────────
-async function loadPredictions() {
-  const grid = document.getElementById('predGrid');
-  try {
-    const url = `${NEXUS}/developer/predictions${currentApp ? '?app=' + currentApp : ''}`;
-    const r = await fetch(url);
-    const data = await r.json();
-    if (!data.length) {
-      grid.innerHTML = '<div class="empty" style="grid-column:1/-1">No predictions yet — predictions appear when the Prescaler detects traffic patterns.</div>';
-      return;
+        }).join('');
+      } catch (e) { box.innerHTML = `<div class="empty">⚠️ Could not load incidents — is NEXUS running?<br><span style="font-size:12px;margin-top:6px;display:block">${e.message}</span></div>`; }
     }
-    grid.innerHTML = data.map(p => {
-      const mult     = p.multiplier || 1;
-      const multCls  = mult >= 3 ? 'high' : mult >= 2 ? '' : 'ok';
-      const confPct  = Math.round((p.confidence || 0) * 100);
-      return `<div class="pred-card">
+
+    async function approve(id) {
+      try { await fetch(`${NEXUS}/approve/${id}`, { method: 'POST' }); toast('✅ Action approved'); loadIncidents(); }
+      catch { toast('Failed to approve', true); }
+    }
+    async function reject(id) {
+      try { await fetch(`${NEXUS}/approve/${id}`, { method: 'DELETE' }); toast('↩️ Action rejected'); loadIncidents(); }
+      catch { toast('Failed to reject', true); }
+    }
+
+    // ── PREDICTIONS ────────────────────────────────────────────────────────────
+    async function loadPredictions() {
+      const grid = document.getElementById('predGrid');
+      try {
+        const url = `${NEXUS}/developer/predictions${currentApp ? '?app=' + currentApp : ''}`;
+        const r = await fetch(url);
+        const data = await r.json();
+        if (!data.length) {
+          grid.innerHTML = '<div class="empty" style="grid-column:1/-1">No predictions yet — predictions appear when the Prescaler detects traffic patterns.</div>';
+          return;
+        }
+        grid.innerHTML = data.map(p => {
+          const mult = p.multiplier || 1;
+          const multCls = mult >= 3 ? 'high' : mult >= 2 ? '' : 'ok';
+          const confPct = Math.round((p.confidence || 0) * 100);
+          return `<div class="pred-card">
         <div class="pred-mult ${multCls}">${mult.toFixed(1)}×</div>
         <div class="pred-name">${p.deployment || '—'}</div>
         <div class="pred-desc">${p.description || ''}</div>
@@ -236,36 +716,36 @@ async function loadPredictions() {
         </div>
         <div class="conf-bar"><div class="conf-fill" style="width:${confPct}%"></div></div>
       </div>`;
-    }).join('');
-  } catch(e) { grid.innerHTML = `<div class="empty" style="grid-column:1/-1">⚠️ Could not load predictions<br><span style="font-size:12px">${e.message}</span></div>`; }
-}
+        }).join('');
+      } catch (e) { grid.innerHTML = `<div class="empty" style="grid-column:1/-1">⚠️ Could not load predictions<br><span style="font-size:12px">${e.message}</span></div>`; }
+    }
 
-// ── POLICY EDITOR ──────────────────────────────────────────────────────────
-let _currentPolicy = null, _currentOverrides = {};
+    // ── POLICY EDITOR ──────────────────────────────────────────────────────────
+    let _currentPolicy = null, _currentOverrides = {};
 
-async function loadPolicy() {
-  const wrap = document.getElementById('policyWrap');
-  if (!currentApp) { wrap.innerHTML = '<div class="empty">Select an app above to view and edit its policy.</div>'; return; }
-  try {
-    const r = await fetch(`${NEXUS}/developer/policy/${currentApp}`);
-    if (!r.ok) { wrap.innerHTML = `<div class="empty">No selfheal.yaml found for <strong>${currentApp}</strong>.<br><span style="font-size:12px">Commit a selfheal.yaml to your repo root and push.</span></div>`; return; }
-    _currentPolicy = await r.json();
-    renderPolicy(_currentPolicy);
-  } catch(e) { wrap.innerHTML = `<div class="empty">⚠️ ${e.message}</div>`; }
-}
+    async function loadPolicy() {
+      const wrap = document.getElementById('policyWrap');
+      if (!currentApp) { wrap.innerHTML = '<div class="empty">Select an app above to view and edit its policy.</div>'; return; }
+      try {
+        const r = await fetch(`${NEXUS}/developer/policy/${currentApp}`);
+        if (!r.ok) { wrap.innerHTML = `<div class="empty">No selfheal.yaml found for <strong>${currentApp}</strong>.<br><span style="font-size:12px">Commit a selfheal.yaml to your repo root and push.</span></div>`; return; }
+        _currentPolicy = await r.json();
+        renderPolicy(_currentPolicy);
+      } catch (e) { wrap.innerHTML = `<div class="empty">⚠️ ${e.message}</div>`; }
+    }
 
-function renderPolicy(p) {
-  const hp      = p.healing_policy || {};
-  const pred    = p.predictive || {};
-  const notif   = p.notifications || {};
-  const ovr     = Object.entries(p).filter(([k]) => k.startsWith('_') === false && k !== 'app' && k !== 'tier' && k !== 'healing_policy' && k !== 'predictive' && k !== 'notifications' && k !== 'critical_routes');
-  const hasOvr  = p._overrides_active;
+    function renderPolicy(p) {
+      const hp = p.healing_policy || {};
+      const pred = p.predictive || {};
+      const notif = p.notifications || {};
+      const ovr = Object.entries(p).filter(([k]) => k.startsWith('_') === false && k !== 'app' && k !== 'tier' && k !== 'healing_policy' && k !== 'predictive' && k !== 'notifications' && k !== 'critical_routes');
+      const hasOvr = p._overrides_active;
 
-  document.getElementById('policyWrap').innerHTML = `
+      document.getElementById('policyWrap').innerHTML = `
   <div style="margin-bottom:16px;display:flex;align-items:center;justify-content:space-between">
     <div>
       <span class="badge info">${p.app}</span>
-      <span class="badge ${p.tier==='production'?'failed':'pending'}" style="margin-left:6px">${p.tier || 'unknown'}</span>
+      <span class="badge ${p.tier === 'production' ? 'failed' : 'pending'}" style="margin-left:6px">${p.tier || 'unknown'}</span>
       ${hasOvr ? '<span class="badge pending" style="margin-left:6px">⚠️ Runtime overrides active</span>' : ''}
     </div>
     ${hasOvr ? `<button class="btn-ghost" onclick="clearOverrides()">Clear overrides</button>` : ''}
@@ -320,63 +800,64 @@ function renderPolicy(p) {
     </div>
   </div>`;
 
-  if (hasOvr) {
-    const ol = document.getElementById('overrideList');
-    if (ol && p._overrides_active) {
-      ol.innerHTML = '<div style="color:var(--muted);font-size:12px">Override details unavailable — check audit trail.</div>';
+      if (hasOvr) {
+        const ol = document.getElementById('overrideList');
+        if (ol && p._overrides_active) {
+          ol.innerHTML = '<div style="color:var(--muted);font-size:12px">Override details unavailable — check audit trail.</div>';
+        }
+      }
     }
-  }
-}
 
-async function savePolicy() {
-  const fields = [
-    ['healing_policy.auto_rollback',              document.getElementById('f-auto-rollback')?.checked],
-    ['healing_policy.max_auto_actions_per_hour',  parseInt(document.getElementById('f-max-actions')?.value) || 10],
-    ['predictive.pre_scale_threshold',            parseFloat(document.getElementById('f-prescale')?.value) || 2.0],
-    ['notifications.page_sre_after',              parseInt(document.getElementById('f-page-sre')?.value) || 3],
-  ];
+    async function savePolicy() {
+      const fields = [
+        ['healing_policy.auto_rollback', document.getElementById('f-auto-rollback')?.checked],
+        ['healing_policy.max_auto_actions_per_hour', parseInt(document.getElementById('f-max-actions')?.value) || 10],
+        ['predictive.pre_scale_threshold', parseFloat(document.getElementById('f-prescale')?.value) || 2.0],
+        ['notifications.page_sre_after', parseInt(document.getElementById('f-page-sre')?.value) || 3],
+      ];
 
-  try {
-    for (const [field, value] of fields) {
-      await fetch(`${NEXUS}/developer/policy/${currentApp}`, {
-        method:  'PUT',
-        headers: {'Content-Type': 'application/json'},
-        body:    JSON.stringify({field, value}),
-      });
+      try {
+        for (const [field, value] of fields) {
+          await fetch(`${NEXUS}/developer/policy/${currentApp}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ field, value }),
+          });
+        }
+        toast('✅ Policy overrides saved');
+        loadPolicy();
+      } catch (e) { toast('Failed to save: ' + e.message, true); }
     }
-    toast('✅ Policy overrides saved');
-    loadPolicy();
-  } catch(e) { toast('Failed to save: ' + e.message, true); }
-}
 
-async function clearOverrides() {
-  try {
-    await fetch(`${NEXUS}/developer/policy/${currentApp}/overrides`, {method:'DELETE'});
-    toast('↩️ Overrides cleared — reverting to selfheal.yaml');
-    loadPolicy();
-  } catch { toast('Failed to clear overrides', true); }
-}
+    async function clearOverrides() {
+      try {
+        await fetch(`${NEXUS}/developer/policy/${currentApp}/overrides`, { method: 'DELETE' });
+        toast('↩️ Overrides cleared — reverting to selfheal.yaml');
+        loadPolicy();
+      } catch { toast('Failed to clear overrides', true); }
+    }
 
-// ── Toast ──────────────────────────────────────────────────────────────────
-let _tt;
-function toast(msg, err = false) {
-  const el = document.getElementById('toast');
-  el.textContent = msg;
-  el.className = 'toast show' + (err ? ' err' : '');
-  clearTimeout(_tt);
-  _tt = setTimeout(() => el.className = 'toast', 3000);
-}
+    // ── Toast ──────────────────────────────────────────────────────────────────
+    let _tt;
+    function toast(msg, err = false) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.className = 'toast show' + (err ? ' err' : '');
+      clearTimeout(_tt);
+      _tt = setTimeout(() => el.className = 'toast', 3000);
+    }
 
-// ── Init ───────────────────────────────────────────────────────────────────
-checkStatus();
-loadApps();
-loadIncidents();
-setInterval(checkStatus, 15000);
-setInterval(() => {
-  const activeTab = document.querySelector('.tab.active')?.id?.replace('tab-', '');
-  if (activeTab === 'incidents')   loadIncidents();
-  if (activeTab === 'predictions') loadPredictions();
-}, 10000);
-</script>
+    // ── Init ───────────────────────────────────────────────────────────────────
+    checkStatus();
+    loadApps();
+    loadIncidents();
+    setInterval(checkStatus, 15000);
+    setInterval(() => {
+      const activeTab = document.querySelector('.tab.active')?.id?.replace('tab-', '');
+      if (activeTab === 'incidents') loadIncidents();
+      if (activeTab === 'predictions') loadPredictions();
+    }, 10000);
+  </script>
 </body>
+
 </html>

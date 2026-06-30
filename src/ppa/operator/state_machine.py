@@ -45,7 +45,9 @@ _PREDICTION_TTL_SECONDS = 60  # Updated from TIMER_INTERVAL * 2
 DECISION_TRACE_SAMPLE_RATE = 0.10
 
 
-def _trace_sampled(event_key: str, sample_rate: float = DECISION_TRACE_SAMPLE_RATE) -> bool:
+def _trace_sampled(
+    event_key: str, sample_rate: float = DECISION_TRACE_SAMPLE_RATE
+) -> bool:
     """Check if this event should be traced (sampled)."""
     digest = hashlib.sha256(event_key.encode("utf-8")).hexdigest()
     bucket = int(digest[:8], 16) / 0xFFFFFFFF
@@ -66,8 +68,13 @@ def _record_scale_failure(state: CRState, patch: kopf.Patch, reason: str) -> Non
 
     state.scale_failures += 1
     state.last_scale_failure_time = time.time()
-    base = min(scale_backoff_max_seconds, scale_backoff_initial_seconds * (2 ** max(state.scale_failures - 1, 0)))
-    state.next_scale_retry_time = state.last_scale_failure_time + base * random.uniform(1.0 - scale_backoff_jitter, 1.0 + scale_backoff_jitter)
+    base = min(
+        scale_backoff_max_seconds,
+        scale_backoff_initial_seconds * (2 ** max(state.scale_failures - 1, 0)),
+    )
+    state.next_scale_retry_time = state.last_scale_failure_time + base * random.uniform(
+        1.0 - scale_backoff_jitter, 1.0 + scale_backoff_jitter
+    )
     state.last_scale_error = reason
     _update_status(patch, "lastScaleError", reason)
     _update_status(patch, "scaleBackoffUntil", state.next_scale_retry_time)
@@ -85,9 +92,9 @@ def _reset_scale_backoff(state: CRState, patch: kopf.Patch) -> None:
 
 def _validate_input_signals(features: dict[str, Any]) -> bool:
     """Return False when ALL primary signals are absent/zero."""
-    rps = features.get("rps_per_replica", 0.0) or 0.0
+    rps = features.get("normalized_rps", 0.0) or 0.0
     cpu = features.get("cpu_utilization_pct", 0.0) or 0.0
-    lat = features.get("latency_p95_ms")
+    lat = features.get("latency_normalized")
     lat_is_nan = lat is None or (isinstance(lat, float) and math.isnan(lat))
 
     if rps <= 0.0 and cpu <= 0.0 and lat_is_nan:
@@ -97,8 +104,8 @@ def _validate_input_signals(features: dict[str, Any]) -> bool:
 
 def _check_prediction_sanity(predicted_load: float, features: dict[str, Any]) -> bool:
     """Return False when predicted_load is high but inputs are near-zero."""
-    rps = features.get("rps_per_replica", 0.0) or 0.0
-    if predicted_load > 50.0 and rps <= 0.0:
+    rps = features.get("normalized_rps", 0.0) or 0.0
+    if predicted_load > 1.5 and rps <= 0.0:  # v3: threshold is on normalized scale
         return False
     return True
 
@@ -118,9 +125,15 @@ def _trace_value(value: Any) -> float | int | str | None:
     return str(value)
 
 
-def _compact_feature_trace(features: dict[str, Any]) -> dict[str, float | int | str | None]:
+def _compact_feature_trace(
+    features: dict[str, Any],
+) -> dict[str, float | int | str | None]:
     """Compact feature vector for tracing."""
-    return {name: _trace_value(features.get(name)) for name in FEATURE_COLUMNS if name in features}
+    return {
+        name: _trace_value(features.get(name))
+        for name in FEATURE_COLUMNS
+        if name in features
+    }
 
 
 def _maybe_record_decision_trace(
@@ -225,14 +238,16 @@ class ScalerStateMachine:
             Tuple of (features, current_replicas, raw_metrics, degraded_reasons, should_continue)
         """
         try:
-            features, current_replicas, raw_metrics, degraded_reasons = build_feature_vector(
-                self.config["target"],
-                self.config["target_ns"],
-                self.config["min_r"],
-                self.config["max_r"],
-                self.config["container_name"],
-                self.config["prom_url"],
-                self.state,
+            features, current_replicas, raw_metrics, degraded_reasons = (
+                build_feature_vector(
+                    self.config["target"],
+                    self.config["target_ns"],
+                    self.config["min_r"],
+                    self.config["max_r"],
+                    self.config["container_name"],
+                    self.config["prom_url"],
+                    self.state,
+                )
             )
             self.state.last_successful_cycle = time.time()
             self.state.consecutive_failures = 0
@@ -241,12 +256,19 @@ class ScalerStateMachine:
 
         except (FeatureVectorException, PrometheusCircuitBreakerTripped) as e:
             self.state.consecutive_failures += 1
-            metric_failures = (self.status.get("metricFailures", 0) if self.status else 0) + 1
+            metric_failures = (
+                self.status.get("metricFailures", 0) if self.status else 0
+            ) + 1
 
-            logger.error(f"[{self.cr_name}] Feature extraction failed ({metric_failures}/5): {e}")
+            logger.error(
+                f"[{self.cr_name}] Feature extraction failed ({metric_failures}/5): {e}"
+            )
 
             # Graceful degradation: use last known good state
-            if self.state.last_known_good_replicas > 0 and self.state.consecutive_failures <= 3:
+            if (
+                self.state.last_known_good_replicas > 0
+                and self.state.consecutive_failures <= 3
+            ):
                 fallback_replicas = self.state.last_known_good_replicas
                 logger.warning(
                     f"[{self.cr_name}] Using fallback scaling: {fallback_replicas} replicas "
@@ -259,13 +281,19 @@ class ScalerStateMachine:
                         f"to {fallback_replicas} replicas"
                     )
                     if not scale_deployment(
-                        self.config["target"], fallback_replicas, self.config["target_ns"]
+                        self.config["target"],
+                        fallback_replicas,
+                        self.config["target_ns"],
                     ):
-                        _record_scale_failure(self.state, self.patch, "fallback scale patch failed")
+                        _record_scale_failure(
+                            self.state, self.patch, "fallback scale patch failed"
+                        )
 
             return {}, 0, {}, [], False
 
-    def update_predictor_and_check_ready(self, features: dict[str, Any], current: int) -> bool:
+    def update_predictor_and_check_ready(
+        self, features: dict[str, Any], current: int
+    ) -> bool:
         """Update predictor history and check readiness.
 
         Returns:
@@ -298,19 +326,22 @@ class ScalerStateMachine:
                     f"History: {history_len}/{maxlen}"
                 )
             else:
-                logger.info(f"[{self.cr_name}] Warming up: {history_len}/{maxlen} steps collected")
+                logger.info(
+                    f"[{self.cr_name}] Warming up: {history_len}/{maxlen} steps collected"
+                )
             return False
 
         # Reset transition flag when predictor becomes ready
         self.state.predictor_missing_logged = False
 
-        lat = features.get("latency_p95_ms", float("nan"))
-        lat_display = f"{lat:.1f}" if isinstance(lat, float) and not math.isnan(lat) else "nan"
+        lat = features.get("latency_normalized", float("nan"))
+        lat_display = (
+            f"{lat:.2f}" if isinstance(lat, float) and not math.isnan(lat) else "nan"
+        )
         logger.info(
-            f"[{self.cr_name}] RPS/Pod={features['rps_per_replica']:.1f} "
-            f"P95={lat_display}ms "
+            f"[{self.cr_name}] normalized_rps={features['normalized_rps']:.3f} "
+            f"P95_norm={lat_display} "
             f"CPU={features['cpu_utilization_pct']:.1f}% "
-            f"Replicas={features['replicas_normalized']:.2f} (norm)"
         )
 
         # Input validation: skip prediction when all primary signals are dead
@@ -323,13 +354,33 @@ class ScalerStateMachine:
 
         return True
 
-    def predict(self, features: dict[str, Any]) -> float:
-        """Run LSTM inference to get predicted load."""
+    def predict(
+        self, features: dict[str, Any], raw_metrics: dict[str, float] | None = None
+    ) -> float:
+        """Run LSTM inference to get predicted load in req/s.
+
+        The foundation model outputs a normalized ratio in [0, 1].  We
+        recover the original rolling_max_rps denominator from raw_metrics
+        and pass it to Predictor.predict() for correct denormalization:
+            predicted_rps = model_output_ratio × rolling_max_rps
+        """
         predictor = self.state.predictor
         if predictor is None:
             return 0.0
 
-        predicted_load = predictor.predict()
+        # Recover rolling_max_rps: it was the normalization denominator during
+        # both training (export_training_data.py, floor=1.0) and inference
+        # (features.py, floor=1.0).  Back-computed from raw_rps / normalized_rps.
+        raw_rps: float = float(
+            (raw_metrics or {}).get("requests_per_second", 0.0) or 0.0
+        )
+        norm_rps: float = float(features.get("normalized_rps", 0.0) or 0.0)
+        if norm_rps > 0.0:
+            rolling_max_rps = raw_rps / norm_rps  # exact inverse of normalization
+        else:
+            rolling_max_rps = max(raw_rps, 1.0)  # floor matches training floor
+
+        predicted_load = predictor.predict(rolling_max_rps=rolling_max_rps)
         logger.info(f"[{self.cr_name}] Predicted load: {predicted_load:.1f} req/s")
         return predicted_load
 
@@ -364,7 +415,7 @@ class ScalerStateMachine:
             deployment=self.config["target"],
             namespace=self.config["target_ns"],
             predicted_rps=predicted_rps,
-            current_rps=features.get("rps_per_replica", 0.0) or 0.0,
+            current_rps=features.get("normalized_rps", 0.0) or 0.0,
             confidence=self._compute_confidence(),
             horizon_minutes=self.config["target_horizon"],
             model_version=self.state.active_model_version or "unknown",
@@ -437,7 +488,7 @@ class ScalerStateMachine:
         if not _check_prediction_sanity(predicted_load, features):
             logger.warning(
                 f"[{self.cr_name}] Rejecting prediction: inconsistent with input signals "
-                f"(predicted={predicted_load:.1f} req/s but rps_per_replica=0)"
+                f"(predicted={predicted_load:.2f} but normalized_rps=0)"
             )
             _maybe_record_decision_trace(
                 self.cr_name,
@@ -473,7 +524,11 @@ class ScalerStateMachine:
 
         # Calculate candidate replicas with safety factor
         self.state.last_prediction = predicted_load
-        self.config["capacity"] if self.config["capacity"] is not None else DEFAULT_CAPACITY_PER_POD
+        (
+            self.config["capacity"]
+            if self.config["capacity"] is not None
+            else DEFAULT_CAPACITY_PER_POD
+        )
         predicted_load * self.config["safety_factor"]
 
         candidate = calculate_replicas(
@@ -564,7 +619,9 @@ class ScalerStateMachine:
                     return current, False
 
                 median_replicas = int(round(statistics.median(valid_predictions)))
-                median_replicas = max(self.config["min_r"], min(self.config["max_r"], median_replicas))
+                median_replicas = max(
+                    self.config["min_r"], min(self.config["max_r"], median_replicas)
+                )
                 logger.info(
                     f"[{self.cr_name}] Aggregated replica target (median of {len(valid_predictions)} models): "
                     f"{median_replicas}"
@@ -603,7 +660,9 @@ class ScalerStateMachine:
         )
         return candidate, True
 
-    def _schedule_nats_publish(self, predicted_rps: float, features: dict[str, Any]) -> None:
+    def _schedule_nats_publish(
+        self, predicted_rps: float, features: dict[str, Any]
+    ) -> None:
         """Schedule a NATS prediction event on the dedicated background loop.
 
         Thread-safe: safe to call from any kopf ThreadPoolExecutor thread.
@@ -613,10 +672,18 @@ class ScalerStateMachine:
             self._nats_loop,
         )
 
-    def act(self, desired: int, current: int, features: dict[str, Any] | None = None, predicted_rps: float | None = None) -> None:
+    def act(
+        self,
+        desired: int,
+        current: int,
+        features: dict[str, Any] | None = None,
+        predicted_rps: float | None = None,
+    ) -> None:
         """Apply scaling decision to deployment and publish NATS event."""
         _features = features or {}
-        _rps = predicted_rps if predicted_rps is not None else self.state.last_prediction
+        _rps = (
+            predicted_rps if predicted_rps is not None else self.state.last_prediction
+        )
 
         if desired != current:
             if self.config["observer_mode"]:
@@ -629,31 +696,48 @@ class ScalerStateMachine:
                 self._schedule_nats_publish(_rps, _features)
             else:
                 now = time.time()
-                if self.state.next_scale_retry_time and now < self.state.next_scale_retry_time:
+                if (
+                    self.state.next_scale_retry_time
+                    and now < self.state.next_scale_retry_time
+                ):
                     logger.warning(
                         f"[{self.cr_name}] Skipping scale attempt during backoff until "
                         f"{self.state.next_scale_retry_time:.0f}"
                     )
-                    _update_status(self.patch, "scaleBackoffUntil", self.state.next_scale_retry_time)
+                    _update_status(
+                        self.patch,
+                        "scaleBackoffUntil",
+                        self.state.next_scale_retry_time,
+                    )
                     return
 
                 logger.info(
                     f"[{self.cr_name}] Scaling {self.config['target_ns']}/{self.config['target']}: "
                     f"{current} → {desired}"
                 )
-                if scale_deployment(self.config["target"], desired, self.config["target_ns"]):
+                if scale_deployment(
+                    self.config["target"], desired, self.config["target_ns"]
+                ):
                     # Increment scale events counter (centralized in metrics.py)
                     metrics = PpaOperatorMetrics.for_cr(self.cr_name, self.cr_namespace)
                     metrics.scale_events.inc()
                     self.state.stable_count = 0
                     _reset_scale_backoff(self.state, self.patch)
-                    _update_status(self.patch, "lastScaleTime", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+                    _update_status(
+                        self.patch,
+                        "lastScaleTime",
+                        time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    )
                     # Publish to NATS after successful scale so NEXUS can track outcomes.
                     self._schedule_nats_publish(_rps, _features)
                 else:
-                    _record_scale_failure(self.state, self.patch, "Kubernetes scale patch failed")
+                    _record_scale_failure(
+                        self.state, self.patch, "Kubernetes scale patch failed"
+                    )
         else:
-            logger.info(f"[{self.cr_name}] No scaling needed: {current} replicas is correct")
+            logger.info(
+                f"[{self.cr_name}] No scaling needed: {current} replicas is correct"
+            )
 
     def reconcile(self) -> dict[str, Any] | None:
         """Execute full reconciliation cycle: fetch → predict → decide → act.
@@ -674,10 +758,12 @@ class ScalerStateMachine:
             return None
 
         # 3. Predict
-        predicted_load = self.predict(features)
+        predicted_load = self.predict(features, raw_metrics=raw_metrics)
 
         # 4. Decide
-        desired, should_apply = self.decide(predicted_load, features, raw_metrics, current)
+        desired, should_apply = self.decide(
+            predicted_load, features, raw_metrics, current
+        )
 
         # 5. Act (pass features + predicted_load so NATS events carry real data)
         if should_apply:
@@ -692,7 +778,9 @@ class ScalerStateMachine:
             "degradedReasons": degraded_reasons,
             "modelLoadTimeMs": self.state.model_load_time_ms,
             "predictionLatencyMs": (
-                self.state.predictor.last_prediction_latency_ms if self.state.predictor else 0.0
+                self.state.predictor.last_prediction_latency_ms
+                if self.state.predictor
+                else 0.0
             ),
             "scaleBackoffUntil": self.state.next_scale_retry_time or None,
             "lastScaleError": self.state.last_scale_error,

@@ -104,7 +104,9 @@ def get_apps_v1(retries: int = 3, backoff: float = 5.0) -> client.AppsV1Api | No
         return None
 
 
-def scale_deployment(deployment: str, replicas: int, namespace: str = "default") -> bool:
+def scale_deployment(
+    deployment: str, replicas: int, namespace: str = "default"
+) -> bool:
     """Patch the Deployment's replica count.
 
     Atomically updates a Deployment's desired replica count via K8s API patch.

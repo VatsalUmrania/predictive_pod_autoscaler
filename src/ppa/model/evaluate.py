@@ -41,10 +41,14 @@ def asymmetric_huber(y_true, y_pred):  # noqa: F811
     weight = tf.where(error > 0, 3.0, 1.0)
     delta = 1.0
     abs_err = tf.abs(error)
-    huber = tf.where(abs_err <= delta, 0.5 * tf.square(error), delta * (abs_err - 0.5 * delta))
+    huber = tf.where(
+        abs_err <= delta, 0.5 * tf.square(error), delta * (abs_err - 0.5 * delta)
+    )
     return tf.reduce_mean(weight * huber)
 
+
 # Metric helpers
+
 
 def compute_mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     """Mean Absolute Percentage Error (%), ignoring near-zero actuals."""
@@ -54,7 +58,9 @@ def compute_mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100)
 
 
-def compute_smape(y_true: np.ndarray, y_pred: np.ndarray, min_denominator: float = 1.0) -> float:
+def compute_smape(
+    y_true: np.ndarray, y_pred: np.ndarray, min_denominator: float = 1.0
+) -> float:
     """Symmetric MAPE (%), robust when actual values are near zero."""
     denominator = (np.abs(y_true) + np.abs(y_pred)) / 2.0
     denominator = np.maximum(denominator, min_denominator)
@@ -78,9 +84,13 @@ def compute_mae(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 def compute_rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
 
+
 # HPA comparison helpers
 
-def rps_to_replicas(rps: np.ndarray, capacity: float, min_r: int, max_r: int) -> np.ndarray:
+
+def rps_to_replicas(
+    rps: np.ndarray, capacity: float, min_r: int, max_r: int
+) -> np.ndarray:
     """Convert RPS values to replica counts (ceil division, clamped)."""
     replicas = np.ceil(rps / capacity).astype(int)
     return cast(np.ndarray, np.clip(replicas, min_r, max_r))
@@ -107,7 +117,9 @@ def compute_scaling_stats(
         f"{label}_wasted_capacity_avg": float(np.mean(np.maximum(over, 0))),
     }
 
+
 # Plotting
+
 
 def _load_pyplot():
     """Return matplotlib.pyplot configured for headless use, or None if unavailable."""
@@ -193,7 +205,9 @@ def plot_ppa_vs_hpa(
     print(f"  Plot saved → {output_path}")
     return True
 
+
 # Main evaluation
+
 
 def evaluate_model(
     model_path: str,
@@ -245,7 +259,9 @@ def evaluate_model(
     df = pd.read_csv(csv_path, index_col="timestamp", parse_dates=True)
     df = df.dropna(subset=FEATURE_COLUMNS + [target_col])
 
-    x, y = create_dataset_from_segments(df, FEATURE_COLUMNS, target_col, scaler, lookback)
+    x, y = create_dataset_from_segments(
+        df, FEATURE_COLUMNS, target_col, scaler, lookback
+    )
 
     # Determine test boundaries
     if meta_path and os.path.exists(meta_path):
@@ -275,7 +291,9 @@ def evaluate_model(
     # Metrics
     mape = compute_mape(y_test, y_pred)
     smape = compute_smape(y_test, y_pred)
-    mape_filtered = compute_mape_filtered(y_test, y_pred, min_actual_rps=low_traffic_threshold)
+    mape_filtered = compute_mape_filtered(
+        y_test, y_pred, min_actual_rps=low_traffic_threshold
+    )
     mae = compute_mae(y_test, y_pred)
     rmse = compute_rmse(y_test, y_pred)
 
@@ -315,7 +333,12 @@ def evaluate_model(
         **ppa_stats,
         **hpa_stats,
         "replica_savings_pct": round(
-            (1 - ppa_stats["ppa_avg_replicas"] / max(hpa_stats["hpa_avg_replicas"], 1e-6)) * 100,
+            (
+                1
+                - ppa_stats["ppa_avg_replicas"]
+                / max(hpa_stats["hpa_avg_replicas"], 1e-6)
+            )
+            * 100,
             2,
         ),
     }
@@ -349,8 +372,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate trained LSTM model")
     parser.add_argument("--model", type=str, required=True, help="Path to .keras model")
     parser.add_argument("--scaler", type=str, required=True, help="Path to scaler .pkl")
-    parser.add_argument("--csv", type=str, default="data/training-data/training_data_v2.csv")
-    parser.add_argument("--target", type=str, default=TARGET_COLUMNS[0], choices=TARGET_COLUMNS)
+    parser.add_argument(
+        "--csv", type=str, default="data/training-data/training_data_v2.csv"
+    )
+    parser.add_argument(
+        "--target", type=str, default=TARGET_COLUMNS[0], choices=TARGET_COLUMNS
+    )
     parser.add_argument("--output-dir", type=str, default="data/artifacts")
     parser.add_argument(
         "--meta", type=str, default=None, help="Path to split_meta JSON from train.py"

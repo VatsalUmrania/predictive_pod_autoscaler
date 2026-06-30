@@ -38,7 +38,7 @@ async def test_publish_prediction_calls_nats_with_correct_subject():
 
     await sm._publish_prediction(
         predicted_rps=450.0,
-        features={"rps_per_replica": 100.0, "cpu_utilization_pct": 70.0},
+        features={"normalized_rps": 100.0, "cpu_utilization_pct": 70.0},
     )
 
     mock_nats.publish.assert_called_once()
@@ -147,9 +147,12 @@ async def test_compute_confidence_returns_base_when_no_predictor():
     config = {"target": "x", "target_ns": "default", "target_horizon": 10}
 
     sm = ScalerStateMachine(
-        cr_name="t", cr_namespace="default",
-        state=state, config=config,
-        patch=MagicMock(), status={},
+        cr_name="t",
+        cr_namespace="default",
+        state=state,
+        config=config,
+        patch=MagicMock(),
+        status={},
     )
 
     assert sm._compute_confidence() == 0.5
@@ -167,9 +170,12 @@ async def test_compute_confidence_returns_075_for_healthy_predictor():
     config = {"target": "x", "target_ns": "default", "target_horizon": 10}
 
     sm = ScalerStateMachine(
-        cr_name="t", cr_namespace="default",
-        state=state, config=config,
-        patch=MagicMock(), status={},
+        cr_name="t",
+        cr_namespace="default",
+        state=state,
+        config=config,
+        patch=MagicMock(),
+        status={},
     )
 
     assert sm._compute_confidence() == 0.75
@@ -182,16 +188,21 @@ async def test_compute_confidence_drops_with_drift():
 
     mock_pred = MagicMock()
     mock_pred.check_concept_drift.return_value = {
-        "checked": True, "detected": True, "severity": "medium"
+        "checked": True,
+        "detected": True,
+        "severity": "medium",
     }
 
     state = CRState(predictor=mock_pred)
     config = {"target": "x", "target_ns": "default", "target_horizon": 10}
 
     sm = ScalerStateMachine(
-        cr_name="t", cr_namespace="default",
-        state=state, config=config,
-        patch=MagicMock(), status={},
+        cr_name="t",
+        cr_namespace="default",
+        state=state,
+        config=config,
+        patch=MagicMock(),
+        status={},
     )
 
     assert sm._compute_confidence() == 0.4

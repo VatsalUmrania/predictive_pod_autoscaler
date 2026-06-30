@@ -18,7 +18,9 @@ import yaml
 def grafana_dashboard():
     """Load and parse grafana dashboard ConfigMap."""
     dashboard_path = (
-        Path(__file__).parent.parent.parent / "deploy" / "grafana-dashboard-configmap.yaml"
+        Path(__file__).parent.parent.parent
+        / "deploy"
+        / "grafana-dashboard-configmap.yaml"
     )
     assert dashboard_path.exists(), f"Expected {dashboard_path} to exist"
 
@@ -176,7 +178,9 @@ class TestSLOMetricsDefinitions:
             "window_days": 30,
             "name": "Operator Availability",
         }
-        assert slo_availability["threshold"] >= 0.99, "Availability SLO should be >= 99%"
+        assert (
+            slo_availability["threshold"] >= 0.99
+        ), "Availability SLO should be >= 99%"
 
     def test_prediction_accuracy_slo_definition(self):
         """Define prediction accuracy SLO: MAPE < 30%."""
@@ -305,7 +309,9 @@ class TestSLOCalculations:
         actuals = [100, 200, 300, 150]
         predictions = [95, 210, 290, 155]
 
-        errors = [abs(a - p) / abs(a) for a, p in zip(actuals, predictions, strict=False)]
+        errors = [
+            abs(a - p) / abs(a) for a, p in zip(actuals, predictions, strict=False)
+        ]
         mape = sum(errors) / len(errors) * 100
 
         assert mape > 0, "MAPE should be positive"
@@ -321,7 +327,9 @@ class TestSLOCalculations:
 
         # 99.5% uptime over 30 days = 0.5% downtime
         # 0.5% of 30 days = 0.5% * 43200 minutes = 216 minutes (~3.6 hours)
-        assert error_budget_minutes > 200, "Error budget should be > 200 minutes for 99.5%"
+        assert (
+            error_budget_minutes > 200
+        ), "Error budget should be > 200 minutes for 99.5%"
 
 
 if __name__ == "__main__":

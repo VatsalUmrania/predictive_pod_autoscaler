@@ -4,6 +4,7 @@
 import logging
 import math
 import sys
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple, cast
@@ -49,7 +50,11 @@ REQUIRED_METRICS = {
     "cpu_utilization_pct",
     "memory_utilization_pct",
 }
-PRIMARY_SIGNAL_METRICS = {"requests_per_second", "cpu_utilization_pct", "latency_p95_ms"}
+PRIMARY_SIGNAL_METRICS = {
+    "requests_per_second",
+    "cpu_utilization_pct",
+    "latency_normalized",
+}
 
 
 class FeatureContract(NamedTuple):
@@ -65,13 +70,17 @@ def _is_missing_or_nan(value: float | None) -> bool:
     if isinstance(value, float):
         return math.isnan(value)
     return False
+
+
 DEFAULT_METRIC_FRESHNESS_SECONDS = 30.0
 VOLATILE_METRIC_FRESHNESS_SECONDS = 10.0
 VOLATILE_RPS_CHANGE_ENTER = 0.5
 VOLATILE_RPS_CHANGE_EXIT = 0.35
 
 
-def _metric_cache(cr_state: "CRState | None") -> dict[str, tuple[float, float]]:
+def _metric_cache(
+    cr_state: "CRState | None",
+) -> dict[str, tuple[float, float] | deque[float]]:
     if cr_state is None:
         return {}
     cache = getattr(cr_state, "metric_cache", None)
@@ -105,7 +114,11 @@ def _apply_metric_degradation(
     metric_ages: dict[str, float] = {}
 
     for name, value in values.items():
-        if value is not None and isinstance(value, (int, float)) and not math.isnan(float(value)):
+        if (
+            value is not None
+            and isinstance(value, (int, float))
+            and not math.isnan(float(value))
+        ):
             cache[name] = (float(value), now)
             metric_ages[name] = 0.0
 
@@ -158,31 +171,51 @@ def time_now() -> float:
 def _normalize_metrics(
     values: dict[str, float | None],
     max_replicas: int,
+    cr_state: CRState | None = None,
 ) -> dict[str, float | None]:
-    """Normalize metrics for LSTM input.
+    """Normalize metrics for LSTM input (v3 foundation model schema).
 
-    Converts RPS to per-replica and normalizes replica count to [0,1].
+    Matches training-time `rolling(window=60).max()` semantics via a per-state
+    sliding-window deque. Epsilon floor avoids div-by-zero but never collapses
+    the ratio to identity when absolute load is small — sub-1 RPS traffic must
+    still produce a normalized_rps in the trained distribution.
 
     Args:
         values: Raw metric values dict
-        max_replicas: Maximum pod count for replica normalization
+        max_replicas: Maximum pod count (unused in v3, kept for API compat)
+        cr_state: Optional CRD state for sliding-window tracking
 
     Returns:
         Updated values dict with normalized metrics
     """
+    cache = _metric_cache(cr_state)
+
+    rps_series: deque[float] = cast(
+        deque[float],
+        cache.setdefault("_rolling_max_rps", deque(maxlen=LOOKBACK_STEPS)),
+    )
     rps_value = values.get("requests_per_second", 0.0)
     rps = rps_value if rps_value is not None else 0.0
     if math.isnan(rps):
         rps = 0.0
+    rps_series.append(rps)
+    # Floor at 1.0 req/s to match training-time normalization in export_training_data.py
+    # which applies `np.maximum(rolling_max_rps, 1.0)`.  Using a smaller floor (e.g.
+    # 1e-6) causes normalized_rps = rps / rps = 1.0 at sub-1 RPS traffic, which the
+    # target_scaler inverse-transforms back to the training-time peak (~345 req/s),
+    # producing phantom high-load predictions and spurious scale-out events.
+    values["normalized_rps"] = rps / max(max(rps_series), 1.0)
 
-    current_replicas = values.get("current_replicas") or 0.0
-    if current_replicas <= 0:
-        values["rps_per_replica"] = rps
-        values["scale_from_zero"] = 1.0
+    lat_series: deque[float] = cast(
+        deque[float],
+        cache.setdefault("_rolling_max_latency", deque(maxlen=LOOKBACK_STEPS)),
+    )
+    lat_raw = values.get("latency_p95_ms")
+    if lat_raw is not None and not math.isnan(float(lat_raw)) and lat_raw > 0:
+        lat_series.append(float(lat_raw))
+        values["latency_normalized"] = float(lat_raw) / max(max(lat_series), 1.0)
     else:
-        values["rps_per_replica"] = rps / current_replicas
-        values["scale_from_zero"] = 0.0
-    values["replicas_normalized"] = current_replicas / float(max_replicas)
+        values["latency_normalized"] = float("nan")
 
     return values
 
@@ -302,7 +335,9 @@ def build_feature_vector(
     # as a missing optional feature rather than clipping it against the 1ms lower bound.
     latency_raw = values.get("latency_p95_ms")
     if latency_raw is not None and latency_raw == 0.0:
-        values["latency_p95_ms"] = None  # Will become NaN in Step 3
+        values["latency_p95_ms"] = (
+            None  # Will become NaN in Step 3 → latency_normalized=NaN
+        )
 
     # Step 1c: Try fallback queries for resource utilization metrics if primary queries failed.
     # kube_pod_container_resource_limits may not be available in all Prometheus setups
@@ -320,7 +355,9 @@ def build_feature_vector(
             )
             if fallback_cpu.get("cpu_utilization_pct") is not None:
                 values["cpu_utilization_pct"] = fallback_cpu["cpu_utilization_pct"]
-                logger.warning(f"[{target_app}] Using fallback CPU metric (absolute usage, not percentage)")
+                logger.warning(
+                    f"[{target_app}] Using fallback CPU metric (absolute usage, not percentage)"
+                )
         except Exception as e:
             logger.debug(f"[{target_app}] Fallback CPU query failed: {e}")
 
@@ -335,18 +372,22 @@ def build_feature_vector(
                 cr_state=cr_state,
             )
             if fallback_mem.get("memory_utilization_pct") is not None:
-                values["memory_utilization_pct"] = fallback_mem["memory_utilization_pct"]
-                logger.warning(f"[{target_app}] Using fallback memory metric (absolute usage, not percentage)")
+                values["memory_utilization_pct"] = fallback_mem[
+                    "memory_utilization_pct"
+                ]
+                logger.warning(
+                    f"[{target_app}] Using fallback memory metric (absolute usage, not percentage)"
+                )
         except Exception as e:
             logger.debug(f"[{target_app}] Fallback memory query failed: {e}")
 
     # Step 2: Apply freshness-aware degradation for required metrics.
-    values, degraded_reasons, metric_ages = _apply_metric_degradation(values, cr_state, now)
+    values, degraded_reasons, metric_ages = _apply_metric_degradation(
+        values, cr_state, now
+    )
 
     primary_missing = [
-        name
-        for name in PRIMARY_SIGNAL_METRICS
-        if _is_missing_or_nan(values.get(name))
+        name for name in PRIMARY_SIGNAL_METRICS if _is_missing_or_nan(values.get(name))
     ]
     if len(primary_missing) == len(PRIMARY_SIGNAL_METRICS):
         raise FeatureVectorException("All primary input signals are missing")
@@ -367,18 +408,22 @@ def build_feature_vector(
     raw_metrics = {
         key: float(value)
         for key, value in values.items()
-        if value is not None and isinstance(value, (int, float)) and not math.isnan(float(value))
+        if value is not None
+        and isinstance(value, (int, float))
+        and not math.isnan(float(value))
     }
     _update_volatility(raw_metrics.get("requests_per_second", 0.0), cr_state)
 
-    # Step 4: Normalize metrics for LSTM
-    values = _normalize_metrics(values, max_replicas)
+    # Step 4: Normalize metrics for LSTM (v3: normalized_rps, latency_normalized)
+    values = _normalize_metrics(values, max_replicas, cr_state=cr_state)
 
     # Step 5: Add temporal features
     values = _add_temporal_features(values)
 
     # Step 6: Validate feature bounds
-    final_features = {feature_name: values[feature_name] for feature_name in FEATURE_COLUMNS}
+    final_features = {
+        feature_name: values[feature_name] for feature_name in FEATURE_COLUMNS
+    }
     final_features, oob = validate_feature_bounds(final_features)
 
     if oob:
@@ -393,7 +438,9 @@ def build_feature_vector(
     return final_features, current_replicas, raw_metrics, degraded_reasons
 
 
-def prom_range_query(query: str, step_seconds: int = 30, hours: int = 1) -> dict[float, float]:
+def prom_range_query(
+    query: str, step_seconds: int = 30, hours: int = 1
+) -> dict[float, float]:
     """
     Fetch a time-range of metric values from Prometheus.
     Returns dict mapping Unix timestamp -> float value.
@@ -494,20 +541,36 @@ def build_historical_features(
         for feature_name in queries.keys():
             if feature_name in ["cpu_acceleration", "rps_acceleration"]:
                 continue
-            values[feature_name] = metric_timeseries.get(feature_name, {}).get(ts, float("nan"))
+            values[feature_name] = metric_timeseries.get(feature_name, {}).get(
+                ts, float("nan")
+            )
 
-        # Derived features from raw metrics
-        current_replicas = values.get("current_replicas", float("nan"))
-        safe_replicas = (
-            current_replicas if not math.isnan(current_replicas) and current_replicas > 0 else 1.0
-        )
-
+        # Derived features from raw metrics (v3: normalized_rps, latency_normalized)
         rps = values.get("requests_per_second", 0.0)
         if math.isnan(rps):
             rps = 0.0
 
-        values["rps_per_replica"] = rps / safe_replicas
-        values["replicas_normalized"] = current_replicas / float(max_replicas)
+        # Compute normalized_rps using rolling max across the time window
+        # For historical reconstruction: use a simple running max
+        rps_history = [
+            v
+            for v in metric_timeseries.get("requests_per_second", {}).values()
+            if not math.isnan(v)
+        ]
+        running_max_rps = max(rps_history) if rps_history else 0.0
+        values["normalized_rps"] = rps / max(running_max_rps, 1e-6)
+
+        lat_val = values.get("latency_p95_ms", float("nan"))
+        if not math.isnan(lat_val) and lat_val > 0:
+            lat_history = [
+                v
+                for v in metric_timeseries.get("latency_p95_ms", {}).values()
+                if not math.isnan(v) and v > 0
+            ]
+            running_max_lat = max(lat_history) if lat_history else 0.0
+            values["latency_normalized"] = lat_val / max(running_max_lat, 1e-6)
+        else:
+            values["latency_normalized"] = float("nan")
 
         # Temporal features based on historical timestamp (not current time)
         hour = dt.hour + dt.minute / 60.0 + dt.second / 3600.0
@@ -533,19 +596,20 @@ def build_historical_features(
     logger.info(f"Reconstructed {len(feature_rows)} historical feature vectors")
     return feature_rows
 
+
 # Feature contract API
-def get_feature_columns(version: str = "v2") -> list[str]:
+def get_feature_columns(version: str = "v3") -> list[str]:
     """Return the ordered list of feature columns for the given contract version."""
-    if version == "v2":
+    if version == "v3":
         return list(FEATURE_COLUMNS)
     raise ValueError(f"Unknown feature contract version: {version}")
 
 
-def get_contract(version: str = "v2") -> FeatureContract:
+def get_contract(version: str = "v3") -> FeatureContract:
     """Return the full feature contract for the given version."""
     from ppa.common.feature_spec import NUM_FEATURES, TARGET_COLUMNS
 
-    if version == "v2":
+    if version == "v3":
         return FeatureContract(
             feature_columns=list(FEATURE_COLUMNS),
             target_columns=tuple(TARGET_COLUMNS),

@@ -13,7 +13,6 @@ Validates:
 - Partial execution is detected and tagged correctly
 """
 
-
 import pytest
 
 from nexus.governance.action_ladder import (

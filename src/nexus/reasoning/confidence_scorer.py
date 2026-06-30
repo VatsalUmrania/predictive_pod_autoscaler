@@ -44,17 +44,17 @@ logger = logging.getLogger(__name__)
 # Negative: class is ambiguous or has wider blast radius
 
 _CLASS_ADJUSTMENTS = {
-    "config_error":          +0.05,   # ENV violations are deterministic — boost
-    "bad_deploy":             0.00,   # Clear signal when deploy is correlated
-    "resource_exhaustion":    0.00,   # Metrics are usually reliable
-    "dependency_failure":    -0.05,   # DNS/network failures can be transient
-    "cascading_failure":     -0.10,   # Complex — risky to intervene autonomously
-    "unknown":               -0.20,   # No idea — extremely conservative
+    "config_error": +0.05,  # ENV violations are deterministic — boost
+    "bad_deploy": 0.00,  # Clear signal when deploy is correlated
+    "resource_exhaustion": 0.00,  # Metrics are usually reliable
+    "dependency_failure": -0.05,  # DNS/network failures can be transient
+    "cascading_failure": -0.10,  # Complex — risky to intervene autonomously
+    "unknown": -0.20,  # No idea — extremely conservative
 }
 
 # Healing level caps — don't let a class automatically grant L3 without signal strength
 _MAX_CONFIDENCE_WITHOUT_QUORUM = {
-    0: 1.0,   # L0 — alerts always fine
+    0: 1.0,  # L0 — alerts always fine
     1: 0.90,
     2: 0.80,
     3: 0.75,  # L3 requires agent diversity too
@@ -74,9 +74,9 @@ class ConfidenceScorer:
 
     def __init__(
         self,
-        llm_weight:        float = 0.55,
-        agreement_weight:  float = 0.35,
-        class_adj_weight:  float = 0.10,
+        llm_weight: float = 0.55,
+        agreement_weight: float = 0.35,
+        class_adj_weight: float = 0.10,
         conservative_bias: float = 0.03,
     ):
         total = llm_weight + agreement_weight + class_adj_weight
@@ -85,10 +85,10 @@ class ConfidenceScorer:
                 f"Weights must sum to 1.0, got {total:.2f} "
                 f"(llm={llm_weight}, agreement={agreement_weight}, class_adj={class_adj_weight})"
             )
-        self._w_llm       = llm_weight
+        self._w_llm = llm_weight
         self._w_agreement = agreement_weight
         self._w_class_adj = class_adj_weight
-        self._bias        = conservative_bias
+        self._bias = conservative_bias
 
         # Phase 6: historical boosts injected by FeedbackLoop
         # runbook_id → delta (range ±0.05 from KnowledgeBase)
@@ -96,7 +96,7 @@ class ConfidenceScorer:
 
     def score(
         self,
-        cluster:    IncidentCluster,
+        cluster: IncidentCluster,
         rca_result: RCAResult,
     ) -> float:
         """
@@ -116,7 +116,7 @@ class ConfidenceScorer:
             return max(0.0, min(1.0, raw + boost))
 
         # Gemini — blend multiple signals
-        llm_conf  = rca_result.confidence
+        llm_conf = rca_result.confidence
         agreement = cluster.signal_agreement_score()
 
         # Class adjustment: normalize to [0, 1] (shift from [-0.20, +0.05] to [0, 1])
@@ -125,9 +125,9 @@ class ConfidenceScorer:
         class_adj_normalized = (class_adj_raw + 0.20) / 0.25
 
         blended = (
-            self._w_llm       * llm_conf  +
-            self._w_agreement * agreement +
-            self._w_class_adj * class_adj_normalized
+            self._w_llm * llm_conf
+            + self._w_agreement * agreement
+            + self._w_class_adj * class_adj_normalized
         )
 
         # Deploy-proximity bonus: deploy correlated with bad_deploy = clearer signal
@@ -136,7 +136,7 @@ class ConfidenceScorer:
 
         # Phase 6: historical boost from Learning Plane (±0.05, capped)
         hist_boost = self._historical_boosts.get(rca_result.runbook_id or "", 0.0)
-        blended   += hist_boost
+        blended += hist_boost
 
         # PPA feature boost: +0.05 if cluster was seeded by a high-confidence
         # LSTM spike prediction with elevated load (rps > 20 OR cpu > 60%)
@@ -188,7 +188,8 @@ class ConfidenceScorer:
             f"[ConfidenceScorer] Historical boosts updated — "
             f"{len(boosts)} runbook(s): "
             + ", ".join(
-                f"{k}={v:+.3f}" for k, v in sorted(boosts.items(), key=lambda x: -abs(x[1]))
+                f"{k}={v:+.3f}"
+                for k, v in sorted(boosts.items(), key=lambda x: -abs(x[1]))
             )[:200]
         )
 

@@ -29,7 +29,9 @@ def validate(csv_path: str) -> bool:
     elif len(df) < 10000:
         warnings.append(f"Low row count: {len(df)}, target is 10,000 for training.")
 
-    missing_columns = [col for col in FEATURE_COLUMNS + TARGET_COLUMNS[:3] if col not in df.columns]
+    missing_columns = [
+        col for col in FEATURE_COLUMNS + TARGET_COLUMNS[:3] if col not in df.columns
+    ]
     if missing_columns:
         errors.append("Missing required columns: " + ", ".join(missing_columns))
 
@@ -59,9 +61,13 @@ def validate(csv_path: str) -> bool:
             if "sin" in col1 or "cos" in col1 or "sin" in col2 or "cos" in col2:
                 continue
 
-            cor_val = getattr(corr.iloc[i, j], "item", lambda i=i, j=j: corr.iloc[i, j])()
+            cor_val = getattr(
+                corr.iloc[i, j], "item", lambda i=i, j=j: corr.iloc[i, j]
+            )()
             if cor_val > 0.98:
-                errors.append(f"High correlation (>0.98) between {col1} and {col2}: {cor_val:.3f}")
+                errors.append(
+                    f"High correlation (>0.98) between {col1} and {col2}: {cor_val:.3f}"
+                )
 
     for target_name in TARGET_COLUMNS[:3]:
         if target_name not in df.columns:
@@ -89,6 +95,8 @@ def validate(csv_path: str) -> bool:
 
 
 if __name__ == "__main__":
-    csv_path = sys.argv[1] if len(sys.argv) > 1 else "data/training-data/training_data_v2.csv"
+    csv_path = (
+        sys.argv[1] if len(sys.argv) > 1 else "data/training-data/training_data_v2.csv"
+    )
     if not validate(csv_path):
         sys.exit(1)

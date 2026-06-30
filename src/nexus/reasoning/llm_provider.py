@@ -79,6 +79,7 @@ Required schema:
 # Abstract base
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class LLMProvider(ABC):
     """Abstract base for all LLM provider backends."""
 
@@ -107,6 +108,7 @@ class LLMProvider(ABC):
 # ──────────────────────────────────────────────────────────────────────────────
 # Gemini provider
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class GeminiProvider(LLMProvider):
     """Google Gemini via google-generativeai SDK."""
@@ -144,6 +146,7 @@ class GeminiProvider(LLMProvider):
             return False
         try:
             import google.generativeai as genai
+
             genai.configure(api_key=self._api_key)
             self._client = genai.GenerativeModel(
                 model_name=self._model_name,
@@ -157,7 +160,9 @@ class GeminiProvider(LLMProvider):
             logger.info(f"[LLM] Gemini client ready — model={self._model_name}")
             return True
         except ImportError:
-            logger.warning("[LLM] google-generativeai not installed: pip install google-generativeai")
+            logger.warning(
+                "[LLM] google-generativeai not installed: pip install google-generativeai"
+            )
         except Exception as exc:
             logger.warning(f"[LLM] Gemini init failed: {exc}")
         return False
@@ -176,15 +181,18 @@ class GeminiProvider(LLMProvider):
 # OpenAI provider
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class OpenAIProvider(LLMProvider):
     """OpenAI ChatCompletion via openai SDK."""
 
     DEFAULT_MODEL = "gpt-4o-mini"
 
     def __init__(self, api_key: str | None = None, model: str | None = None):
-        self._api_key    = api_key or os.getenv("NEXUS_LLM_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+        self._api_key = (
+            api_key or os.getenv("NEXUS_LLM_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+        )
         self._model_name = model or os.getenv("NEXUS_LLM_MODEL", self.DEFAULT_MODEL)
-        self._client     = None
+        self._client = None
 
     @property
     def name(self) -> str:
@@ -204,6 +212,7 @@ class OpenAIProvider(LLMProvider):
             return False
         try:
             from openai import OpenAI
+
             self._client = OpenAI(api_key=self._api_key)
             logger.info(f"[LLM] OpenAI client ready — model={self._model_name}")
             return True
@@ -219,8 +228,8 @@ class OpenAIProvider(LLMProvider):
         response = self._client.chat.completions.create(
             model=self._model_name,
             messages=[
-                {"role": "system",  "content": SYSTEM_INSTRUCTION},
-                {"role": "user",    "content": prompt},
+                {"role": "system", "content": SYSTEM_INSTRUCTION},
+                {"role": "user", "content": prompt},
             ],
             temperature=0.2,
             max_tokens=512,
@@ -236,15 +245,20 @@ class OpenAIProvider(LLMProvider):
 # Anthropic provider
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class AnthropicProvider(LLMProvider):
     """Anthropic Claude via anthropic SDK."""
 
     DEFAULT_MODEL = "claude-3-haiku-20240307"
 
     def __init__(self, api_key: str | None = None, model: str | None = None):
-        self._api_key    = api_key or os.getenv("NEXUS_LLM_API_KEY") or os.getenv("ANTHROPIC_API_KEY", "")
+        self._api_key = (
+            api_key
+            or os.getenv("NEXUS_LLM_API_KEY")
+            or os.getenv("ANTHROPIC_API_KEY", "")
+        )
         self._model_name = model or os.getenv("NEXUS_LLM_MODEL", self.DEFAULT_MODEL)
-        self._client     = None
+        self._client = None
 
     @property
     def name(self) -> str:
@@ -264,6 +278,7 @@ class AnthropicProvider(LLMProvider):
             return False
         try:
             import anthropic
+
             self._client = anthropic.Anthropic(api_key=self._api_key)
             logger.info(f"[LLM] Anthropic client ready — model={self._model_name}")
             return True
@@ -292,6 +307,7 @@ class AnthropicProvider(LLMProvider):
 # No-op provider (rule-based only mode)
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class NullProvider(LLMProvider):
     """Placeholder when LLM is explicitly disabled (NEXUS_LLM_PROVIDER=none)."""
 
@@ -315,10 +331,10 @@ class NullProvider(LLMProvider):
 # ──────────────────────────────────────────────────────────────────────────────
 
 _PROVIDERS = {
-    "gemini":    GeminiProvider,
-    "openai":    OpenAIProvider,
+    "gemini": GeminiProvider,
+    "openai": OpenAIProvider,
     "anthropic": AnthropicProvider,
-    "none":      NullProvider,
+    "none": NullProvider,
 }
 
 _cached_provider: LLMProvider | None = None
@@ -326,8 +342,8 @@ _cached_provider: LLMProvider | None = None
 
 def get_llm_provider(
     provider: str | None = None,
-    api_key:  str | None = None,
-    model:    str | None = None,
+    api_key: str | None = None,
+    model: str | None = None,
 ) -> LLMProvider:
     """
     Return the configured LLM provider singleton.
@@ -343,9 +359,7 @@ def get_llm_provider(
         return _cached_provider
 
     provider_name = (
-        provider
-        or os.getenv("NEXUS_LLM_PROVIDER", "")
-        or _autodetect_provider()
+        provider or os.getenv("NEXUS_LLM_PROVIDER", "") or _autodetect_provider()
     ).lower()
 
     cls = _PROVIDERS.get(provider_name, NullProvider)
@@ -357,9 +371,7 @@ def get_llm_provider(
         instance = cls(api_key=api_key, model=model)
 
     if instance.is_available():
-        logger.info(
-            f"[LLM] Provider: {instance.name} | Model: {instance.model}"
-        )
+        logger.info(f"[LLM] Provider: {instance.name} | Model: {instance.model}")
     else:
         logger.info(
             f"[LLM] Provider '{instance.name}' has no API key — "
@@ -371,11 +383,19 @@ def get_llm_provider(
 
 
 def _autodetect_provider() -> str:
-    """Return provider name based on which API key is set in the environment."""
-    if os.getenv("NEXUS_GEMINI_API_KEY") or os.getenv("NEXUS_LLM_API_KEY"):
-        return "gemini"
+    """Return provider name based on which API key is set in the environment.
+
+    Provider-specific keys win over the generic NEXUS_LLM_API_KEY. This way,
+    setting both ``NEXUS_LLM_API_KEY`` and ``OPENAI_API_KEY`` will pick OpenAI
+    rather than silently defaulting to Gemini.
+    """
     if os.getenv("OPENAI_API_KEY"):
         return "openai"
     if os.getenv("ANTHROPIC_API_KEY"):
         return "anthropic"
+    if os.getenv("NEXUS_GEMINI_API_KEY"):
+        return "gemini"
+    if os.getenv("NEXUS_LLM_API_KEY"):
+        # Generic key alone — Gemini is the historical default
+        return "gemini"
     return "none"

@@ -56,17 +56,18 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────────────
 
 _BOUNDS: dict[str, tuple[float, float]] = {
-    "cpu_utilization_pct":    (0.0,  200.0),
-    "memory_utilization_pct": (0.0,  110.0),
-    "error_rate":             (0.0,    1.0),
-    "rps":                    (0.0, 100_000.0),
-    "latency_p95_ms":         (0.0,  30_000.0),
+    "cpu_utilization_pct": (0.0, 200.0),
+    "memory_utilization_pct": (0.0, 110.0),
+    "error_rate": (0.0, 1.0),
+    "rps": (0.0, 100_000.0),
+    "latency_p95_ms": (0.0, 30_000.0),
 }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Prometheus Circuit Breaker
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class _PrometheusCircuitBreaker:
     """
@@ -77,21 +78,24 @@ class _PrometheusCircuitBreaker:
     HALF_OPEN → trial query allowed after timeout; reverts to CLOSED on success
     """
 
-    CLOSED    = "CLOSED"
-    OPEN      = "OPEN"
+    CLOSED = "CLOSED"
+    OPEN = "OPEN"
     HALF_OPEN = "HALF_OPEN"
 
     def __init__(self, threshold: int = 5, reset_timeout: float = 60.0):
-        self.threshold     = threshold
+        self.threshold = threshold
         self.reset_timeout = reset_timeout
-        self._failures     = 0
-        self._state        = self.CLOSED
+        self._failures = 0
+        self._state = self.CLOSED
         self._opened_at: float | None = None
 
     @property
     def state(self) -> str:
         if self._state == self.OPEN:
-            if self._opened_at and (time.monotonic() - self._opened_at) > self.reset_timeout:
+            if (
+                self._opened_at
+                and (time.monotonic() - self._opened_at) > self.reset_timeout
+            ):
                 self._state = self.HALF_OPEN
         return self._state
 
@@ -102,7 +106,7 @@ class _PrometheusCircuitBreaker:
         if self._state == self.HALF_OPEN:
             logger.info("[MetricsAgent] Circuit breaker RESET → CLOSED")
         self._failures = 0
-        self._state    = self.CLOSED
+        self._state = self.CLOSED
         self._opened_at = None
 
     def record_failure(self) -> None:
@@ -113,7 +117,7 @@ class _PrometheusCircuitBreaker:
                     f"[MetricsAgent] Circuit breaker TRIPPED → OPEN "
                     f"({self._failures} consecutive failures)"
                 )
-            self._state    = self.OPEN
+            self._state = self.OPEN
             self._opened_at = time.monotonic()
 
     def __repr__(self) -> str:
@@ -123,6 +127,7 @@ class _PrometheusCircuitBreaker:
 # ──────────────────────────────────────────────────────────────────────────────
 # Metrics Agent
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class MetricsAgent(BaseAgent):
     """
@@ -141,22 +146,20 @@ class MetricsAgent(BaseAgent):
         ),
         # Node-level memory: 1 - available/total
         "memory_utilization_pct": (
-            '100 * (1 - (avg(node_memory_MemAvailable_bytes) / avg(node_memory_MemTotal_bytes)))'
+            "100 * (1 - (avg(node_memory_MemAvailable_bytes) / avg(node_memory_MemTotal_bytes)))"
         ),
         # HTTP error rate — falls back to 0 if metric absent
         "error_rate": (
             '(sum(rate(http_requests_total{status=~"5.."}[2m])) or vector(0))'
-            ' / (sum(rate(http_requests_total[2m])) > 0 or vector(1))'
+            " / (sum(rate(http_requests_total[2m])) > 0 or vector(1))"
         ),
         # RPS across all services
-        "rps": (
-            'sum(rate(http_requests_total[1m])) or vector(0)'
-        ),
+        "rps": ("sum(rate(http_requests_total[1m])) or vector(0)"),
         # P95 latency — falls back to 0 if metric absent
         "latency_p95_ms": (
-            '(histogram_quantile(0.95,'
-            '  sum(rate(http_request_duration_seconds_bucket[2m])) by (le)'
-            ') or vector(0)) * 1000'
+            "(histogram_quantile(0.95,"
+            "  sum(rate(http_request_duration_seconds_bucket[2m])) by (le)"
+            ") or vector(0)) * 1000"
         ),
     }
 
@@ -172,23 +175,25 @@ class MetricsAgent(BaseAgent):
         deployment_name: str | None = None,
     ):
         super().__init__(
-            nats_client           = nats_client,
-            agent_type            = AgentType.METRICS,
-            poll_interval_seconds = poll_interval_seconds,
-            failure_threshold     = cb_failure_threshold,
+            nats_client=nats_client,
+            agent_type=AgentType.METRICS,
+            poll_interval_seconds=poll_interval_seconds,
+            failure_threshold=cb_failure_threshold,
         )
-        self.prom_url        = (prometheus_url or os.getenv("NEXUS_PROMETHEUS_URL", "http://localhost:9090")).rstrip("/")
-        self.http_timeout    = http_timeout
-        self.namespace       = namespace
+        self.prom_url = (
+            prometheus_url or os.getenv("NEXUS_PROMETHEUS_URL", "http://localhost:9090")
+        ).rstrip("/")
+        self.http_timeout = http_timeout
+        self.namespace = namespace
         self.deployment_name = deployment_name
-        self.cb              = _PrometheusCircuitBreaker(cb_failure_threshold, cb_reset_timeout)
+        self.cb = _PrometheusCircuitBreaker(cb_failure_threshold, cb_reset_timeout)
 
         # Load thresholds from env
-        self.cpu_threshold    = float(os.getenv("NEXUS_CPU_THRESHOLD_PCT",    "85.0"))
-        self.mem_threshold    = float(os.getenv("NEXUS_MEM_THRESHOLD_PCT",    "85.0"))
-        self.err_threshold    = float(os.getenv("NEXUS_ERROR_RATE_THRESHOLD", "0.05"))
-        self.lat_threshold_ms = float(os.getenv("NEXUS_LATENCY_P95_MS",      "500.0"))
-        self.rps_spike_mult   = float(os.getenv("NEXUS_RPS_SPIKE_MULTIPLIER", "3.0"))
+        self.cpu_threshold = float(os.getenv("NEXUS_CPU_THRESHOLD_PCT", "85.0"))
+        self.mem_threshold = float(os.getenv("NEXUS_MEM_THRESHOLD_PCT", "85.0"))
+        self.err_threshold = float(os.getenv("NEXUS_ERROR_RATE_THRESHOLD", "0.05"))
+        self.lat_threshold_ms = float(os.getenv("NEXUS_LATENCY_P95_MS", "500.0"))
+        self.rps_spike_mult = float(os.getenv("NEXUS_RPS_SPIKE_MULTIPLIER", "3.0"))
 
         # Rolling RPS history for spike detection (20 samples ≈ 10 min at 30s)
         self._rps_history: deque = deque(maxlen=20)
@@ -222,7 +227,9 @@ class MetricsAgent(BaseAgent):
                 if name in _BOUNDS:
                     lo, hi = _BOUNDS[name]
                     if value < lo or value > hi:
-                        logger.debug(f"[MetricsAgent] Clamping {name}={value:.2f} to [{lo}, {hi}]")
+                        logger.debug(
+                            f"[MetricsAgent] Clamping {name}={value:.2f} to [{lo}, {hi}]"
+                        )
                         value = max(lo, min(hi, value))
 
                 self.cb.record_success()
@@ -233,7 +240,9 @@ class MetricsAgent(BaseAgent):
             logger.warning(f"[MetricsAgent] Prometheus timeout on '{name}'")
         except httpx.HTTPStatusError as exc:
             self.cb.record_failure()
-            logger.warning(f"[MetricsAgent] HTTP {exc.response.status_code} on '{name}'")
+            logger.warning(
+                f"[MetricsAgent] HTTP {exc.response.status_code} on '{name}'"
+            )
         except Exception as exc:
             self.cb.record_failure()
             logger.error(f"[MetricsAgent] Query '{name}' failed: {exc}")
@@ -284,40 +293,56 @@ class MetricsAgent(BaseAgent):
         # CPU
         cpu = metrics.get("cpu_utilization_pct")
         if cpu is not None and cpu > self.cpu_threshold:
-            events.append(_make_anomaly_event(
-                "cpu_utilization_pct", cpu, self.cpu_threshold,
-                severity=Severity.CRITICAL if cpu > 95 else Severity.WARNING,
-            ))
+            events.append(
+                _make_anomaly_event(
+                    "cpu_utilization_pct",
+                    cpu,
+                    self.cpu_threshold,
+                    severity=Severity.CRITICAL if cpu > 95 else Severity.WARNING,
+                )
+            )
 
         # Memory
         mem = metrics.get("memory_utilization_pct")
         if mem is not None and mem > self.mem_threshold:
-            events.append(_make_anomaly_event(
-                "memory_utilization_pct", mem, self.mem_threshold,
-                severity=Severity.CRITICAL if mem > 95 else Severity.WARNING,
-                runbook="runbook_pod_crashloop_v1",
-                healing_level=1,
-            ))
+            events.append(
+                _make_anomaly_event(
+                    "memory_utilization_pct",
+                    mem,
+                    self.mem_threshold,
+                    severity=Severity.CRITICAL if mem > 95 else Severity.WARNING,
+                    runbook="runbook_pod_crashloop_v1",
+                    healing_level=1,
+                )
+            )
 
         # Error rate
         err = metrics.get("error_rate")
         if err is not None and err > self.err_threshold:
-            events.append(_make_anomaly_event(
-                "error_rate", err, self.err_threshold,
-                severity=Severity.CRITICAL if err > 0.20 else Severity.WARNING,
-                runbook="runbook_high_error_rate_post_deploy_v1",
-                healing_level=2,
-                confidence=0.88,
-            ))
+            events.append(
+                _make_anomaly_event(
+                    "error_rate",
+                    err,
+                    self.err_threshold,
+                    severity=Severity.CRITICAL if err > 0.20 else Severity.WARNING,
+                    runbook="runbook_high_error_rate_post_deploy_v1",
+                    healing_level=2,
+                    confidence=0.88,
+                )
+            )
 
         # P95 latency
         lat = metrics.get("latency_p95_ms")
         if lat is not None and lat > self.lat_threshold_ms:
-            events.append(_make_anomaly_event(
-                "latency_p95_ms", lat, self.lat_threshold_ms,
-                severity=Severity.WARNING,
-                confidence=0.75,
-            ))
+            events.append(
+                _make_anomaly_event(
+                    "latency_p95_ms",
+                    lat,
+                    self.lat_threshold_ms,
+                    severity=Severity.WARNING,
+                    confidence=0.75,
+                )
+            )
 
         # RPS spike (vs rolling median baseline)
         rps = metrics.get("rps")
@@ -327,24 +352,30 @@ class MetricsAgent(BaseAgent):
                 median = sorted(self._rps_history)[len(self._rps_history) // 2]
                 spike_threshold = median * self.rps_spike_mult
                 if median > 0 and rps > spike_threshold:
-                    events.append(_make_anomaly_event(
-                        "rps_spike", rps, spike_threshold,
-                        severity=Severity.WARNING,
-                        confidence=0.70,
-                    ))
+                    events.append(
+                        _make_anomaly_event(
+                            "rps_spike",
+                            rps,
+                            spike_threshold,
+                            severity=Severity.WARNING,
+                            confidence=0.70,
+                        )
+                    )
 
         # Prometheus circuit breaker OPEN → metric unavailable
         if self.cb.state == _PrometheusCircuitBreaker.OPEN:
-            events.append(IncidentEvent(
-                agent=AgentType.METRICS,
-                signal_type=SignalType.CIRCUIT_BREAKER_TRIPPED,
-                severity=Severity.CRITICAL,
-                context={
-                    "consecutive_failures": self.cb._failures,
-                    "prometheus_url":       self.prom_url,
-                    "message":              "Prometheus unreachable — metrics suspended",
-                },
-            ))
+            events.append(
+                IncidentEvent(
+                    agent=AgentType.METRICS,
+                    signal_type=SignalType.CIRCUIT_BREAKER_TRIPPED,
+                    severity=Severity.CRITICAL,
+                    context={
+                        "consecutive_failures": self.cb._failures,
+                        "prometheus_url": self.prom_url,
+                        "message": "Prometheus unreachable — metrics suspended",
+                    },
+                )
+            )
 
         return events
 
@@ -360,16 +391,21 @@ class MetricsAgent(BaseAgent):
         metrics = await self._query_all()
 
         # All None + CB open → emit single METRIC_UNAVAILABLE
-        if all(v is None for v in metrics.values()) and self.cb.state != _PrometheusCircuitBreaker.CLOSED:
-            return [IncidentEvent(
-                agent=AgentType.METRICS,
-                signal_type=SignalType.METRIC_UNAVAILABLE,
-                severity=Severity.CRITICAL,
-                namespace=self.namespace,
-                context={
-                    "prometheus_url": self.prom_url,
-                    "cb_state":       self.cb.state,
-                },
-            )]
+        if (
+            all(v is None for v in metrics.values())
+            and self.cb.state != _PrometheusCircuitBreaker.CLOSED
+        ):
+            return [
+                IncidentEvent(
+                    agent=AgentType.METRICS,
+                    signal_type=SignalType.METRIC_UNAVAILABLE,
+                    severity=Severity.CRITICAL,
+                    namespace=self.namespace,
+                    context={
+                        "prometheus_url": self.prom_url,
+                        "cb_state": self.cb.state,
+                    },
+                )
+            ]
 
         return self._check(metrics)

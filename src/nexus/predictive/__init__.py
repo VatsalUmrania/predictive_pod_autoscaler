@@ -10,8 +10,15 @@ from nexus.predictive.anomaly_detector import (
     GRUAutoencoder,
     ZScoreDetector,
 )
-from nexus.predictive.db_traffic_correlator import DBTrafficCorrelator, TableEndpointMapper
-from nexus.predictive.feature_pipeline import FeaturePipeline, FeatureVector, QuerySnapshot
+from nexus.predictive.db_traffic_correlator import (
+    DBTrafficCorrelator,
+    TableEndpointMapper,
+)
+from nexus.predictive.feature_pipeline import (
+    FeaturePipeline,
+    FeatureVector,
+    QuerySnapshot,
+)
 from nexus.predictive.prescaler import (
     PrecisionStats,
     PrecisionTracker,
@@ -19,7 +26,11 @@ from nexus.predictive.prescaler import (
     PrescaleMode,
     Prescaler,
 )
-from nexus.predictive.traffic_model import EWMATrafficModel, SMAPETracker, TrafficPrediction
+from nexus.predictive.traffic_model import (
+    EWMATrafficModel,
+    SMAPETracker,
+    TrafficPrediction,
+)
 
 __all__ = [
     # Feature pipeline

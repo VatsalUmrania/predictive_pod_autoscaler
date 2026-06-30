@@ -64,6 +64,11 @@ class TestPpaOutcomeTracker:
     def mock_nats(self):
         nats = MagicMock()
         nats.publish = AsyncMock()
+        # PpaOutcomeTracker publishes via getattr(self._nats, "_js", None).
+        # Mirror MockNATS in test_ppa_nexus_integration.py by aliasing
+        # `_js` to self so the production code path calls our AsyncMock
+        # instead of trying to await a bare MagicMock.
+        nats._js = nats
         return nats
 
     @pytest.fixture
@@ -94,7 +99,9 @@ class TestPpaOutcomeTracker:
         assert pred.horizon_minutes == 10
 
     @pytest.mark.asyncio
-    async def test_check_and_emit_outcome_publishes_to_ppa_outcomes(self, tracker, mock_nats):
+    async def test_check_and_emit_outcome_publishes_to_ppa_outcomes(
+        self, tracker, mock_nats
+    ):
         # Pre-populate an already-expired pending prediction
         now = datetime.now(timezone.utc)
         tracker._pending["t1"] = PendingPrediction(
@@ -113,10 +120,15 @@ class TestPpaOutcomeTracker:
 
         await tracker._check_and_emit_outcome()
 
-        # Should have published to ppa.outcomes.api
+        # Should have published to ppa.outcomes.api. Production publishes
+        # JSON-encoded bytes (real NATS wire format); decode for assertions.
         mock_nats.publish.assert_called_once()
         subject = mock_nats.publish.call_args[0][0]
         payload = mock_nats.publish.call_args[0][1]
+        if isinstance(payload, (bytes, bytearray)):
+            import json
+
+            payload = json.loads(payload.decode("utf-8"))
         assert subject == "ppa.outcomes.api"
         assert payload["deployment"] == "api"
         assert payload["actual_rps"] == 480.0
@@ -126,7 +138,9 @@ class TestPpaOutcomeTracker:
         assert "t1" not in tracker._pending
 
     @pytest.mark.asyncio
-    async def test_check_and_emit_outcome_skips_fresh_predictions(self, tracker, mock_nats):
+    async def test_check_and_emit_outcome_skips_fresh_predictions(
+        self, tracker, mock_nats
+    ):
         now = datetime.now(timezone.utc)
         tracker._pending["fresh1"] = PendingPrediction(
             decision_id="fresh1",
@@ -151,24 +165,27 @@ class TestPpaOutcomeTracker:
     @pytest.mark.asyncio
     async def test_run_batch_flush_writes_jsonl(self, tracker, mock_nats, tmp_path):
         now = datetime.now(timezone.utc)
-        tracker._recent_outcomes.append({
-            "deployment": "api",
-            "namespace": "default",
-            "predicted_rps": 450.0,
-            "actual_rps": 480.0,
-            "verdict": "spike_hit",
-            "smape": 6.5,
-            "confidence": 0.85,
-            "model_version": "v3",
-            "resolution_at": now.isoformat(),
-            "decision_id": "batch-1",
-        })
+        tracker._recent_outcomes.append(
+            {
+                "deployment": "api",
+                "namespace": "default",
+                "predicted_rps": 450.0,
+                "actual_rps": 480.0,
+                "verdict": "spike_hit",
+                "smape": 6.5,
+                "confidence": 0.85,
+                "model_version": "v3",
+                "resolution_at": now.isoformat(),
+                "decision_id": "batch-1",
+            }
+        )
 
         await tracker.run_batch_flush()
 
         output_file = tmp_path / "ppa_outcomes.jsonl"
         assert output_file.exists()
         import json
+
         with open(output_file) as f:
             lines = f.readlines()
         assert len(lines) == 1
@@ -182,9 +199,15 @@ class TestPpaOutcomeTracker:
     async def test_compute_verdict_spike_hit(self, tracker):
         now = datetime.now(timezone.utc)
         pred = PendingPrediction(
-            decision_id="v1", deployment="api", namespace="default",
-            predicted_rps=100.0, current_rps=50.0, confidence=0.8,
-            horizon_minutes=10, model_version="v1", raw_features={},
+            decision_id="v1",
+            deployment="api",
+            namespace="default",
+            predicted_rps=100.0,
+            current_rps=50.0,
+            confidence=0.8,
+            horizon_minutes=10,
+            model_version="v1",
+            raw_features={},
             expected_resolution_time=now,
         )
         # actual > current * 1.3 → spike_hit
@@ -195,9 +218,15 @@ class TestPpaOutcomeTracker:
     async def test_compute_verdict_no_baseline_when_predicted_zero(self, tracker):
         now = datetime.now(timezone.utc)
         pred = PendingPrediction(
-            decision_id="v2", deployment="api", namespace="default",
-            predicted_rps=0.0, current_rps=100.0, confidence=0.8,
-            horizon_minutes=10, model_version="v1", raw_features={},
+            decision_id="v2",
+            deployment="api",
+            namespace="default",
+            predicted_rps=0.0,
+            current_rps=100.0,
+            confidence=0.8,
+            horizon_minutes=10,
+            model_version="v1",
+            raw_features={},
             expected_resolution_time=now,
         )
         verdict = tracker._compute_verdict(pred, actual_rps=0.0)

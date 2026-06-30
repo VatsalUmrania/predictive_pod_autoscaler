@@ -43,7 +43,11 @@ class MockPredictor:
         self.last_drift_check_time = current_time
 
         if len(self.prediction_history) < 10 or len(self.actual_history) < 10:
-            return {"detected": False, "checked": True, "reason": "insufficient_history"}
+            return {
+                "detected": False,
+                "checked": True,
+                "reason": "insufficient_history",
+            }
 
         recent_predictions = list(self.prediction_history)[-10:]
         recent_actuals = list(self.actual_history)[-10:]
@@ -73,7 +77,11 @@ class MockPredictor:
         return {
             "detected": drift_detected,
             "error_pct": mean_error_pct,
-            "severity": "severe" if severe_drift else ("moderate" if drift_detected else "normal"),
+            "severity": (
+                "severe"
+                if severe_drift
+                else ("moderate" if drift_detected else "normal")
+            ),
             "checked": True,
         }
 

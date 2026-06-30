@@ -40,34 +40,40 @@ _SEV_ORDER = ["info", "warning", "critical", "emergency"]
 # Enums
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class BlastRadius(str, Enum):
-    NONE               = "none"
-    SINGLE_POD         = "single_pod"
-    SINGLE_DEPLOYMENT  = "single_deployment"
-    SINGLE_DATABASE    = "single_database"
-    CLUSTER_DNS        = "cluster_dns"
-    CLUSTER_WIDE       = "cluster_wide"
+    NONE = "none"
+    SINGLE_POD = "single_pod"
+    SINGLE_DEPLOYMENT = "single_deployment"
+    SINGLE_DATABASE = "single_database"
+    CLUSTER_DNS = "cluster_dns"
+    CLUSTER_WIDE = "cluster_wide"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Sub-models
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class PreCheck(BaseModel):
     """Assertion that must pass before executing the runbook's actions."""
-    type: str = "prometheus_query"       # "prometheus_query" | "event_field" | "k8s_resource"
-    query: str | None = None          # PromQL query (type=prometheus_query)
-    field: str | None = None          # Event context field (type=event_field)
-    operator: str = "gt"                 # gt | gte | lt | lte | eq | ne
-    threshold: float | None = None    # Numeric comparison value
-    value: Any | None = None          # Non-numeric comparison value
+
+    type: str = (
+        "prometheus_query"  # "prometheus_query" | "event_field" | "k8s_resource"
+    )
+    query: str | None = None  # PromQL query (type=prometheus_query)
+    field: str | None = None  # Event context field (type=event_field)
+    operator: str = "gt"  # gt | gte | lt | lte | eq | ne
+    threshold: float | None = None  # Numeric comparison value
+    value: Any | None = None  # Non-numeric comparison value
     description: str | None = None
 
 
 class PostCheck(BaseModel):
     """SLO assertion that validates healing succeeded."""
-    metric_query: str | None = None   # Primary field name (YAML)
-    query: str | None = None          # Alias
+
+    metric_query: str | None = None  # Primary field name (YAML)
+    query: str | None = None  # Alias
     operator: str = "lt"
     threshold: float = 0.0
     window_seconds: int = Field(60, ge=1)
@@ -81,15 +87,17 @@ class PostCheck(BaseModel):
 
 class RunbookAction(BaseModel):
     """A single discrete action in the healing sequence."""
-    type: str                                                # Action type key
+
+    type: str  # Action type key
     description: str | None = None
     params: dict[str, Any] = Field(default_factory=dict)
-    abort_on_failure: bool = True                           # Stop runbook on this action's failure
-    condition: str | None = None                         # Optional guard expression (future use)
+    abort_on_failure: bool = True  # Stop runbook on this action's failure
+    condition: str | None = None  # Optional guard expression (future use)
 
 
 class RunbookTrigger(BaseModel):
     """Conditions under which a runbook fires."""
+
     signal_types: list[str] = Field(default_factory=list)
     severity_minimum: str = "warning"
     conditions: list[dict[str, Any]] = Field(default_factory=list)
@@ -98,6 +106,7 @@ class RunbookTrigger(BaseModel):
 # ──────────────────────────────────────────────────────────────────────────────
 # Runbook
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class Runbook(BaseModel):
     """
@@ -150,6 +159,7 @@ class Runbook(BaseModel):
 # RunbookLibrary
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class RunbookLibrary:
     """
     Loads, validates, and indexes all runbook YAML files from a directory.
@@ -199,7 +209,9 @@ class RunbookLibrary:
                 logger.warning(f"[RunbookLibrary] No 'runbook' key in {path.name}")
                 return None
             rb = Runbook.model_validate(rb_data)
-            logger.debug(f"[RunbookLibrary]  ✓ {rb.id}  L{rb.healing_level}  blast={rb.blast_radius}")
+            logger.debug(
+                f"[RunbookLibrary]  ✓ {rb.id}  L{rb.healing_level}  blast={rb.blast_radius}"
+            )
             return rb
         except Exception as exc:
             logger.error(f"[RunbookLibrary] Failed to load {path.name}: {exc}")

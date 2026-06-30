@@ -42,16 +42,16 @@ class SelfHealMiddleware:
 
     def __init__(
         self,
-        app:       Any,
-        token:     str  = "",
-        nexus_url: str  = "http://localhost:8080",
-        wsgi:      bool = False,
-        slow_ms:   int  = 500,
+        app: Any,
+        token: str = "",
+        nexus_url: str = "http://localhost:8080",
+        wsgi: bool = False,
+        slow_ms: int = 500,
     ) -> None:
-        self.app      = app
-        self._token   = token
-        self._url     = nexus_url.rstrip("/")
-        self._wsgi    = wsgi
+        self.app = app
+        self._token = token
+        self._url = nexus_url.rstrip("/")
+        self._wsgi = wsgi
         self._slow_ms = slow_ms
 
     # ── ASGI interface ────────────────────────────────────────────────────────
@@ -61,7 +61,7 @@ class SelfHealMiddleware:
             await self.app(scope, receive, send)
             return
 
-        start      = time.monotonic()
+        start = time.monotonic()
         status_ref = [200]
         exc_ref: list = [None]
 
@@ -77,42 +77,49 @@ class SelfHealMiddleware:
             raise
         finally:
             duration_ms = (time.monotonic() - start) * 1000
-            status      = status_ref[0]
-            exc         = exc_ref[0]
+            status = status_ref[0]
+            exc = exc_ref[0]
 
             if status >= 500 or exc is not None or duration_ms > self._slow_ms:
-                path   = scope.get("path", "/unknown")
+                path = scope.get("path", "/unknown")
                 method = scope.get("method", "GET")
                 err_msg = (
                     traceback.format_exception_only(type(exc), exc)[-1].strip()
-                    if exc else None
+                    if exc
+                    else None
                 )
                 # Fire-and-forget — does not block the response
                 try:
                     asyncio.get_event_loop().create_task(
-                        self._emit(path, method, status if not exc else 500,
-                                   duration_ms, err_msg)
+                        self._emit(
+                            path,
+                            method,
+                            status if not exc else 500,
+                            duration_ms,
+                            err_msg,
+                        )
                     )
                 except RuntimeError:
-                    pass   # No running event loop (test context)
+                    pass  # No running event loop (test context)
 
     # ── Emission ──────────────────────────────────────────────────────────────
 
     async def _emit(
         self,
-        route:       str,
-        method:      str,
+        route: str,
+        method: str,
         status_code: int,
         duration_ms: float,
-        error_msg:   str | None = None,
+        error_msg: str | None = None,
     ) -> None:
         if not self._token:
             return
         try:
             import httpx
+
             payload = {
-                "route":       route,
-                "method":      method,
+                "route": route,
+                "method": method,
                 "status_code": status_code,
                 "duration_ms": round(duration_ms, 1),
             }
@@ -121,8 +128,8 @@ class SelfHealMiddleware:
             async with httpx.AsyncClient(timeout=2.0) as client:
                 await client.post(
                     f"{self._url}/sdk/route-error",
-                    json    = payload,
-                    headers = {"Authorization": f"Bearer {self._token}"},
+                    json=payload,
+                    headers={"Authorization": f"Bearer {self._token}"},
                 )
         except Exception as exc:
             logger.debug(f"[SelfHealMiddleware] emit skipped: {exc}")

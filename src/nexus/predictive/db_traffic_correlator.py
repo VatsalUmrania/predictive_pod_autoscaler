@@ -66,6 +66,7 @@ _ALPHA_EWMA = 0.3
 # Table → Endpoint Mapper
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class TableEndpointMapper:
     """
     Maps DB table names to HTTP endpoints using a YAML config file.
@@ -81,8 +82,8 @@ class TableEndpointMapper:
     """
 
     def __init__(self, map_path: Path | None = None):
-        self._path       = map_path
-        self._mapping:   dict[str, str] = {}
+        self._path = map_path
+        self._mapping: dict[str, str] = {}
         if self._path and self._path.exists():
             self._load()
 
@@ -115,14 +116,16 @@ class TableEndpointMapper:
 # Per-table rate tracker (EWMA-based spike detection)
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class TableRateState:
     """EWMA state for one DB table's query rate."""
-    table:          str
-    rate_ewma:      float = 0.0   # EWMA of query rate
-    roc_ewma:       float = 0.0   # EWMA of rate-of-change
-    last_rate:      float = 0.0
-    samples:        int   = 0
+
+    table: str
+    rate_ewma: float = 0.0  # EWMA of query rate
+    roc_ewma: float = 0.0  # EWMA of rate-of-change
+    last_rate: float = 0.0
+    samples: int = 0
     last_spiked_at: datetime | None = None
 
     def update(self, new_rate: float) -> float:
@@ -134,20 +137,20 @@ class TableRateState:
 
         if self.samples == 0:
             self.rate_ewma = new_rate
-            self.roc_ewma  = 0.0
+            self.roc_ewma = 0.0
         else:
             self.rate_ewma = _ALPHA_EWMA * new_rate + (1 - _ALPHA_EWMA) * self.rate_ewma
-            self.roc_ewma  = _ALPHA_EWMA * roc      + (1 - _ALPHA_EWMA) * self.roc_ewma
+            self.roc_ewma = _ALPHA_EWMA * roc + (1 - _ALPHA_EWMA) * self.roc_ewma
 
         self.last_rate = new_rate
-        self.samples  += 1
+        self.samples += 1
         return roc
 
     def is_spiking(
         self,
-        current_roc:       float,
-        spike_multiplier:  float,
-        cooldown_seconds:  float = 300.0,
+        current_roc: float,
+        spike_multiplier: float,
+        cooldown_seconds: float = 300.0,
     ) -> bool:
         """
         Returns True if the current rate-of-change exceeds the EWMA baseline
@@ -159,7 +162,7 @@ class TableRateState:
 
         baseline = self.roc_ewma
         if baseline < 1.0:
-            return False    # Absolute minimum activity threshold
+            return False  # Absolute minimum activity threshold
 
         if current_roc < spike_multiplier * baseline:
             return False
@@ -188,22 +191,25 @@ class TableRateState:
 # Spike prediction
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class SpikePrediction:
     """Result of spike detection for one table/endpoint."""
-    table:              str
-    endpoint:           str
-    namespace:          str
-    current_rate:       float
-    spike_ratio:        float          # current_roc / baseline_roc
-    confidence:         float
-    horizon_minutes:    int
-    predicted_rps:      float          # Extrapolated endpoint RPS
+
+    table: str
+    endpoint: str
+    namespace: str
+    current_rate: float
+    spike_ratio: float  # current_roc / baseline_roc
+    confidence: float
+    horizon_minutes: int
+    predicted_rps: float  # Extrapolated endpoint RPS
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # DB Traffic Correlator
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class DBTrafficCorrelator:
     """
@@ -220,20 +226,24 @@ class DBTrafficCorrelator:
 
     def __init__(
         self,
-        nats_client:      NATSClient,
-        namespace:        str = "default",
+        nats_client: NATSClient,
+        namespace: str = "default",
         spike_multiplier: float = 2.5,
-        horizon_minutes:  int = 10,
+        horizon_minutes: int = 10,
         cooldown_seconds: float = 300.0,
-        map_path:         Path | None = None,
+        map_path: Path | None = None,
     ):
-        self._nats            = nats_client
-        self._namespace       = namespace
-        self._spike_mult      = float(os.getenv("NEXUS_SPIKE_MULTIPLIER", str(spike_multiplier)))
-        self._horizon         = int(os.getenv("NEXUS_SPIKE_PREDICTION_HORIZON", str(horizon_minutes)))
-        self._cooldown        = cooldown_seconds
-        self._mapper          = TableEndpointMapper(map_path)
-        self._pipeline        = FeaturePipeline(
+        self._nats = nats_client
+        self._namespace = namespace
+        self._spike_mult = float(
+            os.getenv("NEXUS_SPIKE_MULTIPLIER", str(spike_multiplier))
+        )
+        self._horizon = int(
+            os.getenv("NEXUS_SPIKE_PREDICTION_HORIZON", str(horizon_minutes))
+        )
+        self._cooldown = cooldown_seconds
+        self._mapper = TableEndpointMapper(map_path)
+        self._pipeline = FeaturePipeline(
             snapshot_window=int(os.getenv("NEXUS_CORRELATOR_WINDOW", "20"))
         )
 
@@ -242,7 +252,7 @@ class DBTrafficCorrelator:
 
         # Stats
         self._snapshots_ingested = 0
-        self._spikes_predicted   = 0
+        self._spikes_predicted = 0
 
     # ── Ingestion ─────────────────────────────────────────────────────────────
 
@@ -269,32 +279,34 @@ class DBTrafficCorrelator:
         # Evaluate each table
         predictions: list[SpikePrediction] = []
         for table, rate in {
-            k[len("table_"):][: -len("_read_rate")]: v
+            k[len("table_") :][: -len("_read_rate")]: v
             for k, v in fv.features.items()
             if k.startswith("table_") and k.endswith("_read_rate")
         }.items():
             state = self._table_state.setdefault(table, TableRateState(table=table))
-            roc   = state.update(rate)
+            roc = state.update(rate)
 
             if state.is_spiking(roc, self._spike_mult, self._cooldown):
                 spike_ratio = roc / max(state.roc_ewma, 1.0)
-                confidence  = state.confidence(spike_ratio)
-                endpoint    = self._mapper.get_endpoint(table)
+                confidence = state.confidence(spike_ratio)
+                endpoint = self._mapper.get_endpoint(table)
 
                 # Extrapolate RPS: linear projection from current rate
                 # (current_rate × spike_ratio projected over horizon)
                 predicted_rps = rate * max(spike_ratio, 2.0) * (self._horizon / 10.0)
 
-                predictions.append(SpikePrediction(
-                    table           = table,
-                    endpoint        = endpoint,
-                    namespace       = self._namespace,
-                    current_rate    = rate,
-                    spike_ratio     = spike_ratio,
-                    confidence      = confidence,
-                    horizon_minutes = self._horizon,
-                    predicted_rps   = predicted_rps,
-                ))
+                predictions.append(
+                    SpikePrediction(
+                        table=table,
+                        endpoint=endpoint,
+                        namespace=self._namespace,
+                        current_rate=rate,
+                        spike_ratio=spike_ratio,
+                        confidence=confidence,
+                        horizon_minutes=self._horizon,
+                        predicted_rps=predicted_rps,
+                    )
+                )
                 state.last_spiked_at = datetime.now(timezone.utc)
 
         # Publish one prediction event per detected spike
@@ -317,14 +329,14 @@ class DBTrafficCorrelator:
         )
 
         evt = IncidentEvent(
-            agent         = AgentType.ORCHESTRATOR,   # Predictive plane sub-system
-            signal_type   = SignalType.TRAFFIC_SPIKE_PREDICTED,
-            severity      = Severity.WARNING,
-            namespace     = pred.namespace,
-            resource_name = pred.endpoint,
-            correlation_id = source_event.correlation_id or source_event.event_id,
-            context       = ctx.model_dump(),
-            confidence    = pred.confidence,
+            agent=AgentType.ORCHESTRATOR,  # Predictive plane sub-system
+            signal_type=SignalType.TRAFFIC_SPIKE_PREDICTED,
+            severity=Severity.WARNING,
+            namespace=pred.namespace,
+            resource_name=pred.endpoint,
+            correlation_id=source_event.correlation_id or source_event.event_id,
+            context=ctx.model_dump(),
+            confidence=pred.confidence,
         )
 
         await self._nats.publish(evt)
@@ -342,9 +354,9 @@ class DBTrafficCorrelator:
     def stats(self) -> dict[str, Any]:
         return {
             "snapshots_ingested": self._snapshots_ingested,
-            "spikes_predicted":   self._spikes_predicted,
-            "tables_tracked":     len(self._table_state),
+            "spikes_predicted": self._spikes_predicted,
+            "tables_tracked": len(self._table_state),
             "pipeline_snapshots": self._pipeline.snapshot_count,
-            "spike_multiplier":   self._spike_mult,
-            "horizon_minutes":    self._horizon,
+            "spike_multiplier": self._spike_mult,
+            "horizon_minutes": self._horizon,
         }

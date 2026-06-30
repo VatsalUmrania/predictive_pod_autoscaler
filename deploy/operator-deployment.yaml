@@ -69,15 +69,3 @@ spec:
         - name: models
           persistentVolumeClaim:
             claimName: ppa-models
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: ppa-models
-  namespace: default
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1Gi

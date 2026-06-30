@@ -25,6 +25,7 @@ def app():
     @app.get("/slow")
     async def slow_endpoint():
         import asyncio
+
         await asyncio.sleep(0.6)  # Exceeds 500ms threshold
         return {"status": "ok"}
 
@@ -69,7 +70,9 @@ async def test_middleware_captures_500_error(app):
         mock_client.post = mock_post
 
         # Patch the middleware's internal client
-        with patch("nexus.sdk.python.middleware.httpx.AsyncClient", return_value=mock_client):
+        with patch(
+            "nexus.sdk.python.middleware.httpx.AsyncClient", return_value=mock_client
+        ):
             async with AsyncClient(app=wrapped, base_url="http://test") as client:
                 response = await client.get("/error")
                 assert response.status_code == 500
@@ -98,7 +101,9 @@ async def test_middleware_captures_slow_response(app):
         mock_post.return_value = mock_response
         mock_client.post = mock_post
 
-        with patch("nexus.sdk.python.middleware.httpx.AsyncClient", return_value=mock_client):
+        with patch(
+            "nexus.sdk.python.middleware.httpx.AsyncClient", return_value=mock_client
+        ):
             async with AsyncClient(app=wrapped, base_url="http://test") as client:
                 response = await client.get("/slow")
                 assert response.status_code == 200

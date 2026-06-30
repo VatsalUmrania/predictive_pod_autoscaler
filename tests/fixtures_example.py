@@ -81,7 +81,11 @@ class TestFeatureExtraction:
         # Could iterate and test each
         for scenario_name, _feature_dict in scenarios.items():
             # Simulate validation
-            has_error = "nan" in scenario_name or "inf" in scenario_name or "range" in scenario_name
+            has_error = (
+                "nan" in scenario_name
+                or "inf" in scenario_name
+                or "range" in scenario_name
+            )
             print(f"  - {scenario_name}: {'ERROR' if has_error else 'VALID'}")
 
 
@@ -114,7 +118,9 @@ class TestK8sScaling:
 
         # Verify patch was called
         assert api.patch_namespaced_deployment.called
-        print(f"✓ Scale succeeded: {setup['current_replicas']} → {setup['target_replicas']}")
+        print(
+            f"✓ Scale succeeded: {setup['current_replicas']} → {setup['target_replicas']}"
+        )
 
     def test_scale_conflict(self, mock_k8s_scale_conflict):
         """Example: Handle scaling conflict."""
@@ -229,7 +235,9 @@ class TestReconciliationContext:
         current_replicas = 3
         predicted_rps = 500.0
 
-        features = feature_vector_factory(rps_per_replica=predicted_rps / current_replicas)
+        features = feature_vector_factory(
+            rps_per_replica=predicted_rps / current_replicas
+        )
 
         prediction = prediction_factory(
             predicted_rps=predicted_rps,

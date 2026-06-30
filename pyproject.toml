@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ppa"
-version = "2.0.0"
+version = "2.0.2"
 description = "NEXUS — Self-Healing Cloud System built on the Predictive Pod Autoscaler (PPA)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -66,6 +66,7 @@ nexus = [
     "prometheus-client>=0.20.0",
     "click>=8.1.0",
     "rich>=13.7.0",
+    "prometheus-api-client>=0.5.5",
     # Already in base: pydantic, kubernetes, requests, python-json-logger
 ]
 # ── LLM provider extras (install the one you use) ─────────────────────────────

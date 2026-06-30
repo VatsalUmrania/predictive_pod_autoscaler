@@ -2,6 +2,7 @@
 Tests for status_api NexusContext lifecycle: _lifespan must skip self-init
 when context.orchestrator (or any NexusContext field) is already populated.
 """
+
 import asyncio
 from unittest.mock import MagicMock, patch
 
@@ -50,18 +51,20 @@ def test_lifespan_skips_all_self_init_when_context_orchestrator_pre_populated():
     fake_token_store.init = MagicMock()
 
     try:
-        with patch.dict("sys.modules", {
-            "nexus.bus.nats_client": MagicMock(
-                NATSClient=fake_nats_client
-            ),
-            "nexus.learning.ppa_outcome_tracker": MagicMock(
-                PpaOutcomeTracker=fake_tracker
-            ),
-            "nexus.predictive.prescaler": MagicMock(),
-            "nexus.integration.token_store": MagicMock(
-                get_token_store=MagicMock(return_value=fake_token_store)
-            ),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "nexus.bus.nats_client": MagicMock(NATSClient=fake_nats_client),
+                "nexus.learning.ppa_outcome_tracker": MagicMock(
+                    PpaOutcomeTracker=fake_tracker
+                ),
+                "nexus.predictive.prescaler": MagicMock(),
+                "nexus.integration.token_store": MagicMock(
+                    get_token_store=MagicMock(return_value=fake_token_store)
+                ),
+            },
+        ):
+
             async def run_lifespan():
                 async with status_api_module._lifespan(test_app):
                     pass
@@ -69,15 +72,15 @@ def test_lifespan_skips_all_self_init_when_context_orchestrator_pre_populated():
             asyncio.run(run_lifespan())
 
         # When context.orchestrator is populated, NONE of these should happen
-        assert len(nats_instantiated) == 0, (
-            f"NATSClient was instantiated despite pre-populated context: {nats_instantiated!r}"
-        )
-        assert len(tracker_started) == 0, (
-            f"PpaOutcomeTracker was started despite pre-populated context: {tracker_started!r}"
-        )
-        assert len(tokenstore_inits) == 0, (
-            f"TokenStore was inited despite pre-populated context: {tokenstore_inits!r}"
-        )
+        assert (
+            len(nats_instantiated) == 0
+        ), f"NATSClient was instantiated despite pre-populated context: {nats_instantiated!r}"
+        assert (
+            len(tracker_started) == 0
+        ), f"PpaOutcomeTracker was started despite pre-populated context: {tracker_started!r}"
+        assert (
+            len(tokenstore_inits) == 0
+        ), f"TokenStore was inited despite pre-populated context: {tokenstore_inits!r}"
     finally:
         # Tear down global context
         status_api_module.context.orchestrator = None

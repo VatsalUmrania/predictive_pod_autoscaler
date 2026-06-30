@@ -66,17 +66,21 @@ def _include_integration_routers(app: FastAPI) -> None:
     try:
         from nexus.integration.dashboard import router as dev_router
         from nexus.integration.sdk_ingest import router as sdk_router
+
         app.include_router(sdk_router)
         app.include_router(dev_router)
     except ImportError as exc:
         import logging
+
         logging.getLogger(__name__).warning(
             f"[StatusAPI] Integration routers not loaded: {exc}"
         )
 
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Context container (holds all NEXUS runtime singletons)
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 @dataclass
 class NexusContext:
@@ -85,15 +89,16 @@ class NexusContext:
     Populate fields before starting uvicorn.
     Any field left as None causes its endpoint to return 503.
     """
-    orchestrator:        Any = None   # NexusOrchestrator
-    prescaler:           Any = None   # Prescaler
-    feedback_loop:       Any = None   # FeedbackLoop
-    ppa_outcome_tracker: Any = None   # PpaOutcomeTracker
-    outcome_store:       Any = None   # OutcomeStore
-    knowledge_base:      Any = None   # KnowledgeBase
-    audit_trail:         Any = None   # AuditTrail
-    runbook_library:     Any = None   # RunbookLibrary
-    started_at:          float = field(default_factory=time.monotonic)
+
+    orchestrator: Any = None  # NexusOrchestrator
+    prescaler: Any = None  # Prescaler
+    feedback_loop: Any = None  # FeedbackLoop
+    ppa_outcome_tracker: Any = None  # PpaOutcomeTracker
+    outcome_store: Any = None  # OutcomeStore
+    knowledge_base: Any = None  # KnowledgeBase
+    audit_trail: Any = None  # AuditTrail
+    runbook_library: Any = None  # RunbookLibrary
+    started_at: float = field(default_factory=time.monotonic)
 
     def uptime_seconds(self) -> float:
         return round(time.monotonic() - self.started_at, 1)
@@ -107,6 +112,7 @@ context = NexusContext()
 # FastAPI app
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Initialize async resources on startup.
@@ -116,6 +122,7 @@ async def _lifespan(app: FastAPI):
     """
     import logging
     import os
+
     _log = logging.getLogger(__name__)
 
     # Globals written by both paths — declare at top to satisfy Python's scoping rules
@@ -133,6 +140,7 @@ async def _lifespan(app: FastAPI):
     # ── Self-init path (standalone status_api runs only) ─────────────────────
     try:
         from nexus.integration.token_store import get_token_store
+
         store = get_token_store()
         await store.init()
     except Exception as exc:
@@ -141,12 +149,15 @@ async def _lifespan(app: FastAPI):
     # ── NATS (required for SDK events and PPA outcome tracking) ─────────────────
     try:
         from nexus.bus.nats_client import NATSClient
+
         _nats_url = os.environ.get("NATS_URL", "nats://localhost:4222")
         _nats_client = NATSClient(nats_url=_nats_url, reconnect_attempts=10)
         await _nats_client.connect()
         _log.info(f"[StatusAPI] ✅ NATS connected: {_nats_url}")
     except Exception as exc:
-        _log.warning(f"[StatusAPI] ⚠️  NATS connection failed ({exc}) — SDK events won't reach orchestrator")
+        _log.warning(
+            f"[StatusAPI] ⚠️  NATS connection failed ({exc}) — SDK events won't reach orchestrator"
+        )
         _nats_client = None
 
     # ── PPA Outcome Tracker ────────────────────────────────────────────────────
@@ -154,6 +165,7 @@ async def _lifespan(app: FastAPI):
     if _nats_client:
         try:
             from nexus.learning.ppa_outcome_tracker import PpaOutcomeTracker
+
             _ppa_outcome_tracker = PpaOutcomeTracker(nats_client=_nats_client)
             await _ppa_outcome_tracker.start()
             # Subscribe to PPA prediction events (raw JSON — not IncidentEvent)
@@ -167,11 +179,14 @@ async def _lifespan(app: FastAPI):
             # ── Prescaler (ppa.predictions → pre-scale decision engine) ─────────
             try:
                 from nexus.predictive.prescaler import Prescaler
+
                 context.prescaler = Prescaler(nats_client=_nats_client)
                 await context.prescaler.subscribe_to_ppa_predictions()
                 _log.info("[StatusAPI] ✅ Prescaler subscribed to ppa.predictions.*")
             except Exception as exc:
-                _log.warning(f"[StatusAPI] ⚠️  Prescaler init failed ({exc}) — pre-scale decisions disabled")
+                _log.warning(
+                    f"[StatusAPI] ⚠️  Prescaler init failed ({exc}) — pre-scale decisions disabled"
+                )
         except Exception as exc:
             _log.warning(f"[StatusAPI] ⚠️  PPA OutcomeTracker init failed ({exc})")
 
@@ -207,18 +222,19 @@ async def _on_ppa_prediction(data: dict, subject: str) -> None:
         subject_parts = subject.split(".")
         deployment = subject_parts[-1] if len(subject_parts) > 2 else "unknown"
         await _ppa_outcome_tracker.on_prediction(
-            deployment        = deployment,
-            namespace         = data.get("namespace", "default"),
-            predicted_rps     = float(data.get("predicted_rps", 0)),
-            current_rps       = float(data.get("current_rps", 0)),
-            confidence        = float(data.get("confidence", 0)),
-            horizon_minutes   = int(data.get("horizon_minutes", 10)),
-            model_version     = data.get("model_version", "unknown"),
-            raw_features      = data.get("raw_features", {}),
-            event_timestamp   = data.get("timestamp", ""),
+            deployment=deployment,
+            namespace=data.get("namespace", "default"),
+            predicted_rps=float(data.get("predicted_rps", 0)),
+            current_rps=float(data.get("current_rps", 0)),
+            confidence=float(data.get("confidence", 0)),
+            horizon_minutes=int(data.get("horizon_minutes", 10)),
+            model_version=data.get("model_version", "unknown"),
+            raw_features=data.get("raw_features", {}),
+            event_timestamp=data.get("timestamp", ""),
         )
     except Exception as exc:
         import logging
+
         logging.getLogger(__name__).warning(f"[_on_ppa_prediction] {exc}")
 
 
@@ -227,12 +243,12 @@ _nats_client = None
 
 
 app = FastAPI(
-    title       = "NEXUS Self-Healing Infrastructure",
-    description = "Status, control, and developer integration API for NEXUS",
-    version     = "2.0.0",
-    docs_url    = "/docs",
-    redoc_url   = "/redoc",
-    lifespan    = _lifespan,
+    title="NEXUS Self-Healing Infrastructure",
+    description="Status, control, and developer integration API for NEXUS",
+    version="2.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    lifespan=_lifespan,
 )
 
 app.add_middleware(
@@ -257,6 +273,7 @@ def _require(component: Any, name: str) -> Any:
 
 _DASHBOARD_HTML = Path(__file__).parent / "developer-dashboard.html"
 
+
 @app.get("/", include_in_schema=False)
 def serve_dashboard() -> Response:
     """Serve the NEXUS Developer Dashboard UI at the root URL."""
@@ -266,9 +283,9 @@ def serve_dashboard() -> Response:
             detail="Dashboard HTML not found. Ensure developer-dashboard.html is bundled with the package.",
         )
     return Response(
-        content    = _DASHBOARD_HTML.read_text(encoding="utf-8"),
-        media_type = "text/html",
-        headers    = {"Cache-Control": "no-cache"},
+        content=_DASHBOARD_HTML.read_text(encoding="utf-8"),
+        media_type="text/html",
+        headers={"Cache-Control": "no-cache"},
     )
 
 
@@ -276,15 +293,15 @@ def serve_dashboard() -> Response:
 # Health + info
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @app.get("/health", tags=["system"])
 def health() -> dict[str, Any]:
     """Liveness probe — always returns 200 if the server is up."""
     return {
-        "status":           "ok",
-        "timestamp":        datetime.now(timezone.utc).isoformat(),
-        "uptime_seconds":   round(time.monotonic() - _start_time, 1),
+        "status": "ok",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "uptime_seconds": round(time.monotonic() - _start_time, 1),
     }
-
 
 
 @app.get("/status", tags=["system"])
@@ -292,7 +309,7 @@ async def status() -> dict[str, Any]:
     """Full system snapshot — orchestrator, governance, prescaler, learning."""
     out: dict[str, Any] = {
         "uptime_seconds": round(time.monotonic() - _start_time, 1),
-        "timestamp":      datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
     if context.orchestrator:
@@ -311,19 +328,21 @@ async def status() -> dict[str, Any]:
 # Prometheus metrics
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @app.get("/metrics", tags=["observability"], include_in_schema=False)
 def prometheus_metrics() -> Response:
     """Expose Prometheus metrics in text format."""
     m = get_metrics()
     return Response(
-        content      = m.generate_latest(),
-        media_type   = m.content_type,
+        content=m.generate_latest(),
+        media_type=m.content_type,
     )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # RCA
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 @app.get("/rca/last", tags=["reasoning"])
 def last_rca(n: int = 10) -> list[dict[str, Any]]:
@@ -335,6 +354,7 @@ def last_rca(n: int = 10) -> list[dict[str, Any]]:
 # ──────────────────────────────────────────────────────────────────────────────
 # Runbooks
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 @app.get("/runbooks/stats", tags=["governance"])
 async def runbook_stats(days: int = 30) -> dict[str, Any]:
@@ -355,6 +375,7 @@ def runbook_list() -> list[str]:
 # Prescaler
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @app.get("/prescaler", tags=["predictive"])
 def prescaler_status() -> dict[str, Any]:
     """Prescaler statistics, mode, and recent decisions."""
@@ -363,16 +384,16 @@ def prescaler_status() -> dict[str, Any]:
     # Last 5 decisions
     decisions = [
         {
-            "id":           d.decision_id,
-            "deployment":   d.deployment_name,
-            "namespace":    d.namespace,
-            "replicas":     f"{d.current_replicas} → {d.recommended_replicas}",
-            "rps":          f"{d.current_rps:.0f} → {d.predicted_rps:.0f}",
-            "confidence":   d.confidence,
-            "outcome":      d.outcome or "pending",
-            "decided_at":   d.decided_at,
+            "id": d.decision_id,
+            "deployment": d.deployment_name,
+            "namespace": d.namespace,
+            "replicas": f"{d.current_replicas} → {d.recommended_replicas}",
+            "rps": f"{d.current_rps:.0f} → {d.predicted_rps:.0f}",
+            "confidence": d.confidence,
+            "outcome": d.outcome or "pending",
+            "decided_at": d.decided_at,
         }
-        for d in p._all_decisions[-5:][::-1]   # newest first
+        for d in p._all_decisions[-5:][::-1]  # newest first
     ]
     return {"stats": stats, "recent_decisions": decisions}
 
@@ -381,6 +402,7 @@ def prescaler_status() -> dict[str, Any]:
 def prescaler_set_mode(mode: str) -> dict[str, str]:
     """Change prescaler autonomy mode: shadow | advisory | autonomous."""
     from nexus.predictive.prescaler import PrescaleMode
+
     p = _require(context.prescaler, "Prescaler")
     if mode not in ("shadow", "advisory", "autonomous"):
         raise HTTPException(
@@ -394,6 +416,7 @@ def prescaler_set_mode(mode: str) -> dict[str, str]:
 # ──────────────────────────────────────────────────────────────────────────────
 # Learning Plane
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 @app.get("/learning", tags=["learning"])
 def learning_status() -> dict[str, Any]:
@@ -422,12 +445,13 @@ async def knowledge_records() -> list[dict[str, Any]]:
 async def advisor_recommendations(days: int = 30) -> list[dict[str, Any]]:
     """Run the RunbookAdvisor and return current recommendations."""
     from nexus.learning.runbook_advisor import RunbookAdvisor
+
     store = _require(context.outcome_store, "OutcomeStore")
     advisor = RunbookAdvisor(outcome_store=store)
     all_stats = await store.get_all_runbook_stats(days=days)
-    kpis      = await store.get_system_kpis(days=days)
-    recs      = advisor.analyze(all_stats, kpis)
-    chronic   = await advisor.find_chronic_targets()
+    kpis = await store.get_system_kpis(days=days)
+    recs = advisor.analyze(all_stats, kpis)
+    chronic = await advisor.find_chronic_targets()
     recs.extend(chronic)
     return [r.to_dict() for r in recs]
 
@@ -435,6 +459,7 @@ async def advisor_recommendations(days: int = 30) -> list[dict[str, Any]]:
 # ──────────────────────────────────────────────────────────────────────────────
 # Audit Trail
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 @app.get("/audit/tail", tags=["governance"])
 async def audit_tail(n: int = 20) -> list[dict[str, Any]]:
@@ -444,7 +469,8 @@ async def audit_tail(n: int = 20) -> list[dict[str, Any]]:
     # Strip large JSON blobs from the tail view
     return [
         {
-            k: v for k, v in row.items()
+            k: v
+            for k, v in row.items()
             if k not in ("pre_check_results", "action_results", "post_check_results")
         }
         for row in rows
@@ -462,6 +488,7 @@ async def audit_by_incident(incident_id: str) -> list[dict[str, Any]]:
 # Human approvals
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @app.post("/approve/{action_id}", tags=["governance"])
 async def approve_action(action_id: str) -> dict[str, str]:
     """
@@ -471,13 +498,17 @@ async def approve_action(action_id: str) -> dict[str, str]:
     orc = _require(context.orchestrator, "NexusOrchestrator")
     try:
         ladder = orc.executor.ladder
-        queue  = ladder.human_queue
-        ok     = await queue.approve(action_id)
+        queue = ladder.human_queue
+        ok = await queue.approve(action_id)
         if ok:
             return {"status": "approved", "action_id": action_id}
-        raise HTTPException(status_code=404, detail=f"Action {action_id!r} not found in approval queue")
+        raise HTTPException(
+            status_code=404, detail=f"Action {action_id!r} not found in approval queue"
+        )
     except AttributeError:
-        raise HTTPException(status_code=503, detail="HumanApprovalQueue not accessible") from None
+        raise HTTPException(
+            status_code=503, detail="HumanApprovalQueue not accessible"
+        ) from None
 
 
 @app.get("/approvals/pending", tags=["governance"])
@@ -498,6 +529,7 @@ async def pending_approvals() -> list[dict[str, Any]]:
 # OutcomeTracker subscribes to ppa.predictions.* via NATS directly.
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @app.get("/ppa/decisions", tags=["predictive"])
 def ppa_decisions(n: int = 20) -> list[dict[str, Any]]:
     """
@@ -517,38 +549,38 @@ def ppa_decisions(n: int = 20) -> list[dict[str, Any]]:
     # Combine pending (unresolved) + resolved outcomes, newest first
     pending = [
         {
-            "decision_id":    p.decision_id,
-            "deployment":     p.deployment,
-            "namespace":      p.namespace,
-            "predicted_rps":  round(p.predicted_rps, 1),
-            "current_rps":    round(p.current_rps, 1),
-            "confidence":     round(p.confidence, 3),
+            "decision_id": p.decision_id,
+            "deployment": p.deployment,
+            "namespace": p.namespace,
+            "predicted_rps": round(p.predicted_rps, 1),
+            "current_rps": round(p.current_rps, 1),
+            "confidence": round(p.confidence, 3),
             "horizon_minutes": p.horizon_minutes,
-            "model_version":  p.model_version,
-            "status":         "pending",
-            "verdict":        None,
-            "smape":          None,
-            "created_at":     p.created_at.isoformat(),
-            "resolves_at":    p.expected_resolution_time.isoformat(),
+            "model_version": p.model_version,
+            "status": "pending",
+            "verdict": None,
+            "smape": None,
+            "created_at": p.created_at.isoformat(),
+            "resolves_at": p.expected_resolution_time.isoformat(),
         }
         for p in tracker._pending.values()
     ]
 
     resolved = [
         {
-            "decision_id":    o.get("decision_id"),
-            "deployment":     o.get("deployment"),
-            "namespace":      o.get("namespace"),
-            "predicted_rps":  o.get("predicted_rps"),
-            "current_rps":    None,   # not stored in outcome event
-            "confidence":     o.get("confidence"),
+            "decision_id": o.get("decision_id"),
+            "deployment": o.get("deployment"),
+            "namespace": o.get("namespace"),
+            "predicted_rps": o.get("predicted_rps"),
+            "current_rps": None,  # not stored in outcome event
+            "confidence": o.get("confidence"),
             "horizon_minutes": None,
-            "model_version":  o.get("model_version"),
-            "status":         "resolved",
-            "verdict":        o.get("verdict"),
-            "smape":          o.get("smape"),
-            "created_at":     o.get("resolution_at"),
-            "resolves_at":    None,
+            "model_version": o.get("model_version"),
+            "status": "resolved",
+            "verdict": o.get("verdict"),
+            "smape": o.get("smape"),
+            "created_at": o.get("resolution_at"),
+            "resolves_at": None,
         }
         for o in tracker._recent_outcomes
     ]
@@ -573,7 +605,7 @@ def ppa_stats() -> dict[str, Any]:
     tracker = _ppa_outcome_tracker
     if tracker is None:
         return {
-            "tracker_ready":  False,
+            "tracker_ready": False,
             "nats_connected": False,
             "message": (
                 "PpaOutcomeTracker not initialised — "
@@ -582,25 +614,25 @@ def ppa_stats() -> dict[str, Any]:
         }
 
     resolved = tracker._recent_outcomes
-    pending  = list(tracker._pending.values())
+    pending = list(tracker._pending.values())
 
     total_resolved = len(resolved)
-    spike_hits     = sum(1 for o in resolved if o.get("verdict") == "spike_hit")
-    spike_misses   = sum(1 for o in resolved if o.get("verdict") == "spike_missed")
-    smape_vals     = [o["smape"] for o in resolved if o.get("smape") is not None]
-    mean_smape     = round(sum(smape_vals) / len(smape_vals), 3) if smape_vals else None
-    hit_rate       = round(spike_hits / total_resolved, 3) if total_resolved else None
+    spike_hits = sum(1 for o in resolved if o.get("verdict") == "spike_hit")
+    spike_misses = sum(1 for o in resolved if o.get("verdict") == "spike_missed")
+    smape_vals = [o["smape"] for o in resolved if o.get("smape") is not None]
+    mean_smape = round(sum(smape_vals) / len(smape_vals), 3) if smape_vals else None
+    hit_rate = round(spike_hits / total_resolved, 3) if total_resolved else None
 
     return {
-        "tracker_ready":    True,
-        "nats_connected":   _nats_client is not None,
-        "pending_count":    len(pending),
-        "resolved_count":   total_resolved,
-        "spike_hits":       spike_hits,
-        "spike_misses":     spike_misses,
+        "tracker_ready": True,
+        "nats_connected": _nats_client is not None,
+        "pending_count": len(pending),
+        "resolved_count": total_resolved,
+        "spike_hits": spike_hits,
+        "spike_misses": spike_misses,
         "correct_no_spike": total_resolved - spike_hits - spike_misses,
-        "mean_smape":       mean_smape,
-        "spike_hit_rate":   hit_rate,
+        "mean_smape": mean_smape,
+        "spike_hit_rate": hit_rate,
         "ready_for_advisory": (hit_rate or 0) >= 0.7 and total_resolved >= 10,
     }
 
@@ -613,14 +645,14 @@ def ppa_pending() -> list[dict[str, Any]]:
         return []
     return [
         {
-            "decision_id":    p.decision_id,
-            "deployment":     p.deployment,
-            "predicted_rps":  round(p.predicted_rps, 1),
-            "current_rps":    round(p.current_rps, 1),
-            "confidence":     round(p.confidence, 3),
+            "decision_id": p.decision_id,
+            "deployment": p.deployment,
+            "predicted_rps": round(p.predicted_rps, 1),
+            "current_rps": round(p.current_rps, 1),
+            "confidence": round(p.confidence, 3),
             "horizon_minutes": p.horizon_minutes,
-            "resolves_at":    p.expected_resolution_time.isoformat(),
-            "is_expired":     p.is_expired,
+            "resolves_at": p.expected_resolution_time.isoformat(),
+            "is_expired": p.is_expired,
         }
         for p in tracker._pending.values()
     ]

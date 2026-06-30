@@ -150,7 +150,10 @@ class TestMetadataValidation:
                     assert meta is not None
                     # Should warn about high quantization loss
                     mock_logger.warning.assert_called()
-                    assert "quantization loss" in str(mock_logger.warning.call_args).lower()
+                    assert (
+                        "quantization loss"
+                        in str(mock_logger.warning.call_args).lower()
+                    )
 
     def test_load_succeeds_with_missing_metadata_file(self):
         """If metadata file doesn't exist, should warn but continue (backward compat)."""
@@ -185,15 +188,13 @@ class TestFeatureVectorValidation:
 
         # Example of CORRECT order
         correct_order = {
-            "rps_per_replica": 5.5,
+            "normalized_rps": 5.5,
             "cpu_utilization_pct": 45.0,
             "memory_utilization_pct": 60.0,
-            "latency_p95_ms": 25.3,
-            "active_connections": 10,
+            "latency_normalized": 25.3,
             "error_rate": 0.001,
-            "cpu_acceleration": 0.1,
             "rps_acceleration": 0.2,
-            "replicas_normalized": 0.5,
+            "cpu_acceleration": 0.1,
             "hour_sin": 0.5,
             "hour_cos": 0.866,
             "dow_sin": 0.7,

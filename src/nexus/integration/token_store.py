@@ -48,9 +48,9 @@ class TokenStore:
     """Async SQLite-backed token registry for SDK app authentication."""
 
     def __init__(self, db_path: str = _DEFAULT_DB) -> None:
-        self._db_path   = db_path
-        self._cache:    dict[str, str] = {}   # token → app_name (in-memory fast-path)
-        self._ready     = False
+        self._db_path = db_path
+        self._cache: dict[str, str] = {}  # token → app_name (in-memory fast-path)
+        self._ready = False
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -75,9 +75,7 @@ class TokenStore:
                     self._cache[row[1]] = row[0]
 
         self._ready = True
-        logger.info(
-            f"[TokenStore] Initialized — {len(self._cache)} app(s) registered"
-        )
+        logger.info(f"[TokenStore] Initialized — {len(self._cache)} app(s) registered")
 
     # ── Registration ──────────────────────────────────────────────────────────
 
@@ -95,11 +93,13 @@ class TokenStore:
         # Check if already registered
         existing = await self.get_token(app_name)
         if existing:
-            logger.info(f"[TokenStore] App '{app_name}' already registered — returning existing token")
+            logger.info(
+                f"[TokenStore] App '{app_name}' already registered — returning existing token"
+            )
             return existing
 
         token = _generate_token()
-        now   = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
         async with aiosqlite.connect(self._db_path) as db:
             await db.execute(
@@ -132,6 +132,7 @@ class TokenStore:
         if app_name:
             # Fire-and-forget update (don't block the request)
             import asyncio
+
             asyncio.create_task(self._touch(token))
             return app_name
 
@@ -145,6 +146,7 @@ class TokenStore:
         if row:
             self._cache[token] = row[0]
             import asyncio
+
             asyncio.create_task(self._touch(token))
             return row[0]
 
@@ -181,20 +183,18 @@ class TokenStore:
     async def list_apps(self) -> list[dict]:
         """List all registered apps (for /apps endpoint)."""
         async with aiosqlite.connect(self._db_path) as db:
-            async with db.execute(
-                """
+            async with db.execute("""
                 SELECT app_name, tier, created_at, last_used, event_count
                 FROM app_tokens
                 ORDER BY created_at DESC
-                """
-            ) as cur:
+                """) as cur:
                 rows = await cur.fetchall()
         return [
             {
-                "app_name":    r[0],
-                "tier":        r[1],
-                "created_at":  r[2],
-                "last_used":   r[3],
+                "app_name": r[0],
+                "tier": r[1],
+                "created_at": r[2],
+                "last_used": r[3],
                 "event_count": r[4],
                 "token_prefix": (await self.get_token(r[0]) or "")[:8] + "…",
             }
@@ -209,7 +209,7 @@ class TokenStore:
         Returns the new token.
         """
         new_token = _generate_token()
-        now       = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
         async with aiosqlite.connect(self._db_path) as db:
             await db.execute(
@@ -231,6 +231,7 @@ class TokenStore:
 # ──────────────────────────────────────────────────────────────────────────────
 # Token generation
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def _generate_token() -> str:
     """Generate a cryptographically secure SELFHEAL_TOKEN."""

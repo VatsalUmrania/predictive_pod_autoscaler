@@ -151,7 +151,9 @@ class AuditTrail:
         )
         return record_id
 
-    async def write_pending(self, *, triggered_by: str, runbook_id: str, **kwargs) -> str:
+    async def write_pending(
+        self, *, triggered_by: str, runbook_id: str, **kwargs
+    ) -> str:
         """
         Write an audit record with outcome='pending'.
         Call update_outcome() once the action completes.

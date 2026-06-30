@@ -48,38 +48,39 @@ from nexus.learning.outcome_store import OutcomeStore, RunbookStats, SystemKPIs
 logger = logging.getLogger(__name__)
 
 # Thresholds
-_FLAG_RATE         = 0.50
+_FLAG_RATE = 0.50
 _ADD_PRECHECK_RATE = 0.70
-_HIGH_ROLLBACK     = 0.30
-_EXCELLENT_RATE    = 0.90
-_MIN_SAMPLES       = 5
-_EXCELLENT_MIN_N   = 20
+_HIGH_ROLLBACK = 0.30
+_EXCELLENT_RATE = 0.90
+_MIN_SAMPLES = 5
+_EXCELLENT_MIN_N = 20
 _CHRONIC_HEALS_PER_DAY = 3
 
 # Severity levels
-SEV_INFO     = "info"
-SEV_WARN     = "warning"
-SEV_ACTION   = "action_required"
+SEV_INFO = "info"
+SEV_WARN = "warning"
+SEV_ACTION = "action_required"
 
 
 @dataclass
 class RunbookRecommendation:
     """A single advisor recommendation for one runbook."""
-    runbook_id:       str
-    severity:         str
-    recommendation:   str
-    message:          str
+
+    runbook_id: str
+    severity: str
+    recommendation: str
+    message: str
     suggested_action: str
-    evidence:         dict[str, Any] = field(default_factory=dict)
+    evidence: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "runbook_id":       self.runbook_id,
-            "severity":         self.severity,
-            "recommendation":   self.recommendation,
-            "message":          self.message,
+            "runbook_id": self.runbook_id,
+            "severity": self.severity,
+            "recommendation": self.recommendation,
+            "message": self.message,
             "suggested_action": self.suggested_action,
-            "evidence":         self.evidence,
+            "evidence": self.evidence,
         }
 
     def __str__(self) -> str:
@@ -102,7 +103,7 @@ class RunbookAdvisor:
 
     def analyze(
         self,
-        all_stats:  dict[str, RunbookStats],
+        all_stats: dict[str, RunbookStats],
         system_kpis: SystemKPIs | None = None,
     ) -> list[RunbookRecommendation]:
         """
@@ -136,86 +137,94 @@ class RunbookAdvisor:
 
     def _check_runbook(self, stats: RunbookStats) -> list[RunbookRecommendation]:
         recs: list[RunbookRecommendation] = []
-        n     = stats.completed
-        rate  = stats.success_rate
+        n = stats.completed
+        rate = stats.success_rate
         rb_id = stats.runbook_id
 
         if n < _MIN_SAMPLES:
-            return []   # Not enough data
+            return []  # Not enough data
 
         # 1. FLAG_FOR_REVIEW — failing majority of the time
         if rate < _FLAG_RATE:
-            recs.append(RunbookRecommendation(
-                runbook_id       = rb_id,
-                severity         = SEV_ACTION,
-                recommendation   = "FLAG_FOR_REVIEW",
-                message          = (
-                    f"Success rate {rate:.0%} across {n} executions — "
-                    f"this runbook fails more often than it heals. "
-                    f"Review action logic and pre-check conditions."
-                ),
-                suggested_action = "Disable autonomous execution; audit runbook YAML actions",
-                evidence         = stats.to_dict(),
-            ))
-            return recs   # Don't pile on more recs for the same runbook
+            recs.append(
+                RunbookRecommendation(
+                    runbook_id=rb_id,
+                    severity=SEV_ACTION,
+                    recommendation="FLAG_FOR_REVIEW",
+                    message=(
+                        f"Success rate {rate:.0%} across {n} executions — "
+                        f"this runbook fails more often than it heals. "
+                        f"Review action logic and pre-check conditions."
+                    ),
+                    suggested_action="Disable autonomous execution; audit runbook YAML actions",
+                    evidence=stats.to_dict(),
+                )
+            )
+            return recs  # Don't pile on more recs for the same runbook
 
         # 2. ADD_PRE_CHECK — succeeds sometimes but not reliably
         if _FLAG_RATE <= rate < _ADD_PRECHECK_RATE:
-            recs.append(RunbookRecommendation(
-                runbook_id       = rb_id,
-                severity         = SEV_WARN,
-                recommendation   = "ADD_PRE_CHECK",
-                message          = (
-                    f"Success rate {rate:.0%} — inconsistent healing. "
-                    f"Adding pre-checks (e.g. confirm pod is actually unhealthy "
-                    f"before restarting) would reduce false-start executions."
-                ),
-                suggested_action = (
-                    "Add pre_checks to runbook YAML: "
-                    "pod_is_crashlooping / error_rate_confirmed / deployment_degraded"
-                ),
-                evidence         = stats.to_dict(),
-            ))
+            recs.append(
+                RunbookRecommendation(
+                    runbook_id=rb_id,
+                    severity=SEV_WARN,
+                    recommendation="ADD_PRE_CHECK",
+                    message=(
+                        f"Success rate {rate:.0%} — inconsistent healing. "
+                        f"Adding pre-checks (e.g. confirm pod is actually unhealthy "
+                        f"before restarting) would reduce false-start executions."
+                    ),
+                    suggested_action=(
+                        "Add pre_checks to runbook YAML: "
+                        "pod_is_crashlooping / error_rate_confirmed / deployment_degraded"
+                    ),
+                    evidence=stats.to_dict(),
+                )
+            )
 
         # 3. REDUCE_BLAST_RADIUS — rollback rate high even when healing succeeds
         if stats.rollback_rate > _HIGH_ROLLBACK:
-            recs.append(RunbookRecommendation(
-                runbook_id       = rb_id,
-                severity         = SEV_WARN,
-                recommendation   = "REDUCE_BLAST_RADIUS",
-                message          = (
-                    f"Rollback rate {stats.rollback_rate:.0%} — "
-                    f"the action is causing side effects that post-checks are catching. "
-                    f"Consider narrowing scope or adding rollback hooks."
-                ),
-                suggested_action = (
-                    "Scope action to single replica first; "
-                    "add pod-count post_check to detect cascading restarts"
-                ),
-                evidence         = {
-                    "rollback_count": stats.rolled_back,
-                    "rollback_rate":  round(stats.rollback_rate, 3),
-                    **stats.to_dict(),
-                },
-            ))
+            recs.append(
+                RunbookRecommendation(
+                    runbook_id=rb_id,
+                    severity=SEV_WARN,
+                    recommendation="REDUCE_BLAST_RADIUS",
+                    message=(
+                        f"Rollback rate {stats.rollback_rate:.0%} — "
+                        f"the action is causing side effects that post-checks are catching. "
+                        f"Consider narrowing scope or adding rollback hooks."
+                    ),
+                    suggested_action=(
+                        "Scope action to single replica first; "
+                        "add pod-count post_check to detect cascading restarts"
+                    ),
+                    evidence={
+                        "rollback_count": stats.rolled_back,
+                        "rollback_rate": round(stats.rollback_rate, 3),
+                        **stats.to_dict(),
+                    },
+                )
+            )
 
         # 4. PROMOTE_CONFIDENCE — excellent performer
         if rate >= _EXCELLENT_RATE and n >= _EXCELLENT_MIN_N:
-            recs.append(RunbookRecommendation(
-                runbook_id       = rb_id,
-                severity         = SEV_INFO,
-                recommendation   = "PROMOTE_CONFIDENCE",
-                message          = (
-                    f"Excellent: {rate:.0%} success rate across {n} executions. "
-                    f"KnowledgeBase +{0.05:.2f} confidence boost already applied. "
-                    f"Eligible for auto-approve at L2 without human review."
-                ),
-                suggested_action = (
-                    "Promote healing_level cap in OPA policy: "
-                    f"allow_auto_approve[\"{rb_id}\"] = true"
-                ),
-                evidence         = stats.to_dict(),
-            ))
+            recs.append(
+                RunbookRecommendation(
+                    runbook_id=rb_id,
+                    severity=SEV_INFO,
+                    recommendation="PROMOTE_CONFIDENCE",
+                    message=(
+                        f"Excellent: {rate:.0%} success rate across {n} executions. "
+                        f"KnowledgeBase +{0.05:.2f} confidence boost already applied. "
+                        f"Eligible for auto-approve at L2 without human review."
+                    ),
+                    suggested_action=(
+                        "Promote healing_level cap in OPA policy: "
+                        f'allow_auto_approve["{rb_id}"] = true'
+                    ),
+                    evidence=stats.to_dict(),
+                )
+            )
 
         return recs
 
@@ -226,35 +235,39 @@ class RunbookAdvisor:
 
         # High false-heal rate across all runbooks
         if kpis.false_heal_rate > 0.40 and kpis.total_actions >= 10:
-            recs.append(RunbookRecommendation(
-                runbook_id       = "SYSTEM",
-                severity         = SEV_ACTION,
-                recommendation   = "HIGH_SYSTEM_FALSE_HEAL_RATE",
-                message          = (
-                    f"System-wide false-heal rate is {kpis.false_heal_rate:.0%} — "
-                    f"autonomous healing is causing more harm than good. "
-                    f"Consider halting autonomous L2/L3 actions and require human approval."
-                ),
-                suggested_action = (
-                    "Set GovernanceCircuitBreaker threshold to 1 failure; "
-                    "review all runbooks with success_rate < 0.70"
-                ),
-                evidence         = kpis.to_dict(),
-            ))
+            recs.append(
+                RunbookRecommendation(
+                    runbook_id="SYSTEM",
+                    severity=SEV_ACTION,
+                    recommendation="HIGH_SYSTEM_FALSE_HEAL_RATE",
+                    message=(
+                        f"System-wide false-heal rate is {kpis.false_heal_rate:.0%} — "
+                        f"autonomous healing is causing more harm than good. "
+                        f"Consider halting autonomous L2/L3 actions and require human approval."
+                    ),
+                    suggested_action=(
+                        "Set GovernanceCircuitBreaker threshold to 1 failure; "
+                        "review all runbooks with success_rate < 0.70"
+                    ),
+                    evidence=kpis.to_dict(),
+                )
+            )
 
         # Good overall performance — log for operators
         if kpis.autonomous_success_rate >= 0.85 and kpis.total_actions >= 20:
-            recs.append(RunbookRecommendation(
-                runbook_id       = "SYSTEM",
-                severity         = SEV_INFO,
-                recommendation   = "SYSTEM_PERFORMING_WELL",
-                message          = (
-                    f"Autonomous healing success rate: {kpis.autonomous_success_rate:.0%} "
-                    f"across {kpis.total_actions} actions in {kpis.window_days} days."
-                ),
-                suggested_action = "Continue monitoring; review Prescaler graduation criteria",
-                evidence         = kpis.to_dict(),
-            ))
+            recs.append(
+                RunbookRecommendation(
+                    runbook_id="SYSTEM",
+                    severity=SEV_INFO,
+                    recommendation="SYSTEM_PERFORMING_WELL",
+                    message=(
+                        f"Autonomous healing success rate: {kpis.autonomous_success_rate:.0%} "
+                        f"across {kpis.total_actions} actions in {kpis.window_days} days."
+                    ),
+                    suggested_action="Continue monitoring; review Prescaler graduation criteria",
+                    evidence=kpis.to_dict(),
+                )
+            )
 
         return recs
 
@@ -273,19 +286,21 @@ class RunbookAdvisor:
         for row in rows:
             daily_rate = row["heal_count"] / 7.0
             if daily_rate >= _CHRONIC_HEALS_PER_DAY:
-                recs.append(RunbookRecommendation(
-                    runbook_id       = row["runbook_id"],
-                    severity         = SEV_ACTION,
-                    recommendation   = "CHRONIC_TARGET",
-                    message          = (
-                        f"Target {row['target']} received {row['heal_count']} heals "
-                        f"in 7 days ({daily_rate:.1f}/day) with runbook {row['runbook_id']}. "
-                        f"Root cause is not being fixed — only symptoms."
-                    ),
-                    suggested_action = (
-                        f"Escalate {row['target']} for human engineering review. "
-                        f"Increase cooldown on {row['runbook_id']} to 1h to force investigation."
-                    ),
-                    evidence         = dict(row),
-                ))
+                recs.append(
+                    RunbookRecommendation(
+                        runbook_id=row["runbook_id"],
+                        severity=SEV_ACTION,
+                        recommendation="CHRONIC_TARGET",
+                        message=(
+                            f"Target {row['target']} received {row['heal_count']} heals "
+                            f"in 7 days ({daily_rate:.1f}/day) with runbook {row['runbook_id']}. "
+                            f"Root cause is not being fixed — only symptoms."
+                        ),
+                        suggested_action=(
+                            f"Escalate {row['target']} for human engineering review. "
+                            f"Increase cooldown on {row['runbook_id']} to 1h to force investigation."
+                        ),
+                        evidence=dict(row),
+                    )
+                )
         return recs

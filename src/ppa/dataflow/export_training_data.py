@@ -15,8 +15,13 @@ import numpy as np
 import pandas as pd
 import requests
 
-from ppa.common.constants import CAPACITY_PER_POD, GAP_THRESHOLD_MINUTES
-from ppa.common.feature_spec import FEATURE_COLUMNS, QUERIED_FEATURES, TARGET_COLUMNS
+from ppa.common.constants import GAP_THRESHOLD_MINUTES
+from ppa.common.feature_spec import (
+    FEATURE_COLUMNS,
+    NUM_FEATURES,
+    QUERIED_FEATURES,
+    TARGET_COLUMNS,
+)
 from ppa.config import (
     CONTAINER_NAME,
     NAMESPACE,
@@ -51,7 +56,7 @@ def step_to_pandas_freq(step: str) -> str:
 
 CHUNK_HOURS = 6  # Max hours per individual Prometheus request
 PROM_TIMEOUT = 120  # Seconds — histogram_quantile over large ranges needs more than 30s
-ZERO_FILL_BOUNDARY_FEATURES = {"requests_per_second", "active_connections", "error_rate"}
+ZERO_FILL_BOUNDARY_FEATURES = {"requests_per_second", "error_rate"}
 
 
 def _align_query_window(
@@ -68,7 +73,9 @@ def _align_query_window(
     return aligned_start, aligned_end
 
 
-def _fetch_chunk(query: str, start: datetime, end: datetime, step: str) -> list[dict[str, Any]]:
+def _fetch_chunk(
+    query: str, start: datetime, end: datetime, step: str
+) -> list[dict[str, Any]]:
     """Fetch a single time range chunk from Prometheus. Returns raw values list."""
     from typing import cast
 
@@ -159,7 +166,10 @@ def collect_range(
         return pd.Series(dtype=float)
 
     series = pd.Series(
-        {datetime.fromtimestamp(ts, timezone.utc): float(val) for ts, val in all_values},
+        {
+            datetime.fromtimestamp(ts, timezone.utc): float(val)
+            for ts, val in all_values
+        },
         dtype=float,
     )
     series = series[~series.index.duplicated(keep="last")]
@@ -179,7 +189,9 @@ def resample_by_segment(
     df = df.sort_index()
     gap_threshold = pd.Timedelta(minutes=gap_threshold_minutes)
     segment_ids = (df.index.to_series().diff() > gap_threshold).cumsum()
-    parts = [segment.resample(resample_freq).mean() for _, segment in df.groupby(segment_ids)]
+    parts = [
+        segment.resample(resample_freq).mean() for _, segment in df.groupby(segment_ids)
+    ]
     return pd.concat(parts).sort_index()
 
 
@@ -193,7 +205,9 @@ def add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _detect_segments(df: pd.DataFrame, gap_minutes: int = GAP_THRESHOLD_MINUTES) -> pd.Series:
+def _detect_segments(
+    df: pd.DataFrame, gap_minutes: int = GAP_THRESHOLD_MINUTES
+) -> pd.Series:
     gaps = df.index.to_series().diff() > pd.Timedelta(minutes=gap_minutes)
     return gaps.cumsum()
 
@@ -253,41 +267,39 @@ def drop_rows_missing_required_features(
 def add_prediction_targets(df: pd.DataFrame) -> pd.DataFrame:
     """Build future targets within continuous segments only.
 
-    When requests_per_second is unavailable (all-NaN), replica targets are derived
-    directly from current_replicas shifted forward. RPS targets remain NaN.
+    v3: Targets are normalized_rps at future timesteps, not raw RPS.
     """
     df = df.sort_index()
     seg_ids = _detect_segments(df)
     parts = []
 
-    rps_available = "requests_per_second" in df.columns and not df["requests_per_second"].isna().all()
-    replicas_available = "current_replicas" in df.columns and not df["current_replicas"].isna().all()
+    rps_available = (
+        "normalized_rps" in df.columns and not df["normalized_rps"].isna().all()
+    )
 
     for _seg_id, seg in df.groupby(seg_ids):
         seg = seg.copy()
 
         if rps_available:
-            base = seg["requests_per_second"]
-            seg["rps_t3m"] = base.reindex(seg.index + pd.Timedelta(minutes=3)).to_numpy()
-            seg["rps_t5m"] = base.reindex(seg.index + pd.Timedelta(minutes=5)).to_numpy()
-            seg["rps_t10m"] = base.reindex(seg.index + pd.Timedelta(minutes=10)).to_numpy()
-            seg["replicas_t3m"] = np.ceil(seg["rps_t3m"] / CAPACITY_PER_POD).clip(lower=2, upper=20)
-            seg["replicas_t5m"] = np.ceil(seg["rps_t5m"] / CAPACITY_PER_POD).clip(lower=2, upper=20)
-            seg["replicas_t10m"] = np.ceil(seg["rps_t10m"] / CAPACITY_PER_POD).clip(lower=2, upper=20)
-            valid = seg.dropna(subset=["rps_t3m", "rps_t5m", "rps_t10m"])
-        elif replicas_available:
-            # Fallback: derive replica targets directly from observed replica counts.
-            # RPS targets stay NaN; only replica targets are populated.
-            replicas = seg["current_replicas"]
-            seg["rps_t3m"] = np.nan
-            seg["rps_t5m"] = np.nan
-            seg["rps_t10m"] = np.nan
-            seg["replicas_t3m"] = replicas.reindex(seg.index + pd.Timedelta(minutes=3)).clip(lower=2, upper=20).to_numpy()
-            seg["replicas_t5m"] = replicas.reindex(seg.index + pd.Timedelta(minutes=5)).clip(lower=2, upper=20).to_numpy()
-            seg["replicas_t10m"] = replicas.reindex(seg.index + pd.Timedelta(minutes=10)).clip(lower=2, upper=20).to_numpy()
-            valid = seg.dropna(subset=["replicas_t3m", "replicas_t5m", "replicas_t10m"])
+            base = seg["normalized_rps"]
+            seg["normalized_rps_t3m"] = base.reindex(
+                seg.index + pd.Timedelta(minutes=3)
+            ).to_numpy()
+            seg["normalized_rps_t5m"] = base.reindex(
+                seg.index + pd.Timedelta(minutes=5)
+            ).to_numpy()
+            seg["normalized_rps_t10m"] = base.reindex(
+                seg.index + pd.Timedelta(minutes=10)
+            ).to_numpy()
+            valid = seg.dropna(
+                subset=[
+                    "normalized_rps_t3m",
+                    "normalized_rps_t5m",
+                    "normalized_rps_t10m",
+                ]
+            )
         else:
-            # Neither RPS nor replicas — skip segment entirely
+            # No RPS data — skip segment entirely
             continue
 
         if not valid.empty:
@@ -314,11 +326,15 @@ def prepare_dataset(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, object]]:
     )
 
     if df.empty:
-        missing = [f for f in REQUIRED_QUERY_FEATURES if f not in df.columns or df[f].isna().all()]
+        missing = [
+            f
+            for f in REQUIRED_QUERY_FEATURES
+            if f not in df.columns or df[f].isna().all()
+        ]
         raise RuntimeError(
             f"No rows remain after enforcing required feature completeness. "
             f"These required features were fully missing: {missing or 'none — all rows had partial NaNs'}. "
-            f"Ensure latency_p95_ms and current_replicas are available in Prometheus for the target app."
+            f"Ensure latency_normalized and normalized_rps are available in the collected data."
         )
 
     df = add_temporal_features(df)
@@ -359,7 +375,6 @@ def build_feature_dataframe(
     fallbacks = build_fallback_queries(app_name, NAMESPACE, CONTAINER_NAME)
 
     optional_features = {
-        "active_connections",
         "cpu_utilization_pct",
         "error_rate",
         "memory_utilization_pct",
@@ -370,7 +385,9 @@ def build_feature_dataframe(
             continue
 
         print(f"  Fetching {feature_name}...")
-        series = collect_range(query, hours=hours, step=step, start=query_start, end=query_end)
+        series = collect_range(
+            query, hours=hours, step=step, start=query_start, end=query_end
+        )
 
         if series.empty and feature_name == "cpu_utilization_pct":
             print(
@@ -404,9 +421,11 @@ def build_feature_dataframe(
             )
         else:
             if feature_name in optional_features:
-                print(f"Warning: optional metric {feature_name} not found in Prometheus; filling with NaN.")
+                print(
+                    f"Warning: optional metric {feature_name} not found in Prometheus; filling with NaN."
+                )
                 # Insert a NaN column so derived features that depend on this column
-                # (e.g. rps_per_replica, cpu_acceleration) still get computed as NaN
+                # (e.g. normalized_rps, cpu_acceleration) still get computed as NaN
                 # instead of being silently absent from the DataFrame.
                 feature_series[feature_name] = pd.Series(
                     np.nan, index=expected_index, dtype=float
@@ -416,25 +435,43 @@ def build_feature_dataframe(
 
     if missing_features:
         raise RuntimeError(
-            "Required metrics missing from Prometheus: " + ", ".join(sorted(missing_features))
+            "Required metrics missing from Prometheus: "
+            + ", ".join(sorted(missing_features))
         )
 
     df = pd.DataFrame(feature_series).sort_index()
 
-    if "requests_per_second" in df.columns and "current_replicas" in df.columns:
-        df["rps_per_replica"] = df["requests_per_second"] / df["current_replicas"].clip(lower=1)
-    if "current_replicas" in df.columns:
-        df["replicas_normalized"] = df["current_replicas"] / float(
-            os.getenv("DATA_COLLECTION_MAX_REPLICAS", "20")
+    # v3: Compute normalized_rps and latency_normalized from raw metrics
+    if "requests_per_second" in df.columns:
+        # Compute rolling max per segment for normalization
+        seg_ids = _detect_segments(df)
+        df["rolling_max_rps"] = df.groupby(seg_ids)["requests_per_second"].transform(
+            lambda x: x.rolling(window=60, min_periods=1).max()
         )
+        df["rolling_max_rps"] = np.maximum(df["rolling_max_rps"], 1.0)
+        df["normalized_rps"] = df["requests_per_second"] / df["rolling_max_rps"]
+        df["rps_acceleration"] = df["normalized_rps"].diff()
+
+    if "latency_p95_ms" in df.columns:
+        seg_ids = (
+            _detect_segments(df)
+            if "rolling_max_rps" not in df.columns
+            else _detect_segments(df)
+        )
+        df["rolling_max_latency"] = df.groupby(seg_ids)["latency_p95_ms"].transform(
+            lambda x: x.rolling(window=60, min_periods=1).max()
+        )
+        df["rolling_max_latency"] = np.maximum(df["rolling_max_latency"], 1.0)
+        df["latency_normalized"] = df["latency_p95_ms"] / df["rolling_max_latency"]
+
     if "cpu_utilization_pct" in df.columns:
         df["cpu_acceleration"] = df["cpu_utilization_pct"].diff()
-    if "rps_per_replica" in df.columns:
-        df["rps_acceleration"] = df["rps_per_replica"].diff()
 
     if resample:
         print(f"Resampling data to {resample} intervals (segment-aware)...")
-        df = resample_by_segment(df, step_to_pandas_freq(resample), GAP_THRESHOLD_MINUTES)
+        df = resample_by_segment(
+            df, step_to_pandas_freq(resample), GAP_THRESHOLD_MINUTES
+        )
 
     prepared, quality_stats = prepare_dataset(df)
 
@@ -444,13 +481,19 @@ def build_feature_dataframe(
         "cpu_core_percent",
         "memory_usage_bytes",
     ]
-    prepared.drop(columns=[c for c in cols_to_drop if c in prepared.columns], inplace=True)
+    prepared.drop(
+        columns=[c for c in cols_to_drop if c in prepared.columns], inplace=True
+    )
 
     # CRITICAL FIX: Reorder columns to FEATURE_COLUMNS order
     # This ensures consistency between training data and online predictions
     feature_cols_present = [c for c in FEATURE_COLUMNS if c in prepared.columns]
     target_cols_present = [c for c in TARGET_COLUMNS if c in prepared.columns]
-    other_cols = [c for c in prepared.columns if c not in feature_cols_present + target_cols_present]
+    other_cols = [
+        c
+        for c in prepared.columns
+        if c not in feature_cols_present + target_cols_present
+    ]
 
     col_order = feature_cols_present + target_cols_present + other_cols
     prepared = prepared[col_order]
@@ -519,7 +562,9 @@ def print_dataset_health(health: dict[str, object]) -> None:
     date_range = cast(dict[str, object], health.get("date_range", {}))
     if date_range and date_range.get("start"):
         print(f"Date range       : {date_range['start']} -> {date_range['end']}")
-    missing_required = cast(dict[str, object], health.get("missing_required_values", {}))
+    missing_required = cast(
+        dict[str, object], health.get("missing_required_values", {})
+    )
     if missing_required:
         print("Missing required :")
         for feature_name, count in sorted(missing_required.items()):
@@ -528,7 +573,9 @@ def print_dataset_health(health: dict[str, object]) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Export PPA training data from Prometheus.")
+    parser = argparse.ArgumentParser(
+        description="Export PPA training data from Prometheus."
+    )
     parser.add_argument(
         "--app-name",
         type=str,
@@ -550,12 +597,14 @@ if __name__ == "__main__":
         default=None,
         help="Resample resulting dataframe (e.g., 1m)",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Run without saving the CSV file")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Run without saving the CSV file"
+    )
     parser.add_argument(
         "--assert-schema",
         type=str,
         default=None,
-        help="Assert schema matches the specified version (e.g. 'v2')",
+        help="Assert schema matches the specified version (e.g. 'v3')",
     )
     args = parser.parse_args()
 
@@ -564,13 +613,17 @@ if __name__ == "__main__":
         app_name=args.app_name, hours=args.hours, step=args.step, resample=args.resample
     )
 
-    if args.assert_schema == "v2":
-        assert list(df[FEATURE_COLUMNS].columns) == FEATURE_COLUMNS, (
-            "Column order mismatch — model will produce wrong predictions"
-        )
+    if args.assert_schema == "v3":
+        assert (
+            list(df[FEATURE_COLUMNS].columns) == FEATURE_COLUMNS
+        ), "Column order mismatch — model will produce wrong predictions"
         nan_count = df[FEATURE_COLUMNS].isna().sum().sum()
-        assert nan_count == 0, f"Expected zero NaN values in feature columns, found {nan_count}"
-        print("  ✅ Schema assertion passed: 14 feature columns matched exactly with 0 NaNs")
+        assert (
+            nan_count == 0
+        ), f"Expected zero NaN values in feature columns, found {nan_count}"
+        print(
+            f"  ✅ Schema assertion passed: {NUM_FEATURES} feature columns matched exactly with 0 NaNs"
+        )
 
     # Add a placeholder segment_id column so schema matches existing CSV during comparison
     df["segment_id"] = 0
@@ -585,7 +638,9 @@ if __name__ == "__main__":
     round_freq = step_to_pandas_freq(effective_step)
 
     if not args.dry_run and os.path.exists(output_path):
-        print(f"  Found existing dataset at {output_path}, safely appending new data...")
+        print(
+            f"  Found existing dataset at {output_path}, safely appending new data..."
+        )
         df_existing = pd.read_csv(output_path, index_col="timestamp", parse_dates=True)
         df_existing.index = pd.to_datetime(df_existing.index, utc=True)
 
@@ -598,7 +653,9 @@ if __name__ == "__main__":
             print("  Starting a fresh dataset with the new schema...")
         else:
             df_combined = pd.concat([df_existing, df])
-            df_combined.index = pd.to_datetime(df_combined.index, utc=True).round(round_freq)
+            df_combined.index = pd.to_datetime(df_combined.index, utc=True).round(
+                round_freq
+            )
             df = df_combined[~df_combined.index.duplicated(keep="last")].sort_index()
 
     # Recalculate segment_id on the full combined dataset so it matches the health report

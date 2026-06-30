@@ -48,22 +48,36 @@ logger = logging.getLogger(__name__)
 # No-op stub (when prometheus_client not installed)
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class _Noop:
     """Silent no-op replacement for any Prometheus metric."""
-    def labels(self, **kwargs) -> _Noop: return self
-    def inc(self, amount: float = 1) -> None: pass
-    def observe(self, amount: float) -> None: pass
-    def set(self, value: float) -> None: pass
+
+    def labels(self, **kwargs) -> _Noop:
+        return self
+
+    def inc(self, amount: float = 1) -> None:
+        pass
+
+    def observe(self, amount: float) -> None:
+        pass
+
+    def set(self, value: float) -> None:
+        pass
+
     def time(self):
         from contextlib import contextmanager
+
         @contextmanager
-        def _cm(): yield
+        def _cm():
+            yield
+
         return _cm()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # NexusMetrics singleton
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class NexusMetrics:
     """
@@ -84,10 +98,10 @@ class NexusMetrics:
     """
 
     def __init__(self) -> None:
-        self._available   = False
-        self._registry    = None
+        self._available = False
+        self._registry = None
         self._initialized = False
-        self._lock        = threading.Lock()
+        self._lock = threading.Lock()
         self._init()
 
     def _init(self) -> None:
@@ -99,8 +113,9 @@ class NexusMetrics:
                 Gauge,
                 Histogram,
             )
+
             self._registry = CollectorRegistry()
-            self._ct       = CONTENT_TYPE_LATEST
+            self._ct = CONTENT_TYPE_LATEST
             self._available = True
 
             # ── Counters ──────────────────────────────────────────────────────
@@ -134,7 +149,19 @@ class NexusMetrics:
                 "nexus_confidence_score",
                 "Distribution of confidence scores at decision time",
                 ["failure_class", "rca_source"],
-                buckets=[0.30, 0.40, 0.50, 0.60, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.0],
+                buckets=[
+                    0.30,
+                    0.40,
+                    0.50,
+                    0.60,
+                    0.70,
+                    0.75,
+                    0.80,
+                    0.85,
+                    0.90,
+                    0.95,
+                    1.0,
+                ],
                 registry=self._registry,
             )
             self.rca_duration_seconds = Histogram(
@@ -203,12 +230,20 @@ class NexusMetrics:
     def _init_noop(self) -> None:
         noop = _Noop()
         for attr in [
-            "healing_actions_total", "incident_clusters_total",
-            "prescale_decisions_total", "rca_requests_total",
-            "confidence_score", "rca_duration_seconds",
-            "feedback_cycle_duration_seconds", "autonomous_success_rate",
-            "false_heal_rate", "runbook_success_rate", "confidence_adjustment",
-            "active_clusters", "governance_circuit_breaker_open", "prescaler_precision",
+            "healing_actions_total",
+            "incident_clusters_total",
+            "prescale_decisions_total",
+            "rca_requests_total",
+            "confidence_score",
+            "rca_duration_seconds",
+            "feedback_cycle_duration_seconds",
+            "autonomous_success_rate",
+            "false_heal_rate",
+            "runbook_success_rate",
+            "confidence_adjustment",
+            "active_clusters",
+            "governance_circuit_breaker_open",
+            "prescaler_precision",
         ]:
             setattr(self, attr, noop)
 
@@ -219,6 +254,7 @@ class NexusMetrics:
         if not self._available:
             return b"# prometheus_client not installed\n"
         from prometheus_client import generate_latest as _gen
+
         return _gen(self._registry)
 
     @property
@@ -227,9 +263,7 @@ class NexusMetrics:
 
     # ── Convenience update methods (high-level; no label juggling for callers) ──
 
-    def record_healing_action(
-        self, runbook_id: str, outcome: str, level: int
-    ) -> None:
+    def record_healing_action(self, runbook_id: str, outcome: str, level: int) -> None:
         """Record one completed healing action (call from RunbookExecutor)."""
         self.healing_actions_total.labels(
             runbook_id=runbook_id, outcome=outcome, level=str(level)
@@ -237,10 +271,10 @@ class NexusMetrics:
 
     def record_rca(
         self,
-        source:        str,
+        source: str,
         failure_class: str,
-        confidence:    float,
-        duration_s:    float,
+        confidence: float,
+        duration_s: float,
     ) -> None:
         """Record one RCA result (call from NexusOrchestrator)."""
         self.rca_requests_total.labels(source=source).inc()
@@ -322,7 +356,7 @@ def get_metrics() -> NexusMetrics:
 metrics: NexusMetrics = None  # type: ignore[assignment]
 
 
-def __getattr__(name: str):   # Module-level __getattr__ (PEP 562)
+def __getattr__(name: str):  # Module-level __getattr__ (PEP 562)
     global metrics
     if name == "metrics":
         if metrics is None:
