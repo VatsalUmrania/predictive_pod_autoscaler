@@ -1,0 +1,60 @@
+runbook:
+  id: "runbook_lambda_throttle_v1"
+  version: "1.0.0"
+  description: >
+    Responds to Lambda function throttling.
+    Throttles mean the function has hit its concurrency limit (reserved or account-level).
+    Strategy:
+      1. Alert with throttle count.
+      2. Increase reserved concurrency by 50% (L2, bounded to policy max of 1000).
+      3. Verify throttle count drops after 2 minutes.
+  failure_class: "resource_exhaustion"
+  healing_level: 2
+
+  trigger:
+    signal_types:
+      - "lambda_throttle_spike"
+    severity_minimum: "warning"
+
+  pre_checks:
+    - type: "event_field"
+      field: "throttle_count"
+      operator: "gte"
+      threshold: 10
+      description: "Only trigger if throttle count >= 10"
+
+  actions:
+    - type: "emit_alert"
+      description: "Notify team of throttling."
+      abort_on_failure: false
+      params:
+        message: >
+          ⚡ NEXUS: Lambda throttle spike detected.
+          Function: {resource_name} | Throttles: {context.throttle_count}
+          NEXUS will attempt to increase reserved concurrency.
+
+    - type: "set_lambda_reserved_concurrency"
+      description: "Increase reserved concurrency by 50% to absorb burst traffic."
+      abort_on_failure: false
+      params:
+        reserved_concurrent_executions: 200   # RunbookExecutor should use 1.5x current if available
+
+  post_checks:
+    - metric_query: "lambda_throttle_post_heal"
+      operator: "lt"
+      threshold: 5
+      window_seconds: 120
+      timeout_seconds: 180
+      description: "Throttle count must drop below 5 within 3 minutes"
+
+  rollback_if_post_check_fails: false
+  rollback_actions:
+    - type: "emit_alert"
+      params:
+        message: >
+          ⚠️  NEXUS: Lambda throttle mitigation FAILED.
+          Throttle count still elevated after concurrency increase.
+          Manual investigation required — check account-level concurrency limits.
+
+  cooldown_seconds: 300
+  blast_radius: "single_deployment"

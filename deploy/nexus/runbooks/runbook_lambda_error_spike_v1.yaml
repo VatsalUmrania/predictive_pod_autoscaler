@@ -1,0 +1,68 @@
+runbook:
+  id: "runbook_lambda_error_spike_v1"
+  version: "1.0.0"
+  description: >
+    Responds to a Lambda function error rate spike.
+    Strategy:
+      1. L0: Alert immediately with error context.
+      2. If a recent deployment is correlated (within 30 minutes),
+         attempt to roll back the Lambda alias to the previous published version (L3).
+      3. Verify error rate drops below threshold after rollback.
+      4. Escalate to EMERGENCY if verification fails.
+  failure_class: "bad_deploy"
+  healing_level: 3   # L3 — significant change (requires confidence >= 0.85 for autonomous rollback)
+
+  trigger:
+    signal_types:
+      - "lambda_error_rate_high"
+    severity_minimum: "warning"
+
+  pre_checks:
+    - type: "event_field"
+      field: "error_rate"
+      operator: "gte"
+      threshold: 0.05
+      description: "Only trigger if error rate >= 5%"
+
+  actions:
+    - type: "emit_alert"
+      description: "Notify team immediately — Lambda error spike detected."
+      abort_on_failure: false
+      params:
+        message: >
+          🚨 NEXUS: Lambda function error rate spike detected.
+          Function: {resource_name} | Error rate: {context.error_rate:.1%}
+          Recent logs included in context. Investigating root cause...
+
+    - type: "rollback_lambda_alias"
+      description: >
+        Roll back the Lambda alias 'live' to the previous published version.
+        Only executed if RCA identifies a recent deployment as root cause (healing_level=3
+        requires confidence >= 0.85 from RCA engine for autonomous execution).
+      abort_on_failure: false
+      params:
+        alias_name: "live"
+        # function_name is injected by RunbookExecutor from event.resource_name
+
+    - type: "emit_alert"
+      description: "Notify team of rollback action taken."
+      abort_on_failure: false
+      params:
+        message: >
+          🔧 NEXUS: Lambda alias rolled back.
+          Function: {resource_name}
+          Previous version restored. Monitoring for 2 minutes to confirm resolution.
+
+  post_checks:
+    - metric_query: "lambda_error_rate_post_heal"
+      operator: "lt"
+      threshold: 0.05
+      window_seconds: 120
+      timeout_seconds: 180
+      description: "Lambda error rate must drop below 5% within 3 minutes"
+
+  rollback_if_post_check_fails: false  # Can't roll forward — escalate instead
+  rollback_actions: []
+
+  cooldown_seconds: 600    # 10 minutes — don't re-rollback within cooldown
+  blast_radius: "single_deployment"

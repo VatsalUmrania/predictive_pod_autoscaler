@@ -1,0 +1,47 @@
+runbook:
+  id: "runbook_dynamo_throttle_v1"
+  version: "1.0.0"
+  description: >
+    Responds to DynamoDB throttling events.
+    DynamoDB provisioned capacity cannot be increased autonomously without
+    understanding the traffic pattern — changing provisioned RCU/WCU requires
+    careful analysis.
+    Strategy:
+      1. Alert immediately with throttle counts and table info.
+      2. Tag the table with a NEXUS diagnostic annotation.
+      3. Escalate to human for capacity planning.
+    Note: If the table uses PAY_PER_REQUEST mode and is still throttling,
+    this indicates an AWS service issue — escalate to AWS Support.
+  failure_class: "resource_exhaustion"
+  healing_level: 0   # L0 — alert only; autonomous DynamoDB capacity changes are risky
+
+  trigger:
+    signal_types:
+      - "dynamo_throttle_read"
+      - "dynamo_throttle_write"
+      - "dynamo_system_error"
+    severity_minimum: "warning"
+
+  pre_checks: []
+
+  actions:
+    - type: "emit_alert"
+      description: "Alert team — DynamoDB throttling detected."
+      abort_on_failure: false
+      params:
+        message: >
+          🗄️  NEXUS: DynamoDB throttling detected.
+          Table: {resource_name}
+          Read throttles: {context.throttle_read} | Write throttles: {context.throttle_write}
+          Capacity mode: {context.capacity_mode}
+          Provisioned RCU: {context.provisioned_rcu} | Consumed RCU: {context.consumed_rcu}
+          Manual capacity review required.
+          If PAY_PER_REQUEST and throttling: consider opening AWS Support case.
+
+  post_checks: []   # No autonomous remediation — alert only
+
+  rollback_if_post_check_fails: false
+  rollback_actions: []
+
+  cooldown_seconds: 300
+  blast_radius: "single_database"

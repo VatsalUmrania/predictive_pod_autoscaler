@@ -38,6 +38,12 @@ class AgentType(str, Enum):
     CONFIG = "config"
     K8S = "k8s"
     ORCHESTRATOR = "orchestrator"  # for system-level internal events
+    # ── AWS Serverless Agents ─────────────────────────────────────────────────
+    LAMBDA      = "lambda"
+    APIGW       = "apigw"
+    SQS         = "sqs"
+    DYNAMODB    = "dynamodb"
+    CLOUDWATCH  = "cloudwatch"    # catch-all CloudWatch Alarm agent
 
 
 class SignalType(str, Enum):
@@ -90,6 +96,33 @@ class SignalType(str, Enum):
     # ── Predictive Layer ──────────────────────────────────────────────────────
     TRAFFIC_SPIKE_PREDICTED = "traffic_spike_predicted"
     ANOMALY_PREDICTED = "anomaly_predicted"
+
+    # ── AWS Lambda ───────────────────────────────────────────────────────────
+    LAMBDA_ERROR_RATE_HIGH   = "lambda_error_rate_high"
+    LAMBDA_THROTTLE_SPIKE    = "lambda_throttle_spike"
+    LAMBDA_TIMEOUT           = "lambda_timeout"
+    LAMBDA_OOM               = "lambda_oom"
+    LAMBDA_COLD_START_HIGH   = "lambda_cold_start_high"
+    LAMBDA_CONCURRENCY_MAXED = "lambda_concurrency_maxed"
+
+    # ── AWS API Gateway ───────────────────────────────────────────────────────
+    APIGW_5XX_SPIKE          = "apigw_5xx_spike"
+    APIGW_LATENCY_HIGH       = "apigw_latency_high"
+    APIGW_4XX_SPIKE          = "apigw_4xx_spike"
+
+    # ── AWS SQS ──────────────────────────────────────────────────────────────
+    SQS_DLQ_DEPTH_HIGH       = "sqs_dlq_depth_high"
+    SQS_QUEUE_DEPTH_HIGH     = "sqs_queue_depth_high"
+    SQS_CONSUMER_LAG         = "sqs_consumer_lag"
+
+    # ── AWS DynamoDB ──────────────────────────────────────────────────────────
+    DYNAMO_THROTTLE_READ     = "dynamo_throttle_read"
+    DYNAMO_THROTTLE_WRITE    = "dynamo_throttle_write"
+    DYNAMO_SYSTEM_ERROR      = "dynamo_system_error"
+    DYNAMO_CONSUMED_RCU_HIGH = "dynamo_consumed_rcu_high"
+
+    # ── AWS CloudWatch (catch-all) ─────────────────────────────────────────────
+    AWS_ALARM_FIRED          = "aws_alarm_fired"
 
 
 class Severity(str, Enum):

@@ -264,6 +264,7 @@ class NexusServer:
         # ── Agent manager ────────────────────────────────────────────────────
         agent_manager = AgentManager(nats_client=nats, prometheus_url=prometheus_url)
 
+
         # ── Pre-populate NexusContext so status_api lifespan skips self-init ───
         context.orchestrator = orchestrator
         context.prescaler = prescaler
