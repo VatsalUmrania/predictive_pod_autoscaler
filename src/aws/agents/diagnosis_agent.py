@@ -113,7 +113,12 @@ def diagnose(context: dict[str, Any], cfg: AgentConfig | None = None) -> dict[st
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
         )
-        raw = message.content[0].text.strip()
+        text_block = next(
+            (blk for blk in message.content if blk.type == "text"), None
+        )
+        if text_block is None:
+            raise ValueError("No text block found in Claude response")
+        raw = text_block.text.strip()
         logger.debug(f"[DiagnosisAgent] Raw response: {raw[:400]}")
         rca = _parse(raw)
 

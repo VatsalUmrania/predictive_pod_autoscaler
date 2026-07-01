@@ -291,7 +291,12 @@ class AnthropicProvider(LLMProvider):
             system=SYSTEM_INSTRUCTION,
             messages=[{"role": "user", "content": prompt}],
         )
-        return message.content[0].text.strip()
+        text_block = next(
+            (blk for blk in message.content if blk.type == "text"), None
+        )
+        if text_block is None:
+            raise RuntimeError("No text block found in Claude response")
+        return text_block.text.strip()
 
     async def complete(self, user_prompt: str) -> str:
         return await asyncio.to_thread(self._sync_complete, user_prompt)
