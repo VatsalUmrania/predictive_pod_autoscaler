@@ -35,14 +35,18 @@ logger = logging.getLogger(__name__)
 # Pre-action state snapshot
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class PreActionState:
     """Snapshot of resource state captured before a healing action executes."""
-    action_type:      str
+
+    action_type: str
     target_namespace: str
-    target_name:      str
-    captured_at:      str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    state_data:       dict[str, Any] = field(default_factory=dict)
+    target_name: str
+    captured_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    state_data: dict[str, Any] = field(default_factory=dict)
 
     @property
     def rollback_key(self) -> str:
@@ -52,6 +56,7 @@ class PreActionState:
 # ──────────────────────────────────────────────────────────────────────────────
 # Rollback Registry
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class RollbackRegistry:
     """
@@ -123,8 +128,8 @@ class RollbackRegistry:
         Returns a result dict with status and message.
         """
         action_type = pre_state.action_type
-        ns          = pre_state.target_namespace
-        name        = pre_state.target_name
+        ns = pre_state.target_namespace
+        name = pre_state.target_name
         result: dict[str, Any] = {"action_type": action_type, "status": "noop"}
 
         logger.info(f"[RollbackRegistry] Rolling back: {action_type} on {ns}/{name}")
@@ -137,7 +142,10 @@ class RollbackRegistry:
                 return result
 
             if self.dry_run:
-                result.update(status="dry_run", message=f"Would scale {ns}/{name} → {prev_replicas}")
+                result.update(
+                    status="dry_run",
+                    message=f"Would scale {ns}/{name} → {prev_replicas}",
+                )
                 return result
 
             if k8s_apps:
@@ -156,17 +164,22 @@ class RollbackRegistry:
         # ── patch_annotation: remove nexus.io/* annotations ──────────────────
         elif action_type == "patch_annotation":
             if self.dry_run:
-                result.update(status="dry_run", message=f"Would remove nexus annotations from {ns}/{name}")
+                result.update(
+                    status="dry_run",
+                    message=f"Would remove nexus annotations from {ns}/{name}",
+                )
                 return result
 
             if k8s_apps:
                 try:
                     # Get current annotations, remove nexus.io/* keys
-                    dep  = k8s_apps.read_namespaced_deployment(name, ns)
+                    dep = k8s_apps.read_namespaced_deployment(name, ns)
                     anns = dict(dep.metadata.annotations or {})
                     nexus_keys = [k for k in anns if k.startswith("nexus.io/")]
                     for k in nexus_keys:
-                        anns[k] = None   # Setting to None removes in strategic merge patch
+                        anns[k] = (
+                            None  # Setting to None removes in strategic merge patch
+                        )
                     patch = {"metadata": {"annotations": anns}}
                     k8s_apps.patch_namespaced_deployment(name, ns, patch)
                     result.update(
@@ -196,5 +209,7 @@ class RollbackRegistry:
                 message=f"Unknown action type for rollback: {action_type}",
             )
 
-        logger.info(f"[RollbackRegistry] Rollback result: {result['status']} — {result.get('message', result.get('error', ''))}")
+        logger.info(
+            f"[RollbackRegistry] Rollback result: {result['status']} — {result.get('message', result.get('error', ''))}"
+        )
         return result

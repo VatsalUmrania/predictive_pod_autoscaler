@@ -39,6 +39,7 @@ Configuration (environment variables):
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import uuid
@@ -60,50 +61,53 @@ logger = logging.getLogger(__name__)
 # Enums & dataclasses
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class PrescaleMode(str, Enum):
-    SHADOW     = "shadow"
-    ADVISORY   = "advisory"
+    SHADOW = "shadow"
+    ADVISORY = "advisory"
     AUTONOMOUS = "autonomous"
 
 
 @dataclass
 class PrescaleDecision:
     """A single pre-scale recommendation."""
-    decision_id:          str
-    deployment_name:      str
-    namespace:            str
-    endpoint:             str
-    current_rps:          float
-    predicted_rps:        float
-    horizon_minutes:      int
-    current_replicas:     int
-    recommended_replicas: int
-    confidence:           float
-    mode:                 PrescaleMode
-    db_table_trigger:     str | None
 
-    decided_at:           str = field(
+    decision_id: str
+    deployment_name: str
+    namespace: str
+    endpoint: str
+    current_rps: float
+    predicted_rps: float
+    horizon_minutes: int
+    current_replicas: int
+    recommended_replicas: int
+    confidence: float
+    mode: PrescaleMode
+    db_table_trigger: str | None
+
+    decided_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
-    verified_at:          str | None = None
-    actual_rps:           float | None = None
-    outcome:              str | None   = None   # "correct" | "false_positive" | "pending"
-    executed:             bool = False
+    verified_at: str | None = None
+    actual_rps: float | None = None
+    outcome: str | None = None  # "correct" | "false_positive" | "pending"
+    executed: bool = False
 
     def mark_outcome(self, actual_rps: float, spike_threshold: float = 1.3) -> str:
-        self.actual_rps  = actual_rps
+        self.actual_rps = actual_rps
         self.verified_at = datetime.now(timezone.utc).isoformat()
-        expected_spike   = self.current_rps * spike_threshold
-        self.outcome     = "correct" if actual_rps >= expected_spike else "false_positive"
+        expected_spike = self.current_rps * spike_threshold
+        self.outcome = "correct" if actual_rps >= expected_spike else "false_positive"
         return self.outcome
 
 
 @dataclass
 class PrecisionStats:
     """Rolling precision metrics over the last N decisions."""
-    true_positives:  int = 0
+
+    true_positives: int = 0
     false_positives: int = 0
-    pending:         int = 0
+    pending: int = 0
 
     @property
     def precision(self) -> float:
@@ -128,6 +132,7 @@ class PrecisionStats:
 # Precision Tracker
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class PrecisionTracker:
     """
     Tracks shadow-mode prediction accuracy.
@@ -141,8 +146,8 @@ class PrecisionTracker:
     """
 
     def __init__(self, window: int = 20, spike_threshold: float = 1.3):
-        self._window     = window
-        self._threshold  = spike_threshold
+        self._window = window
+        self._threshold = spike_threshold
         self._decisions: dict[str, PrescaleDecision] = {}
         self._smape_deque: deque[float] = deque(maxlen=window)
 
@@ -164,7 +169,7 @@ class PrecisionTracker:
         return outcome
 
     def stats(self) -> PrecisionStats:
-        recent = list(self._decisions.values())[-self._window:]
+        recent = list(self._decisions.values())[-self._window :]
         tp = sum(1 for d in recent if d.outcome == "correct")
         fp = sum(1 for d in recent if d.outcome == "false_positive")
         pending = sum(1 for d in recent if d.outcome is None)
@@ -176,7 +181,12 @@ class PrecisionTracker:
             return None
         return sum(self._smape_deque) / len(self._smape_deque)
 
-    def ready_for_advisory(self, min_samples: int = 20, min_precision: float = 0.70, max_smape: float = 25.0) -> bool:
+    def ready_for_advisory(
+        self,
+        min_samples: int = 20,
+        min_precision: float = 0.70,
+        max_smape: float = 25.0,
+    ) -> bool:
         """Returns True if shadow-mode results justify promoting to ADVISORY."""
         st = self.stats()
         smape = self.rolling_smape
@@ -190,6 +200,7 @@ class PrecisionTracker:
 # ──────────────────────────────────────────────────────────────────────────────
 # Prescaler
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class Prescaler:
     """
@@ -208,46 +219,6 @@ class Prescaler:
         cooldown_seconds:       Per-deployment cooldown (default: 300).
         target_rps_per_replica: Used to compute replica target (default: 100).
     """
-
-    # def __init__(
-    #     self,
-    #     nats_client:            NATSClient,
-    #     action_ladder:          ActionLadder | None = None,
-    #     mode:                   PrescaleMode = PrescaleMode(
-    #         os.getenv("NEXUS_PRESCALE_MODE", "shadow")
-    #     ),
-    #     max_replicas:           int   = int(os.getenv("NEXUS_PRESCALE_MAX_REPLICAS", "20")),
-    #     min_confidence:         float = float(os.getenv("NEXUS_PRESCALE_MIN_CONFIDENCE", "0.55")),
-    #     threshold_pct:          float = float(os.getenv("NEXUS_PRESCALE_THRESHOLD_PCT", "30")),
-    #     cooldown_seconds:       float = float(os.getenv("NEXUS_PRESCALE_COOLDOWN_S", "300")),
-    #     target_rps_per_replica: float = 100.0,
-    # ):
-    #     self._nats              = nats_client
-    #     self._ladder            = action_ladder
-    #     self.mode               = mode
-    #     self._max_replicas      = max_replicas
-    #     self._min_confidence    = min_confidence
-    #     self._threshold_pct     = threshold_pct
-    #     self._cooldown          = cooldown_seconds
-    #     self._target_rps        = target_rps_per_replica
-
-    #     # Precision tracking and decision log
-    #     self._tracker           = PrecisionTracker()
-    #     self._all_decisions:    list[PrescaleDecision] = []
-    #     self._cooldowns:        dict[str, float] = {}   # deployment → mono time
-
-    #     # Stats
-    #     self._events_received   = 0
-    #     self._decisions_made    = 0
-    #     self._skipped_cooldown  = 0
-    #     self._skipped_confidence = 0
-    #     self._skipped_threshold = 0
-
-    #     logger.info(
-    #         f"[Prescaler] Started — mode={self.mode.value} "
-    #         f"threshold={self._threshold_pct}% "
-    #         f"min_confidence={self._min_confidence}"
-    #     )
 
     def __init__(
         self,
@@ -320,6 +291,7 @@ class Prescaler:
         Becomes the primary driver of pre-scaling decisions (DBTrafficCorrelator
         is the fallback). Falls back to DBTrafficCorrelator in degraded mode.
         """
+
         def _parse_horizon(raw) -> int:
             """Parse PPA horizon field: 'rps_t10m' → 10, 'rps_t5m' → 5, or int passthrough."""
             if isinstance(raw, int):
@@ -327,7 +299,8 @@ class Prescaler:
             s = str(raw)  # e.g. 'rps_t10m', 'rps_t5m', 'rps_t3m'
             # Extract trailing digit(s) before 'm': rps_t10m → '10'
             import re
-            m = re.search(r'(\d+)m$', s)
+
+            m = re.search(r"(\d+)m$", s)
             if m:
                 return int(m.group(1))
             try:
@@ -348,14 +321,16 @@ class Prescaler:
                 namespace=data.get("namespace", "default"),
                 resource_name=deployment,
                 context={
-                    "current_rps":               data.get("current_rps", 0.0),
-                    "predicted_rps":             data.get("predicted_rps", 0.0),
-                    "confidence":                data.get("confidence", 0.0),
-                    "endpoint":                 f"/{deployment}",
-                    "prediction_horizon_minutes": _parse_horizon(data.get("horizon_minutes", 10)),
-                    "db_table_trigger":          None,
-                    "ppa_model_version":         data.get("model_version", "unknown"),
-                    "raw_features":              data.get("raw_features", {}),
+                    "current_rps": data.get("current_rps", 0.0),
+                    "predicted_rps": data.get("predicted_rps", 0.0),
+                    "confidence": data.get("confidence", 0.0),
+                    "endpoint": f"/{deployment}",
+                    "prediction_horizon_minutes": _parse_horizon(
+                        data.get("horizon_minutes", 10)
+                    ),
+                    "db_table_trigger": None,
+                    "ppa_model_version": data.get("model_version", "unknown"),
+                    "raw_features": data.get("raw_features", {}),
                 },
                 confidence=data.get("confidence", 0.0),
             )
@@ -370,7 +345,9 @@ class Prescaler:
         await self._nats.subscribe_raw(
             "ppa.predictions.>",
             handler=handler,
-            durable_name="prescaler-ppa-predictions",
+            # No durable_name: ephemeral consumer per-pod.
+            # Durable push consumers are exclusive (one subscriber only) — during
+            # a rolling deploy the new pod would collide with the old pod's consumer.
             stream_name="PPA_PREDICTIONS",
         )
         logger.info("[PreScaler] Subscribed to ppa.predictions.*")
@@ -387,14 +364,14 @@ class Prescaler:
         self._events_received += 1
         ctx = event.context
 
-        current_rps   = float(ctx.get("current_rps", 0.0))
+        current_rps = float(ctx.get("current_rps", 0.0))
         predicted_rps = float(ctx.get("predicted_rps", 0.0))
-        confidence    = float(ctx.get("confidence", 0.0))
-        endpoint      = str(ctx.get("endpoint", "/unknown"))
-        horizon       = int(ctx.get("prediction_horizon_minutes", 10))
-        db_table      = ctx.get("db_table_trigger")
-        namespace     = event.namespace or "default"
-        deployment    = event.resource_name or self._endpoint_to_deployment(endpoint)
+        confidence = float(ctx.get("confidence", 0.0))
+        endpoint = str(ctx.get("endpoint", "/unknown"))
+        horizon = int(ctx.get("prediction_horizon_minutes", 10))
+        db_table = ctx.get("db_table_trigger")
+        namespace = event.namespace or "default"
+        deployment = event.resource_name or self._endpoint_to_deployment(endpoint)
 
         # ── Gates ─────────────────────────────────────────────────────────────
 
@@ -420,8 +397,7 @@ class Prescaler:
 
         # ── Compute recommendation ────────────────────────────────────────────
         recommended_replicas = min(
-            self._max_replicas,
-            max(1, int(predicted_rps / max(self._target_rps, 1.0)))
+            self._max_replicas, max(1, int(predicted_rps / max(self._target_rps, 1.0)))
         )
         # Fetch current replicas (K8s API — in autonomous mode; estimate otherwise)
         current_replicas = await self._get_current_replicas(deployment, namespace)
@@ -434,18 +410,18 @@ class Prescaler:
             return
 
         decision = PrescaleDecision(
-            decision_id          = str(uuid.uuid4())[:8].upper(),
-            deployment_name      = deployment,
-            namespace            = namespace,
-            endpoint             = endpoint,
-            current_rps          = round(current_rps, 2),
-            predicted_rps        = round(predicted_rps, 2),
-            horizon_minutes      = horizon,
-            current_replicas     = current_replicas,
-            recommended_replicas = recommended_replicas,
-            confidence           = round(confidence, 3),
-            mode                 = self.mode,
-            db_table_trigger     = db_table,
+            decision_id=str(uuid.uuid4())[:8].upper(),
+            deployment_name=deployment,
+            namespace=namespace,
+            endpoint=endpoint,
+            current_rps=round(current_rps, 2),
+            predicted_rps=round(predicted_rps, 2),
+            horizon_minutes=horizon,
+            current_replicas=current_replicas,
+            recommended_replicas=recommended_replicas,
+            confidence=round(confidence, 3),
+            mode=self.mode,
+            db_table_trigger=db_table,
         )
 
         self._tracker.record_decision(decision)
@@ -470,6 +446,9 @@ class Prescaler:
         elif self.mode == PrescaleMode.AUTONOMOUS:
             await self._autonomous_execute(decision, event)
 
+        # Notify downstream consumers (e.g. SlackNotifier) on nexus.prescale.*
+        await self._publish_prescale_decision(decision, event)
+
         self._set_cooldown(deployment)
 
     # ── Mode implementations ──────────────────────────────────────────────────
@@ -485,7 +464,7 @@ class Prescaler:
             f"in {decision.namespace}  (not executed — shadow mode)"
         )
         decision.executed = False
-        decision.outcome  = None   # Will be set by record_actual()
+        decision.outcome = None  # Will be set by record_actual()
 
         # Log graduated precision
         stats = self._tracker.stats()
@@ -498,32 +477,34 @@ class Prescaler:
                 f"  Stats: {stats}"
             )
 
-    async def _advisory_execute(self, decision: PrescaleDecision, source_event: IncidentEvent) -> None:
+    async def _advisory_execute(
+        self, decision: PrescaleDecision, source_event: IncidentEvent
+    ) -> None:
         """
         ADVISORY mode: publish a NATS advisory event. Human must approve.
         """
         advisory_event = IncidentEvent(
-            agent         = AgentType.ORCHESTRATOR,
-            signal_type   = SignalType.ANOMALY_PREDICTED,   # closest available
-            severity      = Severity.WARNING,
-            namespace     = decision.namespace,
-            resource_name = decision.deployment_name,
-            correlation_id = source_event.correlation_id or source_event.event_id,
-            context = {
-                "type":                  "pre_scale_advisory",
-                "decision_id":           decision.decision_id,
-                "deployment":            decision.deployment_name,
-                "namespace":             decision.namespace,
-                "current_replicas":      decision.current_replicas,
-                "recommended_replicas":  decision.recommended_replicas,
-                "current_rps":           decision.current_rps,
-                "predicted_rps":         decision.predicted_rps,
-                "horizon_minutes":       decision.horizon_minutes,
-                "confidence":            decision.confidence,
-                "db_table_trigger":      decision.db_table_trigger,
-                "action":                "Run: nexus prescale approve " + decision.decision_id,
+            agent=AgentType.ORCHESTRATOR,
+            signal_type=SignalType.ANOMALY_PREDICTED,  # closest available
+            severity=Severity.WARNING,
+            namespace=decision.namespace,
+            resource_name=decision.deployment_name,
+            correlation_id=source_event.correlation_id or source_event.event_id,
+            context={
+                "type": "pre_scale_advisory",
+                "decision_id": decision.decision_id,
+                "deployment": decision.deployment_name,
+                "namespace": decision.namespace,
+                "current_replicas": decision.current_replicas,
+                "recommended_replicas": decision.recommended_replicas,
+                "current_rps": decision.current_rps,
+                "predicted_rps": decision.predicted_rps,
+                "horizon_minutes": decision.horizon_minutes,
+                "confidence": decision.confidence,
+                "db_table_trigger": decision.db_table_trigger,
+                "action": "Run: nexus prescale approve " + decision.decision_id,
             },
-            confidence = decision.confidence,
+            confidence=decision.confidence,
         )
         await self._nats.publish(advisory_event)
         logger.info(
@@ -532,42 +513,46 @@ class Prescaler:
             f"→ Run: nexus prescale approve {decision.decision_id}"
         )
 
-    async def _autonomous_execute(self, decision: PrescaleDecision, source_event: IncidentEvent) -> None:
+    async def _autonomous_execute(
+        self, decision: PrescaleDecision, source_event: IncidentEvent
+    ) -> None:
         """
         AUTONOMOUS mode: scale deployment directly via ActionLadder (L2 action).
         Full governance plane applies — policy, cooldown, circuit breaker.
         """
         if self._ladder is None:
-            logger.error("[Prescaler] AUTONOMOUS mode requires ActionLadder — not configured")
+            logger.error(
+                "[Prescaler] AUTONOMOUS mode requires ActionLadder — not configured"
+            )
             return
 
         # Build a synthetic Runbook for the ActionLadder governance checks
-        scale_action  = RunbookAction(
+        scale_action = RunbookAction(
             type="scale_deployment",
             description=f"Pre-scale {decision.deployment_name} for predicted traffic spike",
             params={
                 "namespace": decision.namespace,
-                "name":      decision.deployment_name,
-                "replicas":  decision.recommended_replicas,
+                "name": decision.deployment_name,
+                "replicas": decision.recommended_replicas,
             },
         )
         synthetic_runbook = Runbook(
-            id            = f"prescale_{decision.decision_id}",
-            description   = "Predictive pre-scale",
-            failure_class = "resource_exhaustion",
-            healing_level = 2,
-            blast_radius  = "single_deployment",
-            cooldown_seconds = int(self._cooldown),
-            trigger       = RunbookTrigger(signal_types=["traffic_spike_predicted"]),
-            actions       = [scale_action],
+            id=f"prescale_{decision.decision_id}",
+            description="Predictive pre-scale",
+            failure_class="resource_exhaustion",
+            healing_level=2,
+            blast_radius="single_deployment",
+            cooldown_seconds=int(self._cooldown),
+            trigger=RunbookTrigger(signal_types=["traffic_spike_predicted"]),
+            actions=[scale_action],
         )
 
         ladder_decision = await self._ladder.evaluate(
-            runbook    = synthetic_runbook,
-            action     = scale_action,
-            event      = source_event,
-            target     = f"{decision.namespace}/{decision.deployment_name}",
-            confidence = decision.confidence,
+            runbook=synthetic_runbook,
+            action=scale_action,
+            event=source_event,
+            target=f"{decision.namespace}/{decision.deployment_name}",
+            confidence=decision.confidence,
         )
 
         if not ladder_decision.can_proceed:
@@ -582,19 +567,22 @@ class Prescaler:
         try:
             from kubernetes import client as k8s_client
             from kubernetes import config as k8s_config
+
             try:
                 k8s_config.load_incluster_config()
             except Exception:
                 k8s_config.load_kube_config()
 
             apps_v1 = k8s_client.AppsV1Api()
-            patch   = {"spec": {"replicas": decision.recommended_replicas}}
+            patch = {"spec": {"replicas": decision.recommended_replicas}}
             apps_v1.patch_namespaced_deployment_scale(
                 decision.deployment_name, decision.namespace, patch
             )
-            await self._ladder.set_cooldown(synthetic_runbook, f"{decision.namespace}/{decision.deployment_name}")
+            await self._ladder.set_cooldown(
+                synthetic_runbook, f"{decision.namespace}/{decision.deployment_name}"
+            )
             decision.executed = True
-            decision.outcome  = "executed"
+            decision.outcome = "executed"
             logger.info(
                 f"[Prescaler] [AUTONOMOUS] ✅ Scaled "
                 f"{decision.namespace}/{decision.deployment_name} "
@@ -604,6 +592,45 @@ class Prescaler:
             decision.outcome = "failed"
             logger.error(f"[Prescaler] [AUTONOMOUS] Scale failed: {exc}")
 
+    async def _publish_prescale_decision(
+        self,
+        decision: PrescaleDecision,
+        source_event: IncidentEvent,
+    ) -> None:
+        """Publish the finalized decision on nexus.prescale.* for Notifier/dashboard pickup.
+
+        Subject: nexus.prescale.<deployment>.<mode>
+        Payload includes outcome, replica targets, and confidence so that consumers
+        can render Slack notifications without re-reading the audit trail.
+        """
+        subject = f"nexus.prescale.{decision.deployment_name}.{self.mode.value}"
+        payload = {
+            "type": "prescale_decision",
+            "decision_id": decision.decision_id,
+            "deployment": decision.deployment_name,
+            "namespace": decision.namespace,
+            "mode": self.mode.value,
+            "executed": decision.executed,
+            "outcome": decision.outcome,
+            "current_replicas": decision.current_replicas,
+            "recommended_replicas": decision.recommended_replicas,
+            "current_rps": decision.current_rps,
+            "predicted_rps": decision.predicted_rps,
+            "horizon_minutes": decision.horizon_minutes,
+            "confidence": decision.confidence,
+            "db_table_trigger": decision.db_table_trigger,
+            "incident_id": source_event.correlation_id or source_event.event_id,
+            "timestamp": decision.decided_at,
+        }
+        try:
+            js = getattr(self._nats, "_js", None)
+            if js is not None:
+                await js.publish(subject, json.dumps(payload).encode())
+                logger.debug(f"[Prescaler] Published prescale event to {subject}")
+        except Exception as exc:
+            # Notifications are best-effort — never fail prescaler on publish error
+            logger.debug(f"[Prescaler] prescale publish failed: {exc}")
+
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     async def _get_current_replicas(self, deployment: str, namespace: str) -> int:
@@ -611,6 +638,7 @@ class Prescaler:
         try:
             from kubernetes import client as k8s_client
             from kubernetes import config as k8s_config
+
             try:
                 k8s_config.load_incluster_config()
             except Exception:
@@ -619,7 +647,7 @@ class Prescaler:
             dep = apps_v1.read_namespaced_deployment(deployment, namespace)
             return dep.spec.replicas or 1
         except Exception:
-            return 1    # Conservative fallback
+            return 1  # Conservative fallback
 
     @staticmethod
     def _endpoint_to_deployment(endpoint: str) -> str:
@@ -632,11 +660,13 @@ class Prescaler:
 
     def _is_in_cooldown(self, deployment: str) -> bool:
         import time
+
         expiry = self._cooldowns.get(deployment, 0.0)
         return time.monotonic() < expiry
 
     def _set_cooldown(self, deployment: str) -> None:
         import time
+
         self._cooldowns[deployment] = time.monotonic() + self._cooldown
 
     # ── Mode promotion ────────────────────────────────────────────────────────
@@ -655,16 +685,16 @@ class Prescaler:
 
     @property
     def stats(self) -> dict[str, Any]:
-        prec  = self._tracker.stats()
+        prec = self._tracker.stats()
         smape = self._tracker.rolling_smape
         return {
-            "mode":                self.mode.value,
-            "events_received":     self._events_received,
-            "decisions_made":      self._decisions_made,
-            "skipped_confidence":  self._skipped_confidence,
-            "skipped_threshold":   self._skipped_threshold,
-            "skipped_cooldown":    self._skipped_cooldown,
-            "precision":           round(prec.precision, 3),
-            "smape":               round(smape, 2) if smape else None,
-            "ready_for_advisory":  self._tracker.ready_for_advisory(),
+            "mode": self.mode.value,
+            "events_received": self._events_received,
+            "decisions_made": self._decisions_made,
+            "skipped_confidence": self._skipped_confidence,
+            "skipped_threshold": self._skipped_threshold,
+            "skipped_cooldown": self._skipped_cooldown,
+            "precision": round(prec.precision, 3),
+            "smape": round(smape, 2) if smape else None,
+            "ready_for_advisory": self._tracker.ready_for_advisory(),
         }

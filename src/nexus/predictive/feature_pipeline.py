@@ -41,13 +41,13 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────────────
 
 FEATURE_BOUNDS: dict[str, tuple[float, float]] = {
-    "cpu_utilization_pct":     (0.0,   100.0),
-    "memory_utilization_pct":  (0.0,   100.0),
-    "error_rate":              (0.0,   1.0),
-    "rps":                     (0.0,   100_000.0),
-    "latency_p95_ms":          (0.0,   60_000.0),
-    "db_total_read_rate":      (0.0,   100_000.0),
-    "db_rw_ratio":             (0.0,   1.0),
+    "cpu_utilization_pct": (0.0, 100.0),
+    "memory_utilization_pct": (0.0, 100.0),
+    "error_rate": (0.0, 1.0),
+    "rps": (0.0, 100_000.0),
+    "latency_p95_ms": (0.0, 60_000.0),
+    "db_total_read_rate": (0.0, 100_000.0),
+    "db_rw_ratio": (0.0, 1.0),
 }
 
 # Fill strategies for missing features
@@ -60,14 +60,16 @@ FILL_LAST = "last"
 # Query Snapshot
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class QuerySnapshot:
     """
     A point-in-time snapshot of per-table DB query counts.
     Published by DBAgent as context in DB_QUERY_SPIKE events.
     """
-    captured_at:  datetime
-    db_engine:    str
+
+    captured_at: datetime
+    db_engine: str
     table_counts: dict[str, int] = field(default_factory=dict)
     """Raw cumulative counters per table (not rate — pipeline computes delta)."""
 
@@ -75,19 +77,20 @@ class QuerySnapshot:
     def from_event_context(cls, context: dict[str, Any]) -> QuerySnapshot | None:
         """Parse a QuerySnapshot from a DBAgent event context dict."""
         table_counts = context.get("table_counts")
-        db_engine    = context.get("db_engine", "unknown")
+        db_engine = context.get("db_engine", "unknown")
         if not isinstance(table_counts, dict):
             return None
         return cls(
-            captured_at  = datetime.now(timezone.utc),
-            db_engine    = db_engine,
-            table_counts = {k: int(v) for k, v in table_counts.items()},
+            captured_at=datetime.now(timezone.utc),
+            db_engine=db_engine,
+            table_counts={k: int(v) for k, v in table_counts.items()},
         )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Feature vector
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 @dataclass
 class FeatureVector:
@@ -97,10 +100,11 @@ class FeatureVector:
     Missing features are filled using the pipeline's fill_strategy.
     All values are clamped to FEATURE_BOUNDS.
     """
-    timestamp:  datetime
-    features:   dict[str, float] = field(default_factory=dict)
-    missing:    list[str] = field(default_factory=list)   # Features that were filled
-    has_db:     bool = False
+
+    timestamp: datetime
+    features: dict[str, float] = field(default_factory=dict)
+    missing: list[str] = field(default_factory=list)  # Features that were filled
+    has_db: bool = False
     has_metrics: bool = False
 
     def to_list(self, feature_names: list[str]) -> list[float]:
@@ -114,6 +118,7 @@ class FeatureVector:
 # ──────────────────────────────────────────────────────────────────────────────
 # Feature Pipeline
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def _safe_div(a: float, b: float, fallback: float = 0.0) -> float:
     """Division with NaN/Inf guard."""
@@ -155,19 +160,19 @@ class FeaturePipeline:
     def __init__(
         self,
         snapshot_window: int = 20,
-        fill_strategy:   str = FILL_ZERO,
-        interval_s:      float = 30.0,
+        fill_strategy: str = FILL_ZERO,
+        interval_s: float = 30.0,
     ):
-        self._window     = snapshot_window
-        self._fill       = fill_strategy
+        self._window = snapshot_window
+        self._fill = fill_strategy
         self._interval_s = interval_s
 
         # Rolling snapshot history: deque of QuerySnapshot
         self._snapshots: deque[QuerySnapshot] = deque(maxlen=snapshot_window)
 
         # Running mean for FILL_MEAN strategy
-        self._feature_sums:  dict[str, float] = {}
-        self._feature_counts: dict[str, int]  = {}
+        self._feature_sums: dict[str, float] = {}
+        self._feature_counts: dict[str, int] = {}
 
         # Last seen feature values for FILL_LAST strategy
         self._last_values: dict[str, float] = {}
@@ -195,22 +200,24 @@ class FeaturePipeline:
             dt = self._interval_s
 
         features: dict[str, float] = {}
-        total_reads  = 0.0
+        total_reads = 0.0
         total_writes = 0.0
 
         all_tables = set(prev.table_counts) | set(curr.table_counts)
         for table in all_tables:
             prev_count = prev.table_counts.get(table, 0)
             curr_count = curr.table_counts.get(table, 0)
-            delta = max(0, curr_count - prev_count)   # Counters only increase
+            delta = max(0, curr_count - prev_count)  # Counters only increase
 
             # Heuristic: even table names → reads, odd names → writes.
             # DBAgent will provide explicit read/write split in Phase 6.
             # For now, treat all counts as reads.
             rate = _safe_div(float(delta), dt)
-            rate = _clamp(rate, 0.0, FEATURE_BOUNDS.get(f"table_{table}_read_rate", (0, 1e6))[1])
-            features[f"table_{table}_read_rate"]  = rate
-            features[f"table_{table}_write_rate"] = 0.0   # Phase 6: split from DBAgent
+            rate = _clamp(
+                rate, 0.0, FEATURE_BOUNDS.get(f"table_{table}_read_rate", (0, 1e6))[1]
+            )
+            features[f"table_{table}_read_rate"] = rate
+            features[f"table_{table}_write_rate"] = 0.0  # Phase 6: split from DBAgent
             total_reads += rate
 
         # Aggregate features
@@ -232,11 +239,17 @@ class FeaturePipeline:
         Uses _guard() on every value — immune to NaN/None/string inputs.
         """
         raw: dict[str, float] = {
-            "cpu_utilization_pct":    _guard(context.get("cpu_utilization_pct",    context.get("cpu_pct"))),
-            "memory_utilization_pct": _guard(context.get("memory_utilization_pct", context.get("mem_pct"))),
-            "error_rate":             _guard(context.get("error_rate")),
-            "rps":                    _guard(context.get("rps")),
-            "latency_p95_ms":         _guard(context.get("latency_p95_ms",         context.get("latency_ms"))),
+            "cpu_utilization_pct": _guard(
+                context.get("cpu_utilization_pct", context.get("cpu_pct"))
+            ),
+            "memory_utilization_pct": _guard(
+                context.get("memory_utilization_pct", context.get("mem_pct"))
+            ),
+            "error_rate": _guard(context.get("error_rate")),
+            "rps": _guard(context.get("rps")),
+            "latency_p95_ms": _guard(
+                context.get("latency_p95_ms", context.get("latency_ms"))
+            ),
         }
         return {
             name: _clamp(value, *FEATURE_BOUNDS.get(name, (0.0, 1e9)))
@@ -259,7 +272,7 @@ class FeaturePipeline:
         Returns:
             FeatureVector with all features clamped and NaN-free.
         """
-        ts      = datetime.now(timezone.utc)
+        ts = datetime.now(timezone.utc)
         missing = []
         features: dict[str, float] = {}
 
@@ -272,7 +285,7 @@ class FeaturePipeline:
         has_metrics = False
         if metrics_context:
             met_features = self._extract_metrics_features(metrics_context)
-            has_metrics  = any(v > 0.0 for v in met_features.values())
+            has_metrics = any(v > 0.0 for v in met_features.values())
             features.update(met_features)
 
         # Fill missing metrics features
@@ -285,15 +298,15 @@ class FeaturePipeline:
         # Update running mean and last-value state
         for name, value in features.items():
             self._last_values[name] = value
-            self._feature_sums[name]   = self._feature_sums.get(name, 0.0)   + value
-            self._feature_counts[name] = self._feature_counts.get(name, 0)    + 1
+            self._feature_sums[name] = self._feature_sums.get(name, 0.0) + value
+            self._feature_counts[name] = self._feature_counts.get(name, 0) + 1
 
         return FeatureVector(
-            timestamp   = ts,
-            features    = features,
-            missing     = missing,
-            has_db      = has_db,
-            has_metrics = has_metrics,
+            timestamp=ts,
+            features=features,
+            missing=missing,
+            has_db=has_db,
+            has_metrics=has_metrics,
         )
 
     def _fill_value(self, feature_name: str) -> float:
@@ -306,9 +319,7 @@ class FeaturePipeline:
             count = self._feature_counts.get(feature_name, 0)
             if count == 0:
                 return 0.0
-            return _safe_div(
-                self._feature_sums.get(feature_name, 0.0), float(count)
-            )
+            return _safe_div(self._feature_sums.get(feature_name, 0.0), float(count))
         return 0.0
 
     @property

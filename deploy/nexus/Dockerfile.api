@@ -33,7 +33,7 @@ RUN groupadd -r nexus && useradd -r -g nexus nexus
 
 # Runtime deps only
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget curl \
+    wget curl git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

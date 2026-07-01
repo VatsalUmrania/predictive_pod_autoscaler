@@ -62,6 +62,7 @@ def _get_middleware():
     global _middleware_cls
     if _middleware_cls is None:
         from nexus.sdk.python.middleware import SelfHealMiddleware
+
         _middleware_cls = SelfHealMiddleware
     return _middleware_cls
 
@@ -70,6 +71,7 @@ def _get_decorators():
     global _decorators_mod
     if _decorators_mod is None:
         from nexus.sdk.python import decorators
+
         _decorators_mod = decorators
     return _decorators_mod
 
@@ -77,6 +79,7 @@ def _get_decorators():
 # ──────────────────────────────────────────────────────────────────────────────
 # Public SelfHeal class
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class _SelfHeal:
     """
@@ -91,18 +94,18 @@ class _SelfHeal:
     """
 
     def __init__(self) -> None:
-        self._token:    str | None = None
+        self._token: str | None = None
         self._nexus_url: str = os.getenv("NEXUS_API_URL", "http://localhost:8080")
         self._app_name: str | None = None
         self._initialized = False
 
     def init(
         self,
-        app:       Any,
-        token:     str | None  = None,
-        nexus_url: str | None  = None,
-        wsgi:      bool           = False,
-        slow_threshold_ms: int    = 500,
+        app: Any,
+        token: str | None = None,
+        nexus_url: str | None = None,
+        wsgi: bool = False,
+        slow_threshold_ms: int = 500,
     ) -> Any:
         """
         Wrap an ASGI (or WSGI) app with NEXUS telemetry middleware.
@@ -117,7 +120,7 @@ class _SelfHeal:
         Returns:
             The app wrapped with SelfHealMiddleware (same type as input for ASGI).
         """
-        self._token     = token or os.getenv("SELFHEAL_TOKEN", "")
+        self._token = token or os.getenv("SELFHEAL_TOKEN", "")
         self._nexus_url = nexus_url or self._nexus_url
 
         if not self._token:
@@ -128,11 +131,11 @@ class _SelfHeal:
 
         mw = _get_middleware()
         wrapped = mw(
-            app             = app,
-            token           = self._token,
-            nexus_url       = self._nexus_url,
-            wsgi            = wsgi,
-            slow_ms         = slow_threshold_ms,
+            app=app,
+            token=self._token,
+            nexus_url=self._nexus_url,
+            wsgi=wsgi,
+            slow_ms=slow_threshold_ms,
         )
 
         # Stash app name from the wrapped object if available
@@ -148,10 +151,10 @@ class _SelfHeal:
 
     def critical(
         self,
-        never_shed:          bool         = False,
-        fallback:            str | None= None,
-        alert_sre_after:     int          = 3,
-        max_healing_actions: int          = 5,
+        never_shed: bool = False,
+        fallback: str | None = None,
+        alert_sre_after: int = 3,
+        max_healing_actions: int = 5,
     ):
         """
         Route-level annotation for critical endpoints.
@@ -169,20 +172,20 @@ class _SelfHeal:
                 ...
         """
         return _get_decorators().critical(
-            never_shed          = never_shed,
-            fallback            = fallback,
-            alert_sre_after     = alert_sre_after,
-            max_healing_actions = max_healing_actions,
-            token               = self._token,
-            nexus_url           = self._nexus_url,
+            never_shed=never_shed,
+            fallback=fallback,
+            alert_sre_after=alert_sre_after,
+            max_healing_actions=max_healing_actions,
+            token=self._token,
+            nexus_url=self._nexus_url,
         )
 
     def query(
         self,
-        label:            str           = "",
-        spike_indicator:  bool          = False,
-        cache_on_failure: bool          = False,
-        timeout_ms:       int | None = None,
+        label: str = "",
+        spike_indicator: bool = False,
+        cache_on_failure: bool = False,
+        timeout_ms: int | None = None,
     ):
         """
         DB query annotation — marks a query function for NEXUS tracking.
@@ -199,23 +202,24 @@ class _SelfHeal:
                 return db.query("SELECT * FROM orders WHERE user_id = ?", user_id)
         """
         return _get_decorators().query(
-            label            = label,
-            spike_indicator  = spike_indicator,
-            cache_on_failure = cache_on_failure,
-            timeout_ms       = timeout_ms,
-            token            = self._token,
-            nexus_url        = self._nexus_url,
+            label=label,
+            spike_indicator=spike_indicator,
+            cache_on_failure=cache_on_failure,
+            timeout_ms=timeout_ms,
+            token=self._token,
+            nexus_url=self._nexus_url,
         )
 
     async def send_event(self, event_type: str, data: dict = None) -> None:
         """Manually emit a custom event to NEXUS."""
         try:
             import httpx
+
             async with httpx.AsyncClient(timeout=3.0) as client:
                 await client.post(
                     f"{self._nexus_url}/sdk/event",
-                    json    = {"type": event_type, **(data or {})},
-                    headers = {"Authorization": f"Bearer {self._token}"},
+                    json={"type": event_type, **(data or {})},
+                    headers={"Authorization": f"Bearer {self._token}"},
                 )
         except Exception as exc:
             logger.debug(f"[SelfHeal] send_event failed: {exc}")
@@ -223,9 +227,9 @@ class _SelfHeal:
     def wrap_db(
         self,
         engine_or_pool: Any,
-        slow_ms:        int  = 200,
-        track_tables:   bool = False,
-        label:          str  = "",
+        slow_ms: int = 200,
+        track_tables: bool = False,
+        label: str = "",
     ) -> Any:
         """
         Wrap a database engine or connection pool with NEXUS telemetry.
@@ -255,12 +259,12 @@ class _SelfHeal:
             )
         """
         return _DBWrapper(
-            wrapped      = engine_or_pool,
-            token        = self._token        or "",
-            nexus_url    = self._nexus_url,
-            slow_ms      = slow_ms,
-            track_tables = track_tables,
-            label        = label or type(engine_or_pool).__name__,
+            wrapped=engine_or_pool,
+            token=self._token or "",
+            nexus_url=self._nexus_url,
+            slow_ms=slow_ms,
+            track_tables=track_tables,
+            label=label or type(engine_or_pool).__name__,
         )
 
 
@@ -284,32 +288,40 @@ class _DBWrapper:
     and emits timing telemetry to NEXUS without changing any behaviour.
     """
 
-    _INTERCEPT = frozenset({
-        "execute", "query", "fetch", "fetchrow", "fetchval",
-        "scalar", "scalar_one", "scalar_one_or_none",
-    })
+    _INTERCEPT = frozenset(
+        {
+            "execute",
+            "query",
+            "fetch",
+            "fetchrow",
+            "fetchval",
+            "scalar",
+            "scalar_one",
+            "scalar_one_or_none",
+        }
+    )
 
     def __init__(self, wrapped, token, nexus_url, slow_ms, track_tables, label):
-        object.__setattr__(self, "_wrapped",      wrapped)
-        object.__setattr__(self, "_token",        token)
-        object.__setattr__(self, "_nexus_url",    nexus_url)
-        object.__setattr__(self, "_slow_ms",      slow_ms)
+        object.__setattr__(self, "_wrapped", wrapped)
+        object.__setattr__(self, "_token", token)
+        object.__setattr__(self, "_nexus_url", nexus_url)
+        object.__setattr__(self, "_slow_ms", slow_ms)
         object.__setattr__(self, "_track_tables", track_tables)
-        object.__setattr__(self, "_label",        label)
+        object.__setattr__(self, "_label", label)
 
     def __getattr__(self, name: str):
         wrapped = object.__getattribute__(self, "_wrapped")
-        attr    = getattr(wrapped, name)
+        attr = getattr(wrapped, name)
 
         if name not in _DBWrapper._INTERCEPT or not callable(attr):
             return attr
 
         # Wrap the method
-        slow_ms      = object.__getattribute__(self, "_slow_ms")
+        slow_ms = object.__getattribute__(self, "_slow_ms")
         track_tables = object.__getattribute__(self, "_track_tables")
-        token        = object.__getattribute__(self, "_token")
-        nexus_url    = object.__getattribute__(self, "_nexus_url")
-        label        = object.__getattribute__(self, "_label")
+        token = object.__getattribute__(self, "_token")
+        nexus_url = object.__getattribute__(self, "_nexus_url")
+        label = object.__getattribute__(self, "_label")
 
         import inspect
 
@@ -317,7 +329,7 @@ class _DBWrapper:
             import asyncio
 
             async def async_wrapper(*args, **kwargs):
-                sql   = _sql_from_args(args)
+                sql = _sql_from_args(args)
                 start = _time.monotonic()
                 try:
                     result = await attr(*args, **kwargs)
@@ -326,15 +338,21 @@ class _DBWrapper:
                     duration_ms = (_time.monotonic() - start) * 1000
                     asyncio.create_task(
                         _emit_query_async(
-                            sql, duration_ms, track_tables,
-                            slow_ms, token, nexus_url, label
+                            sql,
+                            duration_ms,
+                            track_tables,
+                            slow_ms,
+                            token,
+                            nexus_url,
+                            label,
                         )
                     )
 
             return async_wrapper
         else:
+
             def sync_wrapper(*args, **kwargs):
-                sql   = _sql_from_args(args)
+                sql = _sql_from_args(args)
                 start = _time.monotonic()
                 try:
                     result = attr(*args, **kwargs)
@@ -343,7 +361,15 @@ class _DBWrapper:
                     duration_ms = (_time.monotonic() - start) * 1000
                     _threading.Thread(
                         target=_emit_query_sync,
-                        args=(sql, duration_ms, track_tables, slow_ms, token, nexus_url, label),
+                        args=(
+                            sql,
+                            duration_ms,
+                            track_tables,
+                            slow_ms,
+                            token,
+                            nexus_url,
+                            label,
+                        ),
                         daemon=True,
                     ).start()
 
@@ -384,16 +410,17 @@ def _sql_from_args(args) -> str:
 def _emit_query_sync(sql, duration_ms, track_tables, slow_ms, token, url, label):
     try:
         import requests
+
         requests.post(
             f"{url}/sdk/query",
-            json    = {
+            json={
                 "sql_preview": sql or label,
                 "duration_ms": round(duration_ms, 1),
-                "tables":      _extract_tables(sql) if track_tables and sql else [],
-                "slow":        duration_ms > slow_ms,
+                "tables": _extract_tables(sql) if track_tables and sql else [],
+                "slow": duration_ms > slow_ms,
             },
-            headers = {"Authorization": f"Bearer {token}"},
-            timeout = 2,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=2,
         )
     except Exception:
         pass
@@ -402,16 +429,17 @@ def _emit_query_sync(sql, duration_ms, track_tables, slow_ms, token, url, label)
 async def _emit_query_async(sql, duration_ms, track_tables, slow_ms, token, url, label):
     try:
         import httpx
+
         async with httpx.AsyncClient(timeout=2.0) as client:
             await client.post(
                 f"{url}/sdk/query",
-                json    = {
+                json={
                     "sql_preview": sql or label,
                     "duration_ms": round(duration_ms, 1),
-                    "tables":      _extract_tables(sql) if track_tables and sql else [],
-                    "slow":        duration_ms > slow_ms,
+                    "tables": _extract_tables(sql) if track_tables and sql else [],
+                    "slow": duration_ms > slow_ms,
                 },
-                headers = {"Authorization": f"Bearer {token}"},
+                headers={"Authorization": f"Bearer {token}"},
             )
     except Exception:
         pass

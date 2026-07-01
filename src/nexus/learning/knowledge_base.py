@@ -71,12 +71,12 @@ CREATE TABLE IF NOT EXISTS signal_patterns (
 """
 
 # Thresholds for adjustment computation
-_HIGH_PERFORMER_RATE   = 0.85
-_LOW_PERFORMER_RATE    = 0.50
-_MAX_POSITIVE_DELTA    = +0.05
-_MAX_NEGATIVE_DELTA    = -0.10
-_POSITIVE_TARGET_N     = 10     # Evidence required for full positive boost
-_NEGATIVE_TARGET_N     = 5      # Evidence required for full negative penalty
+_HIGH_PERFORMER_RATE = 0.85
+_LOW_PERFORMER_RATE = 0.50
+_MAX_POSITIVE_DELTA = +0.05
+_MAX_NEGATIVE_DELTA = -0.10
+_POSITIVE_TARGET_N = 10  # Evidence required for full positive boost
+_NEGATIVE_TARGET_N = 5  # Evidence required for full negative penalty
 
 
 def _compute_delta(stats: RunbookStats) -> float:
@@ -84,7 +84,7 @@ def _compute_delta(stats: RunbookStats) -> float:
     Compute the confidence adjustment delta for a runbook.
     Returns a value in [_MAX_NEGATIVE_DELTA, _MAX_POSITIVE_DELTA].
     """
-    n    = stats.completed
+    n = stats.completed
     rate = stats.success_rate
 
     if n == 0:
@@ -92,13 +92,13 @@ def _compute_delta(stats: RunbookStats) -> float:
 
     if rate >= _HIGH_PERFORMER_RATE:
         # Positive boost, scaled by evidence volume
-        raw   = _MAX_POSITIVE_DELTA
+        raw = _MAX_POSITIVE_DELTA
         scale = min(n / _POSITIVE_TARGET_N, 1.0)
         return round(raw * scale, 4)
 
     if rate < _LOW_PERFORMER_RATE:
         # Negative penalty, scaled by evidence volume
-        raw   = _MAX_NEGATIVE_DELTA
+        raw = _MAX_NEGATIVE_DELTA
         scale = min(n / _NEGATIVE_TARGET_N, 1.0)
         return round(raw * scale, 4)
 
@@ -111,24 +111,26 @@ def _compute_delta(stats: RunbookStats) -> float:
 # Knowledge Base
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class AdjustmentRecord:
     """One row from the confidence_adjustments table."""
-    runbook_id:      str
-    delta:           float
-    evidence_count:  int
-    success_rate:    float
+
+    runbook_id: str
+    delta: float
+    evidence_count: int
+    success_rate: float
     false_heal_rate: float
-    last_updated:    str
+    last_updated: str
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "runbook_id":      self.runbook_id,
-            "delta":           self.delta,
-            "evidence_count":  self.evidence_count,
-            "success_rate":    round(self.success_rate, 3),
+            "runbook_id": self.runbook_id,
+            "delta": self.delta,
+            "evidence_count": self.evidence_count,
+            "success_rate": round(self.success_rate, 3),
             "false_heal_rate": round(self.false_heal_rate, 3),
-            "last_updated":    self.last_updated,
+            "last_updated": self.last_updated,
         }
 
 
@@ -202,7 +204,7 @@ class KnowledgeBase:
             return 0.0
 
         delta = _compute_delta(stats)
-        now   = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
         await self._db.execute(
             """
@@ -258,12 +260,12 @@ class KnowledgeBase:
             rows = await cur.fetchall()
             return [
                 AdjustmentRecord(
-                    runbook_id      = r["runbook_id"],
-                    delta           = r["delta"],
-                    evidence_count  = r["evidence_count"],
-                    success_rate    = r["success_rate"],
-                    false_heal_rate = r["false_heal_rate"],
-                    last_updated    = r["last_updated"],
+                    runbook_id=r["runbook_id"],
+                    delta=r["delta"],
+                    evidence_count=r["evidence_count"],
+                    success_rate=r["success_rate"],
+                    false_heal_rate=r["false_heal_rate"],
+                    last_updated=r["last_updated"],
                 )
                 for r in rows
             ]
@@ -273,8 +275,8 @@ class KnowledgeBase:
     async def record_pattern(
         self,
         signal_types: set[str],
-        runbook_id:   str,
-        success:      bool,
+        runbook_id: str,
+        success: bool,
     ) -> None:
         """
         Record a signal_type combination and whether the associated runbook succeeded.
@@ -283,8 +285,8 @@ class KnowledgeBase:
         if not self._db:
             return
 
-        key  = "|".join(sorted(signal_types))
-        now  = datetime.now(timezone.utc).isoformat()
+        key = "|".join(sorted(signal_types))
+        now = datetime.now(timezone.utc).isoformat()
 
         await self._db.execute(
             """
@@ -307,9 +309,7 @@ class KnowledgeBase:
         )
         await self._db.commit()
 
-    async def get_best_runbook_for_pattern(
-        self, signal_types: set[str]
-    ) -> str | None:
+    async def get_best_runbook_for_pattern(self, signal_types: set[str]) -> str | None:
         """
         Look up which runbook historically worked best for a given signal-type set.
         Returns the runbook_id with highest success_count / total_count.
@@ -332,7 +332,9 @@ class KnowledgeBase:
             row = await cur.fetchone()
             return row["runbook_id"] if row else None
 
-    async def get_working_patterns(self, min_success_rate: float = 0.80) -> list[dict[str, Any]]:
+    async def get_working_patterns(
+        self, min_success_rate: float = 0.80
+    ) -> list[dict[str, Any]]:
         """
         Return signal patterns that reliably led to successful healing.
         Used to enrich RCA prompts and advisor recommendations.

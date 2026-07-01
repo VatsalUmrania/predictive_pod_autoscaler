@@ -28,21 +28,22 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Registry of annotated routes — sent to NEXUS at startup
-_CRITICAL_ROUTES:  dict[str, dict] = {}
-_QUERY_LABELS:     dict[str, dict] = {}
+_CRITICAL_ROUTES: dict[str, dict] = {}
+_QUERY_LABELS: dict[str, dict] = {}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # @critical decorator
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def critical(
-    never_shed:          bool         = False,
-    fallback:            str | None= None,
-    alert_sre_after:     int          = 3,
-    max_healing_actions: int          = 5,
-    token:               str          = "",
-    nexus_url:           str          = "http://localhost:8080",
+    never_shed: bool = False,
+    fallback: str | None = None,
+    alert_sre_after: int = 3,
+    max_healing_actions: int = 5,
+    token: str = "",
+    nexus_url: str = "http://localhost:8080",
 ) -> Callable:
     """
     Declare a route as critical to NEXUS.
@@ -51,23 +52,30 @@ def critical(
     time (startup). The metadata is used by RunbookExecutor to enforce
     blast-radius controls and paging thresholds.
     """
+
     def decorator(func: Callable) -> Callable:
         # Register metadata
         route_name = func.__name__
         _CRITICAL_ROUTES[route_name] = {
-            "function":           route_name,
-            "never_shed":         never_shed,
-            "fallback":           fallback,
-            "alert_sre_after":    alert_sre_after,
-            "max_healing_actions":max_healing_actions,
+            "function": route_name,
+            "never_shed": never_shed,
+            "fallback": fallback,
+            "alert_sre_after": alert_sre_after,
+            "max_healing_actions": max_healing_actions,
         }
 
         # Register with NEXUS (fire-and-forget)
-        asyncio.get_event_loop().call_soon_threadsafe(
-            lambda: asyncio.create_task(
-                _register_critical(route_name, _CRITICAL_ROUTES[route_name], token, nexus_url)
+        (
+            asyncio.get_event_loop().call_soon_threadsafe(
+                lambda: asyncio.create_task(
+                    _register_critical(
+                        route_name, _CRITICAL_ROUTES[route_name], token, nexus_url
+                    )
+                )
             )
-        ) if asyncio.get_event_loop().is_running() else None
+            if asyncio.get_event_loop().is_running()
+            else None
+        )
 
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
@@ -79,6 +87,7 @@ def critical(
                 )
                 if fallback == "queue":
                     from fastapi.responses import JSONResponse
+
                     return JSONResponse(
                         status_code=202,
                         content={"queued": True, "message": "Request queued for retry"},
@@ -105,11 +114,12 @@ def critical(
 async def _register_critical(name: str, meta: dict, token: str, url: str) -> None:
     try:
         import httpx
+
         async with httpx.AsyncClient(timeout=3.0) as client:
             await client.post(
                 f"{url}/sdk/event",
-                json    = {"type": "critical_route_registered", "route": name, **meta},
-                headers = {"Authorization": f"Bearer {token}"},
+                json={"type": "critical_route_registered", "route": name, **meta},
+                headers={"Authorization": f"Bearer {token}"},
             )
     except Exception:
         pass
@@ -118,12 +128,18 @@ async def _register_critical(name: str, meta: dict, token: str, url: str) -> Non
 async def _emit_critical_failure(name: str, error: str, token: str, url: str) -> None:
     try:
         import httpx
+
         async with httpx.AsyncClient(timeout=2.0) as client:
             await client.post(
                 f"{url}/sdk/route-error",
-                json    = {"route": name, "method": "POST", "status_code": 500,
-                           "error_msg": error[:300], "critical": True},
-                headers = {"Authorization": f"Bearer {token}"},
+                json={
+                    "route": name,
+                    "method": "POST",
+                    "status_code": 500,
+                    "error_msg": error[:300],
+                    "critical": True,
+                },
+                headers={"Authorization": f"Bearer {token}"},
             )
     except Exception:
         pass
@@ -134,13 +150,20 @@ def _emit_sync(name: str, error: str, token: str, url: str) -> None:
         import threading
 
         import requests
+
         def _post():
             requests.post(
                 f"{url}/sdk/route-error",
-                json    = {"route": name, "method": "POST", "status_code": 500, "error_msg": error[:300]},
-                headers = {"Authorization": f"Bearer {token}"},
-                timeout = 2,
+                json={
+                    "route": name,
+                    "method": "POST",
+                    "status_code": 500,
+                    "error_msg": error[:300],
+                },
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=2,
             )
+
         threading.Thread(target=_post, daemon=True).start()
     except Exception:
         pass
@@ -150,13 +173,14 @@ def _emit_sync(name: str, error: str, token: str, url: str) -> None:
 # @query decorator
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def query(
-    label:            str           = "",
-    spike_indicator:  bool          = False,
-    cache_on_failure: bool          = False,
-    timeout_ms:       int | None = None,
-    token:            str           = "",
-    nexus_url:        str           = "http://localhost:8080",
+    label: str = "",
+    spike_indicator: bool = False,
+    cache_on_failure: bool = False,
+    timeout_ms: int | None = None,
+    token: str = "",
+    nexus_url: str = "http://localhost:8080",
 ) -> Callable:
     """
     Annotate a DB query function for NEXUS tracking.
@@ -171,11 +195,11 @@ def query(
     def decorator(func: Callable) -> Callable:
         query_name = label or func.__name__
         _QUERY_LABELS[query_name] = {
-            "function":        func.__name__,
-            "label":           query_name,
+            "function": func.__name__,
+            "label": query_name,
             "spike_indicator": spike_indicator,
-            "cache_on_failure":cache_on_failure,
-            "timeout_ms":      timeout_ms,
+            "cache_on_failure": cache_on_failure,
+            "timeout_ms": timeout_ms,
         }
 
         @functools.wraps(func)
@@ -190,6 +214,7 @@ def query(
 
                 # Emit query telemetry (background thread — non-blocking)
                 import threading
+
                 threading.Thread(
                     target=_emit_query_sync,
                     args=(query_name, duration_ms, spike_indicator, token, nexus_url),
@@ -218,7 +243,9 @@ def query(
                     _cache["last"] = result
 
                 asyncio.create_task(
-                    _emit_query_async(query_name, duration_ms, spike_indicator, token, nexus_url)
+                    _emit_query_async(
+                        query_name, duration_ms, spike_indicator, token, nexus_url
+                    )
                 )
                 return result
 
@@ -237,16 +264,17 @@ def query(
 def _emit_query_sync(label, duration_ms, spike_indicator, token, url) -> None:
     try:
         import requests
+
         requests.post(
             f"{url}/sdk/query",
-            json    = {
-                "sql_preview":   label,
-                "duration_ms":   round(duration_ms, 1),
-                "tables":        [label] if spike_indicator else [],
-                "slow":          bool(duration_ms > 200),
+            json={
+                "sql_preview": label,
+                "duration_ms": round(duration_ms, 1),
+                "tables": [label] if spike_indicator else [],
+                "slow": bool(duration_ms > 200),
             },
-            headers = {"Authorization": f"Bearer {token}"},
-            timeout = 2,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=2,
         )
     except Exception:
         pass
@@ -255,16 +283,17 @@ def _emit_query_sync(label, duration_ms, spike_indicator, token, url) -> None:
 async def _emit_query_async(label, duration_ms, spike_indicator, token, url) -> None:
     try:
         import httpx
+
         async with httpx.AsyncClient(timeout=2.0) as client:
             await client.post(
                 f"{url}/sdk/query",
-                json    = {
+                json={
                     "sql_preview": label,
                     "duration_ms": round(duration_ms, 1),
-                    "tables":      [label] if spike_indicator else [],
-                    "slow":        bool(duration_ms > 200),
+                    "tables": [label] if spike_indicator else [],
+                    "slow": bool(duration_ms > 200),
                 },
-                headers = {"Authorization": f"Bearer {token}"},
+                headers={"Authorization": f"Bearer {token}"},
             )
     except Exception:
         pass

@@ -10,13 +10,25 @@ cd /run/media/vatsal/DATA/Projects/predictive_pod_autoscaler
 source venv/bin/activate
 
 # Verify tools are ready
-ppa --help && docker info | head -3 && minikube version && helm version
+docker info | head -3 && minikube version && helm version && kubectl version --client
 ```
+
+> Note: the only remaining `ppa` CLI command is `ppa model push` (it orchestrates a loader pod for TFLite transfers into the `ppa-models` PVC). Everything below is plain `kubectl` / `docker` / `helm`.
 
 ---
 
 ### Phase 1 — Deploy NEXUS into K8s
 ```bash
+# PPA CRD + RBAC + persistent volume claim (declared up front so `ppa model push`
+# never has to create the PVC imperatively — eliminates the
+# "missing kubectl.kubernetes.io/last-applied-configuration annotation"
+# warning from Phase 5; the RBAC binding prevents
+# `serviceaccount "ppa-operator" not found` from the operator deployment)
+kubectl apply -f deploy/crd.yaml
+kubectl apply -f deploy/rbac.yaml
+kubectl apply -f deploy/ppa-models-pvc.yaml
+
+# NEXUS (NATS + nexus-api)
 kubectl apply -f deploy/nexus/nats-statefulset.yaml
 kubectl apply -f deploy/nexus/nexus-api-deployment.yaml
 kubectl get pods -n nexus   # Wait for: nats-0 Running + nexus-api-xxxx Running
@@ -26,54 +38,144 @@ kubectl get pods -n nexus   # Wait for: nats-0 Running + nexus-api-xxxx Running
 
 ### Phase 2 — Bootstrap PPA Infra
 ```bash
-# Full bootstrap (~5-8 min)
-ppa init
+# 1. Start minikube
+minikube start --cpus=4 --memory=6g --driver=docker
 
-# OR, if you only want shop-demo deployed as target:
-ppa init --app demo/backend
+# 2. Enable K8s addons (for HPA + internal traffic)
+minikube addons enable metrics-server
+minikube addons enable ingress
 
-# If infra already exists, just deploy shop-demo manually:
+# 3. Install Prometheus + Grafana via Helm (kube-prometheus-stack)
+kubectl create namespace monitoring
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+helm install prometheus prometheus-community/kube-prometheus-stack \
+    -n monitoring \
+    --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false
+# Wait for Prometheus before moving on — the operator (Phase 5) queries it
+# on startup. If it isn't up, the operator trips a circuit breaker and needs
+# ~5 min to recover on its own.
+kubectl wait --for=condition=ready pod -l "release=prometheus" -n monitoring --timeout=300s
+
+# 4. Build & deploy shop-demo (target app) into minikube's docker daemon
 eval $(minikube docker-env)
 docker build -t shop-demo:latest -f demo/backend/Dockerfile .
 kubectl apply -f demo/backend/deployment.yaml
 kubectl get pods -l app=shop-demo -w
+
+# 5. (Optional) Deploy synthetic traffic generator
+kubectl apply -f deploy/traffic/traffic-gen-deployment.yaml
 ```
 
 ---
 
 ### Phase 3 — Register shop-demo with PPA
+Apply the three `PredictiveAutoscaler` CRs directly (one per horizon).
+Source files at `deploy/generated-manifests/shop-demo/ppa-normalized_rps_t{3,5,10}m.yaml`:
 ```bash
-ppa add \
-  --app-name shop-demo \
-  --target   shop-demo \
-  --namespace default \
-  --min-replicas 1 \
-  --max-replicas 10 \
-  --rps-capacity 50
+cat <<EOF | kubectl apply -f -
+apiVersion: ppa.example.com/v1
+kind: PredictiveAutoscaler
+metadata: {name: shop-demo-ppa-normalized-rps-t3m, namespace: default}
+spec:
+  targetDeployment: "shop-demo"
+  appName: "shop-demo"
+  horizon: "normalized_rps_t3m"
+  minReplicas: 1
+  maxReplicas: 10
+  capacityPerPod: 50
+  scaleUpRate: 2.0
+  scaleDownRate: 0.5
+  safetyFactor: 1.15
+  observerMode: true
+  modelPath: "/models/shop-demo/normalized_rps_t3m/current/model.tflite"
+  scalerPath: "/models/shop-demo/normalized_rps_t3m/current/scaler.pkl"
+  targetScalerPath: "/models/shop-demo/normalized_rps_t3m/current/target_scaler.pkl"
+---
+apiVersion: ppa.example.com/v1
+kind: PredictiveAutoscaler
+metadata: {name: shop-demo-ppa-normalized-rps-t5m, namespace: default}
+spec:
+  targetDeployment: "shop-demo"
+  appName: "shop-demo"
+  horizon: "normalized_rps_t5m"
+  minReplicas: 1
+  maxReplicas: 10
+  capacityPerPod: 50
+  scaleUpRate: 2.0
+  scaleDownRate: 0.5
+  safetyFactor: 1.15
+  observerMode: true
+  modelPath: "/models/shop-demo/normalized_rps_t5m/current/model.tflite"
+  scalerPath: "/models/shop-demo/normalized_rps_t5m/current/scaler.pkl"
+  targetScalerPath: "/models/shop-demo/normalized_rps_t5m/current/target_scaler.pkl"
+---
+apiVersion: ppa.example.com/v1
+kind: PredictiveAutoscaler
+metadata: {name: shop-demo-ppa-normalized-rps-t10m, namespace: default}
+spec:
+  targetDeployment: "shop-demo"
+  appName: "shop-demo"
+  horizon: "normalized_rps_t10m"
+  minReplicas: 1
+  maxReplicas: 10
+  capacityPerPod: 50
+  scaleUpRate: 2.0
+  scaleDownRate: 0.5
+  safetyFactor: 1.15
+  observerMode: false
+  modelPath: "/models/shop-demo/normalized_rps_t10m/current/model.tflite"
+  scalerPath: "/models/shop-demo/normalized_rps_t10m/current/scaler.pkl"
+  targetScalerPath: "/models/shop-demo/normalized_rps_t10m/current/target_scaler.pkl"
+EOF
 
 kubectl get predictiveautoscalers -n default
-# Expected: shop-demo-rps-t3m, shop-demo-rps-t5m, shop-demo-rps-t10m
+# Expected:
+# shop-demo-ppa-normalized-rps-t3m
+# shop-demo-ppa-normalized-rps-t5m
+# shop-demo-ppa-normalized-rps-t10m
 ```
+
+Or, equivalently: `kubectl apply -f deploy/generated-manifests/shop-demo/`.
+
+> **Re-run warning**: if you previously deployed older CRs (e.g. named
+> `shop-demo-rps-t3m` with `horizon: "rps_t3m"`) whose model bundles no
+> longer exist, multiple autoscalers will fight for the same deployment
+> and the operator will log
+> `Model bundle pending: no model bundle found for shop-demo/rps_t*` plus
+> `Multiple CRs detected for target default/shop-demo; active autoscalers
+> can fight over replicas`. Delete the stale ones first:
+> ```bash
+> kubectl get predictiveautoscalers -n default   # list
+> kubectl delete predictiveautoscaler <stale-name> -n default
+> ```
 
 ---
 
-### Phase 4 — Train the LSTM Model
+### Phase 4 — Push pre-trained model to PVC
+> No training step — using the pre-trained model from `artifacts/shop-demo/`.
+> `ppa model push` spawns a loader pod, runs scaler-regeneration in-cluster,
+> and copies `model.tflite` + scalers into the `ppa-models` PVC.
 ```bash
-ppa train \
-  --app shop-demo \
-  --horizon rps_t10m \
-  --epochs 50 \
-  --lookback 60 \
-  --patience 20
-
-ppa model evaluate --app shop-demo   # check accuracy
+ppa model push \
+  --app-name shop-demo \
+  --namespace default \
+  --horizon normalized_rps_t3m,normalized_rps_t5m,normalized_rps_t10m
 ```
+> Horizons must match the `appName`/`horizon` in the CR (Phase 3) and the
+> model directory layout (`/models/<app>/<horizon>/current/`).
 
 ---
 
-### Phase 5 — Deploy the PPA Operator
+### Phase 5 — Build & Deploy the PPA Operator
 ```bash
-ppa apply --app-name shop-demo --yes
+# Build operator image in minikube's docker daemon (so the cluster can pull it)
+eval $(minikube docker-env)
+docker build -t ppa-operator:latest -f src/ppa/operator/Dockerfile .
+
+# Apply operator + verify roll-out
+kubectl apply -f deploy/operator-deployment.yaml
+kubectl rollout status deployment/ppa-operator -n default --timeout=120s
 
 # Verify NATS_URL is correct:
 kubectl get deployment ppa-operator -o jsonpath='{.spec.template.spec.containers[0].env}' \
@@ -166,4 +268,4 @@ open $NEXUS/docs                                      # Swagger UI
 
 ---
 
-**TL;DR order:** Phase 1 (NEXUS K8s) → `ppa init` (Phase 2) → `ppa add` → `ppa train` → `ppa apply` → verify logs. Use the **synthetic inject script** in Phase 9 for instant end-to-end testing without waiting for the full ML cycle.
+**TL;DR order:** Phase 1 (NEXUS K8s) → Phase 2 (minikube+helm+shop-demo) → Phase 3 (apply PredictiveAutoscaler CRs) → Phase 4 (`ppa model push`) → Phase 5 (build + deploy operator) → verify logs. Use the **synthetic inject script** in Phase 9 for instant end-to-end testing without waiting for the full ML cycle.

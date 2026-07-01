@@ -10,6 +10,7 @@ logger = logging.getLogger("ppa.diagnostics")
 
 class FileValidationResult(TypedDict, total=False):
     """Type for individual file validation results."""
+
     path: str
     exists: bool
     is_file: bool
@@ -17,11 +18,14 @@ class FileValidationResult(TypedDict, total=False):
     readable: bool
     reason: str
 
+
 class ModelFormatResult(TypedDict, total=False):
     """Type for model format validation results."""
+
     path: str
     valid_magic: bool
     reason: str | None
+
 
 class DiagnosticsReport(TypedDict, total=False):
     """Type for comprehensive diagnostics report."""
@@ -31,6 +35,7 @@ class DiagnosticsReport(TypedDict, total=False):
     files: dict[str, Any]  # Complex nested structure
     format: ModelFormatResult
     recommendations: list[str]
+
 
 __all__ = [
     "check_tflite_runtime",
@@ -138,7 +143,9 @@ def validate_model_files(
             "exists": p.exists(),
             "is_file": p.is_file(),
             "size_bytes": p.stat().st_size if p.exists() else None,
-            "readable": p.is_file() and p.stat().st_mode & 0o400 if p.exists() else False,
+            "readable": (
+                p.is_file() and p.stat().st_mode & 0o400 if p.exists() else False
+            ),
         }
 
         if not p.exists():
@@ -209,7 +216,9 @@ def diagnose_model_load_issue(
     platform_info = get_platform_info()
     runtime_info = check_tflite_runtime(include_tensorflow=False)
     files_info = validate_model_files(model_path, scaler_path, target_scaler_path)
-    format_info: ModelFormatResult = cast(ModelFormatResult, validate_model_format(model_path))
+    format_info: ModelFormatResult = cast(
+        ModelFormatResult, validate_model_format(model_path)
+    )
 
     report: DiagnosticsReport = {
         "platform": platform_info,
@@ -222,7 +231,9 @@ def diagnose_model_load_issue(
     # Generate recommendations based on findings
     # Check if any runtime is available
     available_runtimes = [
-        k for k, v in runtime_info.items() if v is not None and not v.startswith("ERROR")
+        k
+        for k, v in runtime_info.items()
+        if v is not None and not v.startswith("ERROR")
     ]
     if not available_runtimes:
         report["recommendations"].append(
@@ -257,7 +268,9 @@ def diagnose_model_load_issue(
     # Check for broken runtime implementations
     for runtime_name, status in runtime_info.items():
         if isinstance(status, str) and status.startswith("ERROR"):
-            report["recommendations"].append(f"ERROR: {runtime_name} import failed: {status}")
+            report["recommendations"].append(
+                f"ERROR: {runtime_name} import failed: {status}"
+            )
 
     if not report["recommendations"]:
         report["recommendations"].append("All checks passed. Model should be loadable.")

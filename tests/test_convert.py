@@ -61,7 +61,9 @@ class TestConvertModel:
             assert result_full is not None
             assert result_quant is not None
             # Quantized should be <= full size (for small models they may be equal)
-            assert result_quant["size_kb"] <= result_full["size_kb"] + 1  # 1KB tolerance
+            assert (
+                result_quant["size_kb"] <= result_full["size_kb"] + 1
+            )  # 1KB tolerance
 
     def test_custom_output_path(self):
         """--output flag should place the file at the specified path."""
@@ -97,4 +99,6 @@ class TestConvertModel:
             with open(result["output_path"], "rb") as f:
                 header = f.read(20)
                 # TFLite uses FlatBuffers format, TFL3 magic bytes appear within first 20 bytes
-                assert b"TFL3" in header, "Invalid TFLite file (missing TFL3 magic bytes)"
+                assert (
+                    b"TFL3" in header
+                ), "Invalid TFLite file (missing TFL3 magic bytes)"

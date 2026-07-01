@@ -50,14 +50,14 @@ class BaseAgent(ABC):
         failure_threshold: int = 5,
         backoff_max_seconds: float = 300.0,
     ):
-        self.nats              = nats_client
-        self.agent_type        = agent_type
-        self.poll_interval     = poll_interval_seconds
+        self.nats = nats_client
+        self.agent_type = agent_type
+        self.poll_interval = poll_interval_seconds
         self.failure_threshold = failure_threshold
-        self.backoff_max       = backoff_max_seconds
+        self.backoff_max = backoff_max_seconds
 
-        self._running                = False
-        self._consecutive_failures   = 0
+        self._running = False
+        self._consecutive_failures = 0
         self._last_failure_time: float | None = None
         self._total_events_published = 0
         self._start_time: float | None = None
@@ -101,9 +101,9 @@ class BaseAgent(ABC):
             2. Publish each IncidentEvent to NATS
             3. Sleep for poll_interval (with exponential backoff on failures)
         """
-        self._running    = True
+        self._running = True
         self._start_time = time.monotonic()
-        name             = self._agent_name
+        name = self._agent_name
 
         logger.info(f"[{name}] Starting (poll_interval={self.poll_interval}s)")
         await self.on_start()
@@ -116,7 +116,9 @@ class BaseAgent(ABC):
 
                 # Recovery — reset failure counter
                 if self._consecutive_failures > 0:
-                    logger.info(f"[{name}] Recovered after {self._consecutive_failures} failure(s)")
+                    logger.info(
+                        f"[{name}] Recovered after {self._consecutive_failures} failure(s)"
+                    )
                     self._consecutive_failures = 0
 
                 # Publish all events
@@ -143,13 +145,15 @@ class BaseAgent(ABC):
 
             # Sleep — respects exponential backoff and remaining cycle budget
             elapsed = time.monotonic() - cycle_start
-            sleep   = max(0.0, self._compute_sleep() - elapsed)
+            sleep = max(0.0, self._compute_sleep() - elapsed)
             try:
                 await asyncio.sleep(sleep)
             except asyncio.CancelledError:
                 break
 
-        logger.info(f"[{name}] Stopped. Total events published: {self._total_events_published}")
+        logger.info(
+            f"[{name}] Stopped. Total events published: {self._total_events_published}"
+        )
         await self.on_stop()
 
     def stop(self) -> None:
@@ -169,19 +173,23 @@ class BaseAgent(ABC):
     async def _emit_circuit_breaker(self, error: str) -> None:
         """Emit a CIRCUIT_BREAKER_TRIPPED event to notify the Orchestrator."""
         try:
-            await self.nats.publish(IncidentEvent(
-                agent=self.agent_type,
-                signal_type=SignalType.CIRCUIT_BREAKER_TRIPPED,
-                severity=Severity.CRITICAL,
-                context={
-                    "consecutive_failures": self._consecutive_failures,
-                    "error_message":        error,
-                    "backoff_seconds":      self._compute_sleep(),
-                    "agent":                self._agent_name,
-                },
-            ))
+            await self.nats.publish(
+                IncidentEvent(
+                    agent=self.agent_type,
+                    signal_type=SignalType.CIRCUIT_BREAKER_TRIPPED,
+                    severity=Severity.CRITICAL,
+                    context={
+                        "consecutive_failures": self._consecutive_failures,
+                        "error_message": error,
+                        "backoff_seconds": self._compute_sleep(),
+                        "agent": self._agent_name,
+                    },
+                )
+            )
         except Exception as exc:
-            logger.error(f"[{self._agent_name}] Failed to emit circuit breaker event: {exc}")
+            logger.error(
+                f"[{self._agent_name}] Failed to emit circuit breaker event: {exc}"
+            )
 
     @property
     def _agent_name(self) -> str:

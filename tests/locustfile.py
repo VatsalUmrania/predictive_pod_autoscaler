@@ -1,4 +1,3 @@
-
 from locust import HttpUser, LoadTestShape, between, task
 
 
@@ -13,11 +12,13 @@ class TestAppUser(HttpUser):
     def health(self):
         self.client.get("/health")
 
+
 class StagesShape(LoadTestShape):
     """
     A shape class which loads test in stages.
     Starts at 10 users for 5 minutes, then ramps up to 250 users
     """
+
     stages = [
         {"duration": 300, "users": 50, "spawn_rate": 5},
         {"duration": 300, "users": 150, "spawn_rate": 10},

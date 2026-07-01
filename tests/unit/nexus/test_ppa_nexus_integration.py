@@ -27,6 +27,7 @@ from nexus.predictive.prescaler import PrescaleMode, Prescaler
 
 # ── Test fixtures ──────────────────────────────────────────────────────────────
 
+
 def make_ppa_payload(
     deployment="payments-api",
     namespace="production",
@@ -50,35 +51,69 @@ def make_ppa_payload(
 
 class MockNATS:
     """
-    In-process mock NATS. Supports two publish call patterns:
+    In-process mock NATS. Supports the NEXUSClient call surface used by tests:
 
-    1. NATSClient semantics:  publish(IncidentEvent)  — subject from event.nats_subject()
-    2. Tracker semantics:      publish(subject_str, dict_payload)
+    1. publish(IncidentEvent)                       → routed via nats_subject()
+    2. publish(subject_str, dict_payload)          → raw subject path
+    3. subscribe_raw(pattern, handler=...,           → captures subscriptions
+                     durable_name=..., stream_name=...)
+    4. _js  /  _nc aliases for self                 → JetStream and core NATS code
+                                                       paths route back through
+                                                       publish() so the same
+                                                       assertions work
     """
 
     def __init__(self):
         self._subs: dict[str, dict] = {}
         self._published: list[tuple[str, IncidentEvent | dict]] = []
+        # Alias `_js` and `_nc` to self so production code that prefers the
+        # JetStream context (`self._nats._js.publish(...)`) or the raw NATS
+        # core client (`self._nats._nc.publish(...)`) still routes through
+        # MockNATS.publish instead of silently dropping the message.
+        self._js = self
+        self._nc = self
 
-    async def subscribe_raw(self, subject_pattern: str, *, handler, durable_name=None):
-        self._subs[subject_pattern] = {"handler": handler, "durable_name": durable_name}
+    async def subscribe_raw(
+        self,
+        subject_pattern: str,
+        *,
+        handler,
+        durable_name: str | None = None,
+        stream_name: str | None = None,
+    ):
+        self._subs[subject_pattern] = {
+            "handler": handler,
+            "durable_name": durable_name,
+            "stream_name": stream_name,
+        }
 
     async def publish(
         self,
         arg1: IncidentEvent | str,
-        arg2: dict | None = None,
+        arg2: dict | bytes | None = None,
     ):
         """
         Handle both call signatures:
           - publish(event: IncidentEvent)          → Prescaler path (NATSClient interface)
           - publish(subject: str, payload: dict)   → PpaOutcomeTracker path
+          - publish(subject: str, payload: bytes)  → RunbookExecutor / PpaOutcomeTracker
+                                                     raw-publish path (json-encoded)
+
+        Bytes payloads are JSON-decoded into dicts so list-style assertions can
+        pattern-match fields (`payload["deployment"]`).
         """
         if isinstance(arg1, IncidentEvent):
             subject = arg1.nats_subject()
             payload = arg1
         else:
             subject = arg1
-            payload = arg2 if arg2 is not None else {}
+            if isinstance(arg2, bytes):
+                try:
+                    payload = json.loads(arg2.decode("utf-8"))
+                except Exception:
+                    payload = arg2
+            else:
+                payload = arg2 if arg2 is not None else {}
         self._published.append((subject, payload))
 
     async def emit(self, subject: str, data: dict):
@@ -97,6 +132,7 @@ class MockNATS:
 
 
 # ── Prescaler + PPA prediction integration ─────────────────────────────────────
+
 
 class TestPpaPredictionToPrescalerDecision:
     """Simulate the full flow: PPA publishes prediction → Prescaler handles it."""
@@ -142,7 +178,7 @@ class TestPpaPredictionToPrescalerDecision:
             deployment="api",
             current_rps=100.0,
             predicted_rps=130.0,  # only 30% increase
-            confidence=0.30,       # below 0.55 threshold
+            confidence=0.30,  # below 0.55 threshold
         )
 
         await nats.emit("ppa.predictions.api", payload)
@@ -169,7 +205,11 @@ class TestPpaPredictionToPrescalerDecision:
 
     @pytest.mark.asyncio
     async def test_advisory_mode_publishes_nats_event(self):
-        """ADVISORY mode should publish a pre_scale_advisory event to NATS."""
+        """ADVISORY mode publishes both:
+        - the original pre_scale_advisory IncidentEvent on nexus.incidents.*
+          (carries the human-action prompt "Run: nexus prescale approve <id>")
+        - the Notifier-facing decision event on nexus.prescale.<deployment>.advisory
+        """
         prescaler, nats = await self._make_prescaler()
         prescaler.promote(PrescaleMode.ADVISORY)
 
@@ -178,13 +218,22 @@ class TestPpaPredictionToPrescalerDecision:
 
         assert prescaler._decisions_made == 1
 
-        # Check that something was published
-        assert len(nats._published) == 1
-        subject, body = nats._published[0]
-        # IncidentEvent passed via publish(); convert to dict for field access
-        if hasattr(body, "model_dump"):
-            body = body.model_dump()
-        assert body["context"]["type"] == "pre_scale_advisory"
+        # Exactly two publishes: the advisory IncidentEvent + the prescale decision dict
+        assert len(nats._published) == 2
+
+        # Locate each by subject
+        by_subject = {s: b for s, b in nats._published}
+        advisory_body = by_subject["nexus.incidents.orchestrator.anomaly_predicted"]
+        prescale_body = by_subject["nexus.prescale.checkout-api.advisory"]
+
+        # Advisory IncidentEvent carries the human prompt
+        if hasattr(advisory_body, "model_dump"):
+            advisory_body = advisory_body.model_dump()
+        assert advisory_body["context"]["type"] == "pre_scale_advisory"
+
+        # nexus.prescale.* carries metadata for Notifier / dashboards
+        assert prescale_body["deployment"] == "checkout-api"
+        assert prescale_body["mode"] == "advisory"
 
     @pytest.mark.asyncio
     async def test_precision_tracker_records_decision(self):
@@ -204,6 +253,7 @@ class TestPpaPredictionToPrescalerDecision:
 
 
 # ── Prescaler → PpaOutcomeTracker integration ──────────────────────────────────
+
 
 class TestPrescalerToPpaOutcomeTracker:
     """PpaOutcomeTracker receives predictions and emits outcomes after horizon."""
@@ -299,7 +349,9 @@ class TestPrescalerToPpaOutcomeTracker:
         tracker._fetch_actual_rps.assert_not_called()
         assert "FRESH1" in tracker._pending
 
+
 # ── Full end-to-end: PPA → NATS → Prescaler → OutcomeTracker ──────────────────
+
 
 class TestFullPpaNexusPredictionFlow:
     """
@@ -385,7 +437,9 @@ class TestFullPpaNexusPredictionFlow:
         await outcome_tracker._check_and_emit_outcome()
 
         # Verdict published to ppa.outcomes
-        ppa_outcome_calls = [(s, p) for s, p in nats._published if s.startswith("ppa.outcomes.")]
+        ppa_outcome_calls = [
+            (s, p) for s, p in nats._published if s.startswith("ppa.outcomes.")
+        ]
         assert len(ppa_outcome_calls) >= 1
         subject, outcome_payload = ppa_outcome_calls[0]
         assert outcome_payload["verdict"] == "spike_hit"
@@ -502,11 +556,14 @@ class TestFullPpaNexusPredictionFlow:
 
 # ── FeedbackLoop integration with PpaOutcomeTracker ─────────────────────────────
 
+
 class TestFeedbackLoopWithPpaOutcomeTracker:
     """Verify FeedbackLoop calls run_batch_flush on each learning cycle."""
 
     @pytest.mark.asyncio
-    async def test_feedback_loop_calls_ppa_tracker_batch_flush(self, tmp_path, monkeypatch):
+    async def test_feedback_loop_calls_ppa_tracker_batch_flush(
+        self, tmp_path, monkeypatch
+    ):
         """On each _update_cycle, FeedbackLoop should call run_batch_flush."""
         # Capture whether run_batch_flush was called
         flushed = []
@@ -521,19 +578,25 @@ class TestFeedbackLoopWithPpaOutcomeTracker:
         class FakeOutcomeStore:
             async def get_all_runbook_stats(self, days=30):
                 return {}
+
             async def get_system_kpis(self, days=30):
                 from nexus.learning.outcome_store import SystemKPIs
+
                 return SystemKPIs(window_days=days)
+
             async def get_recent_outcomes(self, limit=50):
                 return []
+
             async def get_targets_with_most_heals(self, days=7, limit=10):
                 return []
 
         class FakeKnowledgeBase:
             async def bulk_update(self, stats):
                 return {}
+
             async def get_all_adjustments(self):
                 return {}
+
             async def record_pattern(self, **kwargs):
                 pass
 

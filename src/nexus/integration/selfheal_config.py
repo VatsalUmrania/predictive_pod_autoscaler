@@ -62,12 +62,14 @@ _ENV_VAR_RE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 
 def _resolve_env(value: str) -> str:
     """Replace ${VAR} tokens with os.environ values."""
+
     def _sub(m: re.Match) -> str:
         key = m.group(1)
         resolved = os.environ.get(key, "")
         if not resolved:
             logger.warning(f"[SelfhealConfig] Unresolved env var: ${{{key}}}")
         return resolved
+
     return _ENV_VAR_RE.sub(_sub, value)
 
 
@@ -75,19 +77,20 @@ def _resolve_env(value: str) -> str:
 # Sub-models
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class HealingPolicy(BaseModel):
     """Governance constraints declared by the developer."""
 
-    auto_rollback:              bool                     = True
-    max_auto_actions_per_hour:  int                      = Field(10, ge=0, le=100)
-    require_approval_for:       list[str | dict[str, str]] = Field(
+    auto_rollback: bool = True
+    max_auto_actions_per_hour: int = Field(10, ge=0, le=100)
+    require_approval_for: list[str | dict[str, str]] = Field(
         default_factory=list,
         description=(
             "List of scenario names that require human approval. "
             "Strings like 'database_migrations', or dicts like {'scaling_above': '10x'}."
         ),
     )
-    never_shed_routes:          list[str] = Field(
+    never_shed_routes: list[str] = Field(
         default_factory=list,
         description="Routes that should never be load-shed, even under extreme pressure.",
     )
@@ -124,7 +127,9 @@ class PredictiveConfig(BaseModel):
         description="DB table names to watch for traffic spike prediction.",
     )
     pre_scale_threshold: float = Field(
-        2.5, ge=1.1, le=20.0,
+        2.5,
+        ge=1.1,
+        le=20.0,
         description="Replica multiplier at which pre-scaling is triggered (e.g. 2.5 = 2.5x RPS).",
     )
     spike_indicator_queries: list[str] = Field(
@@ -136,10 +141,14 @@ class PredictiveConfig(BaseModel):
 class NotificationsConfig(BaseModel):
     """Slack and paging configuration."""
 
-    slack_webhook:   str = Field("", description="Slack incoming webhook URL.")
-    page_sre_after:  int = Field(3, ge=1, le=20,
-                                 description="Number of failed healing attempts before SRE paging.")
-    notify_on_heal:  bool = True
+    slack_webhook: str = Field("", description="Slack incoming webhook URL.")
+    page_sre_after: int = Field(
+        3,
+        ge=1,
+        le=20,
+        description="Number of failed healing attempts before SRE paging.",
+    )
+    notify_on_heal: bool = True
     notify_on_prescale: bool = True
 
     @field_validator("slack_webhook", mode="before")
@@ -152,6 +161,7 @@ class NotificationsConfig(BaseModel):
 # Root schema
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class SelfhealConfig(BaseModel):
     """
     Root schema for selfheal.yaml.
@@ -160,16 +170,22 @@ class SelfhealConfig(BaseModel):
     declare to get full self-healing + predictive behaviour for their app.
     """
 
-    app:             str = Field(..., min_length=1, description="Application name (used for token lookup + incident labelling).")
-    tier:            str = Field("production", description="Deployment tier: production | staging | dev")
-    critical_routes: list[str]           = Field(default_factory=list)
-    healing_policy:  HealingPolicy       = Field(default_factory=HealingPolicy)
-    predictive:      PredictiveConfig    = Field(default_factory=PredictiveConfig)
-    notifications:   NotificationsConfig = Field(default_factory=NotificationsConfig)
+    app: str = Field(
+        ...,
+        min_length=1,
+        description="Application name (used for token lookup + incident labelling).",
+    )
+    tier: str = Field(
+        "production", description="Deployment tier: production | staging | dev"
+    )
+    critical_routes: list[str] = Field(default_factory=list)
+    healing_policy: HealingPolicy = Field(default_factory=HealingPolicy)
+    predictive: PredictiveConfig = Field(default_factory=PredictiveConfig)
+    notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
 
     # Populated by NEXUS at load time — not present in the YAML itself
-    _token:        str | None        = None
-    _source_path:  Path | None       = None
+    _token: str | None = None
+    _source_path: Path | None = None
 
     @field_validator("app", mode="before")
     @classmethod
@@ -194,6 +210,7 @@ class SelfhealConfig(BaseModel):
 # Loader
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def load_selfheal_config(repo_path: str | Path) -> SelfhealConfig | None:
     """
     Load and validate selfheal.yaml from the given repo root.
@@ -208,7 +225,7 @@ def load_selfheal_config(repo_path: str | Path) -> SelfhealConfig | None:
     """
     path = Path(repo_path) / "selfheal.yaml"
     if not path.exists():
-        path = Path(repo_path) / "selfheal.yml"   # also accept .yml
+        path = Path(repo_path) / "selfheal.yml"  # also accept .yml
     if not path.exists():
         return None
 

@@ -30,7 +30,11 @@ def evaluate_model_accuracy(model, eval_data=None):
         else:
             # If it's a tf.data.Dataset
             metrics = model.evaluate(eval_data, verbose=0)
-            return float(metrics[1]) if isinstance(metrics, (list, tuple)) else float(metrics)
+            return (
+                float(metrics[1])
+                if isinstance(metrics, (list, tuple))
+                else float(metrics)
+            )
     except Exception as e:
         print(f"Warning: Could not evaluate model accuracy: {e}")
         return None
@@ -142,9 +146,13 @@ def convert_model(
                 pred = interpreter.get_tensor(output_details[0]["index"])
                 predictions.append(pred.flatten()[0])
 
-            quantized_mae = np.mean(np.abs(np.array(predictions) - y[: len(predictions)].flatten()))
+            quantized_mae = np.mean(
+                np.abs(np.array(predictions) - y[: len(predictions)].flatten())
+            )
             accuracy_loss_pct = (
-                ((quantized_mae - baseline_mae) / baseline_mae * 100) if baseline_mae > 0 else 0.0
+                ((quantized_mae - baseline_mae) / baseline_mae * 100)
+                if baseline_mae > 0
+                else 0.0
             )
 
             print(f"Quantized model accuracy (MAE): {quantized_mae:.6f}")
@@ -210,7 +218,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert Keras model to TFLite")
     parser.add_argument("--app-name", type=str, default="test-app")
     parser.add_argument("--namespace", type=str, default="default")
-    parser.add_argument("--target", type=str, default="rps_t10m")
+    parser.add_argument("--target", type=str, default="normalized_rps_t10m")
     parser.add_argument("--root-dir", type=str, default="data/artifacts")
     parser.add_argument(
         "--output",
@@ -221,8 +229,12 @@ if __name__ == "__main__":
     parser.add_argument("--no-quantize", action="store_true")
     args = parser.parse_args()
 
-    model_path = keras_model_path(args.app_name, args.namespace, args.target, Path(args.root_dir))
+    model_path = keras_model_path(
+        args.app_name, args.namespace, args.target, Path(args.root_dir)
+    )
     output_path = args.output or str(
-        tflite_model_path(args.app_name, args.namespace, args.target, Path(args.root_dir))
+        tflite_model_path(
+            args.app_name, args.namespace, args.target, Path(args.root_dir)
+        )
     )
     convert_model(str(model_path), not args.no_quantize, output_path)

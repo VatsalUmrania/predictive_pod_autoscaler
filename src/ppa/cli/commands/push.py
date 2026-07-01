@@ -12,17 +12,19 @@ from pathlib import Path
 
 import typer
 
-from ppa.cli.utilities.kubernetes import (
+from ppa.cli.k8s.kubectl import (
     cp,
-    create_loader_pod,
-    delete_pod,
-    ensure_exists,
     exec_cmd,
     mkdir,
-    unique_pod_name,
     validate_cluster,
+)
+from ppa.cli.k8s.pod import (
+    create_loader_pod,
+    delete_pod,
+    unique_pod_name,
     wait_for_ready,
 )
+from ppa.cli.k8s.pvc import ensure_exists
 from ppa.cli.utils import (
     console,
     error,
@@ -32,7 +34,7 @@ from ppa.cli.utils import (
     success,
     warn,
 )
-from ppa.config import CHAMPION_DIR, PROJECT_DIR, TRAINING_DATA_DIR
+from ppa.config import CHAMPION_DIR, MODEL_DIR, PROJECT_DIR, TRAINING_DATA_DIR
 
 app = typer.Typer(rich_markup_mode="rich")
 
@@ -75,20 +77,40 @@ def _resolve_source_artifacts(
             "champion",
             [
                 CHAMPION_DIR / app_name / horizon / "ppa_model_metadata.json",
-                CHAMPION_DIR / app_name / horizon / f"ppa_model_{horizon}_metadata.json",
-                PROJECT_DIR / "model" / "artifacts" / f"ppa_model_{horizon}_metadata.json",
+                CHAMPION_DIR
+                / app_name
+                / horizon
+                / f"ppa_model_{horizon}_metadata.json",
+                PROJECT_DIR
+                / "model"
+                / "artifacts"
+                / f"ppa_model_{horizon}_metadata.json",
                 PROJECT_DIR / "model" / "artifacts" / "ppa_model_metadata.json",
-                PROJECT_DIR / "data" / "artifacts" / f"ppa_model_{horizon}_metadata.json",
+                PROJECT_DIR
+                / "data"
+                / "artifacts"
+                / f"ppa_model_{horizon}_metadata.json",
                 PROJECT_DIR / "data" / "artifacts" / "ppa_model_metadata.json",
             ],
+        ),
+        (
+            MODEL_DIR,
+            "data/models",
+            [],
         ),
         (
             PROJECT_DIR / "model" / "artifacts",
             "model/artifacts",
             [
-                PROJECT_DIR / "model" / "artifacts" / f"ppa_model_{horizon}_metadata.json",
+                PROJECT_DIR
+                / "model"
+                / "artifacts"
+                / f"ppa_model_{horizon}_metadata.json",
                 PROJECT_DIR / "model" / "artifacts" / "ppa_model_metadata.json",
-                PROJECT_DIR / "data" / "artifacts" / f"ppa_model_{horizon}_metadata.json",
+                PROJECT_DIR
+                / "data"
+                / "artifacts"
+                / f"ppa_model_{horizon}_metadata.json",
                 PROJECT_DIR / "data" / "artifacts" / "ppa_model_metadata.json",
             ],
         ),
@@ -96,19 +118,30 @@ def _resolve_source_artifacts(
             PROJECT_DIR / "data" / "artifacts",
             "data/artifacts",
             [
-                PROJECT_DIR / "data" / "artifacts" / f"ppa_model_{horizon}_metadata.json",
+                PROJECT_DIR
+                / "data"
+                / "artifacts"
+                / f"ppa_model_{horizon}_metadata.json",
                 PROJECT_DIR / "data" / "artifacts" / "ppa_model_metadata.json",
             ],
         ),
     ]
 
     for root_dir, source_label, metadata_candidates in source_roots:
+        # Check the canonical `current/` bundle structure first (v3+)
+        canonical_current = root_dir / "current"
+        if canonical_current.exists():
+            root_dir = canonical_current  # Use canonical bundle
         model_candidates = [
             root_dir / "ppa_model.tflite",
             root_dir / f"ppa_model_{horizon}.tflite",
+            root_dir / "model.tflite",  # Canonical v3 bundle name
+            root_dir / "foundation_model_v1.tflite",
         ]
 
-        model_path = next((candidate for candidate in model_candidates if candidate.exists()), None)
+        model_path = next(
+            (candidate for candidate in model_candidates if candidate.exists()), None
+        )
         if model_path is None:
             continue
 
@@ -241,6 +274,7 @@ def push_models(
 
     # Give container runtime a moment to be fully ready for file operations
     import time
+
     time.sleep(3)
 
     try:
@@ -339,7 +373,9 @@ def push_models(
         _active_pod = ("", "")
 
     console.print()
-    success(f"Pushed {len(result.horizons_pushed)} horizons: {', '.join(result.horizons_pushed)}")
+    success(
+        f"Pushed {len(result.horizons_pushed)} horizons: {', '.join(result.horizons_pushed)}"
+    )
 
     return result
 

@@ -41,48 +41,59 @@ class Notifier:
     """
 
     def __init__(self) -> None:
-        self._fail_counts:  dict[str, int] = {}   # app_name → consecutive failures
-        self._nats_task:    asyncio.Task | None = None
-        self._running:      bool = False
+        self._fail_counts: dict[str, int] = {}  # app_name → consecutive failures
+        self._nats_task: asyncio.Task | None = None
+        self._running: bool = False
 
     # ── Public notification API ───────────────────────────────────────────────
 
     async def notify_heal(
         self,
-        app_name:    str,
-        runbook_id:  str,
-        outcome:     str,
+        app_name: str,
+        runbook_id: str,
+        outcome: str,
         description: str,
-        target:      str | None = None,
+        target: str | None = None,
     ) -> None:
         """Send a healing action notification."""
         webhook = self._get_webhook(app_name)
         if not webhook:
             return
 
-        icon   = "✅" if outcome == "success" else ("❌" if outcome == "failed" else "↩️")
-        color  = "#36a64f" if outcome == "success" else "#e01e5a"
+        icon = "✅" if outcome == "success" else ("❌" if outcome == "failed" else "↩️")
+        color = "#36a64f" if outcome == "success" else "#e01e5a"
 
         payload = {
-            "attachments": [{
-                "color":    color,
-                "fallback": f"NEXUS healed {app_name}: {description}",
-                "blocks": [
-                    {
-                        "type": "section",
-                        "text": {"type": "mrkdwn", "text": f"*{icon} NEXUS Healing Action — `{app_name}`*"},
-                    },
-                    {
-                        "type": "section",
-                        "fields": [
-                            {"type": "mrkdwn", "text": f"*Action:*\n{description}"},
-                            {"type": "mrkdwn", "text": f"*Outcome:*\n`{outcome}`"},
-                            {"type": "mrkdwn", "text": f"*Runbook:*\n`{runbook_id}`"},
-                            {"type": "mrkdwn", "text": f"*Target:*\n`{target or 'unknown'}`"},
-                        ],
-                    },
-                ],
-            }]
+            "attachments": [
+                {
+                    "color": color,
+                    "fallback": f"NEXUS healed {app_name}: {description}",
+                    "blocks": [
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"*{icon} NEXUS Healing Action — `{app_name}`*",
+                            },
+                        },
+                        {
+                            "type": "section",
+                            "fields": [
+                                {"type": "mrkdwn", "text": f"*Action:*\n{description}"},
+                                {"type": "mrkdwn", "text": f"*Outcome:*\n`{outcome}`"},
+                                {
+                                    "type": "mrkdwn",
+                                    "text": f"*Runbook:*\n`{runbook_id}`",
+                                },
+                                {
+                                    "type": "mrkdwn",
+                                    "text": f"*Target:*\n`{target or 'unknown'}`",
+                                },
+                            ],
+                        },
+                    ],
+                }
+            ]
         }
 
         await self._send(webhook, payload, app_name)
@@ -93,19 +104,19 @@ class Notifier:
             threshold = self._get_page_threshold(app_name)
             if self._fail_counts[app_name] >= threshold:
                 await self.notify_escalation(app_name, self._fail_counts[app_name])
-                self._fail_counts[app_name] = 0   # reset after escalation
+                self._fail_counts[app_name] = 0  # reset after escalation
         else:
-            self._fail_counts[app_name] = 0       # reset on success
+            self._fail_counts[app_name] = 0  # reset on success
 
     async def notify_prescale(
         self,
-        app_name:      str,
-        deployment:    str,
-        current_rps:   float,
+        app_name: str,
+        deployment: str,
+        current_rps: float,
         predicted_rps: float,
-        horizon_min:   int      = 10,
-        confidence:    float    = 0.0,
-        tables:        list     = None,
+        horizon_min: int = 10,
+        confidence: float = 0.0,
+        tables: list = None,
     ) -> None:
         """Send a pre-scale prediction notification."""
         webhook = self._get_webhook(app_name)
@@ -113,45 +124,48 @@ class Notifier:
             return
 
         tables = tables or []
-        mult   = predicted_rps / current_rps if current_rps > 0 else 1.0
+        mult = predicted_rps / current_rps if current_rps > 0 else 1.0
         table_clause = (
             f" — DB spike on {', '.join(f'`{t}`' for t in tables[:3])}"
-            if tables else ""
+            if tables
+            else ""
         )
 
         payload = {
-            "attachments": [{
-                "color": "#ECB22E",
-                "fallback": f"NEXUS pre-scaling {deployment}",
-                "blocks": [
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"*📈 NEXUS Pre-Scale — `{deployment}`*",
+            "attachments": [
+                {
+                    "color": "#ECB22E",
+                    "fallback": f"NEXUS pre-scaling {deployment}",
+                    "blocks": [
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"*📈 NEXUS Pre-Scale — `{deployment}`*",
+                            },
                         },
-                    },
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": (
-                                f"Predicted *{mult:.1f}x* traffic in ~{horizon_min} min "
-                                f"({current_rps:.0f} → {predicted_rps:.0f} RPS)"
-                                f"{table_clause}.\n"
-                                f"Confidence: *{confidence:.0%}*"
-                            ),
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": (
+                                    f"Predicted *{mult:.1f}x* traffic in ~{horizon_min} min "
+                                    f"({current_rps:.0f} → {predicted_rps:.0f} RPS)"
+                                    f"{table_clause}.\n"
+                                    f"Confidence: *{confidence:.0%}*"
+                                ),
+                            },
                         },
-                    },
-                ],
-            }]
+                    ],
+                }
+            ]
         }
 
         await self._send(webhook, payload, app_name)
 
     async def notify_escalation(
         self,
-        app_name:        str,
+        app_name: str,
         failed_attempts: int,
     ) -> None:
         """Send an SRE escalation alert when auto-healing is exhausted."""
@@ -160,29 +174,33 @@ class Notifier:
             return
 
         payload = {
-            "attachments": [{
-                "color": "#e01e5a",
-                "fallback": f"NEXUS: {app_name} requires human review",
-                "blocks": [
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": (
-                                f"*🚨 SRE Escalation — `{app_name}` requires human review*\n\n"
-                                f"NEXUS has made *{failed_attempts}* failed healing attempts "
-                                f"and has stopped autonomous action.\n"
-                                f"Run `nexus audit --n 10` to see the full incident history.\n"
-                                f"Approve or reject actions at: `nexus approvals`"
-                            ),
+            "attachments": [
+                {
+                    "color": "#e01e5a",
+                    "fallback": f"NEXUS: {app_name} requires human review",
+                    "blocks": [
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": (
+                                    f"*🚨 SRE Escalation — `{app_name}` requires human review*\n\n"
+                                    f"NEXUS has made *{failed_attempts}* failed healing attempts "
+                                    f"and has stopped autonomous action.\n"
+                                    f"Run `nexus audit --n 10` to see the full incident history.\n"
+                                    f"Approve or reject actions at: `nexus approvals`"
+                                ),
+                            },
                         },
-                    },
-                ],
-            }]
+                    ],
+                }
+            ]
         }
 
         await self._send(webhook, payload, app_name)
-        logger.warning(f"[Notifier] SRE escalation sent for app='{app_name}' failures={failed_attempts}")
+        logger.warning(
+            f"[Notifier] SRE escalation sent for app='{app_name}' failures={failed_attempts}"
+        )
 
     # ── Policy helpers ────────────────────────────────────────────────────────
 
@@ -190,6 +208,7 @@ class Notifier:
         """Return the Slack webhook URL for an app, or None if not configured."""
         try:
             from nexus.integration.dashboard import _policy_cache
+
             cfg = _policy_cache.get(app_name, {})
             notifications = cfg.get("notifications", {})
             return notifications.get("slack_webhook") or None
@@ -200,6 +219,7 @@ class Notifier:
         """Return the page_sre_after threshold for an app (default 3)."""
         try:
             from nexus.integration.dashboard import _policy_cache
+
             cfg = _policy_cache.get(app_name, {})
             return cfg.get("notifications", {}).get("page_sre_after", 3)
         except Exception:
@@ -210,17 +230,18 @@ class Notifier:
     async def _send(
         self,
         webhook_url: str,
-        payload:     dict[str, Any],
-        app_name:    str,
+        payload: dict[str, Any],
+        app_name: str,
     ) -> None:
         """POST a Slack webhook payload asynchronously."""
         try:
             import httpx
+
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.post(
                     webhook_url,
-                    content     = json.dumps(payload).encode(),
-                    headers     = {"Content-Type": "application/json"},
+                    content=json.dumps(payload).encode(),
+                    headers={"Content-Type": "application/json"},
                 )
                 if resp.status_code != 200:
                     logger.warning(
@@ -234,9 +255,22 @@ class Notifier:
 
     def start_background(self, nats_client: Any) -> None:
         """Subscribe to NATS healing action subjects and auto-notify."""
-        self._running  = True
+        self._running = True
         self._nats_client = nats_client
-        self._nats_task   = asyncio.create_task(self._listen())
+        self._nats_task = asyncio.create_task(self._listen())
+        self._nats_task.add_done_callback(self._on_listen_done)
+
+    def _on_listen_done(self, task: asyncio.Task) -> None:
+        """If the background loop crashed (not cancelled), surface and restart once."""
+        if self._running and not task.cancelled():
+            exc = task.exception()
+            if exc is not None:
+                logger.error(f"[Notifier] _listen crashed: {exc} — restarting in 5s")
+                try:
+                    self._nats_task = asyncio.create_task(self._listen())
+                    self._nats_task.add_done_callback(self._on_listen_done)
+                except RuntimeError:
+                    pass
 
     def stop(self) -> None:
         """Stop the background NATS listener."""
@@ -245,41 +279,64 @@ class Notifier:
             self._nats_task.cancel()
 
     async def _listen(self) -> None:
-        """Background loop: subscribe to nexus.actions.* and nexus.prescale.*"""
-        try:
-            nc = self._nats_client
+        """Background loop: subscribe to nexus.actions.* and nexus.prescale.*.
 
-            async def _action_wrapper(data: dict, subject: str) -> None:
-                await self._on_action_message(data)
+        Retries the subscription with exponential backoff until both succeed,
+        rather than parking silently when the broker wasn't ready. Survives
+        CancelledError on shutdown.
+        """
+        nc = self._nats_client
 
-            async def _prescale_wrapper(data: dict, subject: str) -> None:
-                await self._on_prescale_message(data)
+        async def _action_wrapper(data: dict, subject: str) -> None:
+            await self._on_action_message(data)
 
-            try:
-                await nc.subscribe_raw("nexus.actions.*", handler=_action_wrapper)
-                await nc.subscribe_raw("nexus.prescale.*", handler=_prescale_wrapper)
-                logger.info("[Notifier] Subscribed to NATS nexus.actions.* + nexus.prescale.*")
-            except Exception as exc:
-                logger.warning(
-                    f"[Notifier] NATS subscribe failed (subject not yet in stream — "
-                    f"will retry when messages arrive): {exc}"
+        async def _prescale_wrapper(data: dict, subject: str) -> None:
+            await self._on_prescale_message(data)
+
+        # Retry both subscriptions until both succeed, with capped backoff
+        action_ok = False
+        prescale_ok = False
+        backoff = 1.0
+        while self._running and not (action_ok and prescale_ok):
+            if not action_ok:
+                try:
+                    await nc.subscribe_raw("nexus.actions.*", handler=_action_wrapper)
+                    action_ok = True
+                except Exception as exc:
+                    logger.warning(f"[Notifier] nexus.actions.* subscribe retry: {exc}")
+            if not prescale_ok:
+                try:
+                    await nc.subscribe_raw(
+                        "nexus.prescale.*", handler=_prescale_wrapper
+                    )
+                    prescale_ok = True
+                except Exception as exc:
+                    logger.warning(
+                        f"[Notifier] nexus.prescale.* subscribe retry: {exc}"
+                    )
+            if not (action_ok and prescale_ok):
+                await asyncio.sleep(min(backoff, 30.0))
+                backoff *= 2
+            else:
+                logger.info(
+                    "[Notifier] Subscribed to NATS nexus.actions.* + nexus.prescale.*"
                 )
-            while self._running:
-                await asyncio.sleep(1)
-        except asyncio.CancelledError:
-            pass
-        except Exception as exc:
-            logger.error(f"[Notifier] NATS listener error: {exc}")
+
+        # Park until stopped. If the NATS connection is severed the
+        # NATSClient itself handles reconnect; subscription tasks survive
+        # because they are JS consumers with the standard client.
+        while self._running:
+            await asyncio.sleep(1)
 
     async def _on_action_message(self, data: dict) -> None:
         try:
             app_name = data.get("app") or data.get("resource_name", "unknown")
             await self.notify_heal(
-                app_name    = app_name,
-                runbook_id  = data.get("runbook_id", ""),
-                outcome     = data.get("outcome", "unknown"),
-                description = data.get("description", "Healing action taken"),
-                target      = data.get("target"),
+                app_name=app_name,
+                runbook_id=data.get("runbook_id", ""),
+                outcome=data.get("outcome", "unknown"),
+                description=data.get("description", "Healing action taken"),
+                target=data.get("target"),
             )
         except Exception as exc:
             logger.debug(f"[Notifier] action message error: {exc}")
@@ -287,13 +344,13 @@ class Notifier:
     async def _on_prescale_message(self, data: dict) -> None:
         try:
             await self.notify_prescale(
-                app_name      = data.get("app", "unknown"),
-                deployment    = data.get("deployment", "unknown"),
-                current_rps   = data.get("current_rps", 0),
-                predicted_rps = data.get("predicted_rps", 0),
-                horizon_min   = data.get("horizon_min", 10),
-                confidence    = data.get("confidence", 0),
-                tables        = data.get("tables", []),
+                app_name=data.get("app", "unknown"),
+                deployment=data.get("deployment", "unknown"),
+                current_rps=data.get("current_rps", 0),
+                predicted_rps=data.get("predicted_rps", 0),
+                horizon_min=data.get("horizon_min", 10),
+                confidence=data.get("confidence", 0),
+                tables=data.get("tables", []),
             )
         except Exception as exc:
             logger.debug(f"[Notifier] prescale message error: {exc}")

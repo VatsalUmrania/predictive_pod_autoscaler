@@ -63,9 +63,13 @@ class PpaNATSClient:
             if "10058" in exc_str or "already in use" in exc_str:
                 try:
                     await js.update_stream(cfg)  # type: ignore[attr-defined]
-                    logger.info(f"[PPA-NATS] Updated stream '{PPA_PREDICTION_STREAM}' config")
+                    logger.info(
+                        f"[PPA-NATS] Updated stream '{PPA_PREDICTION_STREAM}' config"
+                    )
                 except Exception as upd_exc:
-                    logger.warning(f"[PPA-NATS] Stream update failed (non-fatal): {upd_exc}")
+                    logger.warning(
+                        f"[PPA-NATS] Stream update failed (non-fatal): {upd_exc}"
+                    )
             else:
                 logger.warning(f"[PPA-NATS] Stream ensure failed (non-fatal): {exc}")
 
@@ -82,9 +86,7 @@ class PpaNATSClient:
 
     async def publish(self, subject: str, payload: dict) -> None:
         if not self._js:
-            raise RuntimeError(
-                "PpaNATSClient not connected. Call connect() first."
-            )
+            raise RuntimeError("PpaNATSClient not connected. Call connect() first.")
         data = json.dumps(payload).encode("utf-8")
         ack = await self._js.publish(subject, data, stream=PPA_PREDICTION_STREAM)
         logger.debug(f"[PPA-NATS] Published {subject} seq={ack.seq}")

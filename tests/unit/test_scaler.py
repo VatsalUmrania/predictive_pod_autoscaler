@@ -106,7 +106,9 @@ class TestInitK8sClient:
             patch(
                 "ppa.infrastructure.kubernetes.k8s_config.load_incluster_config"
             ) as mock_in_cluster,
-            patch("ppa.infrastructure.kubernetes.k8s_config.load_kube_config") as mock_kube,
+            patch(
+                "ppa.infrastructure.kubernetes.k8s_config.load_kube_config"
+            ) as mock_kube,
             patch("ppa.infrastructure.kubernetes.client.AppsV1Api") as mock_api_class,
         ):
             mock_in_cluster.side_effect = k8s_config.ConfigException("Not in cluster")
@@ -133,7 +135,9 @@ class TestInitK8sClient:
             patch(
                 "ppa.infrastructure.kubernetes.k8s_config.load_incluster_config"
             ) as mock_in_cluster,
-            patch("ppa.infrastructure.kubernetes.k8s_config.load_kube_config") as mock_kube,
+            patch(
+                "ppa.infrastructure.kubernetes.k8s_config.load_kube_config"
+            ) as mock_kube,
             patch("ppa.infrastructure.kubernetes.client.AppsV1Api"),
             patch("ppa.infrastructure.kubernetes.time.sleep"),
         ):
@@ -158,7 +162,9 @@ class TestInitK8sClient:
             patch(
                 "ppa.infrastructure.kubernetes.k8s_config.load_incluster_config"
             ) as mock_in_cluster,
-            patch("ppa.infrastructure.kubernetes.k8s_config.load_kube_config") as mock_kube,
+            patch(
+                "ppa.infrastructure.kubernetes.k8s_config.load_kube_config"
+            ) as mock_kube,
             patch("ppa.infrastructure.kubernetes.time.sleep"),
         ):
             # Both fail with final exception type
@@ -210,7 +216,9 @@ class TestScaleDeployment:
         """Verify graceful error handling for unexpected exceptions."""
         with patch("ppa.infrastructure.kubernetes.get_apps_v1") as mock_get_api:
             mock_api = MagicMock(spec=client.AppsV1Api)
-            mock_api.patch_namespaced_deployment_scale.side_effect = RuntimeError("Network error")
+            mock_api.patch_namespaced_deployment_scale.side_effect = RuntimeError(
+                "Network error"
+            )
             mock_get_api.return_value = mock_api
 
             with caplog.at_level(logging.ERROR):

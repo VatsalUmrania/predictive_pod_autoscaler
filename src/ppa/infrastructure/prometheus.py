@@ -69,7 +69,7 @@ def get_current_prometheus_url() -> str:
         >>> url = get_current_prometheus_url()
         >>> print(url)  # "http://prometheus:9090"
     """
-    return getattr(_thread_local_storage, 'prom_url', PROMETHEUS_URL)
+    return getattr(_thread_local_storage, "prom_url", PROMETHEUS_URL)
 
 
 def _get_circuit_breaker(cr_state: object | None) -> tuple[int, float]:
@@ -111,12 +111,18 @@ def _get_circuit_breaker(cr_state: object | None) -> tuple[int, float]:
     """
     # Use duck typing: if cr_state has the required attributes, use it
     # This supports both CRState and test mocks with the same attributes
-    if cr_state is not None and hasattr(cr_state, 'prom_failures') and hasattr(cr_state, 'prom_last_failure_time'):
+    if (
+        cr_state is not None
+        and hasattr(cr_state, "prom_failures")
+        and hasattr(cr_state, "prom_last_failure_time")
+    ):
         return cr_state.prom_failures, cr_state.prom_last_failure_time  # type: ignore[union-attr]
     return _prom_consecutive_failures, _prom_last_failure_time
 
 
-def _set_circuit_breaker(cr_state: object | None, failures: int, last_time: float) -> None:
+def _set_circuit_breaker(
+    cr_state: object | None, failures: int, last_time: float
+) -> None:
     """Update circuit breaker state in CRD status.
 
     Persists the current failure count and timestamp to the CRD status object,
@@ -147,7 +153,11 @@ def _set_circuit_breaker(cr_state: object | None, failures: int, last_time: floa
 
     # Use duck typing: if cr_state has the required attributes, use it
     # This supports both CRState and test mocks with the same attributes
-    if cr_state is not None and hasattr(cr_state, 'prom_failures') and hasattr(cr_state, 'prom_last_failure_time'):
+    if (
+        cr_state is not None
+        and hasattr(cr_state, "prom_failures")
+        and hasattr(cr_state, "prom_last_failure_time")
+    ):
         cr_state.prom_failures = failures  # type: ignore[union-attr]
         cr_state.prom_last_failure_time = last_time  # type: ignore[union-attr]
     else:
@@ -290,7 +300,9 @@ def prom_query_parallel(
     def _query_single(feature_query_pair: tuple[str, str]) -> tuple[str, float | None]:
         feature_name, query = feature_query_pair
         try:
-            result = prom_query(query, prom_url=prom_url, cr_state=cr_state)  # PR#18: pass custom URL; PR#1: pass CR state
+            result = prom_query(
+                query, prom_url=prom_url, cr_state=cr_state
+            )  # PR#18: pass custom URL; PR#1: pass CR state
             return feature_name, result
         except PrometheusCircuitBreakerError:
             raise  # Re-raise circuit breaker to stop all queries

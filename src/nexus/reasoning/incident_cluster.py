@@ -86,14 +86,17 @@ class IncidentCluster:
 
     @property
     def has_env_violation(self) -> bool:
-        return any("env" in st.lower() and "violation" in st.lower() for st in self.signal_types)
+        return any(
+            "env" in st.lower() and "violation" in st.lower()
+            for st in self.signal_types
+        )
 
     @property
     def highest_severity(self) -> str:
         best = "info"
         best_level = 0
         for e in self.events:
-            sev   = str(e.severity).lower()
+            sev = str(e.severity).lower()
             level = _SEV_ORDER.get(sev, 0)
             if level > best_level:
                 best_level = level
@@ -130,7 +133,7 @@ class IncidentCluster:
         if not self.events:
             return 0.0
         if len(self.events) == 1:
-            return 0.35   # Single signal — conservative
+            return 0.35  # Single signal — conservative
 
         agent_count = len(self.agent_types)
         event_count = len(self.events)
@@ -146,7 +149,9 @@ class IncidentCluster:
             for e in self.events
             if isinstance(e.context, dict) and "anomaly_score" in e.context
         ]
-        avg_anomaly = (sum(anomaly_scores) / len(anomaly_scores)) if anomaly_scores else 0.5
+        avg_anomaly = (
+            (sum(anomaly_scores) / len(anomaly_scores)) if anomaly_scores else 0.5
+        )
 
         return diversity * 0.40 + volume * 0.30 + avg_anomaly * 0.30
 
@@ -173,15 +178,24 @@ class IncidentCluster:
             ctx_kv = ""
             if isinstance(event.context, dict):
                 _key_order = [
-                    "current_rps", "error_rate", "threshold", "anomaly_score",
-                    "latency_p95_ms", "restart_count", "missing_keys",
-                    "sha", "author", "reason", "utilization_pct", "active_connections",
-                    "predicted_rps", "confidence", "raw_features",
+                    "current_rps",
+                    "error_rate",
+                    "threshold",
+                    "anomaly_score",
+                    "latency_p95_ms",
+                    "restart_count",
+                    "missing_keys",
+                    "sha",
+                    "author",
+                    "reason",
+                    "utilization_pct",
+                    "active_connections",
+                    "predicted_rps",
+                    "confidence",
+                    "raw_features",
                 ]
                 relevant = {
-                    k: event.context[k]
-                    for k in _key_order[:3]
-                    if k in event.context
+                    k: event.context[k] for k in _key_order[:3] if k in event.context
                 }
                 if relevant:
                     parts = []
@@ -212,8 +226,10 @@ class IncidentCluster:
         # Deploy event detail block
         if self.has_deploy_event:
             for e in self.events:
-                if "deploy" in str(e.signal_type).lower() and isinstance(e.context, dict):
-                    sha    = e.context.get("sha", "unknown")
+                if "deploy" in str(e.signal_type).lower() and isinstance(
+                    e.context, dict
+                ):
+                    sha = e.context.get("sha", "unknown")
                     author = e.context.get("author", "unknown")
                     lines.append(f"\nRECENT DEPLOY: sha={str(sha)[:12]}  by={author}")
                     break
@@ -222,17 +238,17 @@ class IncidentCluster:
 
     def to_summary(self) -> dict[str, Any]:
         return {
-            "cluster_id":        self.cluster_id,
-            "created_at":        self.created_at.isoformat(),
-            "age_seconds":       round(self.age_seconds, 1),
-            "event_count":       len(self.events),
-            "agent_types":       sorted(self.agent_types),
-            "signal_types":      sorted(self.signal_types),
-            "namespace":         self.namespace,
-            "primary_resource":  self.primary_resource,
-            "highest_severity":  self.highest_severity,
-            "has_deploy_event":  self.has_deploy_event,
-            "signal_agreement":  round(self.signal_agreement_score(), 3),
+            "cluster_id": self.cluster_id,
+            "created_at": self.created_at.isoformat(),
+            "age_seconds": round(self.age_seconds, 1),
+            "event_count": len(self.events),
+            "agent_types": sorted(self.agent_types),
+            "signal_types": sorted(self.signal_types),
+            "namespace": self.namespace,
+            "primary_resource": self.primary_resource,
+            "highest_severity": self.highest_severity,
+            "has_deploy_event": self.has_deploy_event,
+            "signal_agreement": round(self.signal_agreement_score(), 3),
         }
 
     # ── Factory ───────────────────────────────────────────────────────────────
@@ -240,7 +256,7 @@ class IncidentCluster:
     @classmethod
     def new(cls, first_event: IncidentEvent) -> IncidentCluster:
         """Create a new cluster seeded with one event."""
-        ts  = datetime.now(timezone.utc)
+        ts = datetime.now(timezone.utc)
         key = f"{first_event.namespace or 'global'}:{ts.isoformat()}"
         cid = "CL-" + hashlib.sha256(key.encode()).hexdigest()[:8].upper()
 

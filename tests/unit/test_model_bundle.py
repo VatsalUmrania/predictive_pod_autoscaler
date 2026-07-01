@@ -72,4 +72,3 @@ def test_rejects_horizon_mismatch(tmp_path):
 
     with pytest.raises(BundleValidationError, match="horizon"):
         resolve_model_bundle_once(str(tmp_path), "test-app", "rps_t10m")
-

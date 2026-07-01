@@ -81,9 +81,10 @@ def server() -> None:
 )
 @click.option(
     "--log-level",
-    default=lambda: os.environ.get("LOG_LEVEL", "INFO"),
+    default=lambda: os.environ.get("NEXUS_LOG_LEVEL")
+    or os.environ.get("LOG_LEVEL", "INFO"),
     type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"], case_sensitive=False),
-    help="Logging level",
+    help="Logging level (NEXUS_LOG_LEVEL env var overrides)",
 )
 def start(
     nats_url: str,
@@ -104,7 +105,9 @@ def start(
         gemini_key = gemini_api_key() if callable(gemini_api_key) else gemini_api_key
 
         if _RICH:
-            console.print(f"[bold green]Starting NexusServer[/bold green]  NATS={nats_url_val}")
+            console.print(
+                f"[bold green]Starting NexusServer[/bold green]  NATS={nats_url_val}"
+            )
             console.print(f"  Prometheus={prom_url_val}  Status API={port}")
 
         try:

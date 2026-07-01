@@ -71,7 +71,8 @@ class TestCRConflictWarnings:
             )
 
         assert not any(
-            "Multiple CRs detected" in call.args[0] for call in mock_warning.call_args_list
+            "Multiple CRs detected" in call.args[0]
+            for call in mock_warning.call_args_list
         )
         assert state.target_namespace == "default"
         assert state.target_deployment == "test-app"
@@ -102,4 +103,7 @@ class TestCRConflictWarnings:
                 patch=DummyPatch(),
             )
 
-        assert any("Multiple CRs detected" in call.args[0] for call in mock_warning.call_args_list)
+        assert any(
+            "Multiple CRs detected" in call.args[0]
+            for call in mock_warning.call_args_list
+        )

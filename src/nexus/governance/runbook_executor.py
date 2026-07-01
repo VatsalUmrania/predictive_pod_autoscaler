@@ -39,6 +39,7 @@ Design principles:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -65,6 +66,7 @@ logger = logging.getLogger(__name__)
 # Runbook Executor
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class RunbookExecutor:
     """
     Phase 3 governance-aware runbook executor.
@@ -84,24 +86,32 @@ class RunbookExecutor:
     def __init__(
         self,
         nats_client: NATSClient,
-        runbook_dir: Path,
         audit_trail: AuditTrail,
         action_ladder: ActionLadder,
         rollback_registry: RollbackRegistry,
+        runbook_dir: Path | None = None,
+        library: RunbookLibrary | None = None,
         prometheus_url: str = "http://prometheus:9090",
         dry_run: bool = False,
         confidence: float = 0.85,
     ):
-        self.nats             = nats_client
-        self.audit            = audit_trail
-        self.ladder           = action_ladder
-        self.rollback_reg     = rollback_registry
-        self.prom_url         = prometheus_url
-        self.dry_run          = dry_run
-        self.confidence       = confidence
+        self.nats = nats_client
+        self.audit = audit_trail
+        self.ladder = action_ladder
+        self.rollback_reg = rollback_registry
+        self.prom_url = prometheus_url
+        self.dry_run = dry_run
+        self.confidence = confidence
 
-        # RunbookLibrary — validates + indexes all YAML files
-        self.library = RunbookLibrary(runbook_dir)
+        # RunbookLibrary — optional explicit instance; otherwise construct from runbook_dir
+        if library is not None:
+            self.library = library
+        elif runbook_dir is not None:
+            self.library = RunbookLibrary(runbook_dir)
+        else:
+            raise ValueError(
+                "RunbookExecutor requires either `library` or `runbook_dir`"
+            )
         logger.info(
             f"[RunbookExecutor] Ready — "
             f"{self.library.count()} runbooks, dry_run={dry_run}"
@@ -121,8 +131,8 @@ class RunbookExecutor:
             k8s_config.load_incluster_config()
         except Exception:
             k8s_config.load_kube_config()
-        self._k8s_apps  = k8s_client.AppsV1Api()
-        self._k8s_core  = k8s_client.CoreV1Api()
+        self._k8s_apps = k8s_client.AppsV1Api()
+        self._k8s_core = k8s_client.CoreV1Api()
         self._k8s_ready = True
 
     # ── Pre / Post check execution ────────────────────────────────────────────
@@ -148,12 +158,12 @@ class RunbookExecutor:
         if value is None:
             return False
         ops: dict[str, Callable] = {
-            "gt":  lambda a, b: a > b,
+            "gt": lambda a, b: a > b,
             "gte": lambda a, b: a >= b,
-            "lt":  lambda a, b: a < b,
+            "lt": lambda a, b: a < b,
             "lte": lambda a, b: a <= b,
-            "eq":  lambda a, b: a == b,
-            "ne":  lambda a, b: a != b,
+            "eq": lambda a, b: a == b,
+            "ne": lambda a, b: a != b,
         }
         fn = ops.get(operator, lambda a, b: False)
         try:
@@ -193,14 +203,16 @@ class RunbookExecutor:
             if not query:
                 continue
 
-            timeout  = check.timeout_seconds
+            timeout = check.timeout_seconds
             deadline = time.monotonic() + timeout
-            passed   = False
+            passed = False
 
             while time.monotonic() < deadline:
                 val = await self._prometheus_query(query)
                 if self._compare(val, check.operator, check.threshold):
-                    logger.info(f"[RunbookExecutor] Post-check PASS: {query} {check.operator} {check.threshold}")
+                    logger.info(
+                        f"[RunbookExecutor] Post-check PASS: {query} {check.operator} {check.threshold}"
+                    )
                     passed = True
                     break
                 await asyncio.sleep(10)
@@ -221,13 +233,15 @@ class RunbookExecutor:
     ) -> dict[str, Any]:
         """Execute a single RunbookAction. Returns result dict."""
         action_type = action.type
-        params      = action.params
-        namespace   = params.get("namespace") or event.namespace or "default"
-        name        = params.get("name") or event.resource_name or ""
+        params = action.params
+        namespace = params.get("namespace") or event.namespace or "default"
+        name = params.get("name") or event.resource_name or ""
         result: dict[str, Any] = {"type": action_type, "status": "unknown"}
 
         if self.dry_run:
-            logger.info(f"[RunbookExecutor] DRY RUN: {action_type} on {namespace}/{name}")
+            logger.info(
+                f"[RunbookExecutor] DRY RUN: {action_type} on {namespace}/{name}"
+            )
             result.update(status="dry_run")
             return result
 
@@ -238,14 +252,29 @@ class RunbookExecutor:
             if action_type == "restart_pod":
                 pod_name = params.get("pod_name") or event.context.get("pod_name", name)
                 self._k8s_core.delete_namespaced_pod(pod_name, namespace)
-                result.update(status="executed", message=f"Deleted pod {namespace}/{pod_name}")
+                result.update(
+                    status="executed", message=f"Deleted pod {namespace}/{pod_name}"
+                )
 
             elif action_type == "kubectl_rollout_undo":
-                patch = {"spec": {"template": {"metadata": {"annotations": {
-                    "nexus.io/rollback-triggered": datetime.now(timezone.utc).isoformat()
-                }}}}}
+                patch = {
+                    "spec": {
+                        "template": {
+                            "metadata": {
+                                "annotations": {
+                                    "nexus.io/rollback-triggered": datetime.now(
+                                        timezone.utc
+                                    ).isoformat()
+                                }
+                            }
+                        }
+                    }
+                }
                 self._k8s_apps.patch_namespaced_deployment(name, namespace, patch)
-                result.update(status="executed", message=f"Rollback annotation applied to {namespace}/{name}")
+                result.update(
+                    status="executed",
+                    message=f"Rollback annotation applied to {namespace}/{name}",
+                )
 
             elif action_type == "scale_deployment":
                 target_replicas = params.get("replicas")
@@ -253,8 +282,13 @@ class RunbookExecutor:
                     result.update(status="failed", error="'replicas' param required")
                 else:
                     patch = {"spec": {"replicas": int(target_replicas)}}
-                    self._k8s_apps.patch_namespaced_deployment_scale(name, namespace, patch)
-                    result.update(status="executed", message=f"Scaled {namespace}/{name} → {target_replicas}")
+                    self._k8s_apps.patch_namespaced_deployment_scale(
+                        name, namespace, patch
+                    )
+                    result.update(
+                        status="executed",
+                        message=f"Scaled {namespace}/{name} → {target_replicas}",
+                    )
 
             elif action_type == "flush_coredns_cache":
                 pods = self._k8s_core.list_namespaced_pod(
@@ -262,21 +296,30 @@ class RunbookExecutor:
                 )
                 deleted = 0
                 for pod in pods.items:
-                    self._k8s_core.delete_namespaced_pod(pod.metadata.name, "kube-system")
+                    self._k8s_core.delete_namespaced_pod(
+                        pod.metadata.name, "kube-system"
+                    )
                     deleted += 1
-                result.update(status="executed", message=f"Flushed CoreDNS: deleted {deleted} pods")
+                result.update(
+                    status="executed",
+                    message=f"Flushed CoreDNS: deleted {deleted} pods",
+                )
 
             elif action_type == "patch_annotation":
                 annotations = {**params.get("annotations", {})}
-                annotations["nexus.io/last-touched"]   = datetime.now(timezone.utc).isoformat()
+                annotations["nexus.io/last-touched"] = datetime.now(
+                    timezone.utc
+                ).isoformat()
                 annotations["nexus.io/healing-system"] = "nexus-v1"
                 patch = {"metadata": {"annotations": annotations}}
-                kind  = params.get("kind", "Deployment")
+                kind = params.get("kind", "Deployment")
                 if kind == "Deployment":
                     self._k8s_apps.patch_namespaced_deployment(name, namespace, patch)
                 elif kind == "Service":
                     self._k8s_core.patch_namespaced_service(name, namespace, patch)
-                result.update(status="executed", message=f"Annotated {kind} {namespace}/{name}")
+                result.update(
+                    status="executed", message=f"Annotated {kind} {namespace}/{name}"
+                )
 
             elif action_type == "emit_alert":
                 alert_event = IncidentEvent(
@@ -287,7 +330,7 @@ class RunbookExecutor:
                     resource_name=name,
                     correlation_id=event.correlation_id or event.event_id,
                     context={
-                        "alert_message":   params.get("message", "NEXUS healing alert"),
+                        "alert_message": params.get("message", "NEXUS healing alert"),
                         "source_event_id": event.event_id,
                     },
                 )
@@ -295,7 +338,9 @@ class RunbookExecutor:
                 result.update(status="executed", message="Alert published to NATS")
 
             else:
-                result.update(status="skipped", message=f"Unknown action type: {action_type}")
+                result.update(
+                    status="skipped", message=f"Unknown action type: {action_type}"
+                )
 
         except Exception as exc:
             result.update(status="failed", error=str(exc))
@@ -311,13 +356,15 @@ class RunbookExecutor:
         Execute a single runbook against an event, traversing the full
         governance plane for every action.
         """
-        target      = f"{event.namespace or 'default'}/{event.resource_name or 'unknown'}"
-        runbook_id  = runbook.id
+        target = f"{event.namespace or 'default'}/{event.resource_name or 'unknown'}"
+        runbook_id = runbook.id
 
         # ── Pre-checks ────────────────────────────────────────────────────────
         pre_ok = await self._run_pre_checks(runbook, event)
         if not pre_ok:
-            logger.info(f"[RunbookExecutor] Pre-checks FAILED for {runbook_id} — skipping")
+            logger.info(
+                f"[RunbookExecutor] Pre-checks FAILED for {runbook_id} — skipping"
+            )
             return
 
         # ── Per-action governance loop ─────────────────────────────────────────
@@ -327,11 +374,11 @@ class RunbookExecutor:
         for action in runbook.actions:
             # ── ActionLadder evaluation ──────────────────────────────────────
             decision = await self.ladder.evaluate(
-                runbook    = runbook,
-                action     = action,
-                event      = event,
-                target     = target,
-                confidence = self.confidence,
+                runbook=runbook,
+                action=action,
+                event=event,
+                target=target,
+                confidence=self.confidence,
             )
 
             if decision.requires_approval:
@@ -340,11 +387,13 @@ class RunbookExecutor:
                     f"(approval_id={decision.approval_id}) — "
                     f"skipping remaining actions in {runbook_id}"
                 )
-                action_results.append({
-                    "type":        action.type,
-                    "status":      "pending_approval",
-                    "approval_id": decision.approval_id,
-                })
+                action_results.append(
+                    {
+                        "type": action.type,
+                        "status": "pending_approval",
+                        "approval_id": decision.approval_id,
+                    }
+                )
                 break
 
             if not decision.can_proceed:
@@ -352,11 +401,13 @@ class RunbookExecutor:
                     f"[RunbookExecutor] Action BLOCKED by governance: "
                     f"{action.type} — {decision.denial_reason}"
                 )
-                action_results.append({
-                    "type":   action.type,
-                    "status": "governance_blocked",
-                    "reason": decision.denial_reason,
-                })
+                action_results.append(
+                    {
+                        "type": action.type,
+                        "status": "governance_blocked",
+                        "reason": decision.denial_reason,
+                    }
+                )
                 if action.abort_on_failure:
                     execution_failed = True
                     break
@@ -365,22 +416,22 @@ class RunbookExecutor:
             # ── Pre-state capture ────────────────────────────────────────────
             self._ensure_k8s()
             await self.rollback_reg.capture(
-                action_type = action.type,
-                namespace   = event.namespace or "default",
-                name        = event.resource_name or "",
-                k8s_apps    = self._k8s_apps,
-                k8s_core    = self._k8s_core,
+                action_type=action.type,
+                namespace=event.namespace or "default",
+                name=event.resource_name or "",
+                k8s_apps=self._k8s_apps,
+                k8s_core=self._k8s_core,
             )
 
             # ── Write pending audit record (crash-safe) ──────────────────────
             action_id = await self.audit.write_pending(
-                triggered_by     = "runbook_executor_v3",
-                runbook_id       = runbook_id,
-                healing_level    = runbook.healing_level,
-                target           = target,
-                pre_check_results = {"passed": True},
-                incident_id      = event.correlation_id or event.event_id,
-                action_id        = None,   # generate new UUID
+                triggered_by="runbook_executor_v3",
+                runbook_id=runbook_id,
+                healing_level=runbook.healing_level,
+                target=target,
+                pre_check_results={"passed": True},
+                incident_id=event.correlation_id or event.event_id,
+                action_id=None,  # generate new UUID
             )
 
             # ── Execute action ───────────────────────────────────────────────
@@ -390,8 +441,8 @@ class RunbookExecutor:
             if result["status"] == "failed" and action.abort_on_failure:
                 await self.audit.update_outcome(
                     action_id,
-                    execution_outcome = "failed",
-                    action_results    = action_results,
+                    execution_outcome="failed",
+                    action_results=action_results,
                 )
                 execution_failed = True
                 break
@@ -399,16 +450,18 @@ class RunbookExecutor:
             # Update audit (intermediate — will be overwritten at post-check)
             await self.audit.update_outcome(
                 action_id,
-                execution_outcome = "executed",
-                action_results    = action_results,
+                execution_outcome="executed",
+                action_results=action_results,
             )
 
         if execution_failed:
-            logger.error(f"[RunbookExecutor] Runbook {runbook_id} ABORTED: action failed")
+            logger.error(
+                f"[RunbookExecutor] Runbook {runbook_id} ABORTED: action failed"
+            )
             return
 
         # ── Post-checks ───────────────────────────────────────────────────────
-        post_ok       = await self._run_post_checks(runbook)
+        post_ok = await self._run_post_checks(runbook)
         rollback_done = False
 
         if not post_ok:
@@ -427,11 +480,14 @@ class RunbookExecutor:
                 # (this captures infra state restoral, not just runbook rollback_actions)
                 if len(runbook.actions) > 0:
                     last_action = runbook.actions[0]  # Primary action
-                    pre_state_ns  = event.namespace or "default"
-                    pre_state_nm  = event.resource_name or ""
+                    pre_state_ns = event.namespace or "default"
+                    pre_state_nm = event.resource_name or ""
                     pre_state_cap = await self.rollback_reg.capture(
-                        last_action.type, pre_state_ns, pre_state_nm,
-                        self._k8s_apps, self._k8s_core
+                        last_action.type,
+                        pre_state_ns,
+                        pre_state_nm,
+                        self._k8s_apps,
+                        self._k8s_core,
                     )
                     rb_infra = await self.rollback_reg.rollback(
                         pre_state_cap, self._k8s_apps, self._k8s_core
@@ -443,13 +499,15 @@ class RunbookExecutor:
             self.ladder.record_post_check_success()
 
         # ── Finalise audit record ─────────────────────────────────────────────
-        outcome = "success" if post_ok else ("rolled_back" if rollback_done else "failed")
+        outcome = (
+            "success" if post_ok else ("rolled_back" if rollback_done else "failed")
+        )
         await self.audit.update_outcome(
             action_id,
-            execution_outcome  = outcome,
-            post_check_results = {"slo_restored": post_ok},
-            rollback_triggered = rollback_done,
-            action_results     = action_results,
+            execution_outcome=outcome,
+            post_check_results={"slo_restored": post_ok},
+            rollback_triggered=rollback_done,
+            action_results=action_results,
         )
 
         # ── Set cooldown (only on non-failure outcomes) ───────────────────────
@@ -460,6 +518,62 @@ class RunbookExecutor:
             f"[RunbookExecutor] Runbook {runbook_id} COMPLETE — "
             f"outcome={outcome} target={target}"
         )
+
+        await self._publish_action_result(
+            action_id=action_id,
+            runbook=runbook,
+            event=event,
+            target=target,
+            outcome=outcome,
+            rollback_done=rollback_done,
+            action_results=action_results,
+            post_ok=post_ok,
+        )
+
+    async def _publish_action_result(
+        self,
+        *,
+        action_id: str,
+        runbook: Runbook,
+        event: IncidentEvent,
+        target: str,
+        outcome: str,
+        rollback_done: bool,
+        action_results: list[dict],
+        post_ok: bool,
+    ) -> None:
+        """Publish the final action result to nexus.actions.* for Notifier pickup.
+
+        Subject: nexus.actions.<runbook_id>.<outcome>
+        Payload mirrors RunbookExecutor result + audit row so Notifier / dashboards
+        have full context without joining to the AuditTrail.
+        """
+        subject = f"nexus.actions.{runbook.id}.{outcome}"
+        payload = {
+            "type": "healing_action",
+            "action_id": action_id,
+            "runbook_id": runbook.id,
+            "healing_level": runbook.healing_level,
+            "target": target,
+            "namespace": event.namespace,
+            "resource_name": event.resource_name,
+            "incident_id": event.correlation_id or event.event_id,
+            "signal_type": str(event.signal_type),
+            "outcome": outcome,
+            "description": runbook.description,
+            "rollback_triggered": rollback_done,
+            "post_check_passed": post_ok,
+            "action_results": action_results,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            js = getattr(self.nats, "_js", None)
+            if js is not None:
+                await js.publish(subject, json.dumps(payload).encode())
+                logger.debug(f"[RunbookExecutor] Published action event to {subject}")
+        except Exception as exc:
+            # Notifications are best-effort — never break healing on publish failure
+            logger.debug(f"[RunbookExecutor] action publish failed: {exc}")
 
     # ── Main event handler ────────────────────────────────────────────────────
 
@@ -483,23 +597,16 @@ class RunbookExecutor:
             return_exceptions=True,
         )
 
-    # ── Entrypoint ────────────────────────────────────────────────────────────
-
-    async def start(self) -> None:
-        """Subscribe to NATS incident events and begin processing."""
-        logger.info("[RunbookExecutor] Starting — subscribing to all incident events")
-        await self.nats.subscribe(
-            handler       = self.handle_event,
-            agent_filter  = ">",            # Subscribe to all agents
-            durable_name  = "governance-runbook-executor",
-        )
-        logger.info("[RunbookExecutor] Listening ...")
-        await asyncio.Event().wait()  # Block until stopped
+    # NOTE: a NATS-driven ``start()`` was removed here (was previously at this
+    # location). The orchestrator is the sole NATS consumer in production and
+    # invokes ``handle_event()`` directly. Calling both paths would double-fire
+    # every runbook.
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Factory — build a fully-configured executor from env + defaults
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def build_executor(
     nats_client: NATSClient,
@@ -525,20 +632,20 @@ def build_executor(
     from nexus.governance.cooldown_store import CooldownStore
     from nexus.governance.rollback_registry import RollbackRegistry
 
-    cooldown  = CooldownStore(redis_url=redis_url)
-    approval  = HumanApprovalQueue()
-    cb        = GovernanceCircuitBreaker(failure_threshold=3)
-    policy    = PolicyEngine(opa_url=opa_url)
-    ladder    = ActionLadder(policy, cooldown, approval, cb)
-    rollback  = RollbackRegistry(dry_run=dry_run)
+    cooldown = CooldownStore(redis_url=redis_url)
+    approval = HumanApprovalQueue()
+    cb = GovernanceCircuitBreaker(failure_threshold=3)
+    policy = PolicyEngine(opa_url=opa_url)
+    ladder = ActionLadder(policy, cooldown, approval, cb)
+    rollback = RollbackRegistry(dry_run=dry_run)
 
     return RunbookExecutor(
-        nats_client       = nats_client,
-        runbook_dir       = runbook_dir,
-        audit_trail       = audit_trail,
-        action_ladder     = ladder,
-        rollback_registry = rollback,
-        prometheus_url    = prometheus_url,
-        dry_run           = dry_run,
-        confidence        = confidence,
+        nats_client=nats_client,
+        runbook_dir=runbook_dir,
+        audit_trail=audit_trail,
+        action_ladder=ladder,
+        rollback_registry=rollback,
+        prometheus_url=prometheus_url,
+        dry_run=dry_run,
+        confidence=confidence,
     )

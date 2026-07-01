@@ -13,8 +13,13 @@ def test_agent_manager_instantiates_all_7_agents():
     assert len(manager.agents) == 7
     agent_types = {type(a).__name__ for a in manager.agents}
     expected = {
-        "MetricsAgent", "K8sAgent", "DBAgent", "NginxAgent",
-        "NetworkAgent", "ConfigAgent", "GitAgent",
+        "MetricsAgent",
+        "K8sAgent",
+        "DBAgent",
+        "NginxAgent",
+        "NetworkAgent",
+        "ConfigAgent",
+        "GitAgent",
     }
     assert agent_types == expected
 

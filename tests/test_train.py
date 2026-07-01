@@ -15,7 +15,11 @@ if str(ROOT_DIR) not in sys.path:
 from sklearn.preprocessing import MinMaxScaler  # noqa: E402
 
 from ppa.common.feature_spec import FEATURE_COLUMNS, TARGET_COLUMNS  # noqa: E402
-from ppa.model.train import LOOKBACK_STEPS, create_dataset_from_segments, train_model  # noqa: E402
+from ppa.model.train import (  # noqa: E402
+    LOOKBACK_STEPS,
+    create_dataset_from_segments,
+    train_model,
+)
 
 
 def _make_synthetic_df(n_rows=200, with_segments=True):
@@ -155,7 +159,8 @@ class TestTrainModel:
             assert meta["val_size"] > 0
             assert meta["test_size"] > 0
             assert (
-                meta["train_size"] + meta["val_size"] + meta["test_size"] == meta["total_windows"]
+                meta["train_size"] + meta["val_size"] + meta["test_size"]
+                == meta["total_windows"]
             )
 
     def test_returns_none_for_missing_csv(self):
@@ -182,6 +187,8 @@ class TestTrainModel:
             )
 
             model = result["model"]
-            dummy_input = np.random.rand(5, LOOKBACK_STEPS, len(FEATURE_COLUMNS)).astype(np.float32)
+            dummy_input = np.random.rand(
+                5, LOOKBACK_STEPS, len(FEATURE_COLUMNS)
+            ).astype(np.float32)
             output = model.predict(dummy_input, verbose=0)
             assert output.shape == (5, 1)

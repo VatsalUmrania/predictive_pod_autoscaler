@@ -31,6 +31,7 @@ from nexus.predictive.prescaler import PrescaleMode, Prescaler
 
 # ── Test fixtures ──────────────────────────────────────────────────────────────
 
+
 def make_ppa_payload(
     deployment: str = "payments-api",
     namespace: str = "production",
@@ -50,7 +51,8 @@ def make_ppa_payload(
         "confidence": confidence,
         "horizon_minutes": horizon_minutes,
         "model_version": model_version,
-        "raw_features": raw_features or {"rps_per_replica": 40.0, "cpu_utilization_pct": 72.0},
+        "raw_features": raw_features
+        or {"rps_per_replica": 40.0, "cpu_utilization_pct": 72.0},
     }
 
 
@@ -103,6 +105,7 @@ class MockNATS:
 
 
 # ── Shared bus wiring ──────────────────────────────────────────────────────────
+
 
 class TestSharedNATSBus:
     """
@@ -194,7 +197,9 @@ class TestSharedNATSBus:
     async def test_outcome_published_to_correct_subject(self, tmp_path):
         """OutcomeTracker publishes ppa.outcomes.{deployment} on verdict."""
         nats = MockNATS()
-        tracker = PpaOutcomeTracker(nats_client=nats, batch_output_path=tmp_path / "out.jsonl")
+        tracker = PpaOutcomeTracker(
+            nats_client=nats, batch_output_path=tmp_path / "out.jsonl"
+        )
 
         now = datetime.now(timezone.utc)
         tracker._pending["ID1"] = PendingPrediction(
@@ -212,12 +217,15 @@ class TestSharedNATSBus:
         tracker._fetch_actual_rps = AsyncMock(return_value=480.0)
         await tracker._check_and_emit_outcome()
 
-        outcome_subjects = [s for s, _ in nats._published if s.startswith("ppa.outcomes.")]
+        outcome_subjects = [
+            s for s, _ in nats._published if s.startswith("ppa.outcomes.")
+        ]
         assert len(outcome_subjects) == 1
         assert outcome_subjects[0] == "ppa.outcomes.api"
 
 
 # ── FeedbackLoop wiring ────────────────────────────────────────────────────────
+
 
 class TestFeedbackLoopBatchFlush:
     """
@@ -240,6 +248,7 @@ class TestFeedbackLoopBatchFlush:
 
             async def get_system_kpis(self, days=30):
                 from nexus.learning.outcome_store import SystemKPIs
+
                 return SystemKPIs(window_days=days)
 
             async def get_recent_outcomes(self, limit=50):
@@ -288,6 +297,7 @@ class TestFeedbackLoopBatchFlush:
 
             async def get_system_kpis(self, days=30):
                 from nexus.learning.outcome_store import SystemKPIs
+
                 return SystemKPIs(window_days=days)
 
             async def get_recent_outcomes(self, limit=50):
@@ -326,6 +336,7 @@ class TestFeedbackLoopBatchFlush:
 
 
 # ── End-to-end sequence ───────────────────────────────────────────────────────
+
 
 class TestPredictionOutcomeSequence:
     """
@@ -400,7 +411,9 @@ class TestPredictionOutcomeSequence:
         tracker._fetch_actual_rps = AsyncMock(return_value=950.0)
         await tracker._check_and_emit_outcome()
 
-        outcome_subjects = [s for s, _ in nats._published if s.startswith("ppa.outcomes.")]
+        outcome_subjects = [
+            s for s, _ in nats._published if s.startswith("ppa.outcomes.")
+        ]
         assert len(outcome_subjects) == 1
         subject, payload = nats._published[0]
         assert subject == "ppa.outcomes.checkout-api"

@@ -84,7 +84,10 @@ class TestDataQuality:
         monkeypatch.setattr(
             export_training_data,
             "prepare_dataset",
-            lambda df: (df, {"dropped_incomplete_rows": 0, "missing_required_values": {}}),
+            lambda df: (
+                df,
+                {"dropped_incomplete_rows": 0, "missing_required_values": {}},
+            ),
         )
 
         def fake_collect_range(query, hours=24, step="1m", *, start=None, end=None):

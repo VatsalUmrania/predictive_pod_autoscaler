@@ -48,14 +48,16 @@ logger = logging.getLogger(__name__)
 # RCA Result
 # ──────────────────────────────────────────────────────────────────────────────
 
-VALID_FAILURE_CLASSES = frozenset({
-    "bad_deploy",
-    "resource_exhaustion",
-    "dependency_failure",
-    "config_error",
-    "cascading_failure",
-    "unknown",
-})
+VALID_FAILURE_CLASSES = frozenset(
+    {
+        "bad_deploy",
+        "resource_exhaustion",
+        "dependency_failure",
+        "config_error",
+        "cascading_failure",
+        "unknown",
+    }
+)
 
 VALID_HEALING_LEVELS = (0, 1, 2, 3)
 
@@ -63,32 +65,33 @@ VALID_HEALING_LEVELS = (0, 1, 2, 3)
 @dataclass
 class RCAResult:
     """The output of the RCA Engine for one IncidentCluster."""
-    root_cause:    str
+
+    root_cause: str
     failure_class: str
     healing_level: int
-    runbook_id:    str | None
-    confidence:    float
-    reasoning:     str
-    source:        str   # "gemini" | "rule_based"
+    runbook_id: str | None
+    confidence: float
+    reasoning: str
+    source: str  # "gemini" | "rule_based"
     actions_to_avoid: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         # Clamp and validate
-        self.confidence    = max(0.0, min(1.0, self.confidence))
+        self.confidence = max(0.0, min(1.0, self.confidence))
         self.healing_level = max(0, min(3, self.healing_level))
         if self.failure_class not in VALID_FAILURE_CLASSES:
             self.failure_class = "unknown"
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "root_cause":        self.root_cause,
-            "failure_class":     self.failure_class,
-            "healing_level":     self.healing_level,
-            "runbook_id":        self.runbook_id,
-            "confidence":        round(self.confidence, 3),
-            "reasoning":         self.reasoning,
-            "source":            self.source,
-            "actions_to_avoid":  self.actions_to_avoid,
+            "root_cause": self.root_cause,
+            "failure_class": self.failure_class,
+            "healing_level": self.healing_level,
+            "runbook_id": self.runbook_id,
+            "confidence": round(self.confidence, 3),
+            "reasoning": self.reasoning,
+            "source": self.source,
+            "actions_to_avoid": self.actions_to_avoid,
         }
 
     def __str__(self) -> str:
@@ -110,186 +113,185 @@ class RCAResult:
 # Rules are evaluated top-to-bottom; first match wins.
 
 _RULES: list[tuple[frozenset[str], bool, dict[str, Any]]] = [
-
     # ── Highest confidence first ───────────────────────────────────────────────
-
     # 1. ENV contract violation — deterministic, always L0 block
     (
-        frozenset({"env_contract_violation"}), False,
+        frozenset({"env_contract_violation"}),
+        False,
         {
-            "root_cause":    "Required environment variables are missing from the deployment. "
-                             "The container will fail to start without them.",
+            "root_cause": "Required environment variables are missing from the deployment. "
+            "The container will fail to start without them.",
             "failure_class": "config_error",
             "healing_level": 0,
-            "runbook_id":    "runbook_missing_env_key_v1",
-            "confidence":    0.97,
-            "reasoning":     "ENV_CONTRACT_VIOLATION is a deterministic signal — "
-                             "the AST scanner found required keys absent from secrets/env.",
+            "runbook_id": "runbook_missing_env_key_v1",
+            "confidence": 0.97,
+            "reasoning": "ENV_CONTRACT_VIOLATION is a deterministic signal — "
+            "the AST scanner found required keys absent from secrets/env.",
         },
     ),
-
     # 2. Secret accidentally committed — security incident, L0 (alert immediately)
     (
-        frozenset({"secret_committed"}), False,
+        frozenset({"secret_committed"}),
+        False,
         {
-            "root_cause":    "A potential secret or credential was detected in a recent git commit.",
+            "root_cause": "A potential secret or credential was detected in a recent git commit.",
             "failure_class": "config_error",
             "healing_level": 0,
-            "runbook_id":    None,
-            "confidence":    0.90,
-            "reasoning":     "SECRET_COMMITTED detected in diff — "
-                             "require immediate manual revocation and secret rotation.",
+            "runbook_id": None,
+            "confidence": 0.90,
+            "reasoning": "SECRET_COMMITTED detected in diff — "
+            "require immediate manual revocation and secret rotation.",
         },
     ),
-
     # 3. OOMKilled — clearest resource signal
     (
-        frozenset({"pod_oomkilled"}), False,
+        frozenset({"pod_oomkilled"}),
+        False,
         {
-            "root_cause":    "Pod terminated by the OOM killer — memory limit exceeded. "
-                             "Container needs higher memory limits or there is a memory leak.",
+            "root_cause": "Pod terminated by the OOM killer — memory limit exceeded. "
+            "Container needs higher memory limits or there is a memory leak.",
             "failure_class": "resource_exhaustion",
             "healing_level": 1,
-            "runbook_id":    "runbook_pod_crashloop_v1",
-            "confidence":    0.90,
-            "reasoning":     "OOMKilled is a deterministic K8s signal. "
-                             "VPA hint + pod restart is the appropriate first response.",
+            "runbook_id": "runbook_pod_crashloop_v1",
+            "confidence": 0.90,
+            "reasoning": "OOMKilled is a deterministic K8s signal. "
+            "VPA hint + pod restart is the appropriate first response.",
         },
     ),
-
     # 4. Pod crash + deploy event (most specific compound rule)
     (
-        frozenset({"pod_crashloop", "deploy_event"}), True,
+        frozenset({"pod_crashloop", "deploy_event"}),
+        True,
         {
-            "root_cause":    "Pod crash loop correlated with a recent deployment — "
-                             "the new image or config change is likely causing startup failures.",
+            "root_cause": "Pod crash loop correlated with a recent deployment — "
+            "the new image or config change is likely causing startup failures.",
             "failure_class": "bad_deploy",
             "healing_level": 2,
-            "runbook_id":    "runbook_high_error_rate_post_deploy_v1",
-            "confidence":    0.83,
-            "reasoning":     "CrashLoopBackOff coinciding with a deploy event "
-                             "is the canonical 'bad deploy' pattern. "
-                             "Canary halt + rollout undo is the appropriate response.",
+            "runbook_id": "runbook_high_error_rate_post_deploy_v1",
+            "confidence": 0.83,
+            "reasoning": "CrashLoopBackOff coinciding with a deploy event "
+            "is the canonical 'bad deploy' pattern. "
+            "Canary halt + rollout undo is the appropriate response.",
         },
     ),
-
     # 5. High error rate + deploy event
     (
-        frozenset({"high_error_rate", "deploy_event"}), True,
+        frozenset({"high_error_rate", "deploy_event"}),
+        True,
         {
-            "root_cause":    "HTTP error rate spike starting after a recent deployment — "
-                             "regression in the new code version.",
+            "root_cause": "HTTP error rate spike starting after a recent deployment — "
+            "regression in the new code version.",
             "failure_class": "bad_deploy",
             "healing_level": 2,
-            "runbook_id":    "runbook_high_error_rate_post_deploy_v1",
-            "confidence":    0.82,
-            "reasoning":     "Error rate correlated with deploy time is a strong "
-                             "bad-deploy signal. Halting canary traffic protects users.",
+            "runbook_id": "runbook_high_error_rate_post_deploy_v1",
+            "confidence": 0.82,
+            "reasoning": "Error rate correlated with deploy time is a strong "
+            "bad-deploy signal. Halting canary traffic protects users.",
         },
     ),
-
     # 6. Pod crash alone
     (
-        frozenset({"pod_crashloop"}), False,
+        frozenset({"pod_crashloop"}),
+        False,
         {
-            "root_cause":    "Pod repeatedly crashing on startup — likely due to misconfiguration, "
-                             "missing dependency, or application bug.",
+            "root_cause": "Pod repeatedly crashing on startup — likely due to misconfiguration, "
+            "missing dependency, or application bug.",
             "failure_class": "bad_deploy",
             "healing_level": 1,
-            "runbook_id":    "runbook_pod_crashloop_v1",
-            "confidence":    0.82,
-            "reasoning":     "CrashLoopBackOff is a clear K8s failure signal. "
-                             "Pod restart resets the exponential backoff timer.",
+            "runbook_id": "runbook_pod_crashloop_v1",
+            "confidence": 0.82,
+            "reasoning": "CrashLoopBackOff is a clear K8s failure signal. "
+            "Pod restart resets the exponential backoff timer.",
         },
     ),
-
     # 7. DB connection exhaustion
     (
-        frozenset({"db_connection_exhaustion"}), False,
+        frozenset({"db_connection_exhaustion"}),
+        False,
         {
-            "root_cause":    "Database connection pool is exhausted — connections are not "
-                             "being released or traffic spike exceeded pool capacity.",
+            "root_cause": "Database connection pool is exhausted — connections are not "
+            "being released or traffic spike exceeded pool capacity.",
             "failure_class": "resource_exhaustion",
             "healing_level": 2,
-            "runbook_id":    "runbook_db_connection_exhaustion_v1",
-            "confidence":    0.80,
-            "reasoning":     "DB connection utilization at threshold is a resource "
-                             "exhaustion signal. Alerting + annotation allows DBAs to investigate.",
+            "runbook_id": "runbook_db_connection_exhaustion_v1",
+            "confidence": 0.80,
+            "reasoning": "DB connection utilization at threshold is a resource "
+            "exhaustion signal. Alerting + annotation allows DBAs to investigate.",
         },
     ),
-
     # 8. DNS resolution failure
     (
-        frozenset({"dns_resolution_failure"}), False,
+        frozenset({"dns_resolution_failure"}),
+        False,
         {
-            "root_cause":    "DNS resolution failures detected — CoreDNS may be "
-                             "overloaded or its cache is corrupted.",
+            "root_cause": "DNS resolution failures detected — CoreDNS may be "
+            "overloaded or its cache is corrupted.",
             "failure_class": "dependency_failure",
             "healing_level": 1,
-            "runbook_id":    "runbook_dns_resolution_failure_v1",
-            "confidence":    0.77,
-            "reasoning":     "DNS failures affect all services in the namespace. "
-                             "CoreDNS cache flush is safe and typically resolves stale records.",
+            "runbook_id": "runbook_dns_resolution_failure_v1",
+            "confidence": 0.77,
+            "reasoning": "DNS failures affect all services in the namespace. "
+            "CoreDNS cache flush is safe and typically resolves stale records.",
         },
     ),
-
     # 9. HPA maxed out
     (
-        frozenset({"hpa_maxed"}), False,
+        frozenset({"hpa_maxed"}),
+        False,
         {
-            "root_cause":    "HPA has reached maximum replica count — cluster cannot "
-                             "auto-scale further to handle the current load.",
+            "root_cause": "HPA has reached maximum replica count — cluster cannot "
+            "auto-scale further to handle the current load.",
             "failure_class": "resource_exhaustion",
             "healing_level": 0,
-            "runbook_id":    None,
-            "confidence":    0.72,
-            "reasoning":     "HPA saturation is a capacity ceiling problem. "
-                             "Autonomous healing cannot increase cluster capacity — escalate.",
+            "runbook_id": None,
+            "confidence": 0.72,
+            "reasoning": "HPA saturation is a capacity ceiling problem. "
+            "Autonomous healing cannot increase cluster capacity — escalate.",
         },
     ),
-
     # 10. Deployment degraded
     (
-        frozenset({"deployment_degraded"}), False,
+        frozenset({"deployment_degraded"}),
+        False,
         {
-            "root_cause":    "Deployment has fewer available replicas than desired — "
-                             "pods failing to start or being evicted.",
+            "root_cause": "Deployment has fewer available replicas than desired — "
+            "pods failing to start or being evicted.",
             "failure_class": "bad_deploy",
             "healing_level": 1,
-            "runbook_id":    "runbook_pod_crashloop_v1",
-            "confidence":    0.68,
-            "reasoning":     "Degraded deployment often results from pod startup failures. "
-                             "Pod restart with logging is the first investigation step.",
+            "runbook_id": "runbook_pod_crashloop_v1",
+            "confidence": 0.68,
+            "reasoning": "Degraded deployment often results from pod startup failures. "
+            "Pod restart with logging is the first investigation step.",
         },
     ),
-
     # 11. High error rate alone (no deploy correlated)
     (
-        frozenset({"high_error_rate"}), False,
+        frozenset({"high_error_rate"}),
+        False,
         {
-            "root_cause":    "Elevated HTTP error rate with no correlated deployment — "
-                             "possible upstream dependency failure or transient spike.",
+            "root_cause": "Elevated HTTP error rate with no correlated deployment — "
+            "possible upstream dependency failure or transient spike.",
             "failure_class": "unknown",
             "healing_level": 0,
-            "runbook_id":    None,
-            "confidence":    0.50,
-            "reasoning":     "Error rate elevated but no deploy detected. "
-                             "Alerting only — more signals needed before autonomous action.",
+            "runbook_id": None,
+            "confidence": 0.50,
+            "reasoning": "Error rate elevated but no deploy detected. "
+            "Alerting only — more signals needed before autonomous action.",
         },
     ),
-
     # 12. Rollout stuck
     (
-        frozenset({"rollout_stuck"}), False,
+        frozenset({"rollout_stuck"}),
+        False,
         {
-            "root_cause":    "Kubernetes deployment rollout has exceeded its progress deadline — "
-                             "new pods are not becoming ready.",
+            "root_cause": "Kubernetes deployment rollout has exceeded its progress deadline — "
+            "new pods are not becoming ready.",
             "failure_class": "bad_deploy",
             "healing_level": 3,
-            "runbook_id":    None,     # Rollout undo is available but requires high confidence
-            "confidence":    0.75,
-            "reasoning":     "ProgressDeadlineExceeded is a K8s rollout failure signal. "
-                             "Manual rollback evaluation is recommended at L3.",
+            "runbook_id": None,  # Rollout undo is available but requires high confidence
+            "confidence": 0.75,
+            "reasoning": "ProgressDeadlineExceeded is a K8s rollout failure signal. "
+            "Manual rollback evaluation is recommended at L3.",
         },
     ),
 
@@ -489,34 +491,34 @@ def _rule_based_rca(cluster: IncidentCluster) -> RCAResult:
     Deterministic fallback RCA — evaluates rule table against cluster signal types.
     Rules are priority-ordered (most specific first).
     """
-    signal_types = cluster.signal_types   # Set[str]
+    signal_types = cluster.signal_types  # Set[str]
 
     for required, partial_ok, tmpl in _RULES:
         if partial_ok:
-            matched = bool(required & signal_types)    # ANY required signal present
+            matched = bool(required & signal_types)  # ANY required signal present
         else:
             matched = required.issubset(signal_types)  # ALL required signals present
 
         if matched:
             return RCAResult(
-                root_cause    = tmpl["root_cause"],
-                failure_class = tmpl["failure_class"],
-                healing_level = tmpl["healing_level"],
-                runbook_id    = tmpl.get("runbook_id"),
-                confidence    = tmpl["confidence"],
-                reasoning     = tmpl["reasoning"],
-                source        = "rule_based",
+                root_cause=tmpl["root_cause"],
+                failure_class=tmpl["failure_class"],
+                healing_level=tmpl["healing_level"],
+                runbook_id=tmpl.get("runbook_id"),
+                confidence=tmpl["confidence"],
+                reasoning=tmpl["reasoning"],
+                source="rule_based",
             )
 
     # Default — cannot determine
     return RCAResult(
-        root_cause    = "Unable to determine root cause from available signals.",
-        failure_class = "unknown",
-        healing_level = 0,
-        runbook_id    = None,
-        confidence    = 0.30,
-        reasoning     = "No matching rule found — alerting only.",
-        source        = "rule_based",
+        root_cause="Unable to determine root cause from available signals.",
+        failure_class="unknown",
+        healing_level=0,
+        runbook_id=None,
+        confidence=0.30,
+        reasoning="No matching rule found — alerting only.",
+        source="rule_based",
     )
 
 
@@ -577,6 +579,7 @@ def _build_gemini_prompt(cluster: IncidentCluster) -> str:
 # RCA Engine
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class RCAEngine:
     """
     Root Cause Analysis engine.
@@ -594,19 +597,20 @@ class RCAEngine:
 
     def __init__(
         self,
-        api_key:      str | None = None,
-        model:        str  = "gemini",
-        timeout_s:    float = 10.0,
-        use_fallback: bool  = True,
+        api_key: str | None = None,
+        model: str = "gemini",
+        timeout_s: float = 10.0,
+        use_fallback: bool = True,
     ):
         # Legacy compat: NEXUS_GEMINI_API_KEY still works for Gemini provider
-        self._timeout_s    = float(os.getenv("NEXUS_RCA_TIMEOUT_S", str(timeout_s)))
+        self._timeout_s = float(os.getenv("NEXUS_RCA_TIMEOUT_S", str(timeout_s)))
         self._use_fallback = use_fallback
-        self._llm_calls    = 0
-        self._llm_errors   = 0
+        self._llm_calls = 0
+        self._llm_errors = 0
 
         # Resolve provider once at init time
         from nexus.reasoning.llm_provider import get_llm_provider
+
         self._provider = get_llm_provider(api_key=api_key or None, model=model or None)
 
     async def analyze(self, cluster: IncidentCluster) -> RCAResult:
@@ -618,7 +622,7 @@ class RCAEngine:
         """
         if self._provider.is_available():
             try:
-                prompt = _build_gemini_prompt(cluster)   # prompt works for all LLMs
+                prompt = _build_gemini_prompt(cluster)  # prompt works for all LLMs
                 raw_text = await asyncio.wait_for(
                     self._provider.complete(prompt),
                     timeout=self._timeout_s,
@@ -641,7 +645,9 @@ class RCAEngine:
                 )
             except Exception as exc:
                 self._llm_errors += 1
-                logger.warning(f"[RCAEngine] {self._provider.name} error: {exc} — using fallback")
+                logger.warning(
+                    f"[RCAEngine] {self._provider.name} error: {exc} — using fallback"
+                )
 
         # Rule-based fallback
         result = _rule_based_rca(cluster)
@@ -655,6 +661,7 @@ class RCAEngine:
     def _parse_response(self, raw: str) -> RCAResult | None:
         """Parse LLM JSON response into an RCAResult."""
         import re as _re
+
         clean = _re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
 
         try:
@@ -665,14 +672,14 @@ class RCAEngine:
 
         try:
             return RCAResult(
-                root_cause    = str(data.get("root_cause", "Unknown")),
-                failure_class = str(data.get("failure_class", "unknown")),
-                healing_level = int(data.get("healing_level", 0)),
-                runbook_id    = data.get("runbook_id") or None,
-                confidence    = float(data.get("confidence", 0.5)),
-                reasoning     = str(data.get("reasoning", "")),
-                source        = "llm",
-                actions_to_avoid = list(data.get("actions_to_avoid", [])),
+                root_cause=str(data.get("root_cause", "Unknown")),
+                failure_class=str(data.get("failure_class", "unknown")),
+                healing_level=int(data.get("healing_level", 0)),
+                runbook_id=data.get("runbook_id") or None,
+                confidence=float(data.get("confidence", 0.5)),
+                reasoning=str(data.get("reasoning", "")),
+                source="llm",
+                actions_to_avoid=list(data.get("actions_to_avoid", [])),
             )
         except (TypeError, ValueError) as exc:
             logger.warning(f"[RCAEngine] Response schema invalid: {exc}")
@@ -681,10 +688,9 @@ class RCAEngine:
     @property
     def stats(self) -> dict:
         return {
-            "llm_calls":    self._llm_calls,
-            "llm_errors":   self._llm_errors,
-            "provider":     self._provider.name,
-            "model":        self._provider.model,
-            "has_api_key":  self._provider.is_available(),
+            "llm_calls": self._llm_calls,
+            "llm_errors": self._llm_errors,
+            "provider": self._provider.name,
+            "model": self._provider.model,
+            "has_api_key": self._provider.is_available(),
         }
-

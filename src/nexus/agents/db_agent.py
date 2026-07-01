@@ -55,34 +55,39 @@ logger = logging.getLogger(__name__)
 # Shared data types
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class DBConnectionStats:
-    db_engine:          str
-    db_host:            str
+    db_engine: str
+    db_host: str
     active_connections: int
-    max_connections:    int
-    utilization_pct:    float
-    blocking_query:     str | None = None
+    max_connections: int
+    utilization_pct: float
+    blocking_query: str | None = None
 
 
 @dataclass
 class SlowQuery:
-    query_digest:   str
+    query_digest: str
     avg_latency_ms: float
-    calls:          int
-    database:       str | None = None
+    calls: int
+    database: str | None = None
 
 
 @dataclass
 class QuerySnapshot:
     """Timestamped per-table/collection query volume — input for DBTrafficCorrelator."""
-    db_engine:    str
-    table_counts: dict[str, int] = field(default_factory=dict)   # table → read+write count
+
+    db_engine: str
+    table_counts: dict[str, int] = field(
+        default_factory=dict
+    )  # table → read+write count
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # PostgreSQL Adapter
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class PostgresAdapter:
     """
@@ -99,18 +104,19 @@ class PostgresAdapter:
         password: str = "",
         connect_timeout: float = 5.0,
     ):
-        self.host            = host
-        self.port            = port
-        self.database        = database
-        self.user            = user
-        self.password        = password
+        self.host = host
+        self.port = port
+        self.database = database
+        self.user = user
+        self.password = password
         self.connect_timeout = connect_timeout
-        self._pool           = None
+        self._pool = None
 
     async def _get_pool(self):
         if self._pool is None:
             try:
                 import asyncpg
+
                 self._pool = await asyncpg.create_pool(
                     host=self.host,
                     port=self.port,
@@ -121,7 +127,9 @@ class PostgresAdapter:
                     max_size=3,
                     command_timeout=self.connect_timeout,
                 )
-                logger.info(f"[DBAgent/Postgres] Connected to {self.host}:{self.port}/{self.database}")
+                logger.info(
+                    f"[DBAgent/Postgres] Connected to {self.host}:{self.port}/{self.database}"
+                )
             except Exception as exc:
                 logger.warning(f"[DBAgent/Postgres] Connection failed: {exc}")
                 raise
@@ -146,7 +154,7 @@ class PostgresAdapter:
                 if not row:
                     return None
                 active = int(row["active"])
-                maxc   = int(row["max_conn"])
+                maxc = int(row["max_conn"])
                 return DBConnectionStats(
                     db_engine="postgres",
                     db_host=self.host,
@@ -164,13 +172,16 @@ class PostgresAdapter:
             pool = await self._get_pool()
             async with pool.acquire() as conn:
                 # pg_stat_statements may not be installed — catch gracefully
-                rows = await conn.fetch("""
+                rows = await conn.fetch(
+                    """
                     SELECT query, mean_exec_time, calls
                     FROM pg_stat_statements
                     WHERE mean_exec_time > $1
                     ORDER BY mean_exec_time DESC
                     LIMIT 10
-                """, threshold_ms)
+                """,
+                    threshold_ms,
+                )
                 return [
                     SlowQuery(
                         query_digest=r["query"][:200],
@@ -201,7 +212,9 @@ class PostgresAdapter:
                 for r in rows:
                     snapshot.table_counts[r["table_name"]] = r["reads"] + r["writes"]
         except Exception as exc:
-            logger.debug(f"[DBAgent/Postgres] query_pattern_snapshot unavailable: {exc}")
+            logger.debug(
+                f"[DBAgent/Postgres] query_pattern_snapshot unavailable: {exc}"
+            )
         return snapshot
 
     async def close(self) -> None:
@@ -212,6 +225,7 @@ class PostgresAdapter:
 # ──────────────────────────────────────────────────────────────────────────────
 # MySQL Adapter
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class MySQLAdapter:
     """
@@ -227,17 +241,18 @@ class MySQLAdapter:
         user: str = "root",
         password: str = "",
     ):
-        self.host     = host
-        self.port     = port
+        self.host = host
+        self.port = port
         self.database = database
-        self.user     = user
+        self.user = user
         self.password = password
-        self._pool    = None
+        self._pool = None
 
     async def _get_pool(self):
         if self._pool is None:
             try:
                 import aiomysql
+
                 self._pool = await aiomysql.create_pool(
                     host=self.host,
                     port=self.port,
@@ -247,7 +262,9 @@ class MySQLAdapter:
                     minsize=1,
                     maxsize=3,
                 )
-                logger.info(f"[DBAgent/MySQL] Connected to {self.host}:{self.port}/{self.database}")
+                logger.info(
+                    f"[DBAgent/MySQL] Connected to {self.host}:{self.port}/{self.database}"
+                )
             except Exception as exc:
                 logger.warning(f"[DBAgent/MySQL] Connection failed: {exc}")
                 raise
@@ -264,7 +281,7 @@ class MySQLAdapter:
                     max_row = await cur.fetchone()
 
                     active = int(threads_row[1]) if threads_row else 0
-                    maxc   = int(max_row[1]) if max_row else 151
+                    maxc = int(max_row[1]) if max_row else 151
                     return DBConnectionStats(
                         db_engine="mysql",
                         db_host=self.host,
@@ -281,13 +298,16 @@ class MySQLAdapter:
             pool = await self._get_pool()
             async with pool.acquire() as conn:
                 async with conn.cursor() as cur:
-                    await cur.execute("""
+                    await cur.execute(
+                        """
                         SELECT DIGEST_TEXT, AVG_TIMER_WAIT / 1e9, COUNT_STAR
                         FROM performance_schema.events_statements_summary_by_digest
                         WHERE AVG_TIMER_WAIT / 1e6 > %s
                         ORDER BY AVG_TIMER_WAIT DESC
                         LIMIT 10
-                    """, (threshold_ms,))
+                    """,
+                        (threshold_ms,),
+                    )
                     rows = await cur.fetchall()
                     return [
                         SlowQuery(
@@ -314,6 +334,7 @@ class MySQLAdapter:
 # MongoDB Adapter
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class MongoDBAdapter:
     """
     Monitors MongoDB via serverStatus and currentOp.
@@ -325,14 +346,15 @@ class MongoDBAdapter:
         uri: str = "mongodb://localhost:27017",
         database: str = "admin",
     ):
-        self.uri      = uri
+        self.uri = uri
         self.database = database
-        self._client  = None
+        self._client = None
 
     def _get_client(self):
         if self._client is None:
             try:
                 import motor.motor_asyncio as motor
+
                 self._client = motor.AsyncIOMotorClient(
                     self.uri,
                     serverSelectionTimeoutMS=5000,
@@ -347,10 +369,10 @@ class MongoDBAdapter:
         try:
             client = self._get_client()
             status = await client[self.database].command("serverStatus")
-            conns  = status.get("connections", {})
+            conns = status.get("connections", {})
             current = int(conns.get("current", 0))
-            avail   = int(conns.get("available", 1))
-            total   = current + avail
+            avail = int(conns.get("available", 1))
+            total = current + avail
             return DBConnectionStats(
                 db_engine="mongodb",
                 db_host=self.uri,
@@ -365,8 +387,9 @@ class MongoDBAdapter:
     async def slow_queries(self, threshold_ms: float = 1000.0) -> list[SlowQuery]:
         try:
             client = self._get_client()
-            ops    = await client[self.database].command(
-                "currentOp", {"active": True, "secs_running": {"$gte": int(threshold_ms / 1000)}}
+            ops = await client[self.database].command(
+                "currentOp",
+                {"active": True, "secs_running": {"$gte": int(threshold_ms / 1000)}},
             )
             return [
                 SlowQuery(
@@ -421,15 +444,19 @@ class DBAgent(BaseAgent):
         deployment_name: str | None = None,
     ):
         super().__init__(
-            nats_client           = nats_client,
-            agent_type            = AgentType.DB,
-            poll_interval_seconds = poll_interval_seconds,
+            nats_client=nats_client,
+            agent_type=AgentType.DB,
+            poll_interval_seconds=poll_interval_seconds,
         )
-        self.adapters              = adapters
-        self.conn_threshold        = float(os.getenv("NEXUS_DB_CONNECTION_THRESHOLD", str(connection_threshold_pct)))
-        self.slow_threshold_ms     = float(os.getenv("NEXUS_SLOW_QUERY_THRESHOLD_MS", str(slow_query_threshold_ms)))
-        self.namespace             = namespace
-        self.deployment_name       = deployment_name
+        self.adapters = adapters
+        self.conn_threshold = float(
+            os.getenv("NEXUS_DB_CONNECTION_THRESHOLD", str(connection_threshold_pct))
+        )
+        self.slow_threshold_ms = float(
+            os.getenv("NEXUS_SLOW_QUERY_THRESHOLD_MS", str(slow_query_threshold_ms))
+        )
+        self.namespace = namespace
+        self.deployment_name = deployment_name
 
     # ── Per-adapter checks ────────────────────────────────────────────────────
 
@@ -439,69 +466,83 @@ class DBAgent(BaseAgent):
         # Connection stats
         stats = await adapter.connection_stats()
         if stats and stats.utilization_pct >= self.conn_threshold:
-            events.append(IncidentEvent(
-                agent=AgentType.DB,
-                signal_type=SignalType.DB_CONNECTION_EXHAUSTION,
-                severity=Severity.CRITICAL if stats.utilization_pct >= 95 else Severity.WARNING,
-                namespace=self.namespace,
-                resource_name=self.deployment_name,
-                context=DBConnectionExhaustionContext(
-                    db_engine=stats.db_engine,
-                    db_host=stats.db_host,
-                    active_connections=stats.active_connections,
-                    max_connections=stats.max_connections,
-                    utilization_pct=stats.utilization_pct,
-                    blocking_query=stats.blocking_query,
-                ).model_dump(),
-                suggested_runbook="runbook_db_connection_exhaustion_v1",
-                suggested_healing_level=2,
-                confidence=0.92,
-            ))
+            events.append(
+                IncidentEvent(
+                    agent=AgentType.DB,
+                    signal_type=SignalType.DB_CONNECTION_EXHAUSTION,
+                    severity=(
+                        Severity.CRITICAL
+                        if stats.utilization_pct >= 95
+                        else Severity.WARNING
+                    ),
+                    namespace=self.namespace,
+                    resource_name=self.deployment_name,
+                    context=DBConnectionExhaustionContext(
+                        db_engine=stats.db_engine,
+                        db_host=stats.db_host,
+                        active_connections=stats.active_connections,
+                        max_connections=stats.max_connections,
+                        utilization_pct=stats.utilization_pct,
+                        blocking_query=stats.blocking_query,
+                    ).model_dump(),
+                    suggested_runbook="runbook_db_connection_exhaustion_v1",
+                    suggested_healing_level=2,
+                    confidence=0.92,
+                )
+            )
 
             if stats.blocking_query:
-                events.append(IncidentEvent(
-                    agent=AgentType.DB,
-                    signal_type=SignalType.DB_LOCK_CONTENTION,
-                    severity=Severity.WARNING,
-                    namespace=self.namespace,
-                    context={
-                        "db_engine":       stats.db_engine,
-                        "db_host":         stats.db_host,
-                        "blocking_query":  stats.blocking_query[:300],
-                    },
-                ))
+                events.append(
+                    IncidentEvent(
+                        agent=AgentType.DB,
+                        signal_type=SignalType.DB_LOCK_CONTENTION,
+                        severity=Severity.WARNING,
+                        namespace=self.namespace,
+                        context={
+                            "db_engine": stats.db_engine,
+                            "db_host": stats.db_host,
+                            "blocking_query": stats.blocking_query[:300],
+                        },
+                    )
+                )
 
         # Slow queries
         slow = await adapter.slow_queries(self.slow_threshold_ms)
-        for sq in slow[:5]:   # Cap at 5 per adapter per cycle
-            events.append(IncidentEvent(
-                agent=AgentType.DB,
-                signal_type=SignalType.SLOW_QUERY_DETECTED,
-                severity=Severity.WARNING,
-                namespace=self.namespace,
-                context={
-                    "db_engine":       adapter.__class__.__name__.replace("Adapter", "").lower(),
-                    "query_digest":    sq.query_digest,
-                    "avg_latency_ms":  sq.avg_latency_ms,
-                    "calls":           sq.calls,
-                    "database":        sq.database,
-                },
-            ))
+        for sq in slow[:5]:  # Cap at 5 per adapter per cycle
+            events.append(
+                IncidentEvent(
+                    agent=AgentType.DB,
+                    signal_type=SignalType.SLOW_QUERY_DETECTED,
+                    severity=Severity.WARNING,
+                    namespace=self.namespace,
+                    context={
+                        "db_engine": adapter.__class__.__name__.replace(
+                            "Adapter", ""
+                        ).lower(),
+                        "query_digest": sq.query_digest,
+                        "avg_latency_ms": sq.avg_latency_ms,
+                        "calls": sq.calls,
+                        "database": sq.database,
+                    },
+                )
+            )
 
         # Query pattern snapshot (for DBTrafficCorrelator in Phase 5)
         snapshot = await adapter.query_pattern_snapshot()
         if snapshot.table_counts:
-            events.append(IncidentEvent(
-                agent=AgentType.DB,
-                signal_type=SignalType.DB_QUERY_SPIKE,
-                severity=Severity.INFO,
-                namespace=self.namespace,
-                context={
-                    "db_engine":    snapshot.db_engine,
-                    "table_counts": snapshot.table_counts,
-                    "type":         "query_pattern_snapshot",
-                },
-            ))
+            events.append(
+                IncidentEvent(
+                    agent=AgentType.DB,
+                    signal_type=SignalType.DB_QUERY_SPIKE,
+                    severity=Severity.INFO,
+                    namespace=self.namespace,
+                    context={
+                        "db_engine": snapshot.db_engine,
+                        "table_counts": snapshot.table_counts,
+                        "type": "query_pattern_snapshot",
+                    },
+                )
+            )
 
         return events
 
@@ -535,6 +576,7 @@ class DBAgent(BaseAgent):
 # Factory helper
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def db_agent_from_env(nats_client: NATSClient) -> DBAgent:
     """
     Build a DBAgent from environment variable configuration.
@@ -547,30 +589,38 @@ def db_agent_from_env(nats_client: NATSClient) -> DBAgent:
     adapters: list[_AdapterType] = []
 
     if os.getenv("NEXUS_POSTGRES_HOST"):
-        adapters.append(PostgresAdapter(
-            host=os.environ["NEXUS_POSTGRES_HOST"],
-            port=int(os.getenv("NEXUS_POSTGRES_PORT", "5432")),
-            database=os.getenv("NEXUS_POSTGRES_DB", "postgres"),
-            user=os.getenv("NEXUS_POSTGRES_USER", "postgres"),
-            password=os.getenv("NEXUS_POSTGRES_PASSWORD", ""),
-        ))
+        adapters.append(
+            PostgresAdapter(
+                host=os.environ["NEXUS_POSTGRES_HOST"],
+                port=int(os.getenv("NEXUS_POSTGRES_PORT", "5432")),
+                database=os.getenv("NEXUS_POSTGRES_DB", "postgres"),
+                user=os.getenv("NEXUS_POSTGRES_USER", "postgres"),
+                password=os.getenv("NEXUS_POSTGRES_PASSWORD", ""),
+            )
+        )
 
     if os.getenv("NEXUS_MYSQL_HOST"):
-        adapters.append(MySQLAdapter(
-            host=os.environ["NEXUS_MYSQL_HOST"],
-            port=int(os.getenv("NEXUS_MYSQL_PORT", "3306")),
-            database=os.getenv("NEXUS_MYSQL_DB", "mysql"),
-            user=os.getenv("NEXUS_MYSQL_USER", "root"),
-            password=os.getenv("NEXUS_MYSQL_PASSWORD", ""),
-        ))
+        adapters.append(
+            MySQLAdapter(
+                host=os.environ["NEXUS_MYSQL_HOST"],
+                port=int(os.getenv("NEXUS_MYSQL_PORT", "3306")),
+                database=os.getenv("NEXUS_MYSQL_DB", "mysql"),
+                user=os.getenv("NEXUS_MYSQL_USER", "root"),
+                password=os.getenv("NEXUS_MYSQL_PASSWORD", ""),
+            )
+        )
 
     if os.getenv("NEXUS_MONGODB_URI"):
-        adapters.append(MongoDBAdapter(
-            uri=os.environ["NEXUS_MONGODB_URI"],
-            database=os.getenv("NEXUS_MONGODB_DB", "admin"),
-        ))
+        adapters.append(
+            MongoDBAdapter(
+                uri=os.environ["NEXUS_MONGODB_URI"],
+                database=os.getenv("NEXUS_MONGODB_DB", "admin"),
+            )
+        )
 
     if not adapters:
-        logger.warning("[DBAgent] No DB adapters configured — set NEXUS_POSTGRES_HOST, NEXUS_MYSQL_HOST, or NEXUS_MONGODB_URI")
+        logger.warning(
+            "[DBAgent] No DB adapters configured — set NEXUS_POSTGRES_HOST, NEXUS_MYSQL_HOST, or NEXUS_MONGODB_URI"
+        )
 
     return DBAgent(nats_client=nats_client, adapters=adapters)

@@ -50,12 +50,13 @@ logger = logging.getLogger(__name__)
 # Policy Decision
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class PolicyDecision:
-    allowed:           bool
+    allowed: bool
     requires_approval: bool = False
-    deny_reasons:      list[str] = field(default_factory=list)
-    source:            str = "unknown"   # "opa" | "fallback"
+    deny_reasons: list[str] = field(default_factory=list)
+    source: str = "unknown"  # "opa" | "fallback"
 
     @property
     def denied(self) -> bool:
@@ -114,7 +115,11 @@ def _fallback_evaluate(
         deny_reasons.append(f"action_type_not_in_allowlist_for_level_{healing_level}")
 
     # Blast radius (L2+ only)
-    if healing_level >= 2 and blast_radius in _CLUSTER_WIDE_BLAST_RADIUS and not override_blast_radius:
+    if (
+        healing_level >= 2
+        and blast_radius in _CLUSTER_WIDE_BLAST_RADIUS
+        and not override_blast_radius
+    ):
         deny_reasons.append("blast_radius_cluster_wide_not_allowed_without_override")
 
     # L3 confidence gate
@@ -152,6 +157,7 @@ def _fallback_evaluate(
 # OPA HTTP Client
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class PolicyEngine:
     """
     Evaluates healing actions against OPA policies.
@@ -171,10 +177,10 @@ class PolicyEngine:
         http_timeout: float = 2.0,
         fallback_on_error: bool = True,
     ):
-        self._opa_url         = opa_url.rstrip("/")
-        self._http_timeout    = http_timeout
-        self._fallback        = fallback_on_error
-        self._opa_available   = True    # Optimistic; flipped on first failure
+        self._opa_url = opa_url.rstrip("/")
+        self._http_timeout = http_timeout
+        self._fallback = fallback_on_error
+        self._opa_available = True  # Optimistic; flipped on first failure
 
     async def is_healthy(self) -> bool:
         """Check if OPA is reachable."""
@@ -206,13 +212,13 @@ class PolicyEngine:
         input_doc = {
             "input": {
                 "action": {
-                    "type":                  action_type,
-                    "level":                 healing_level,
-                    "blast_radius":          blast_radius,
-                    "in_cooldown":           in_cooldown,
-                    "governance_cb_open":    governance_cb_open,
-                    "confidence":            confidence,
-                    "human_approved":        human_approved,
+                    "type": action_type,
+                    "level": healing_level,
+                    "blast_radius": blast_radius,
+                    "in_cooldown": in_cooldown,
+                    "governance_cb_open": governance_cb_open,
+                    "confidence": confidence,
+                    "human_approved": human_approved,
                     "override_blast_radius": override_blast_radius,
                 }
             }
@@ -224,7 +230,9 @@ class PolicyEngine:
                 return decision
             except Exception as exc:
                 self._opa_available = False
-                logger.warning(f"[PolicyEngine] OPA error ({exc}) — switching to fallback")
+                logger.warning(
+                    f"[PolicyEngine] OPA error ({exc}) — switching to fallback"
+                )
 
         if not self._fallback:
             # Hard fail if fallback disabled (production strict mode)
