@@ -22,6 +22,10 @@ mkdir -p "$PACKAGE_DIR"
 echo "[1/4] Installing Python dependencies..."
 pip install -r "$ROOT/requirements-aws-agent.txt" \
     --target "$PACKAGE_DIR" \
+    --platform manylinux2014_x86_64 \
+    --only-binary=:all: \
+    --implementation cp \
+    --python-version 3.12 \
     --no-cache-dir \
     --quiet
 

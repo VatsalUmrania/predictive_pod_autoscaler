@@ -243,3 +243,31 @@ __marimo__/
 
 demo/backend/shop.db
 research/*
+
+# Terraform
+# Local directory for cached providers and modules
+.terraform/
+
+# Do not commit logical state files
+*.tfstate
+*.tfstate.*
+
+# Crash log files
+crash.log
+crash.*.log
+
+# Exclude all variable files that might hold private tokens
+*.tfvars
+*.tfvars.json
+
+# Ignore override files as they are local modifications
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Ignore CLI configuration files 
+.terraformrc
+terraform.rc
+
+lambda_package

@@ -70,13 +70,39 @@ ALARM_SIGNAL_MAP = {
 }
 
 
-def lambda_handler(event: dict, context) -> dict:
+def lambda_handler(event: dict | str, context) -> dict:
     """
     AWS Lambda entry point.
 
     Parses the EventBridge alarm event, maps it to an incident dict,
     and runs the full LangGraph pipeline.
     """
+    while isinstance(event, str):
+        try:
+            parsed = json.loads(event)
+            if parsed == event:
+                break
+            event = parsed
+        except json.JSONDecodeError as exc:
+            logger.error("[Handler] Failed to parse event JSON string: %s", exc)
+            return {"statusCode": 400, "body": f"Invalid JSON event string: {exc}"}
+
+    if not isinstance(event, dict):
+        logger.error("[Handler] Event must be a dict, got %s", type(event))
+        return {"statusCode": 400, "body": "Event must be a JSON object"}
+
+    # Handle API Gateway Proxy events
+    if "body" in event and isinstance(event["body"], str):
+        try:
+            event = json.loads(event["body"])
+        except json.JSONDecodeError as exc:
+            logger.error("[Handler] Failed to parse API Gateway body JSON: %s", exc)
+            return {"statusCode": 400, "body": f"Invalid JSON in request body: {exc}"}
+
+    # Re-check in case the body was parsed but is not a dict
+    if not isinstance(event, dict):
+        return {"statusCode": 400, "body": "Parsed API Gateway body is not a JSON object"}
+
     logger.info(f"[Handler] Received event: {json.dumps(event)[:500]}")
 
     # ── Parse the incoming event ──────────────────────────────────────────────
@@ -123,7 +149,7 @@ def _parse_event(event: dict) -> dict | None:
             "resource_name": event["resource_name"],
             "signal_type":   event.get("signal_type", "lambda_error_rate_high"),
             "raw_metrics":   event.get("raw_metrics", {}),
-            "region":        event.get("region", os.getenv("AWS_DEFAULT_REGION", "us-east-1")),
+            "region":        event.get("region", os.getenv("DEFAULT_REGION", "us-east-1")),
         }
 
     # ── EventBridge CloudWatch Alarm event ───────────────────────────────────
@@ -133,9 +159,19 @@ def _parse_event(event: dict) -> dict | None:
         return None
 
     detail = event.get("detail", {})
-    state_value = detail.get("state", {}).get("value", "")
+    if isinstance(detail, str):
+        try:
+            detail = json.loads(detail)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            logger.debug("[Handler] Could not parse detail as JSON, using empty dict")
+            detail = {}
+    if not isinstance(detail, dict):
+        detail = {}
+
+    state = detail.get("state", {})
+    state_value = state.get("value", "") if isinstance(state, dict) else str(state)
     alarm_name = detail.get("alarmName", "unknown")
-    region = event.get("region", os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
+    region = event.get("region", os.getenv("DEFAULT_REGION", "us-east-1"))
 
     # Only respond to ALARM state (not OK or INSUFFICIENT_DATA)
     if state_value != "ALARM":
@@ -145,9 +181,8 @@ def _parse_event(event: dict) -> dict | None:
     # Map alarm name to signal type
     signal_type = _map_alarm_to_signal(alarm_name)
 
-    # Extract resource name from alarm name
-    # Convention: "service-name-metric" → resource = "service-name"
-    resource_name = _extract_resource_from_alarm(alarm_name)
+    # Extract resource name — prefer dimensions (authoritative), fall back to alarm name parsing
+    resource_name = _extract_resource_from_detail(detail, alarm_name)
 
     # Extract any dimension values as raw context
     raw_metrics = _extract_metrics_from_alarm(detail)
@@ -175,29 +210,97 @@ def _map_alarm_to_signal(alarm_name: str) -> str:
     return "aws_alarm_fired"
 
 
-def _extract_resource_from_alarm(alarm_name: str) -> str:
+def _extract_resource_from_detail(detail: dict, alarm_name: str) -> str:
     """
-    Extract the resource name from the alarm name.
+    Extract the resource name from alarm metric dimensions (the reliable source).
 
-    Common conventions:
-      "my-api-lambda-errors"      → "my-api-lambda"
-      "payment-service-dlq-depth" → "payment-service"
+    The EventBridge CloudWatch Alarm event carries explicit dimension values like
+    FunctionName, QueueName, or TableName inside
+    detail.configuration.metrics[].metricStat.metric.dimensions.
+    We prefer that over parsing the alarm name string, which is fragile.
     """
-    # Try to extract from CloudWatch alarm dimensions in detail
-    # (this is the reliable way; alarm name parsing is a fallback)
-    parts = alarm_name.rsplit("-", 1)
-    return parts[0] if len(parts) > 1 else alarm_name
+    # Priority order for dimension keys
+    dimension_keys = ("FunctionName", "QueueName", "TableName", "ApiName")
+
+    configuration = detail.get("configuration", {})
+    if isinstance(configuration, str):
+        try:
+            configuration = json.loads(configuration)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            logger.debug("[Handler] Could not parse configuration as JSON, using empty dict")
+            configuration = {}
+    if isinstance(configuration, dict):
+        for metric in configuration.get("metrics", []) or []:
+            if not isinstance(metric, dict):
+                continue
+            metric_stat = metric.get("metricStat", {})
+            if not isinstance(metric_stat, dict):
+                continue
+            metric_inner = metric_stat.get("metric", {})
+            if not isinstance(metric_inner, dict):
+                continue
+            dims = metric_inner.get("dimensions", {})
+            if isinstance(dims, dict):
+                for key in dimension_keys:
+                    if key in dims:
+                        logger.debug("[Handler] Resource from dimension %s=%s", key, dims[key])
+                        return dims[key]
+            elif isinstance(dims, list):
+                dim_map = {d.get("name"): d.get("value") for d in dims if isinstance(d, dict) and "name" in d and "value" in d}
+                for key in dimension_keys:
+                    if key in dim_map:
+                        logger.debug("[Handler] Resource from dimension %s=%s", key, dim_map[key])
+                        return dim_map[key]
+
+    # Fallback: strip the last known metric-name suffixes from alarm name
+    metric_suffixes = (
+        "-errors", "-throttles", "-timeout", "-oom",
+        "-dlq-depth", "-dlq", "-5xx", "-throttle",
+    )
+    name = alarm_name
+    for suffix in metric_suffixes:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    # Last resort: drop the last hyphen-segment
+    parts = name.rsplit("-", 1)
+    return parts[0] if len(parts) > 1 else name
 
 
 def _extract_metrics_from_alarm(detail: dict) -> dict:
     """Extract metric values from the EventBridge alarm detail."""
     raw: dict = {}
     state = detail.get("state", {})
-    raw["alarm_reason"] = state.get("reason", "")[:300]
+    raw["alarm_reason"] = state.get("reason", "")[:300] if isinstance(state, dict) else str(state)
 
     # Extract dimension values (e.g., FunctionName)
-    for metric in detail.get("configuration", {}).get("metrics", []):
-        for dim in metric.get("metricStat", {}).get("metric", {}).get("dimensions", []):
-            raw[dim.get("name", "")] = dim.get("value", "")
+    configuration = detail.get("configuration", {})
+    if isinstance(configuration, str):
+        try:
+            configuration = json.loads(configuration)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            logger.debug("[Handler] Could not parse configuration as JSON in _extract_metrics_from_alarm")
+            configuration = {}
+    if not isinstance(configuration, dict):
+        configuration = {}
+
+    metrics = configuration.get("metrics", [])
+    if not isinstance(metrics, list):
+        metrics = []
+
+    for metric in metrics:
+        if not isinstance(metric, dict):
+            continue
+        metric_stat = metric.get("metricStat", {})
+        if not isinstance(metric_stat, dict):
+            continue
+        metric_inner = metric_stat.get("metric", {})
+        if not isinstance(metric_inner, dict):
+            continue
+        dimensions = metric_inner.get("dimensions", [])
+        if not isinstance(dimensions, list):
+            continue
+        for dim in dimensions:
+            if isinstance(dim, dict) and "name" in dim and "value" in dim:
+                raw[str(dim.get("name", ""))] = str(dim.get("value", ""))
 
     return raw

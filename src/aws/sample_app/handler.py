@@ -84,7 +84,7 @@ def _fail_throttle(event, context):
     """Write to DynamoDB rapidly to trigger throttling on a provisioned table."""
     import boto3
     table_name = os.environ.get("DYNAMODB_TABLE_NAME", "sample-app-table")
-    region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+    region = os.environ.get("DEFAULT_REGION", "us-east-1")
     count = int(event.get("queryStringParameters", {}).get("count", "100"))
 
     dynamodb = boto3.resource("dynamodb", region_name=region)
@@ -108,7 +108,7 @@ def _fail_dlq(event, context):
     if not queue_url:
         return _error("SQS_QUEUE_URL not configured")
 
-    sqs = boto3.client("sqs", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
+    sqs = boto3.client("sqs", region_name=os.environ.get("DEFAULT_REGION", "us-east-1"))
     count = int(event.get("queryStringParameters", {}).get("count", "20"))
 
     for i in range(count):

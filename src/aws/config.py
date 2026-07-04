@@ -3,13 +3,21 @@ AWS AI DevOps Agent — Configuration
 =====================================
 All settings come from environment variables. No secrets hard-coded.
 
-Required environment variables:
-    ANTHROPIC_API_KEY           Claude Sonnet API key
+Auth options (pick ONE — in priority order):
+
+  1. Bedrock API Key (simplest for local dev / CI):
+       AWS_BEARER_TOKEN_BEDROCK=<your Bedrock API key>
+     The SDK also accepts this as BEDROCK_API_KEY for convenience.
+
+  2. IAM credentials (recommended for Lambda / ECS with roles):
+       AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY  (local dev)
+       IAM role attached to Lambda/ECS             (production, no keys needed)
 
 Optional environment variables:
-    AWS_DEFAULT_REGION          (default: us-east-1)
+    DEFAULT_REGION              (default: us-east-1)
     AWS_ACCESS_KEY_ID           AWS credentials (or use IAM role — recommended on Lambda)
     AWS_SECRET_ACCESS_KEY
+    AGENT_CLAUDE_MODEL          Bedrock model ID (default: global.anthropic.claude-sonnet-4-6)
 
     AGENT_LAMBDA_PREFIX         Only monitor functions starting with this prefix (default: all)
     AGENT_ERROR_THRESHOLD       Lambda error rate threshold 0.0-1.0 (default: 0.05 = 5%)
@@ -47,12 +55,17 @@ class AgentConfig(BaseSettings):
         extra="ignore",
     )
 
-    # ── LLM ──────────────────────────────────────────────────────────────────
-    anthropic_api_key: str = ""          # loaded from ANTHROPIC_API_KEY (no prefix)
-    claude_model: str = "claude-sonnet-4-5"
+    # ── LLM (Amazon Bedrock) ─────────────────────────────────────────────────
+    # Option 1 — Bedrock API Key (Bearer token, no IAM needed).
+    #   Set AWS_BEARER_TOKEN_BEDROCK in your environment.
+    # Option 2 — IAM credentials / role (see AWS section below).
+    bedrock_api_key: str = ""                 # loaded from AWS_BEARER_TOKEN_BEDROCK
+    bedrock_model: str = "global.anthropic.claude-sonnet-4-6"     # loaded from AGENT_BEDROCK_MODEL
 
     # ── AWS ──────────────────────────────────────────────────────────────────
-    aws_region: str = "us-east-1"       # loaded from AWS_DEFAULT_REGION (no prefix)
+    aws_region: str = "us-east-1"             # loaded from DEFAULT_REGION (no prefix)
+    aws_access_key_id: str = ""               # loaded from AWS_ACCESS_KEY_ID (no prefix)
+    aws_secret_access_key: str = ""           # loaded from AWS_SECRET_ACCESS_KEY (no prefix)
 
     # ── Monitoring thresholds ─────────────────────────────────────────────────
     lambda_prefix: str = ""             # "" = monitor all functions
@@ -79,10 +92,18 @@ class AgentConfig(BaseSettings):
     def load(cls) -> "AgentConfig":
         """Load config from environment. Call once at Lambda cold start."""
         import os
-        # Fields without the AGENT_ prefix need manual handling
+        # Fields without the AGENT_ prefix need manual handling.
+        # AWS_BEARER_TOKEN_BEDROCK is the canonical env var; fall back to
+        # BEDROCK_API_KEY as an alias for convenience.
+        bedrock_api_key = (
+            os.getenv("AWS_BEARER_TOKEN_BEDROCK", "")
+            or os.getenv("BEDROCK_API_KEY", "")
+        )
         instance = cls(
-            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
-            aws_region=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
+            bedrock_api_key=bedrock_api_key,
+            aws_region=os.getenv("DEFAULT_REGION", "us-east-1"),
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", ""),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", ""),
         )
         return instance
 
