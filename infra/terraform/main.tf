@@ -28,7 +28,11 @@ resource "aws_iam_role" "agent_role" {
   name = "${var.project_name}-role"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{ Action = "sts:AssumeRole" Effect = "Allow" Principal = { Service = "lambda.amazonaws.com" } }]
+    Statement = [{ 
+      Action = "sts:AssumeRole" 
+      Effect = "Allow" 
+      Principal = { Service = "lambda.amazonaws.com" } 
+    }]
   })
 }
 
@@ -123,9 +127,9 @@ resource "aws_lambda_function" "agent" {
 
   environment {
     variables = {
-      ANTHROPIC_API_KEY          = var.anthropic_api_key
+      AWS_BEARER_TOKEN_BEDROCK   = var.aws_bearer_token_bedrock
       SLACK_WEBHOOK_URL          = var.slack_webhook_url
-      AWS_DEFAULT_REGION         = var.aws_region
+      DEFAULT_REGION             = var.aws_region
       AGENT_CONFIDENCE_THRESHOLD = tostring(var.agent_confidence_threshold)
       AGENT_DRY_RUN              = tostring(var.agent_dry_run)
       AGENT_VERIFY_WAIT_SECONDS  = tostring(var.agent_verify_wait_seconds)

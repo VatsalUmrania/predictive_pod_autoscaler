@@ -106,7 +106,23 @@ def diagnose(context: dict[str, Any], cfg: AgentConfig | None = None) -> dict[st
     user_message = _build_prompt(context)
 
     try:
-        client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
+        # Auth priority:
+        #   1. Bedrock API key (Bearer token) — no IAM credentials needed.
+        #   2. Explicit IAM key/secret from config (local dev).
+        #   3. boto3 credential chain — env vars, ~/.aws, IAM role (Lambda/ECS).
+        if cfg.bedrock_api_key:
+            client = anthropic.AnthropicBedrock(
+                api_key=cfg.bedrock_api_key,
+                aws_region=cfg.aws_region,
+            )
+        else:
+            bedrock_kwargs: dict[str, str] = {"aws_region": cfg.aws_region}
+            if cfg.aws_access_key_id:
+                bedrock_kwargs["aws_access_key"] = cfg.aws_access_key_id
+            if cfg.aws_secret_access_key:
+                bedrock_kwargs["aws_secret_key"] = cfg.aws_secret_access_key
+            client = anthropic.AnthropicBedrock(**bedrock_kwargs)
+
         message = client.messages.create(
             model=cfg.claude_model,
             max_tokens=1024,
@@ -122,11 +138,9 @@ def diagnose(context: dict[str, Any], cfg: AgentConfig | None = None) -> dict[st
         logger.debug(f"[DiagnosisAgent] Raw response: {raw[:400]}")
         rca = _parse(raw)
 
-    except anthropic.AuthenticationError:
-        logger.error("[DiagnosisAgent] Invalid ANTHROPIC_API_KEY")
-        rca = {**SAFE_DEFAULT, "reasoning": "Authentication failed — check ANTHROPIC_API_KEY env var."}
     except Exception as exc:
-        logger.error(f"[DiagnosisAgent] Claude call failed: {exc}")
+        # AnthropicBedrock raises botocore / httpx errors; catch all and fall back.
+        logger.error(f"[DiagnosisAgent] Bedrock call failed: {exc}")
         rca = {**SAFE_DEFAULT, "reasoning": f"LLM call failed: {exc}"}
 
     logger.info(

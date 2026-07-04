@@ -70,13 +70,20 @@ ALARM_SIGNAL_MAP = {
 }
 
 
-def lambda_handler(event: dict, context) -> dict:
+def lambda_handler(event: dict | str, context) -> dict:
     """
     AWS Lambda entry point.
 
     Parses the EventBridge alarm event, maps it to an incident dict,
     and runs the full LangGraph pipeline.
     """
+    if isinstance(event, str):
+        try:
+            event = json.loads(event)
+        except Exception as e:
+            logger.error(f"[Handler] Failed to deserialize string event: {e}")
+            return {"statusCode": 400, "body": f"Invalid JSON string event: {e}"}
+
     logger.info(f"[Handler] Received event: {json.dumps(event)[:500]}")
 
     # ── Parse the incoming event ──────────────────────────────────────────────
@@ -123,7 +130,7 @@ def _parse_event(event: dict) -> dict | None:
             "resource_name": event["resource_name"],
             "signal_type":   event.get("signal_type", "lambda_error_rate_high"),
             "raw_metrics":   event.get("raw_metrics", {}),
-            "region":        event.get("region", os.getenv("AWS_DEFAULT_REGION", "us-east-1")),
+            "region":        event.get("region", os.getenv("DEFAULT_REGION", "us-east-1")),
         }
 
     # ── EventBridge CloudWatch Alarm event ───────────────────────────────────
@@ -135,7 +142,7 @@ def _parse_event(event: dict) -> dict | None:
     detail = event.get("detail", {})
     state_value = detail.get("state", {}).get("value", "")
     alarm_name = detail.get("alarmName", "unknown")
-    region = event.get("region", os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
+    region = event.get("region", os.getenv("DEFAULT_REGION", "us-east-1"))
 
     # Only respond to ALARM state (not OK or INSUFFICIENT_DATA)
     if state_value != "ALARM":

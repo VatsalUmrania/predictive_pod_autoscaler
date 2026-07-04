@@ -90,7 +90,7 @@ Edit `.env`:
 ```bash
 ANTHROPIC_API_KEY=sk-ant-...          # Required
 SLACK_WEBHOOK_URL=https://hooks...    # Recommended
-AWS_DEFAULT_REGION=us-east-1
+DEFAULT_REGION=us-east-1
 AGENT_DRY_RUN=true                    # Start with dry-run for safety!
 AGENT_CONFIDENCE_THRESHOLD=0.85
 AGENT_VERIFY_WAIT_SECONDS=120

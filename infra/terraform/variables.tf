@@ -4,8 +4,8 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
-variable "anthropic_api_key" {
-  description = "Anthropic API key for Claude Sonnet"
+variable "aws_bearer_token_bedrock" {
+  description = "AWS Bearer Token Bedrock"
   type        = string
   sensitive   = true
 }

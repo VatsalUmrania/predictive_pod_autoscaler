@@ -123,7 +123,7 @@ async def test_incident(request: Request):
 
     incident.setdefault("signal_type", "lambda_error_rate_high")
     incident.setdefault("raw_metrics", {})
-    incident.setdefault("region", os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
+    incident.setdefault("region", os.getenv("DEFAULT_REGION", "us-east-1"))
 
     result = run_graph(incident)
     return {
@@ -147,7 +147,7 @@ def _parse_eventbridge(event: dict[str, Any]) -> dict[str, Any]:
     """Parse EventBridge CloudWatch Alarm event into incident dict."""
     detail = event.get("detail", {})
     alarm_name = detail.get("alarmName", "unknown")
-    region = event.get("region", os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
+    region = event.get("region", os.getenv("DEFAULT_REGION", "us-east-1"))
     reason = detail.get("state", {}).get("reason", "")
 
     # Extract resource name from dimensions
