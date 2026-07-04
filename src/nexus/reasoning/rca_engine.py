@@ -27,7 +27,7 @@ RCAResult fields:
 
 Configuration:
     NEXUS_GEMINI_API_KEY   — required for Gemini; fallback used if absent
-    NEXUS_GEMINI_MODEL     — model name (default: gemini-1.5-flash)
+    NEXUS_GEMINI_MODEL     — model name (default: gemini-2.5-flash)
     NEXUS_RCA_TIMEOUT_S    — Gemini request timeout in seconds (default: 10)
 """
 

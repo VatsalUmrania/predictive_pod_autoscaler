@@ -28,7 +28,7 @@ resource "aws_iam_role" "agent_role" {
   name = "${var.project_name}-role"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{ Action = "sts:AssumeRole" Effect = "Allow" Principal = { Service = "lambda.amazonaws.com" } }]
+    Statement = [{ Action = "sts:AssumeRole" ,Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" } }]
   })
 }
 
@@ -91,6 +91,12 @@ resource "aws_iam_role_policy" "agent_policy" {
         Action   = ["cloudtrail:LookupEvents"]
         Resource = "*"
       },
+      # Amazon Bedrock — invoke models (GLM-5 via converse)
+      {
+        Effect   = "Allow"
+        Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+        Resource = "*"
+      },
       # Lambda execution — write logs
       {
         Effect   = "Allow"
@@ -105,15 +111,10 @@ resource "aws_iam_role_policy" "agent_policy" {
 
 # NOTE: Before `terraform apply`, run the packaging script:
 #   scripts/package_lambda.sh
-data "archive_file" "agent_zip" {
-  type        = "zip"
-  source_dir  = "${path.root}/../../lambda_package"
-  output_path = "${path.root}/../../agent.zip"
-}
 
 resource "aws_lambda_function" "agent" {
-  filename         = data.archive_file.agent_zip.output_path
-  source_code_hash = data.archive_file.agent_zip.output_base64sha256
+  filename         = "${path.root}/../../agent.zip"
+  source_code_hash = filebase64sha256("${path.root}/../../agent.zip")
   function_name    = "${var.project_name}-function"
   role             = aws_iam_role.agent_role.arn
   handler          = "aws.handler.lambda_handler"
@@ -123,9 +124,7 @@ resource "aws_lambda_function" "agent" {
 
   environment {
     variables = {
-      ANTHROPIC_API_KEY          = var.anthropic_api_key
       SLACK_WEBHOOK_URL          = var.slack_webhook_url
-      AWS_DEFAULT_REGION         = var.aws_region
       AGENT_CONFIDENCE_THRESHOLD = tostring(var.agent_confidence_threshold)
       AGENT_DRY_RUN              = tostring(var.agent_dry_run)
       AGENT_VERIFY_WAIT_SECONDS  = tostring(var.agent_verify_wait_seconds)

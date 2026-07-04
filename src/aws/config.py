@@ -4,7 +4,7 @@ AWS AI DevOps Agent — Configuration
 All settings come from environment variables. No secrets hard-coded.
 
 Required environment variables:
-    ANTHROPIC_API_KEY           Claude Sonnet API key
+    (none — Bedrock auth uses the Lambda IAM execution role)
 
 Optional environment variables:
     AWS_DEFAULT_REGION          (default: us-east-1)
@@ -47,9 +47,8 @@ class AgentConfig(BaseSettings):
         extra="ignore",
     )
 
-    # ── LLM ──────────────────────────────────────────────────────────────────
-    anthropic_api_key: str = ""          # loaded from ANTHROPIC_API_KEY (no prefix)
-    claude_model: str = "claude-sonnet-4-5"
+    # ── LLM (Amazon Bedrock) ─────────────────────────────────────────────────
+    bedrock_model: str = "google.gemma-3-4b-it"     # loaded from AGENT_BEDROCK_MODEL
 
     # ── AWS ──────────────────────────────────────────────────────────────────
     aws_region: str = "us-east-1"       # loaded from AWS_DEFAULT_REGION (no prefix)
@@ -79,9 +78,7 @@ class AgentConfig(BaseSettings):
     def load(cls) -> "AgentConfig":
         """Load config from environment. Call once at Lambda cold start."""
         import os
-        # Fields without the AGENT_ prefix need manual handling
         instance = cls(
-            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
             aws_region=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
         )
         return instance

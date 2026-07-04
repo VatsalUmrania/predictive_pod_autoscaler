@@ -1,10 +1,10 @@
 """
 Phase 5 — Diagnosis Agent
 ==========================
-Claude Sonnet analyzes the incident context and returns structured JSON RCA.
+Amazon Bedrock (GLM-5) analyzes the incident context and returns structured JSON RCA.
 
 This agent does ONE job:
-  Context dict  →  Claude Sonnet  →  Structured RCA dict
+  Context dict  →  Bedrock converse  →  Structured RCA dict
 
 The agent NEVER touches AWS. It only reads context and thinks.
 
@@ -28,7 +28,7 @@ import logging
 import re
 from typing import Any
 
-import anthropic
+import boto3
 
 from aws.config import AgentConfig
 
@@ -87,7 +87,7 @@ Analyze the incident context and return a JSON object with your diagnosis.
 
 def diagnose(context: dict[str, Any], cfg: AgentConfig | None = None) -> dict[str, Any]:
     """
-    Call Claude Sonnet with the incident context and return structured RCA.
+    Call Amazon Bedrock (GLM-5) with the incident context and return structured RCA.
 
     Args:
         context: Output from collector.context_builder.build_context()
@@ -101,32 +101,24 @@ def diagnose(context: dict[str, Any], cfg: AgentConfig | None = None) -> dict[st
     resource = context.get("service", "unknown")
     signal = context.get("signal_type", "unknown")
 
-    logger.info(f"[DiagnosisAgent] Diagnosing {resource} ({signal})")
+    logger.info(f"[DiagnosisAgent] Diagnosing {resource} ({signal}) via Bedrock {cfg.bedrock_model}")
 
     user_message = _build_prompt(context)
 
     try:
-        client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
-        message = client.messages.create(
-            model=cfg.claude_model,
-            max_tokens=1024,
-            system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
+        client = boto3.client("bedrock-runtime", region_name=cfg.aws_region)
+        response = client.converse(
+            modelId=cfg.bedrock_model,
+            system=[{"text": _SYSTEM_PROMPT}],
+            messages=[{"role": "user", "content": [{"text": user_message}]}],
+            inferenceConfig={"maxTokens": 1024},
         )
-        text_block = next(
-            (blk for blk in message.content if blk.type == "text"), None
-        )
-        if text_block is None:
-            raise ValueError("No text block found in Claude response")
-        raw = text_block.text.strip()
+        raw = response["output"]["message"]["content"][0]["text"].strip()
         logger.debug(f"[DiagnosisAgent] Raw response: {raw[:400]}")
         rca = _parse(raw)
 
-    except anthropic.AuthenticationError:
-        logger.error("[DiagnosisAgent] Invalid ANTHROPIC_API_KEY")
-        rca = {**SAFE_DEFAULT, "reasoning": "Authentication failed — check ANTHROPIC_API_KEY env var."}
     except Exception as exc:
-        logger.error(f"[DiagnosisAgent] Claude call failed: {exc}")
+        logger.error(f"[DiagnosisAgent] Bedrock call failed: {exc}")
         rca = {**SAFE_DEFAULT, "reasoning": f"LLM call failed: {exc}"}
 
     logger.info(

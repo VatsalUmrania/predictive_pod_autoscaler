@@ -8,7 +8,7 @@
 set -e
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PACKAGE_DIR="$ROOT/lambda_package"
+PACKAGE_DIR="/tmp/nexus_lambda_package"
 ZIP_FILE="$ROOT/agent.zip"
 
 echo "=== NEXUS AI Agent — Lambda Packaging ==="
@@ -22,6 +22,10 @@ mkdir -p "$PACKAGE_DIR"
 echo "[1/4] Installing Python dependencies..."
 pip install -r "$ROOT/requirements-aws-agent.txt" \
     --target "$PACKAGE_DIR" \
+    --platform manylinux2014_x86_64 \
+    --only-binary=:all: \
+    --implementation cp \
+    --python-version 3.12 \
     --no-cache-dir \
     --quiet
 

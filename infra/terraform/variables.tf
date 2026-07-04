@@ -4,12 +4,6 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
-variable "anthropic_api_key" {
-  description = "Anthropic API key for Claude Sonnet"
-  type        = string
-  sensitive   = true
-}
-
 variable "slack_webhook_url" {
   description = "Slack Incoming Webhook URL for notifications"
   type        = string

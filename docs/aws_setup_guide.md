@@ -12,7 +12,7 @@
 | Terraform | v1.5+ | [developer.hashicorp.com/terraform](https://developer.hashicorp.com/terraform/install) |
 | Python | 3.12 | [python.org](https://www.python.org/downloads/) |
 | Git | any | [git-scm.com](https://git-scm.com/) |
-| Anthropic API Key | — | [console.anthropic.com](https://console.anthropic.com/) |
+| Gemini API Key | — | [aistudio.google.com](https://aistudio.google.com/app/apikey) |
 | Slack Webhook | — | [api.slack.com/messaging/webhooks](https://api.slack.com/messaging/webhooks) (optional) |
 
 ---
@@ -54,13 +54,13 @@ aws sts get-caller-identity
 
 ---
 
-## Step 2 — Get an Anthropic API Key
+## Step 2 — Get a Gemini API Key
 
-1. Go to [console.anthropic.com](https://console.anthropic.com/)
-2. **API Keys** → **Create Key**
+1. Go to [aistudio.google.com](https://aistudio.google.com/app/apikey)
+2. **Create API Key**
 3. Copy the key — you'll need it for Terraform and `.env`
 
-The agent uses **Claude Sonnet** (default: `claude-sonnet-4-5`).
+The agent uses **Gemini 1.5 Pro** (default: `gemini-1.5-pro-latest`).
 
 ---
 
@@ -88,7 +88,7 @@ cp .env.example .env
 
 Edit `.env`:
 ```bash
-ANTHROPIC_API_KEY=sk-ant-...          # Required
+GEMINI_API_KEY=AIzaSy...              # Required
 SLACK_WEBHOOK_URL=https://hooks...    # Recommended
 AWS_DEFAULT_REGION=us-east-1
 AGENT_DRY_RUN=true                    # Start with dry-run for safety!
@@ -136,13 +136,13 @@ terraform init
 
 # Preview what will be created
 terraform plan \
-  -var="anthropic_api_key=sk-ant-..." \
+  -var="gemini_api_key=AIzaSy..." \
   -var="slack_webhook_url=https://hooks.slack.com/..." \
   -var="agent_dry_run=true"
 
 # Deploy everything
 terraform apply \
-  -var="anthropic_api_key=sk-ant-..." \
+  -var="gemini_api_key=AIzaSy..." \
   -var="slack_webhook_url=https://hooks.slack.com/..." \
   -var="agent_dry_run=true"
 ```
@@ -178,6 +178,7 @@ terraform output
 for i in {1..10}; do
   aws lambda invoke \
     --function-name nexus-ai-agent-sample-app \
+    --cli-binary-format raw-in-base64-out \
     --payload '{"path":"/fail/error"}' \
     /dev/null
 done
@@ -190,6 +191,7 @@ aws logs tail /aws/lambda/nexus-ai-agent-function --follow
 ```bash
 aws lambda invoke \
   --function-name nexus-ai-agent-sample-app \
+  --cli-binary-format raw-in-base64-out \
   --payload '{"path":"/fail/timeout","queryStringParameters":{"sleep":"10"}}' \
   response.json
 # Lambda timeout is 5s, sleep is 10s → guaranteed timeout
@@ -201,6 +203,7 @@ DLQ_URL=$(terraform output -raw sample_dlq_url)
 
 aws lambda invoke \
   --function-name nexus-ai-agent-sample-app \
+  --cli-binary-format raw-in-base64-out \
   --payload "{\"path\":\"/fail/dlq\",\"queryStringParameters\":{\"count\":\"25\",\"queue_url\":\"$(terraform output -raw sample_queue_url)\"}}" \
   response.json
 
@@ -214,6 +217,7 @@ aws sqs get-queue-attributes \
 ```bash
 aws lambda invoke \
   --function-name nexus-ai-agent-sample-app \
+  --cli-binary-format raw-in-base64-out \
   --payload '{"path":"/fail/throttle","queryStringParameters":{"count":"200"}}' \
   response.json
 ```
@@ -282,7 +286,7 @@ Once you're satisfied with the dry-run diagnoses:
 cd infra/terraform
 
 terraform apply \
-  -var="anthropic_api_key=sk-ant-..." \
+  -var="gemini_api_key=AIzaSy..." \
   -var="slack_webhook_url=https://hooks.slack.com/..." \
   -var="agent_dry_run=false"   # ← Remove dry-run
 ```
@@ -316,7 +320,7 @@ done
 [CloudWatch]  Errors alarm → ALARM state
 [EventBridge] Routes alarm to agent Lambda
 [Agent]       collect  → gathering context...
-[Agent]       diagnose → Claude Sonnet analyzing...
+[Agent]       diagnose → Gemini analyzing...
 [Agent]       policy   → confidence=0.XX approved=True
 [Agent]       execute  → increasing memory (if dry_run=false)
 [Agent]       verify   → waiting 120s...
@@ -332,7 +336,7 @@ To destroy all AWS resources:
 ```bash
 cd infra/terraform
 terraform destroy \
-  -var="anthropic_api_key=placeholder" \
+  -var="gemini_api_key=placeholder" \
   -var="slack_webhook_url=placeholder"
 ```
 
@@ -361,7 +365,7 @@ The agent only runs when an alarm fires — there's no polling loop.
 
 | Problem | Cause | Fix |
 |---|---|---|
-| `Invalid ANTHROPIC_API_KEY` | Wrong key | Check `.env` or Terraform var |
+| `Invalid GEMINI_API_KEY` | Wrong key | Check `.env` or Terraform var |
 | Agent Lambda timeout | `AGENT_VERIFY_WAIT_SECONDS` > Lambda timeout | Lambda timeout must be > verify wait + 60s |
 | No alarms firing | CloudWatch metrics have 1-min delay | Wait 2 minutes after triggering errors |
 | `ResourceNotFoundException` on DynamoDB | Table not created yet | Check terraform apply output |
