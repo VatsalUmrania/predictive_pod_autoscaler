@@ -178,6 +178,7 @@ terraform output
 for i in {1..10}; do
   aws lambda invoke \
     --function-name nexus-ai-agent-sample-app \
+    --cli-binary-format raw-in-base64-out \
     --payload '{"path":"/fail/error"}' \
     /dev/null
 done
@@ -190,6 +191,7 @@ aws logs tail /aws/lambda/nexus-ai-agent-function --follow
 ```bash
 aws lambda invoke \
   --function-name nexus-ai-agent-sample-app \
+  --cli-binary-format raw-in-base64-out \
   --payload '{"path":"/fail/timeout","queryStringParameters":{"sleep":"10"}}' \
   response.json
 # Lambda timeout is 5s, sleep is 10s → guaranteed timeout
@@ -201,6 +203,7 @@ DLQ_URL=$(terraform output -raw sample_dlq_url)
 
 aws lambda invoke \
   --function-name nexus-ai-agent-sample-app \
+  --cli-binary-format raw-in-base64-out \
   --payload "{\"path\":\"/fail/dlq\",\"queryStringParameters\":{\"count\":\"25\",\"queue_url\":\"$(terraform output -raw sample_queue_url)\"}}" \
   response.json
 
@@ -214,6 +217,7 @@ aws sqs get-queue-attributes \
 ```bash
 aws lambda invoke \
   --function-name nexus-ai-agent-sample-app \
+  --cli-binary-format raw-in-base64-out \
   --payload '{"path":"/fail/throttle","queryStringParameters":{"count":"200"}}' \
   response.json
 ```

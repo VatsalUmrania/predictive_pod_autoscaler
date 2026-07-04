@@ -95,6 +95,12 @@ resource "aws_iam_role_policy" "agent_policy" {
         Action   = ["cloudtrail:LookupEvents"]
         Resource = "*"
       },
+      # Amazon Bedrock — invoke models (GLM-5 via converse)
+      {
+        Effect   = "Allow"
+        Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+        Resource = "*"
+      },
       # Lambda execution — write logs
       {
         Effect   = "Allow"

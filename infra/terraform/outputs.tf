@@ -31,10 +31,10 @@ output "test_commands" {
   description = "Copy-paste commands to trigger test failures"
   value = {
     # Direct Lambda invocation
-    trigger_error = "aws lambda invoke --function-name ${aws_lambda_function.sample_app.function_name} --payload '{\"path\":\"/fail/error\"}' response.json"
-    trigger_oom   = "aws lambda invoke --function-name ${aws_lambda_function.sample_app.function_name} --payload '{\"path\":\"/fail/oom\"}' response.json"
-    trigger_dlq   = "aws lambda invoke --function-name ${aws_lambda_function.sample_app.function_name} --payload '{\"path\":\"/fail/dlq\",\"queryStringParameters\":{\"count\":\"20\"}}' response.json"
-    trigger_throttle = "aws lambda invoke --function-name ${aws_lambda_function.sample_app.function_name} --payload '{\"path\":\"/fail/throttle\",\"queryStringParameters\":{\"count\":\"200\"}}' response.json"
+    trigger_error = "aws lambda invoke --function-name ${aws_lambda_function.sample_app.function_name} --cli-binary-format raw-in-base64-out --payload '{\"path\":\"/fail/error\"}' response.json"
+    trigger_oom   = "aws lambda invoke --function-name ${aws_lambda_function.sample_app.function_name} --cli-binary-format raw-in-base64-out --payload '{\"path\":\"/fail/oom\"}' response.json"
+    trigger_dlq   = "aws lambda invoke --function-name ${aws_lambda_function.sample_app.function_name} --cli-binary-format raw-in-base64-out --payload '{\"path\":\"/fail/dlq\",\"queryStringParameters\":{\"count\":\"20\"}}' response.json"
+    trigger_throttle = "aws lambda invoke --function-name ${aws_lambda_function.sample_app.function_name} --cli-binary-format raw-in-base64-out --payload '{\"path\":\"/fail/throttle\",\"queryStringParameters\":{\"count\":\"200\"}}' response.json"
 
     # HTTP API endpoints (Phase 1)
     http_error   = "curl -X POST ${aws_apigatewayv2_stage.default.invoke_url}/fail/error"
@@ -42,6 +42,6 @@ output "test_commands" {
     http_health  = "curl ${aws_apigatewayv2_stage.default.invoke_url}/health"
 
     # Direct agent test (no alarm needed)
-    test_agent = "aws lambda invoke --function-name ${aws_lambda_function.agent.function_name} --payload '{\"resource_name\":\"${aws_lambda_function.sample_app.function_name}\",\"signal_type\":\"lambda_error_rate_high\",\"raw_metrics\":{}}' agent_response.json"
+    test_agent = "aws lambda invoke --function-name ${aws_lambda_function.agent.function_name} --cli-binary-format raw-in-base64-out --payload '{\"resource_name\":\"${aws_lambda_function.sample_app.function_name}\",\"signal_type\":\"lambda_error_rate_high\",\"raw_metrics\":{}}' agent_response.json"
   }
 }

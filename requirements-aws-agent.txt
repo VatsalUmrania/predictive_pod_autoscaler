@@ -5,13 +5,11 @@
 boto3>=1.34.0
 botocore>=1.34.0
 
-# LangGraph + LangChain (for Claude tool-calling)
+# LangGraph + LangChain
 langgraph>=0.2.0
-langchain-anthropic>=0.1.20
 langchain-core>=0.2.0
 
-# Anthropic SDK (direct usage in diagnose node)
-anthropic>=0.30.0
+# Bedrock is accessed via boto3
 
 # Web framework (Lambda handler via Mangum adapter)
 fastapi>=0.111.0

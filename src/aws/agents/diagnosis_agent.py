@@ -28,7 +28,7 @@ import logging
 import re
 from typing import Any
 
-import anthropic
+import boto3
 
 from aws.config import AgentConfig
 
@@ -101,41 +101,20 @@ def diagnose(context: dict[str, Any], cfg: AgentConfig | None = None) -> dict[st
     resource = context.get("service", "unknown")
     signal = context.get("signal_type", "unknown")
 
-    logger.info(f"[DiagnosisAgent] Diagnosing {resource} ({signal})")
+    logger.info(f"[DiagnosisAgent] Diagnosing {resource} ({signal}) via Bedrock {cfg.bedrock_model}")
 
     user_message = _build_prompt(context)
 
     try:
-        # Auth priority:
-        #   1. Bedrock API key (Bearer token) — no IAM credentials needed.
-        #   2. Explicit IAM key/secret from config (local dev).
-        #   3. boto3 credential chain — env vars, ~/.aws, IAM role (Lambda/ECS).
-        if cfg.bedrock_api_key:
-            client = anthropic.AnthropicBedrock(
-                api_key=cfg.bedrock_api_key,
-                aws_region=cfg.aws_region,
-            )
-        else:
-            bedrock_kwargs: dict[str, str] = {"aws_region": cfg.aws_region}
-            if cfg.aws_access_key_id:
-                bedrock_kwargs["aws_access_key"] = cfg.aws_access_key_id
-            if cfg.aws_secret_access_key:
-                bedrock_kwargs["aws_secret_key"] = cfg.aws_secret_access_key
-            client = anthropic.AnthropicBedrock(**bedrock_kwargs)
-
-        message = client.messages.create(
-            model=cfg.claude_model,
-            max_tokens=1024,
-            system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
+        client = boto3.client("bedrock-runtime", region_name=cfg.aws_region)
+        response = client.converse(
+            modelId=cfg.bedrock_model,
+            system=[{"text": _SYSTEM_PROMPT}],
+            messages=[{"role": "user", "content": [{"text": user_message}]}],
+            inferenceConfig={"maxTokens": 1024},
         )
-        text_block = next(
-            (blk for blk in message.content if blk.type == "text"), None
-        )
-        if text_block is None:
-            raise ValueError("No text block found in Claude response")
-        raw = text_block.text.strip()
-        logger.debug(f"[DiagnosisAgent] Raw response: {raw[:400]}")
+        raw = response["output"]["message"]["content"][0]["text"].strip()
+        logger.debug("[DiagnosisAgent] Raw response: %s", raw[:400])
         rca = _parse(raw)
 
     except Exception as exc:

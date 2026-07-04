@@ -122,7 +122,7 @@ class LLMProvider(ABC):
 class GeminiProvider(LLMProvider):
     """Google Gemini via google-generativeai SDK."""
 
-    DEFAULT_MODEL = "gemini-1.5-flash"
+    DEFAULT_MODEL = "gemini-2.5-flash"
 
     def __init__(self, api_key: str | None = None, model: str | None = None):
         self._api_key = (
@@ -154,32 +154,35 @@ class GeminiProvider(LLMProvider):
         if not self._api_key:
             return False
         try:
-            import google.generativeai as genai
+            from google import genai
 
-            genai.configure(api_key=self._api_key)
-            self._client = genai.GenerativeModel(
-                model_name=self._model_name,
-                system_instruction=SYSTEM_INSTRUCTION,
-                generation_config=genai.GenerationConfig(
-                    temperature=0.2,
-                    max_output_tokens=512,
-                    response_mime_type="application/json",
-                ),
-            )
-            logger.info(f"[LLM] Gemini client ready — model={self._model_name}")
-            return True
+            self._client = genai.Client(api_key=self._api_key)
         except ImportError:
             logger.warning(
-                "[LLM] google-generativeai not installed: pip install google-generativeai"
+                "[LLM] google-genai not installed: pip install google-genai"
             )
+            return False
         except Exception as exc:
             logger.warning(f"[LLM] Gemini init failed: {exc}")
-        return False
+            return False
+
+        logger.info("[LLM] Gemini client ready — model=%s", self._model_name)
+        return True
 
     def _sync_complete(self, prompt: str) -> str:
         if not self._ensure_client():
             raise RuntimeError("Gemini client not available")
-        response = self._client.generate_content(prompt)
+        from google.genai import types
+        response = self._client.models.generate_content(
+            model=self._model_name,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_INSTRUCTION,
+                temperature=0.2,
+                max_output_tokens=512,
+                response_mime_type="application/json",
+            )
+        )
         return response.text.strip()
 
     async def complete(self, user_prompt: str) -> str:

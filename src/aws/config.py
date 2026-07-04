@@ -60,7 +60,7 @@ class AgentConfig(BaseSettings):
     #   Set AWS_BEARER_TOKEN_BEDROCK in your environment.
     # Option 2 — IAM credentials / role (see AWS section below).
     bedrock_api_key: str = ""                 # loaded from AWS_BEARER_TOKEN_BEDROCK
-    claude_model: str = "global.anthropic.claude-sonnet-4-6"
+    bedrock_model: str = "global.anthropic.claude-sonnet-4-6"     # loaded from AGENT_BEDROCK_MODEL
 
     # ── AWS ──────────────────────────────────────────────────────────────────
     aws_region: str = "us-east-1"             # loaded from DEFAULT_REGION (no prefix)
