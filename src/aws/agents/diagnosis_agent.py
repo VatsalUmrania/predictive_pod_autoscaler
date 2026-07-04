@@ -101,7 +101,7 @@ def diagnose(context: dict[str, Any], cfg: AgentConfig | None = None) -> dict[st
     resource = context.get("service", "unknown")
     signal = context.get("signal_type", "unknown")
 
-    logger.info(f"[DiagnosisAgent] Diagnosing {resource} ({signal}) via Bedrock {cfg.bedrock_model}")
+    logger.info("[DiagnosisAgent] Diagnosing %s (%s) via Bedrock %s", resource, signal, cfg.bedrock_model)
 
     user_message = _build_prompt(context)
 
@@ -114,17 +114,18 @@ def diagnose(context: dict[str, Any], cfg: AgentConfig | None = None) -> dict[st
             inferenceConfig={"maxTokens": 1024},
         )
         raw = response["output"]["message"]["content"][0]["text"].strip()
-        logger.debug(f"[DiagnosisAgent] Raw response: {raw[:400]}")
+        logger.debug("[DiagnosisAgent] Raw response: %s", raw[:400])
         rca = _parse(raw)
 
-    except Exception as exc:
-        logger.error(f"[DiagnosisAgent] Bedrock call failed: {exc}")
+    except Exception as exc:  # noqa: BLE001 - Broad catch for Bedrock fallback to SAFE_DEFAULT
+        logger.error("[DiagnosisAgent] Bedrock call failed: %s", exc)
         rca = {**SAFE_DEFAULT, "reasoning": f"LLM call failed: {exc}"}
 
     logger.info(
-        f"[DiagnosisAgent] action={rca['action']} "
-        f"confidence={rca['confidence']:.0%} "
-        f"severity={rca['severity']}"
+        "[DiagnosisAgent] action=%s confidence=%.0f%% severity=%s",
+        rca['action'],
+        rca['confidence'] * 100,
+        rca['severity']
     )
     return rca
 
@@ -133,7 +134,7 @@ def diagnose(context: dict[str, Any], cfg: AgentConfig | None = None) -> dict[st
 
 def _build_prompt(ctx: dict[str, Any]) -> str:
     lines = [
-        f"## Incident",
+        "## Incident",
         f"- Service: {ctx.get('service', 'unknown')}",
         f"- Signal: {ctx.get('signal_type', 'unknown')}",
         f"- Alarm: {ctx.get('alarm', 'unknown')}",
@@ -189,12 +190,12 @@ def _parse(raw: str) -> dict[str, Any]:
     try:
         data = json.loads(text.strip())
     except json.JSONDecodeError as exc:
-        logger.warning(f"[DiagnosisAgent] JSON parse failed: {exc}")
+        logger.warning("[DiagnosisAgent] JSON parse failed: %s", exc)
         return SAFE_DEFAULT.copy()
 
     required = {"root_cause", "failure_class", "severity", "confidence", "action", "params"}
     if not required.issubset(data.keys()):
-        logger.warning(f"[DiagnosisAgent] Missing fields: {required - data.keys()}")
+        logger.warning("[DiagnosisAgent] Missing fields: %s", required - data.keys())
         return SAFE_DEFAULT.copy()
 
     data["confidence"] = max(0.0, min(1.0, float(data.get("confidence", 0.0))))

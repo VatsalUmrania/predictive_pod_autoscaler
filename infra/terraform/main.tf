@@ -95,7 +95,7 @@ resource "aws_iam_role_policy" "agent_policy" {
       {
         Effect   = "Allow"
         Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
-        Resource = "*"
+        Resource = "arn:aws:bedrock:${var.aws_region}::foundation-model/google.gemma-3-4b-it"
       },
       # Lambda execution — write logs
       {

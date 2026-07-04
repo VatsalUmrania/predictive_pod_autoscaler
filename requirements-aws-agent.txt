@@ -2,14 +2,14 @@
 # Install with: pip install -r requirements-aws-agent.txt
 
 # AWS
-# boto3>=1.34.0 (Included in Lambda runtime)
-# botocore>=1.34.0 (Included in Lambda runtime)
+boto3>=1.34.0
+botocore>=1.34.0
 
 # LangGraph + LangChain
 langgraph>=0.2.0
 langchain-core>=0.2.0
 
-# Bedrock is accessed via boto3 (included in Lambda runtime — no extra package needed)
+# Bedrock is accessed via boto3 (pinned above, bundled into agent.zip for bedrock-runtime.converse())
 
 # Web framework (Lambda handler via Mangum adapter)
 fastapi>=0.111.0

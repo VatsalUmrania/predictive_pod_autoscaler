@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ppa"
-version = "3.0.0"
+version = "3.0.1"
 description = "NEXUS — Self-Healing Cloud System built on the Predictive Pod Autoscaler (PPA)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -59,7 +59,7 @@ nexus = [
     # Cooldown store Redis backend
     "redis[hiredis]>=5.0.0",
     # LLM for RCA Engine — Gemini is default; openai/anthropic installed via extras
-    "google-generativeai>=0.8.0",
+    "google-genai>=1.0.0",
     # Phase 7: Observability + CLI
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.30.0",
@@ -71,7 +71,7 @@ nexus = [
 ]
 # ── LLM provider extras (install the one you use) ─────────────────────────────
 gemini = [
-    "google-generativeai>=0.8.0",
+    "google-genai>=1.0.0",
 ]
 openai = [
     "openai>=1.30.0",
@@ -80,7 +80,7 @@ anthropic = [
     "anthropic>=0.28.0",
 ]
 llm = [
-    "google-generativeai>=0.8.0",
+    "google-genai>=1.0.0",
     "openai>=1.30.0",
     "anthropic>=0.28.0",
 ]

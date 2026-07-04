@@ -46,15 +46,14 @@ import json
 import logging
 import os
 
+from aws.graph.workflow import run_graph
+
 # Configure logging at cold start
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-# Import the graph at cold start (compiled once, reused across invocations)
-from aws.graph.workflow import run_graph
 
 # Map alarm names to signal types (customize for your infrastructure)
 # Format: "alarm-name-pattern" → "signal_type"
@@ -84,31 +83,32 @@ def lambda_handler(event: dict, context) -> dict:
                 break
             event = parsed
         except json.JSONDecodeError as exc:
-            logger.error(f"[Handler] Failed to parse event JSON string: {exc}")
+            logger.error("[Handler] Failed to parse event JSON string: %s", exc)
             return {"statusCode": 400, "body": f"Invalid JSON event string: {exc}"}
 
     if not isinstance(event, dict):
-        logger.error(f"[Handler] Event must be a dict, got {type(event)}")
+        logger.error("[Handler] Event must be a dict, got %s", type(event))
         return {"statusCode": 400, "body": "Event must be a JSON object"}
 
     # Handle API Gateway Proxy events
     if "body" in event and isinstance(event["body"], str):
         try:
             event = json.loads(event["body"])
-        except json.JSONDecodeError:
-            pass
+        except json.JSONDecodeError as exc:
+            logger.error("[Handler] Failed to parse API Gateway body JSON: %s", exc)
+            return {"statusCode": 400, "body": f"Invalid JSON in request body: {exc}"}
 
     # Re-check in case the body was parsed but is not a dict
     if not isinstance(event, dict):
         return {"statusCode": 400, "body": "Parsed API Gateway body is not a JSON object"}
 
-    logger.info(f"[Handler] Received event: {json.dumps(event)[:500]}")
+    logger.info("[Handler] Received event: %s", json.dumps(event)[:500])
 
     # ── Parse the incoming event ──────────────────────────────────────────────
     try:
         incident = _parse_event(event)
     except Exception as exc:
-        logger.error(f"[Handler] Failed to parse event: {exc}")
+        logger.error("[Handler] Failed to parse event: %s", exc)
         return {"statusCode": 400, "body": f"Invalid event: {exc}"}
 
     # ── Ignore non-ALARM states ───────────────────────────────────────────────
@@ -116,7 +116,7 @@ def lambda_handler(event: dict, context) -> dict:
         logger.info("[Handler] Event is not an ALARM state — skipping")
         return {"statusCode": 200, "body": "skipped"}
 
-    logger.info(f"[Handler] Processing incident: {incident['resource_name']} / {incident['signal_type']}")
+    logger.info("[Handler] Processing incident: %s / %s", incident['resource_name'], incident['signal_type'])
 
     # ── Run the graph ─────────────────────────────────────────────────────────
     result = run_graph(incident)
@@ -130,7 +130,7 @@ def lambda_handler(event: dict, context) -> dict:
         "resolved":   result.get("resolved"),
         "escalated":  result.get("escalated"),
     }
-    logger.info(f"[Handler] Done: {summary}")
+    logger.info("[Handler] Done: %s", summary)
     return {"statusCode": 200, "body": json.dumps(summary)}
 
 
@@ -154,15 +154,16 @@ def _parse_event(event: dict) -> dict | None:
     # ── EventBridge CloudWatch Alarm event ───────────────────────────────────
     detail_type = event.get("detail-type", "")
     if detail_type != "CloudWatch Alarm State Change":
-        logger.info(f"[Handler] Ignoring non-alarm event: {detail_type}")
+        logger.info("[Handler] Ignoring non-alarm event: %s", detail_type)
         return None
 
     detail = event.get("detail", {})
     if isinstance(detail, str):
         try:
             detail = json.loads(detail)
-        except Exception:
-            pass
+        except (json.JSONDecodeError, TypeError, ValueError):
+            logger.debug("[Handler] Could not parse detail as JSON, using empty dict")
+            detail = {}
     if not isinstance(detail, dict):
         detail = {}
 
@@ -173,7 +174,7 @@ def _parse_event(event: dict) -> dict | None:
 
     # Only respond to ALARM state (not OK or INSUFFICIENT_DATA)
     if state_value != "ALARM":
-        logger.info(f"[Handler] Alarm '{alarm_name}' is in state '{state_value}' — ignoring")
+        logger.info("[Handler] Alarm '%s' is in state '%s' — ignoring", alarm_name, state_value)
         return None
 
     # Map alarm name to signal type
@@ -204,7 +205,7 @@ def _map_alarm_to_signal(alarm_name: str) -> str:
     for pattern, signal in ALARM_SIGNAL_MAP.items():
         if pattern in alarm_lower:
             return signal
-    logger.info(f"[Handler] No signal mapping for alarm '{alarm_name}' — using aws_alarm_fired")
+    logger.info("[Handler] No signal mapping for alarm '%s' — using aws_alarm_fired", alarm_name)
     return "aws_alarm_fired"
 
 
@@ -218,14 +219,15 @@ def _extract_resource_from_detail(detail: dict, alarm_name: str) -> str:
     We prefer that over parsing the alarm name string, which is fragile.
     """
     # Priority order for dimension keys
-    _DIMENSION_KEYS = ("FunctionName", "QueueName", "TableName", "ApiName")
+    dimension_keys = ("FunctionName", "QueueName", "TableName", "ApiName")
 
     configuration = detail.get("configuration", {})
     if isinstance(configuration, str):
         try:
             configuration = json.loads(configuration)
-        except Exception:
-            pass
+        except (json.JSONDecodeError, TypeError, ValueError):
+            logger.debug("[Handler] Could not parse configuration as JSON, using empty dict")
+            configuration = {}
     if isinstance(configuration, dict):
         for metric in configuration.get("metrics", []) or []:
             if not isinstance(metric, dict):
@@ -233,26 +235,29 @@ def _extract_resource_from_detail(detail: dict, alarm_name: str) -> str:
             metric_stat = metric.get("metricStat", {})
             if not isinstance(metric_stat, dict):
                 continue
-            dims = metric_stat.get("metric", {}).get("dimensions", {})
+            metric_inner = metric_stat.get("metric", {})
+            if not isinstance(metric_inner, dict):
+                continue
+            dims = metric_inner.get("dimensions", {})
             if isinstance(dims, dict):
-                for key in _DIMENSION_KEYS:
+                for key in dimension_keys:
                     if key in dims:
-                        logger.debug(f"[Handler] Resource from dimension {key}={dims[key]}")
+                        logger.debug("[Handler] Resource from dimension %s=%s", key, dims[key])
                         return dims[key]
             elif isinstance(dims, list):
-                dim_map = {d["name"]: d["value"] for d in dims if isinstance(d, dict)}
-                for key in _DIMENSION_KEYS:
+                dim_map = {d.get("name"): d.get("value") for d in dims if isinstance(d, dict) and "name" in d and "value" in d}
+                for key in dimension_keys:
                     if key in dim_map:
-                        logger.debug(f"[Handler] Resource from dimension {key}={dim_map[key]}")
+                        logger.debug("[Handler] Resource from dimension %s=%s", key, dim_map[key])
                         return dim_map[key]
 
     # Fallback: strip the last known metric-name suffixes from alarm name
-    _METRIC_SUFFIXES = (
+    metric_suffixes = (
         "-errors", "-throttles", "-timeout", "-oom",
         "-dlq-depth", "-dlq", "-5xx", "-throttle",
     )
     name = alarm_name
-    for suffix in _METRIC_SUFFIXES:
+    for suffix in metric_suffixes:
         if name.endswith(suffix):
             return name[: -len(suffix)]
     # Last resort: drop the last hyphen-segment
@@ -271,8 +276,9 @@ def _extract_metrics_from_alarm(detail: dict) -> dict:
     if isinstance(configuration, str):
         try:
             configuration = json.loads(configuration)
-        except Exception:
-            pass
+        except (json.JSONDecodeError, TypeError, ValueError):
+            logger.debug("[Handler] Could not parse configuration as JSON in _extract_metrics_from_alarm")
+            configuration = {}
     if not isinstance(configuration, dict):
         configuration = {}
 
@@ -293,7 +299,7 @@ def _extract_metrics_from_alarm(detail: dict) -> dict:
         if not isinstance(dimensions, list):
             continue
         for dim in dimensions:
-            if isinstance(dim, dict):
+            if isinstance(dim, dict) and "name" in dim and "value" in dim:
                 raw[str(dim.get("name", ""))] = str(dim.get("value", ""))
 
     return raw

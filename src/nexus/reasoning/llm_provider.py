@@ -157,15 +157,17 @@ class GeminiProvider(LLMProvider):
             from google import genai
 
             self._client = genai.Client(api_key=self._api_key)
-            logger.info(f"[LLM] Gemini client ready — model={self._model_name}")
-            return True
         except ImportError:
             logger.warning(
                 "[LLM] google-genai not installed: pip install google-genai"
             )
+            return False
         except Exception as exc:
-            logger.warning(f"[LLM] Gemini init failed: {exc}")
-        return False
+            logger.warning("[LLM] Gemini init failed: %s", exc)
+            return False
+
+        logger.info("[LLM] Gemini client ready — model=%s", self._model_name)
+        return True
 
     def _sync_complete(self, prompt: str) -> str:
         if not self._ensure_client():
@@ -224,12 +226,12 @@ class OpenAIProvider(LLMProvider):
             from openai import OpenAI
 
             self._client = OpenAI(api_key=self._api_key)
-            logger.info(f"[LLM] OpenAI client ready — model={self._model_name}")
+            logger.info("[LLM] OpenAI client ready — model=%s", self._model_name)
             return True
         except ImportError:
             logger.warning("[LLM] openai not installed: pip install openai")
         except Exception as exc:
-            logger.warning(f"[LLM] OpenAI init failed: {exc}")
+            logger.warning("[LLM] OpenAI init failed: %s", exc)
         return False
 
     def _sync_complete(self, prompt: str) -> str:
@@ -290,12 +292,12 @@ class AnthropicProvider(LLMProvider):
             import anthropic
 
             self._client = anthropic.Anthropic(api_key=self._api_key)
-            logger.info(f"[LLM] Anthropic client ready — model={self._model_name}")
+            logger.info("[LLM] Anthropic client ready — model=%s", self._model_name)
             return True
         except ImportError:
             logger.warning("[LLM] anthropic not installed: pip install anthropic")
         except Exception as exc:
-            logger.warning(f"[LLM] Anthropic init failed: {exc}")
+            logger.warning("[LLM] Anthropic init failed: %s", exc)
         return False
 
     def _sync_complete(self, prompt: str) -> str:
@@ -386,11 +388,11 @@ def get_llm_provider(
         instance = cls(api_key=api_key, model=model)
 
     if instance.is_available():
-        logger.info(f"[LLM] Provider: {instance.name} | Model: {instance.model}")
+        logger.info("[LLM] Provider: %s | Model: %s", instance.name, instance.model)
     else:
         logger.info(
-            f"[LLM] Provider '{instance.name}' has no API key — "
-            "RCA will use rule-based fallback only"
+            "[LLM] Provider '%s' has no API key — RCA will use rule-based fallback only",
+            instance.name
         )
 
     _cached_provider = instance
