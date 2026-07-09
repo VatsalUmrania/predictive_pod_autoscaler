@@ -17,6 +17,12 @@ variable "slack_webhook_url" {
   default     = ""
 }
 
+variable "agent_bedrock_model" {
+  description = "Bedrock model ID"
+  type        = string
+  default     = "zai.glm-5"
+}
+
 variable "agent_confidence_threshold" {
   description = "Min confidence for autonomous action (0.0-1.0)"
   type        = number

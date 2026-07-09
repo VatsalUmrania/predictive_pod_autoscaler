@@ -136,6 +136,7 @@ resource "aws_lambda_function" "agent" {
       AWS_BEARER_TOKEN_BEDROCK   = var.aws_bearer_token_bedrock
       SLACK_WEBHOOK_URL          = var.slack_webhook_url
       DEFAULT_REGION             = var.aws_region
+      AGENT_BEDROCK_MODEL        = var.agent_bedrock_model
       AGENT_CONFIDENCE_THRESHOLD = tostring(var.agent_confidence_threshold)
       AGENT_DRY_RUN              = tostring(var.agent_dry_run)
       AGENT_VERIFY_WAIT_SECONDS  = tostring(var.agent_verify_wait_seconds)
