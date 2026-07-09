@@ -142,6 +142,98 @@ def send_approval_request(
     return _post_to_slack(url, payload)
 
 
+def send_log_error_alert(
+    function_name: str,
+    log_group: str,
+    error_lines: list[str],
+    analysis: dict[str, Any],
+    webhook_url: str = "",
+) -> bool:
+    """
+    Send a Slack alert with raw error log lines + LLM's analysis.
+    This is the primary notification function for the log monitor pipeline.
+
+    Format:
+      🔴 ERROR DETECTED in <function_name>
+      ─────────────────────────────────
+      Severity: High
+      Root Cause: IAM permission missing — dynamodb:PutItem not allowed
+      What it means: Writes to DynamoDB are failing silently
+      How to fix:
+        1. Add dynamodb:PutItem to the Lambda execution role
+        2. Re-apply Terraform: terraform apply
+      ─────────────────────────────────
+      Raw log lines (last 5):
+        [ERROR] AccessDeniedException: ...
+    """
+    url = webhook_url or _SLACK_WEBHOOK_URL
+    if not url:
+        logger.warning("[Slack] SLACK_WEBHOOK_URL not set — log error alert not sent")
+        return False
+
+    severity       = analysis.get("severity", "Unknown")
+    root_cause     = analysis.get("root_cause", "Unable to determine")
+    what_it_means  = analysis.get("what_it_means", "")
+    how_to_fix     = analysis.get("how_to_fix", "Review the logs manually.")
+    is_infra_issue = analysis.get("is_infra_issue", False)
+    error_types    = analysis.get("error_types", [])
+
+    # Color by severity
+    color_map = {
+        "Critical": "#8B0000",
+        "High":     "#FF0000",
+        "Medium":   "#FFA500",
+        "Low":      "#FFFF00",
+        "Unknown":  "#808080",
+    }
+    color = color_map.get(severity, "#808080")
+
+    severity_emoji = {
+        "Critical": "💀", "High": "🔴",
+        "Medium": "🟡", "Low": "🟢", "Unknown": "⚪",
+    }.get(severity, "⚪")
+
+    infra_tag = " 🏗️ *Infrastructure Issue*" if is_infra_issue else ""
+
+    # Trim log lines for the Slack message
+    shown_lines = error_lines[-5:]
+    log_block = "\n".join(f"  {line[:200]}" for line in shown_lines)
+
+    fields = [
+        {"title": "Function",   "value": f"`{function_name}`",  "short": True},
+        {"title": "Log Group",  "value": f"`{log_group}`",       "short": True},
+        {"title": "Severity",   "value": f"{severity_emoji} {severity}{infra_tag}", "short": True},
+        {"title": "Error Count", "value": str(len(error_lines)), "short": True},
+        {"title": "Root Cause", "value": root_cause,             "short": False},
+        {"title": "What It Means", "value": what_it_means,       "short": False},
+        {"title": "How To Fix",    "value": how_to_fix,           "short": False},
+    ]
+
+    if error_types:
+        fields.append({"title": "Error Types", "value": ", ".join(f"`{e}`" for e in error_types), "short": False})
+
+    payload = {
+        "attachments": [
+            {
+                "color":   color,
+                "title":   f"{severity_emoji} ERROR DETECTED in `{function_name}`",
+                "pretext": "NEXUS AI DevOps Agent detected errors in CloudWatch Logs",
+                "fields":  fields,
+                "footer":  "NEXUS Log Monitor | CloudWatch Logs Subscription",
+                "ts":      _now_ts(),
+            },
+            {
+                "color":    "#333333",
+                "title":    f"Raw Log Lines (last {len(shown_lines)} of {len(error_lines)})",
+                "text":     f"```{log_block}```",
+                "mrkdwn_in": ["text"],
+            },
+        ]
+    }
+
+    return _post_to_slack(url, payload)
+
+
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 def _post_to_slack(url: str, payload: dict) -> bool:

@@ -26,10 +26,12 @@ import time
 
 def handler(event, context):
     """Main Lambda handler — route based on path."""
+    # rawPath is set by API Gateway v2; path by API Gateway v1;
+    # fall back to /health so direct invocations without a path don't 404
     path = (
         event.get("rawPath")
         or event.get("path")
-        or event.get("path", "/health")
+        or "/health"
     )
 
     routes = {
