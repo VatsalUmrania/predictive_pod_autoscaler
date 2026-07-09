@@ -98,16 +98,9 @@ def analyze_logs(
 
     logger.info(f"[LogAnalyst] Analyzing {len(log_lines)} log lines from {log_group}")
 
-    # Build boto3 Bedrock client — on Lambda, credentials come from the IAM role
-    bedrock_kwargs: dict[str, Any] = {"region_name": region}
-    if cfg.bedrock_api_key:
-        # Bearer token auth (local dev / CI without a full IAM role)
-        bedrock_kwargs["aws_bearer_token"] = cfg.bedrock_api_key
-    elif cfg.aws_access_key_id and cfg.aws_secret_access_key:
-        bedrock_kwargs["aws_access_key_id"]     = cfg.aws_access_key_id
-        bedrock_kwargs["aws_secret_access_key"] = cfg.aws_secret_access_key
-
-    bedrock = boto3.client("bedrock-runtime", **bedrock_kwargs)
+    # On Lambda: credentials come from the IAM role automatically.
+    # Locally: set AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY or use `aws configure`.
+    bedrock = boto3.client("bedrock-runtime", region_name=cfg.aws_region)
 
     try:
         # converse() is model-agnostic — works with Claude, Llama, Mistral, Titan, etc.
