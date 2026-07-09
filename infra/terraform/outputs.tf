@@ -2,6 +2,11 @@ output "agent_function_name" {
   value = aws_lambda_function.agent.function_name
 }
 
+output "log_monitor_function_name" {
+  description = "Log Monitor Lambda — triggered by CloudWatch Logs subscription filters"
+  value       = aws_lambda_function.log_monitor.function_name
+}
+
 output "sample_app_function_name" {
   value = aws_lambda_function.sample_app.function_name
 }
