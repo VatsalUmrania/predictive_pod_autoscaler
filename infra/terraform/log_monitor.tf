@@ -58,9 +58,10 @@ resource "aws_lambda_function" "log_monitor" {
 
   environment {
     variables = {
-      ANTHROPIC_API_KEY = var.anthropic_api_key
-      SLACK_WEBHOOK_URL = var.slack_webhook_url
-      DEFAULT_REGION    = var.aws_region
+      AWS_BEARER_TOKEN_BEDROCK = var.aws_bearer_token_bedrock
+      AGENT_BEDROCK_MODEL      = var.agent_bedrock_model
+      SLACK_WEBHOOK_URL        = var.slack_webhook_url
+      DEFAULT_REGION           = var.aws_region
     }
   }
 }

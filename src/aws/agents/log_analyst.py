@@ -109,22 +109,16 @@ def analyze_logs(
 
     bedrock = boto3.client("bedrock-runtime", **bedrock_kwargs)
 
-    request_body = json.dumps({
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 1024,
-        "system": _SYSTEM_PROMPT,
-        "messages": [{"role": "user", "content": user_message}],
-    })
-
     try:
-        response = bedrock.invoke_model(
+        # converse() is model-agnostic — works with Claude, Llama, Mistral, Titan, etc.
+        # No need to know the provider-specific request body schema.
+        response = bedrock.converse(
             modelId=cfg.bedrock_model,
-            body=request_body,
-            contentType="application/json",
-            accept="application/json",
+            system=[{"text": _SYSTEM_PROMPT}],
+            messages=[{"role": "user", "content": [{"text": user_message}]}],
+            inferenceConfig={"maxTokens": 1024},
         )
-        result = json.loads(response["body"].read())
-        raw = result["content"][0]["text"].strip()
+        raw = response["output"]["message"]["content"][0]["text"].strip()
         logger.debug(f"[LogAnalyst] Bedrock response: {raw[:300]}")
         return _parse(raw)
 
