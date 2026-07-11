@@ -93,7 +93,7 @@ resource "aws_lambda_permission" "allow_cloudwatch_logs_sample_app" {
 resource "aws_cloudwatch_log_subscription_filter" "sample_app_errors" {
   name            = "${var.project_name}-sample-app-error-monitor"
   log_group_name  = aws_cloudwatch_log_group.sample_app_logs.name
-  filter_pattern  = "?ERROR ?Exception ?error ?CRITICAL ?AccessDenied ?QueueDoesNotExist ?timed out ?OOM ?WARN"
+  filter_pattern  = "?ERROR ?Exception ?error ?CRITICAL ?AccessDenied ?QueueDoesNotExist ?OOM ?WARN"
   destination_arn = aws_lambda_function.log_monitor.arn
 
   depends_on = [aws_lambda_permission.allow_cloudwatch_logs_sample_app]
