@@ -41,32 +41,63 @@ _SAFE_DEFAULT: dict[str, Any] = {
     "how_to_fix":     "Check the raw error lines above.",
     "error_types":    [],
     "is_infra_issue": False,
+    # Action fields (consumed by remediation_agent)
+    "action":         "alert_only",
+    "params":         {},
+    "confidence":     0.0,
+    "failure_class":  "unknown",
 }
 
 _SYSTEM_PROMPT = """\
-You are a Senior AWS DevOps Engineer. You are reviewing error logs from an AWS Lambda function.
+You are a Senior AWS DevOps Engineer embedded in an autonomous AIOps system.
+You receive raw CloudWatch error logs from an AWS Lambda function.
 
-Your job is to explain:
-1. What went wrong (in plain English, no jargon)
-2. Why it happened (root cause)
-3. How to fix it
+Your job:
+1. Explain what went wrong (plain English, no jargon)
+2. Identify the root cause
+3. Recommend a concrete remediation action
 
-Be SPECIFIC. If you see "AccessDeniedException", say exactly which IAM permission is missing.
-If you see "QueueDoesNotExist", say the SQS_QUEUE_URL environment variable is wrong or queue wasn't created.
-If you see "Task timed out", say the Lambda timeout setting is too low.
+Be SPECIFIC:
+- "AccessDeniedException" → name the exact IAM action missing
+- "QueueDoesNotExist" → SQS_QUEUE_URL env var is wrong or queue not created
+- "Task timed out" → Lambda timeout setting is too low
+- OOM / MemoryError → Lambda memory_size too low
+
+## Available remediation actions
+| action | when to use | params |
+|--------|-------------|--------|
+| increase_memory | OOM errors, duration near timeout | {"function_name": str, "memory_mb": int} |
+| increase_timeout | Duration exceeded timeout, no OOM | {"function_name": str, "timeout_seconds": int} |
+| set_concurrency | Throttle errors from concurrent invocations | {"function_name": str, "reserved_concurrent_executions": int} |
+| rollback_alias | Error spike after a recent deploy | {"function_name": str, "alias_name": "live"} |
+| replay_dlq | DLQ has messages, root Lambda is now healthy | {"dlq_url": str, "source_queue_url": str} |
+| alert_only | IAM issues, missing resources, config problems, or low confidence | {} |
+
+Note: For IAM issues (AccessDeniedException), SQS/DynamoDB missing resources, or config bugs —
+always use alert_only. These require human action (IAM policy changes, Terraform apply).
+Never attempt to fix IAM or infrastructure issues automatically.
 
 Respond ONLY with valid JSON, no markdown fences:
 {
   "severity": "Critical | High | Medium | Low",
   "root_cause": "one sentence — what exactly failed",
-  "what_it_means": "1-2 sentences — impact on users/system",
-  "how_to_fix": "numbered list of concrete steps to fix this",
+  "what_it_means": "1-2 sentences — user/system impact",
+  "how_to_fix": "numbered steps to fix this",
   "error_types": ["AccessDeniedException", ...],
-  "is_infra_issue": true/false
+  "is_infra_issue": true/false,
+  "action": "action_name",
+  "params": {},
+  "confidence": 0.0,
+  "failure_class": "resource_exhaustion | bad_deploy | dependency_failure | config_error | unknown"
 }
 
+Confidence guide (0.0–1.0):
+- 0.9+: unambiguous evidence in logs (OOM text, timeout text, throttle text)
+- 0.7–0.9: strong signal but some uncertainty
+- < 0.7: limited signal — use alert_only
+
 Severity guide:
-- Critical: data loss, security breach, complete service outage
+- Critical: data loss, security breach, complete outage
 - High: user-facing errors, service degraded
 - Medium: internal errors, retried successfully
 - Low: warnings, expected test failures
@@ -180,10 +211,15 @@ def _parse(raw: str) -> dict[str, Any]:
         logger.warning(f"[LogAnalyst] JSON parse failed: {exc} — raw: {raw[:200]}")
         return _SAFE_DEFAULT.copy()
 
-    data.setdefault("severity", "Unknown")
-    data.setdefault("root_cause", "Unknown")
+    data.setdefault("severity",      "Unknown")
+    data.setdefault("root_cause",    "Unknown")
     data.setdefault("what_it_means", "")
-    data.setdefault("how_to_fix", "")
-    data.setdefault("error_types", [])
+    data.setdefault("how_to_fix",    "")
+    data.setdefault("error_types",   [])
     data.setdefault("is_infra_issue", False)
+    # Action fields consumed by remediation_agent
+    data.setdefault("action",        "alert_only")
+    data.setdefault("params",        {})
+    data.setdefault("failure_class", "unknown")
+    data["confidence"] = max(0.0, min(1.0, float(data.get("confidence", 0.0))))
     return data

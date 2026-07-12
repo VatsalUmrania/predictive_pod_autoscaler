@@ -147,10 +147,11 @@ def send_log_error_alert(
     log_group: str,
     error_lines: list[str],
     analysis: dict[str, Any],
+    remediation_result: dict | None = None,
     webhook_url: str = "",
 ) -> bool:
     """
-    Send a Slack alert with raw error log lines + LLM's analysis.
+    Send a Slack alert with raw error log lines + LLM analysis + remediation outcome.
     This is the primary notification function for the log monitor pipeline.
 
     Format:
@@ -177,20 +178,21 @@ def send_log_error_alert(
     how_to_fix     = analysis.get("how_to_fix", "Review the logs manually.")
     is_infra_issue = analysis.get("is_infra_issue", False)
     error_types    = analysis.get("error_types", [])
+    action         = analysis.get("action", "alert_only")
+    confidence     = float(analysis.get("confidence", 0.0))
 
     # Color by severity
     color_map = {
         "Critical": "#8B0000",
-        "High":     "#FF0000",
-        "Medium":   "#FFA500",
-        "Low":      "#FFFF00",
-        "Unknown":  "#808080",
+        "High": "#FF0000",
+        "Medium": "#FFA500",
+        "Low":  "#FFFF00",
+        "Unknown": "#808080",
     }
     color = color_map.get(severity, "#808080")
 
     severity_emoji = {
-        "Critical": "💀", "High": "🔴",
-        "Medium": "🟡", "Low": "🟢", "Unknown": "⚪",
+        "Critical": "💀", "High": "🔴", "Medium": "🟡", "Low": "🟢", "Unknown": "⚪",
     }.get(severity, "⚪")
 
     infra_tag = " 🏗️ *Infrastructure Issue*" if is_infra_issue else ""
@@ -200,38 +202,76 @@ def send_log_error_alert(
     log_block = "\n".join(f"  {line[:200]}" for line in shown_lines)
 
     fields = [
-        {"title": "Function",   "value": f"`{function_name}`",  "short": True},
+        {"title": "Function",   "value": f"`{function_name}`",   "short": True},
         {"title": "Log Group",  "value": f"`{log_group}`",       "short": True},
         {"title": "Severity",   "value": f"{severity_emoji} {severity}{infra_tag}", "short": True},
         {"title": "Error Count", "value": str(len(error_lines)), "short": True},
         {"title": "Root Cause", "value": root_cause,             "short": False},
         {"title": "What It Means", "value": what_it_means,       "short": False},
-        {"title": "How To Fix",    "value": how_to_fix,           "short": False},
+        {"title": "How To Fix",    "value": how_to_fix,          "short": False},
     ]
 
+    # Add error types if available
     if error_types:
         fields.append({"title": "Error Types", "value": ", ".join(f"`{e}`" for e in error_types), "short": False})
 
-    payload = {
-        "attachments": [
-            {
-                "color":   color,
-                "title":   f"{severity_emoji} ERROR DETECTED in `{function_name}`",
-                "pretext": "NEXUS AI DevOps Agent detected errors in CloudWatch Logs",
-                "fields":  fields,
-                "footer":  "NEXUS Log Monitor | CloudWatch Logs Subscription",
-                "ts":      _now_ts(),
-            },
-            {
-                "color":    "#333333",
-                "title":    f"Raw Log Lines (last {len(shown_lines)} of {len(error_lines)})",
-                "text":     f"```{log_block}```",
-                "mrkdwn_in": ["text"],
-            },
-        ]
-    }
+    # Build the Slack attachments
+    attachments = [
+        {
+            "color":   color,
+            "title":   f"{severity_emoji} ERROR DETECTED in `{function_name}`",
+            "pretext": "NEXUS AI DevOps Agent detected errors in CloudWatch Logs",
+            "fields":  fields,
+            "footer":  "NEXUS Log Monitor | CloudWatch Logs Subscription",
+            "ts":      _now_ts(),
+        },
+        {
+            "color":     "#333333",
+            "title":     f"Raw Log Lines (last {len(shown_lines)} of {len(error_lines)})",
+            "text":      f"```{log_block}```",
+            "mrkdwn_in": ["text"],
+        },
+    ]
 
-    return _post_to_slack(url, payload)
+    # Remediation block — appended when an action was attempted
+    if remediation_result is not None:
+        approved = remediation_result.get("approved", False)
+        result   = remediation_result.get("result") or {}
+        success  = result.get("success", False)
+        dry_run  = result.get("dry_run", False)
+
+        if not approved:
+            rem_color  = "#FFA500"   # orange — blocked
+            rem_title  = f"⛔ Remediation BLOCKED"
+            rem_text   = f"*Action:* `{action}` | *Reason:* {remediation_result.get('reason', '')}"
+        elif dry_run:
+            rem_color  = "#0099CC"   # blue — dry-run
+            rem_title  = f"🔵 Remediation DRY-RUN (no changes made)"
+            rem_text   = f"*Action:* `{action}` | *Confidence:* {confidence:.0%}"
+        elif success:
+            rem_color  = "#36a64f"   # green — executed
+            rem_title  = f"✅ Remediation EXECUTED"
+            pre  = result.get("pre", {})
+            post = result.get("post", {})
+            rem_text   = (
+                f"*Action:* `{action}` | *Confidence:* {confidence:.0%}\n"
+                f"*Before:* `{pre}` → *After:* `{post}`"
+            )
+        else:
+            rem_color  = "#FF0000"   # red — failed
+            rem_title  = f"❌ Remediation FAILED"
+            rem_text   = (
+                f"*Action:* `{action}` | *Error:* {result.get('error', 'unknown')}"
+            )
+
+        attachments.append({
+            "color":     rem_color,
+            "title":     rem_title,
+            "text":      rem_text,
+            "mrkdwn_in": ["text"],
+        })
+
+    return _post_to_slack(url, {"attachments": attachments})
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────

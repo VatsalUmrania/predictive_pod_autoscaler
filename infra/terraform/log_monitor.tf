@@ -41,8 +41,32 @@ resource "aws_iam_role_policy" "log_monitor_policy" {
       # Invoke Bedrock models for log analysis
       {
         Effect   = "Allow"
-        Action   = ["bedrock:InvokeModel"]
+        Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
         Resource = "*"
+      },
+      # Execute remediation actions on Lambda functions
+      {
+        Effect = "Allow"
+        Action = [
+          "lambda:UpdateFunctionConfiguration",  # increase_memory, increase_timeout
+          "lambda:PutFunctionConcurrency",        # set_concurrency
+          "lambda:UpdateAlias",                   # rollback_alias
+          "lambda:GetFunction",
+          "lambda:GetFunctionConfiguration",
+          "lambda:ListAliases",
+        ]
+        Resource = "arn:aws:lambda:*:*:function:*"
+      },
+      # Execute remediation actions on SQS (replay_dlq)
+      {
+        Effect = "Allow"
+        Action = [
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage",
+          "sqs:SendMessage",
+          "sqs:GetQueueAttributes",
+        ]
+        Resource = "arn:aws:sqs:*:*:*"
       },
     ]
   })
