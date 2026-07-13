@@ -148,6 +148,9 @@ def send_log_error_alert(
     error_lines: list[str],
     analysis: dict[str, Any],
     remediation_result: dict | None = None,
+    approval_id: str | None = None,
+    suggested_commands: list[dict] | None = None,
+    api_base_url: str = "",
     webhook_url: str = "",
 ) -> bool:
     """
@@ -264,14 +267,102 @@ def send_log_error_alert(
                 f"*Action:* `{action}` | *Error:* {result.get('error', 'unknown')}"
             )
 
-        attachments.append({
-            "color":     rem_color,
-            "title":     rem_title,
-            "text":      rem_text,
-            "mrkdwn_in": ["text"],
-        })
+        attachments.append(
+            {
+                "color": rem_color,
+                "title": rem_title,
+                "text": rem_text,
+                "mrkdwn_in": ["text"],
+            }
+        )
+
+    # Approval block — shown when LLM suggested commands pending human review
+    if approval_id and suggested_commands:
+        cmd_lines = []
+        for i, cmd in enumerate(suggested_commands, 1):
+            desc = cmd.get("description", f"Command {i}")
+            svc = cmd.get("service", "")
+            method = cmd.get("method", "")
+            risk = cmd.get("risk", "medium")
+            cmd_lines.append(f"{i}. *{desc}* — `{svc}.{method}` _(risk: {risk})_")
+
+        approve_cmd = (
+            f"`curl -X POST {api_base_url}/approve/{approval_id}`"
+            if api_base_url
+            else f"Call `POST /approve/{approval_id}` on your API Gateway URL"
+        )
+        reject_cmd = (
+            f"`curl -X POST {api_base_url}/reject/{approval_id}`"
+            if api_base_url
+            else f"Call `POST /reject/{approval_id}` to discard"
+        )
+
+        attachments.append(
+            {
+                "color": "#0099CC",
+                "title": f"🔵 Approval Required — {len(suggested_commands)} command(s) to fix `{function_name}`",
+                "text": (
+                    "*LLM-suggested fixes (not yet executed):*\n"
+                    + "\n".join(cmd_lines)
+                    + f"\n\n✅ *Approve:* {approve_cmd}"
+                    + f"\n❌ *Reject:* {reject_cmd}"
+                    + f"\n\n_Approval ID: `{approval_id}` · Expires in 24h_"
+                ),
+                "mrkdwn_in": ["text"],
+            }
+        )
 
     return _post_to_slack(url, {"attachments": attachments})
+
+
+def send_approval_result(
+    function_name: str,
+    approval_id: str,
+    root_cause: str,
+    results: list[dict[str, Any]],
+    all_ok: bool,
+    dry_run: bool = False,
+    webhook_url: str = "",
+) -> bool:
+    """
+    Post the outcome of an approved command execution to Slack.
+    Called by the /approve/{id} API endpoint after running the commands.
+    """
+    url = webhook_url or _SLACK_WEBHOOK_URL
+    if not url:
+        return False
+
+    icon = "✅" if all_ok else "❌"
+    color = "#36a64f" if all_ok else "#FF0000"
+    title = (
+        f"{icon} Commands {'DRY-RUN' if dry_run else 'Executed'} for `{function_name}`"
+    )
+
+    lines = [f"*Approval ID:* `{approval_id}`", f"*Root Cause:* {root_cause}", ""]
+    for i, r in enumerate(results, 1):
+        status = "✅" if r.get("success") else "❌"
+        desc = r.get("description", f"Command {i}")
+        svc = r.get("service", "")
+        method = r.get("method", "")
+        err = r.get("error", "")
+        lines.append(f"{status} *{i}. {desc}*")
+        lines.append(f"   `{svc}.{method}`")
+        if err:
+            lines.append(f"   Error: {err}")
+
+    payload = {
+        "attachments": [
+            {
+                "color": color,
+                "title": title,
+                "text": "\n".join(lines),
+                "mrkdwn_in": ["text"],
+                "footer": "NEXUS AI DevOps Agent | Approval Execution",
+                "ts": _now_ts(),
+            }
+        ]
+    }
+    return _post_to_slack(url, payload)
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────

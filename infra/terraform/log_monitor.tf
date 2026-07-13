@@ -68,6 +68,16 @@ resource "aws_iam_role_policy" "log_monitor_policy" {
         ]
         Resource = "arn:aws:sqs:*:*:*"
       },
+      # Read/write the approvals DynamoDB table
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem",
+        ]
+        Resource = aws_dynamodb_table.approvals.arn
+      },
     ]
   })
 }
@@ -90,6 +100,8 @@ resource "aws_lambda_function" "log_monitor" {
       AGENT_BEDROCK_MODEL      = var.agent_bedrock_model
       SLACK_WEBHOOK_URL        = var.slack_webhook_url
       DEFAULT_REGION           = var.aws_region
+      APPROVALS_TABLE_NAME     = aws_dynamodb_table.approvals.name
+      API_BASE_URL             = aws_lambda_function_url.agent_api.function_url
     }
   }
 }

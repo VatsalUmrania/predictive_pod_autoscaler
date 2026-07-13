@@ -89,7 +89,7 @@ class AgentConfig(BaseSettings):
 
 
     @classmethod
-    def load(cls) -> "AgentConfig":
+    def load(cls) -> AgentConfig:
         """Load config from environment. Call once at Lambda cold start."""
         import os
         # Fields without the AGENT_ prefix need manual handling.

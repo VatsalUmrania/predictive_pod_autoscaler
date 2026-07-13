@@ -46,6 +46,8 @@ _SAFE_DEFAULT: dict[str, Any] = {
     "params":         {},
     "confidence":     0.0,
     "failure_class":  "unknown",
+    # Suggested boto3 commands (consumed by approval flow)
+    "suggested_commands": [],
 }
 
 _SYSTEM_PROMPT = """\
@@ -56,14 +58,15 @@ Your job:
 1. Explain what went wrong (plain English, no jargon)
 2. Identify the root cause
 3. Recommend a concrete remediation action
+4. Generate specific boto3 API calls to fix the issue (when possible)
 
 Be SPECIFIC:
-- "AccessDeniedException" → name the exact IAM action missing
+- "AccessDeniedException" → name the exact IAM action and resource ARN
 - "QueueDoesNotExist" → SQS_QUEUE_URL env var is wrong or queue not created
 - "Task timed out" → Lambda timeout setting is too low
 - OOM / MemoryError → Lambda memory_size too low
 
-## Available remediation actions
+## Predefined actions (auto-executed if confidence is high)
 | action | when to use | params |
 |--------|-------------|--------|
 | increase_memory | OOM errors, duration near timeout | {"function_name": str, "memory_mb": int} |
@@ -71,11 +74,67 @@ Be SPECIFIC:
 | set_concurrency | Throttle errors from concurrent invocations | {"function_name": str, "reserved_concurrent_executions": int} |
 | rollback_alias | Error spike after a recent deploy | {"function_name": str, "alias_name": "live"} |
 | replay_dlq | DLQ has messages, root Lambda is now healthy | {"dlq_url": str, "source_queue_url": str} |
-| alert_only | IAM issues, missing resources, config problems, or low confidence | {} |
+| alert_only | Use for IAM issues, missing resources, config problems, or low confidence | {} |
 
-Note: For IAM issues (AccessDeniedException), SQS/DynamoDB missing resources, or config bugs —
-always use alert_only. These require human action (IAM policy changes, Terraform apply).
-Never attempt to fix IAM or infrastructure issues automatically.
+## Suggested commands (human-approved boto3 calls)
+For ANY error where you know a specific fix — especially alert_only cases —
+populate `suggested_commands` with the exact boto3 API calls needed.
+These will be shown to the user for approval before execution.
+
+Allowed boto3 services and methods you can suggest:
+- iam: put_role_policy, attach_role_policy
+- lambda: update_function_configuration, put_function_concurrency, update_alias, update_function_event_invoke_config
+- sqs: create_queue, set_queue_attributes, get_queue_url
+- dynamodb: create_table, update_table
+- ssm: put_parameter
+- cloudwatch: put_metric_alarm
+
+NEVER suggest: delete_*, terminate_*, remove_*, stop_* operations.
+
+Example for AccessDeniedException on dynamodb:PutItem:
+"suggested_commands": [
+  {
+    "service": "iam",
+    "method": "put_role_policy",
+    "params": {
+      "RoleName": "nexus-ai-agent-sample-app-role",
+      "PolicyName": "nexus-auto-fix-dynamodb",
+      "PolicyDocument": "{\\"Version\\":\\"2012-10-17\\",\\"Statement\\":[{\\"Effect\\":\\"Allow\\",\\"Action\\":[\\"dynamodb:PutItem\\",\\"dynamodb:GetItem\\"],\\"Resource\\":\\"*\\"}]}"
+    },
+    "description": "Add dynamodb:PutItem permission to the Lambda execution role",
+    "risk": "low"
+  }
+]
+
+Example for QueueDoesNotExist when log shows function=nexus-ai-agent-sample-app
+and Lambda role is nexus-ai-agent-sample-app-role:
+"suggested_commands": [
+  {
+    "service": "sqs",
+    "method": "create_queue",
+    "params": {"QueueName": "nexus-ai-agent-sample-app-dlq"},
+    "description": "Create the missing SQS dead-letter queue",
+    "risk": "low"
+  },
+  {
+    "service": "lambda",
+    "method": "update_function_configuration",
+    "params": {
+      "FunctionName": "nexus-ai-agent-sample-app",
+      "Environment": {"Variables": {"DLQ_URL": "https://sqs.ap-south-1.amazonaws.com/804078307169/nexus-ai-agent-sample-app-dlq"}}
+    },
+    "description": "Update Lambda DLQ_URL env var with the new queue URL",
+    "risk": "low"
+  }
+]
+
+## CRITICAL RULE: NO PLACEHOLDERS
+Never use <placeholder> syntax in params. The system will REJECT commands with angle-bracket values.
+You will be given the actual function name, IAM role name, region, and account ID in the prompt.
+Use those exact values. If you don't have a required value (e.g. the queue URL), omit that command
+and explain what the user needs to fill in via how_to_fix. An empty suggested_commands is better
+than commands with placeholder values.
+
 
 Respond ONLY with valid JSON, no markdown fences:
 {
@@ -88,7 +147,8 @@ Respond ONLY with valid JSON, no markdown fences:
   "action": "action_name",
   "params": {},
   "confidence": 0.0,
-  "failure_class": "resource_exhaustion | bad_deploy | dependency_failure | config_error | unknown"
+  "failure_class": "resource_exhaustion | bad_deploy | dependency_failure | config_error | unknown",
+  "suggested_commands": []
 }
 
 Confidence guide (0.0–1.0):
@@ -179,11 +239,27 @@ def _build_prompt(
     log_lines: list[str],
     region: str,
 ) -> str:
+    # Fetch live Lambda metadata so the LLM has real values (role name, env vars, account)
+    lambda_ctx = _get_lambda_context(function_name, region)
+
     lines = [
         f"## Lambda Function: `{function_name}`",
         f"## Log Group: `{log_group}`",
         f"## Region: `{region}`",
         f"## Error Count: {len(log_lines)}",
+    ]
+    if lambda_ctx:
+        lines += [
+            f"## IAM Role Name: `{lambda_ctx.get('role_name', 'unknown')}`",
+            f"## IAM Role ARN: `{lambda_ctx.get('role_arn', 'unknown')}`",
+            f"## Account ID: `{lambda_ctx.get('account_id', 'unknown')}`",
+            f"## Lambda Timeout: {lambda_ctx.get('timeout', '?')}s",
+            f"## Lambda Memory: {lambda_ctx.get('memory', '?')} MB",
+        ]
+        if lambda_ctx.get("env_var_names"):
+            lines.append(f"## Env Var Keys: {', '.join(lambda_ctx['env_var_names'])}")
+
+    lines += [
         "",
         "## Raw Error Log Lines:",
         "```",
@@ -198,6 +274,35 @@ def _build_prompt(
         "Be specific about IAM permissions, missing resources, configuration, or code bugs."
     )
     return "\n".join(lines)
+
+
+def _get_lambda_context(function_name: str, region: str) -> dict[str, Any] | None:
+    """
+    Fetch live Lambda configuration so the LLM has real values
+    (role name, account ID, timeout, memory, env var keys) to use in suggested_commands.
+
+    Returns a dict or None on any error (network issue, function not found, etc.).
+    Never raises.
+    """
+    try:
+        client = boto3.client("lambda", region_name=region)
+        config = client.get_function_configuration(FunctionName=function_name)
+        role_arn     = config.get("Role", "")
+        # role ARN format: arn:aws:iam::<account-id>:role/<role-name>
+        role_name    = role_arn.split("/")[-1] if "/" in role_arn else role_arn
+        account_id   = role_arn.split(":")[4] if role_arn.count(":") >= 4 else "unknown"
+        env_vars     = config.get("Environment", {}).get("Variables", {})
+        return {
+            "role_arn":     role_arn,
+            "role_name":    role_name,
+            "account_id":   account_id,
+            "timeout":      config.get("Timeout", "?"),
+            "memory":       config.get("MemorySize", "?"),
+            "env_var_names": list(env_vars.keys()),
+        }
+    except Exception as exc:
+        logger.debug(f"[LogAnalyst] Could not fetch Lambda context for {function_name}: {exc}")
+        return None
 
 
 # ── JSON parser ───────────────────────────────────────────────────────────────
@@ -221,5 +326,9 @@ def _parse(raw: str) -> dict[str, Any]:
     data.setdefault("action",        "alert_only")
     data.setdefault("params",        {})
     data.setdefault("failure_class", "unknown")
+    data.setdefault("suggested_commands", [])
     data["confidence"] = max(0.0, min(1.0, float(data.get("confidence", 0.0))))
+    # Ensure suggested_commands is always a list
+    if not isinstance(data["suggested_commands"], list):
+        data["suggested_commands"] = []
     return data

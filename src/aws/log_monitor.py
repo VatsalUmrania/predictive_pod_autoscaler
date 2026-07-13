@@ -8,8 +8,17 @@ Flow:
       → Subscription Filter (pattern: ?ERROR ?Exception ?error)
       → THIS Lambda (log_monitor.handler)
       → log_analyst.analyze() → Bedrock LLM
-          → if action != alert_only → remediation_agent.remediate()
-      → Slack notification with analysis + action taken
+
+  Branch A — predefined action (OOM, timeout, throttle, rollback):
+      → remediation_agent.remediate() → AWS changes
+      → Slack: ✅ Executed / ❌ Failed
+
+  Branch B — alert_only with suggested_commands (IAM, missing queue, config):
+      → approvals.create_approval() → DynamoDB
+      → Slack: 🔵 Approval required — shows commands + approve URL
+
+  Branch C — alert_only, no commands (low confidence, unknown error):
+      → Slack: ⚪ Alert only — analysis + how_to_fix
 
 Event format from CloudWatch Logs subscription:
 {
@@ -30,6 +39,8 @@ import os
 from aws.agents.log_analyst import analyze_logs
 from aws.agents.remediation_agent import remediate
 from aws.config import AgentConfig
+from aws.memory.approvals import create_approval
+from aws.tools.aws_executor import validate_commands
 from aws.tools.slack import send_log_error_alert
 
 # force=True overrides Lambda's pre-configured root logger
@@ -59,13 +70,12 @@ def handler(event: dict, context) -> dict:
         log_group  = log_events.get("logGroup", "unknown")
         log_stream = log_events.get("logStream", "unknown")
         events     = log_events.get("logEvents", [])
-        region     = cfg.aws_region
 
         # Extract the raw log messages
         messages = [e.get("message", "").strip() for e in events if e.get("message", "").strip()]
 
         if not messages:
-            print(f"[LogMonitor] Log group {log_group} triggered but no messages after filtering")
+            print(f"[LogMonitor] No messages after filtering in {log_group}")
             return {"status": "no_messages"}
 
         print(f"[LogMonitor] {len(messages)} error line(s) from {log_group}")
@@ -79,28 +89,30 @@ def handler(event: dict, context) -> dict:
             else log_group
         )
 
-        # Step 1: LLM analysis — explains the error AND recommends an action
-        print(f"[LogMonitor] Calling Bedrock for analysis (model={cfg.bedrock_model})")
+        # ── Step 1: LLM Analysis ──────────────────────────────────────────────
+        print(f"[LogMonitor] Analyzing with model={cfg.bedrock_model}")
         analysis = analyze_logs(
             function_name=function_name,
             log_group=log_group,
             log_lines=messages,
-            region=region,
+            region=cfg.aws_region,
             cfg=cfg,
         )
         action     = analysis.get("action", "alert_only")
         confidence = float(analysis.get("confidence", 0.0))
+        suggested_cmds = analysis.get("suggested_commands", [])
         print(
-            f"[LogMonitor] Analysis: severity={analysis.get('severity')} "
-            f"action={action} confidence={confidence:.0%} "
-            f"root_cause={analysis.get('root_cause', '')[:80]}"
+            f"[LogMonitor] action={action} confidence={confidence:.0%} "
+            f"suggested_commands={len(suggested_cmds)}"
         )
 
-        # Step 2: Remediation — only if LLM recommended a real action
+        # ── Step 2: Route ─────────────────────────────────────────────────────
         remediation_result: dict | None = None
+        approval_id: str | None = None
+
         if action != "alert_only":
-            print(f"[LogMonitor] Attempting remediation: {action} on {function_name}")
-            # Pass function_name into params so the validator/executor know the target
+            # Branch A: Predefined action — attempt auto-remediation
+            print(f"[LogMonitor] Branch A: auto-remediate {action}")
             if function_name and "function_name" not in analysis.get("params", {}):
                 analysis["params"]["function_name"] = function_name
             remediation_result = remediate(
@@ -109,22 +121,47 @@ def handler(event: dict, context) -> dict:
                 cfg=cfg,
             )
             approved = remediation_result.get("approved", False)
-            success  = remediation_result.get("result", {}).get("success", False) if approved else False
-            print(
-                f"[LogMonitor] Remediation: approved={approved} "
-                f"success={success} "
-                f"reason={remediation_result.get('reason', '')[:80]}"
+            success = (
+                remediation_result.get("result", {}).get("success", False)
+                if approved
+                else False
             )
-        else:
-            print(f"[LogMonitor] Action=alert_only — no AWS changes made")
+            print(f"[LogMonitor] Remediation: approved={approved} success={success}")
 
-        # Step 3: Slack notification — includes analysis + remediation outcome
+        elif suggested_cmds:
+            # Branch B: alert_only but LLM generated specific commands → approval flow
+            valid, reason = validate_commands(suggested_cmds)
+            if valid:
+                print(
+                    f"[LogMonitor] Branch B: {len(suggested_cmds)} command(s) pending approval"
+                )
+                approval_id = create_approval(
+                    commands=suggested_cmds,
+                    function_name=function_name,
+                    root_cause=analysis.get("root_cause", ""),
+                    analysis=analysis,
+                    region=cfg.aws_region,
+                )
+                print(f"[LogMonitor] Approval created: {approval_id}")
+            else:
+                print(f"[LogMonitor] Suggested commands failed validation: {reason}")
+                suggested_cmds = []  # Fall through to Branch C
+
+        else:
+            # Branch C: alert_only, no actionable commands
+            print("[LogMonitor] Branch C: alert only, no commands")
+
+        # ── Step 3: Slack notification ────────────────────────────────────────
+        api_base = os.environ.get("API_BASE_URL", "")
         slack_sent = send_log_error_alert(
             function_name=function_name,
             log_group=log_group,
             error_lines=messages,
             analysis=analysis,
             remediation_result=remediation_result,
+            approval_id=approval_id,
+            suggested_commands=suggested_cmds,
+            api_base_url=api_base,
         )
         print(f"[LogMonitor] Slack sent={slack_sent}")
 
@@ -133,10 +170,9 @@ def handler(event: dict, context) -> dict:
             "function_name":      function_name,
             "log_group":          log_group,
             "error_count":        len(messages),
-            "severity":           analysis.get("severity"),
             "action":             action,
             "confidence":         confidence,
-            "remediation_result": remediation_result,
+            "approval_id":        approval_id,
             "slack_sent":         slack_sent,
         }
 
@@ -170,5 +206,4 @@ def _decode_log_events(event: dict) -> dict:
         return decoded
     except Exception as exc:
         print(f"[LogMonitor] Failed to decode log payload: {exc}")
-        logger.error(f"[LogMonitor] Failed to decode log payload: {exc}")
         return {}

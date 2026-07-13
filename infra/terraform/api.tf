@@ -1,5 +1,5 @@
 ########################################################################
-# Phase 1 Infrastructure — API Gateway
+# Phase 1 Infrastructure — API Gateway (Sample App)
 # Creates an HTTP API that sits in front of the sample failing app Lambda.
 # Use this to trigger failures via HTTP requests.
 ########################################################################
@@ -55,4 +55,65 @@ resource "aws_lambda_permission" "apigw_invoke" {
   function_name = aws_lambda_function.sample_app.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.sample_api.execution_arn}/*/*"
+}
+
+########################################################################
+# Agent API — Lambda Function URL
+# Exposes server.py (FastAPI + Mangum) as a direct HTTPS endpoint.
+# Handles: /approve/{id}, /reject/{id}, /health, /status, /webhook/*
+#
+# Lambda Function URL is free, instant, and needs no API Gateway setup.
+# The URL looks like: https://<id>.lambda-url.<region>.on.aws
+########################################################################
+
+resource "aws_lambda_function" "agent_api" {
+  filename         = data.archive_file.agent_zip.output_path
+  source_code_hash = data.archive_file.agent_zip.output_base64sha256
+  function_name    = "${var.project_name}-api"
+  role             = aws_iam_role.agent_role.arn   # Reuse the agent role — same permissions
+  handler          = "aws.api.server.handler"       # Mangum adapter in server.py
+  runtime          = "python3.12"
+  timeout          = 30     # API calls should be fast; approve runs executor synchronously
+  memory_size      = 256
+
+  environment {
+    variables = {
+      SLACK_WEBHOOK_URL        = var.slack_webhook_url
+      DEFAULT_REGION           = var.aws_region
+      AWS_BEARER_TOKEN_BEDROCK = var.aws_bearer_token_bedrock
+      AGENT_BEDROCK_MODEL      = var.agent_bedrock_model
+      AGENT_DRY_RUN            = tostring(var.agent_dry_run)
+      INCIDENT_TABLE_NAME      = aws_dynamodb_table.incidents.name
+      APPROVALS_TABLE_NAME     = aws_dynamodb_table.approvals.name
+    }
+  }
+}
+
+# Lambda Function URL — gives the FastAPI server a public HTTPS address
+# authorization_type = "NONE" means anyone who knows the URL can call it.
+# The approval_id UUID acts as the authorization token (unguessable 36-char string).
+resource "aws_lambda_function_url" "agent_api" {
+  function_name      = aws_lambda_function.agent_api.function_name
+  authorization_type = "NONE"
+
+  cors {
+    allow_origins = ["*"]
+    allow_methods = ["GET", "POST"]
+    allow_headers = ["content-type"]
+  }
+}
+
+# REQUIRED: even with authorization_type=NONE, AWS needs an explicit resource policy
+# granting lambda:InvokeFunctionUrl from * — without this you get 403 Forbidden.
+resource "aws_lambda_permission" "agent_api_public" {
+  statement_id           = "FunctionURLAllowPublicAccess"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = aws_lambda_function.agent_api.function_name
+  principal              = "*"
+  function_url_auth_type = "NONE"
+}
+
+resource "aws_cloudwatch_log_group" "agent_api_logs" {
+  name              = "/aws/lambda/${aws_lambda_function.agent_api.function_name}"
+  retention_in_days = 7
 }

@@ -32,6 +32,11 @@ output "incident_memory_table" {
   value = aws_dynamodb_table.incidents.name
 }
 
+output "agent_api_url" {
+  description = "Agent API Lambda Function URL — use this for /approve/{id} calls"
+  value       = aws_lambda_function_url.agent_api.function_url
+}
+
 output "test_commands" {
   description = "Copy-paste commands to trigger test failures"
   value = {
