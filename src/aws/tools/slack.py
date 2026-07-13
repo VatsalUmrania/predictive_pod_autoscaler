@@ -147,10 +147,14 @@ def send_log_error_alert(
     log_group: str,
     error_lines: list[str],
     analysis: dict[str, Any],
+    remediation_result: dict | None = None,
+    approval_id: str | None = None,
+    suggested_commands: list[dict] | None = None,
+    api_base_url: str = "",
     webhook_url: str = "",
 ) -> bool:
     """
-    Send a Slack alert with raw error log lines + LLM's analysis.
+    Send a Slack alert with raw error log lines + LLM analysis + remediation outcome.
     This is the primary notification function for the log monitor pipeline.
 
     Format:
@@ -177,20 +181,21 @@ def send_log_error_alert(
     how_to_fix     = analysis.get("how_to_fix", "Review the logs manually.")
     is_infra_issue = analysis.get("is_infra_issue", False)
     error_types    = analysis.get("error_types", [])
+    action         = analysis.get("action", "alert_only")
+    confidence     = float(analysis.get("confidence", 0.0))
 
     # Color by severity
     color_map = {
         "Critical": "#8B0000",
-        "High":     "#FF0000",
-        "Medium":   "#FFA500",
-        "Low":      "#FFFF00",
-        "Unknown":  "#808080",
+        "High": "#FF0000",
+        "Medium": "#FFA500",
+        "Low":  "#FFFF00",
+        "Unknown": "#808080",
     }
     color = color_map.get(severity, "#808080")
 
     severity_emoji = {
-        "Critical": "💀", "High": "🔴",
-        "Medium": "🟡", "Low": "🟢", "Unknown": "⚪",
+        "Critical": "💀", "High": "🔴", "Medium": "🟡", "Low": "🟢", "Unknown": "⚪",
     }.get(severity, "⚪")
 
     infra_tag = " 🏗️ *Infrastructure Issue*" if is_infra_issue else ""
@@ -200,37 +205,163 @@ def send_log_error_alert(
     log_block = "\n".join(f"  {line[:200]}" for line in shown_lines)
 
     fields = [
-        {"title": "Function",   "value": f"`{function_name}`",  "short": True},
+        {"title": "Function",   "value": f"`{function_name}`",   "short": True},
         {"title": "Log Group",  "value": f"`{log_group}`",       "short": True},
         {"title": "Severity",   "value": f"{severity_emoji} {severity}{infra_tag}", "short": True},
         {"title": "Error Count", "value": str(len(error_lines)), "short": True},
         {"title": "Root Cause", "value": root_cause,             "short": False},
         {"title": "What It Means", "value": what_it_means,       "short": False},
-        {"title": "How To Fix",    "value": how_to_fix,           "short": False},
+        {"title": "How To Fix",    "value": how_to_fix,          "short": False},
     ]
 
+    # Add error types if available
     if error_types:
         fields.append({"title": "Error Types", "value": ", ".join(f"`{e}`" for e in error_types), "short": False})
+
+    # Build the Slack attachments
+    attachments = [
+        {
+            "color":   color,
+            "title":   f"{severity_emoji} ERROR DETECTED in `{function_name}`",
+            "pretext": "NEXUS AI DevOps Agent detected errors in CloudWatch Logs",
+            "fields":  fields,
+            "footer":  "NEXUS Log Monitor | CloudWatch Logs Subscription",
+            "ts":      _now_ts(),
+        },
+        {
+            "color":     "#333333",
+            "title":     f"Raw Log Lines (last {len(shown_lines)} of {len(error_lines)})",
+            "text":      f"```{log_block}```",
+            "mrkdwn_in": ["text"],
+        },
+    ]
+
+    # Remediation block — appended when an action was attempted
+    if remediation_result is not None:
+        approved = remediation_result.get("approved", False)
+        result   = remediation_result.get("result") or {}
+        success  = result.get("success", False)
+        dry_run  = result.get("dry_run", False)
+
+        if not approved:
+            rem_color  = "#FFA500"   # orange — blocked
+            rem_title  = f"⛔ Remediation BLOCKED"
+            rem_text   = f"*Action:* `{action}` | *Reason:* {remediation_result.get('reason', '')}"
+        elif dry_run:
+            rem_color  = "#0099CC"   # blue — dry-run
+            rem_title  = f"🔵 Remediation DRY-RUN (no changes made)"
+            rem_text   = f"*Action:* `{action}` | *Confidence:* {confidence:.0%}"
+        elif success:
+            rem_color  = "#36a64f"   # green — executed
+            rem_title  = f"✅ Remediation EXECUTED"
+            pre  = result.get("pre", {})
+            post = result.get("post", {})
+            rem_text   = (
+                f"*Action:* `{action}` | *Confidence:* {confidence:.0%}\n"
+                f"*Before:* `{pre}` → *After:* `{post}`"
+            )
+        else:
+            rem_color  = "#FF0000"   # red — failed
+            rem_title  = f"❌ Remediation FAILED"
+            rem_text   = (
+                f"*Action:* `{action}` | *Error:* {result.get('error', 'unknown')}"
+            )
+
+        attachments.append(
+            {
+                "color": rem_color,
+                "title": rem_title,
+                "text": rem_text,
+                "mrkdwn_in": ["text"],
+            }
+        )
+
+    # Approval block — shown when LLM suggested commands pending human review
+    if approval_id and suggested_commands:
+        cmd_lines = []
+        for i, cmd in enumerate(suggested_commands, 1):
+            desc = cmd.get("description", f"Command {i}")
+            svc = cmd.get("service", "")
+            method = cmd.get("method", "")
+            risk = cmd.get("risk", "medium")
+            cmd_lines.append(f"{i}. *{desc}* — `{svc}.{method}` _(risk: {risk})_")
+
+        approve_cmd = (
+            f"`curl -X POST {api_base_url}/approve/{approval_id}`"
+            if api_base_url
+            else f"Call `POST /approve/{approval_id}` on your API Gateway URL"
+        )
+        reject_cmd = (
+            f"`curl -X POST {api_base_url}/reject/{approval_id}`"
+            if api_base_url
+            else f"Call `POST /reject/{approval_id}` to discard"
+        )
+
+        attachments.append(
+            {
+                "color": "#0099CC",
+                "title": f"🔵 Approval Required — {len(suggested_commands)} command(s) to fix `{function_name}`",
+                "text": (
+                    "*LLM-suggested fixes (not yet executed):*\n"
+                    + "\n".join(cmd_lines)
+                    + f"\n\n✅ *Approve:* {approve_cmd}"
+                    + f"\n❌ *Reject:* {reject_cmd}"
+                    + f"\n\n_Approval ID: `{approval_id}` · Expires in 24h_"
+                ),
+                "mrkdwn_in": ["text"],
+            }
+        )
+
+    return _post_to_slack(url, {"attachments": attachments})
+
+
+def send_approval_result(
+    function_name: str,
+    approval_id: str,
+    root_cause: str,
+    results: list[dict[str, Any]],
+    all_ok: bool,
+    dry_run: bool = False,
+    webhook_url: str = "",
+) -> bool:
+    """
+    Post the outcome of an approved command execution to Slack.
+    Called by the /approve/{id} API endpoint after running the commands.
+    """
+    url = webhook_url or _SLACK_WEBHOOK_URL
+    if not url:
+        return False
+
+    icon = "✅" if all_ok else "❌"
+    color = "#36a64f" if all_ok else "#FF0000"
+    title = (
+        f"{icon} Commands {'DRY-RUN' if dry_run else 'Executed'} for `{function_name}`"
+    )
+
+    lines = [f"*Approval ID:* `{approval_id}`", f"*Root Cause:* {root_cause}", ""]
+    for i, r in enumerate(results, 1):
+        status = "✅" if r.get("success") else "❌"
+        desc = r.get("description", f"Command {i}")
+        svc = r.get("service", "")
+        method = r.get("method", "")
+        err = r.get("error", "")
+        lines.append(f"{status} *{i}. {desc}*")
+        lines.append(f"   `{svc}.{method}`")
+        if err:
+            lines.append(f"   Error: {err}")
 
     payload = {
         "attachments": [
             {
-                "color":   color,
-                "title":   f"{severity_emoji} ERROR DETECTED in `{function_name}`",
-                "pretext": "NEXUS AI DevOps Agent detected errors in CloudWatch Logs",
-                "fields":  fields,
-                "footer":  "NEXUS Log Monitor | CloudWatch Logs Subscription",
-                "ts":      _now_ts(),
-            },
-            {
-                "color":    "#333333",
-                "title":    f"Raw Log Lines (last {len(shown_lines)} of {len(error_lines)})",
-                "text":     f"```{log_block}```",
+                "color": color,
+                "title": title,
+                "text": "\n".join(lines),
                 "mrkdwn_in": ["text"],
-            },
+                "footer": "NEXUS AI DevOps Agent | Approval Execution",
+                "ts": _now_ts(),
+            }
         ]
     }
-
     return _post_to_slack(url, payload)
 
 

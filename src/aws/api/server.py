@@ -20,7 +20,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
 from mangum import Mangum
 
 from aws.graph.workflow import run_graph
@@ -130,10 +129,93 @@ async def test_incident(request: Request):
         "resource":   result.get("resource_name"),
         "action":     result.get("rca", {}).get("action"),
         "confidence": result.get("rca", {}).get("confidence"),
-        "resolved":   result.get("resolved"),
-        "escalated":  result.get("escalated"),
-        "rca":        result.get("rca"),
+        "resolved": result.get("resolved"),
+        "escalated": result.get("escalated"),
+        "rca": result.get("rca"),
     }
+
+
+@app.post("/approve/{approval_id}")
+async def approve_commands(approval_id: str):
+    """
+    Execute a pending set of LLM-suggested commands after user approval.
+
+    The user gets this URL from the Slack notification.
+    Call it with: curl -X POST <api-url>/approve/<approval_id>
+
+    Returns the execution results for each command.
+    """
+    from aws.config import AgentConfig
+    from aws.memory.approvals import get_approval, update_status
+    from aws.tools.aws_executor import execute_commands
+    from aws.tools.slack import send_approval_result
+
+    cfg = AgentConfig.load()
+
+    # Fetch pending approval
+    approval = get_approval(approval_id, region=cfg.aws_region)
+    if not approval:
+        raise HTTPException(
+            status_code=404, detail=f"Approval '{approval_id}' not found or expired"
+        )
+
+    if approval.get("status") != "pending":
+        return {
+            "approval_id": approval_id,
+            "status": approval.get("status"),
+            "message": "This approval has already been processed",
+        }
+
+    commands = approval.get("commands", [])
+    function_name = approval.get("function_name", "unknown")
+    root_cause = approval.get("root_cause", "")
+
+    logger.info(f"[API] Approving {len(commands)} command(s) for {function_name}")
+
+    # Mark as approved (in-flight)
+    update_status(approval_id, "approved", region=cfg.aws_region)
+
+    # Execute
+    results = execute_commands(commands, region=cfg.aws_region, dry_run=cfg.dry_run)
+    all_ok = all(r.get("success") for r in results)
+    final_status = "executed" if all_ok else "failed"
+    update_status(approval_id, final_status, results=results, region=cfg.aws_region)
+
+    # Notify Slack with results
+    send_approval_result(
+        function_name=function_name,
+        approval_id=approval_id,
+        root_cause=root_cause,
+        results=results,
+        all_ok=all_ok,
+        dry_run=cfg.dry_run,
+    )
+
+    return {
+        "approval_id": approval_id,
+        "status": final_status,
+        "function": function_name,
+        "commands_run": len(results),
+        "all_ok": all_ok,
+        "results": results,
+    }
+
+
+@app.post("/reject/{approval_id}")
+async def reject_commands(approval_id: str):
+    """Mark a pending approval as rejected (no execution)."""
+    from aws.config import AgentConfig
+    from aws.memory.approvals import get_approval, update_status
+
+    cfg = AgentConfig.load()
+    approval = get_approval(approval_id, region=cfg.aws_region)
+    if not approval:
+        raise HTTPException(
+            status_code=404, detail=f"Approval '{approval_id}' not found or expired"
+        )
+
+    update_status(approval_id, "rejected", region=cfg.aws_region)
+    return {"approval_id": approval_id, "status": "rejected"}
 
 
 # ── Lambda handler via Mangum ─────────────────────────────────────────────────

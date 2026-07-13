@@ -64,24 +64,39 @@ resource "aws_iam_role_policy" "agent_policy" {
         ]
         Resource = "*"
       },
-      # SQS — read + replay
+      # SQS — read + replay + create (executor needs CreateQueue for missing-queue fixes)
       {
         Effect = "Allow"
         Action = [
-          "sqs:GetQueueAttributes", "sqs:GetQueueUrl", "sqs:ListQueues",
-          "sqs:ReceiveMessage",     "sqs:SendMessage",  "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes", "sqs:GetQueueUrl",    "sqs:ListQueues",
+          "sqs:ReceiveMessage",     "sqs:SendMessage",    "sqs:DeleteMessage",
+          "sqs:CreateQueue",        "sqs:SetQueueAttributes", "sqs:PurgeQueue",
         ]
         Resource = "*"
       },
-      # DynamoDB — read + write (for incident memory table only)
+      # DynamoDB — read + write (incident memory + approvals table)
       {
         Effect = "Allow"
         Action = [
           "dynamodb:ListTables", "dynamodb:DescribeTable",
           "dynamodb:PutItem",    "dynamodb:GetItem",
-          "dynamodb:Query",      "dynamodb:UpdateTable",
+          "dynamodb:UpdateItem", "dynamodb:Query",
+          "dynamodb:UpdateTable",
         ]
         Resource = "*"
+      },
+      # IAM — safe writes for executor (add policies to existing roles only)
+      {
+        Effect = "Allow"
+        Action = [
+          "iam:PutRolePolicy",
+          "iam:AttachRolePolicy",
+          "iam:GetRole",
+          "iam:GetRolePolicy",
+          "iam:ListRolePolicies",
+          "iam:ListAttachedRolePolicies",
+        ]
+        Resource = "arn:aws:iam::*:role/*"
       },
       # X-Ray — read traces
       {
