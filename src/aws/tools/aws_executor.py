@@ -152,7 +152,20 @@ def validate_commands(commands: list[dict[str, Any]]) -> tuple[bool, str]:
 
         # Reject placeholder values — LLM sometimes generates <role-name> or <account-id>
         # instead of real values. These will always cause AWS API errors.
-        placeholders = _find_placeholders(cmd.get("params", {}))
+        # However, for Lambda environment variables, we allow placeholders (like ${VAR_NAME} or <VAR_NAME>)
+        # because we merge and filter them out during execution to keep the existing values.
+        import copy
+        params_to_check = copy.deepcopy(cmd.get("params", {}) or {})
+        if (
+            isinstance(params_to_check, dict)
+            and "Environment" in params_to_check
+            and isinstance(params_to_check["Environment"], dict)
+            and "Variables" in params_to_check["Environment"]
+        ):
+            # Temporarily remove Environment.Variables for validation so placeholders are allowed there
+            params_to_check["Environment"].pop("Variables")
+
+        placeholders = _find_placeholders(params_to_check)
         if placeholders:
             return False, (
                 f"Command #{i+1} ({service}.{method}) contains unfilled placeholders: "
@@ -164,11 +177,12 @@ def validate_commands(commands: list[dict[str, Any]]) -> tuple[bool, str]:
 
 def _find_placeholders(obj: Any, path: str = "") -> list[str]:
     """
-    Recursively scan a params dict for LLM placeholder strings like <role-name>.
+    Recursively scan a params dict for LLM placeholder strings like <role-name> or ${role-name}.
     Returns a list of dotted paths to any placeholder values found.
     """
     import re
-    _PLACEHOLDER = re.compile(r"<[^\u003e]+>")
+    # Match both <placeholder> and ${placeholder} formats
+    _PLACEHOLDER = re.compile(r"<[^\u003e]+>|\$\{[^}]+\}")
     found: list[str] = []
 
     if isinstance(obj, str):
@@ -295,6 +309,9 @@ def _merge_lambda_env_vars(client: Any, params: dict[str, Any]) -> dict[str, Any
     Lambda's update_function_configuration replaces the ENTIRE Environment.Variables
     dict. This fetches the current vars first, merges (new values win), and returns
     updated params. If the fetch fails, returns params unchanged.
+
+    Any placeholder value in the new variables (e.g. ${VAR_NAME} or <VAR_NAME>)
+    is skipped so the existing live value is preserved.
     """
     function_name = params.get("FunctionName", "")
     new_vars: dict[str, str] = params["Environment"]["Variables"]
@@ -304,10 +321,30 @@ def _merge_lambda_env_vars(client: Any, params: dict[str, Any]) -> dict[str, Any
         existing_vars: dict[str, str] = (
             current.get("Environment", {}).get("Variables", {})
         )
-        merged = {**existing_vars, **new_vars}   # new_vars overwrite existing
+
+        # Filter out placeholders from new_vars before merging.
+        # We catch predefined tokens (__PRESERVE__), bracket formats, and typical placeholder words.
+        clean_new_vars = {}
+        for k, v in new_vars.items():
+            if isinstance(v, str):
+                v_strip = v.strip()
+                v_lower = v_strip.lower()
+                is_placeholder = (
+                    v_lower == "__preserve__"
+                    or (v_strip.startswith("${") and v_strip.endswith("}"))
+                    or (v_strip.startswith("<") and v_strip.endswith(">"))
+                    or "placeholder" in v_lower
+                    or "preserve" in v_lower
+                )
+                if is_placeholder:
+                    logger.info(f"[AWSExecutor] Ignoring placeholder env var {k}={v} — preserving existing value")
+                    continue
+            clean_new_vars[k] = v
+
+        merged = {**existing_vars, **clean_new_vars}   # new_vars overwrite existing
         logger.info(
             f"[AWSExecutor] Merging env vars for {function_name}: "
-            f"existing={list(existing_vars.keys())} new={list(new_vars.keys())}"
+            f"existing={list(existing_vars.keys())} updated={list(clean_new_vars.keys())}"
         )
         import copy
         merged_params = copy.deepcopy(params)
