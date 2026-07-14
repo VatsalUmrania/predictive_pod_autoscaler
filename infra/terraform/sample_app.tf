@@ -35,9 +35,10 @@ resource "aws_iam_role_policy" "sample_app_policy" {
         Resource = aws_dynamodb_table.sample.arn
       },
       {
-        Effect   = "Allow"
-        Action   = ["sqs:SendMessage", "sqs:ReceiveMessage", "sqs:DeleteMessage"]
-        Resource = [aws_sqs_queue.sample_queue.arn, aws_sqs_queue.sample_dlq.arn]
+        Effect = "Allow"
+        Action = ["sqs:SendMessage", "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
+        # Allow all queues in this account/region — the agent may create new queues as fixes
+        Resource = "arn:aws:sqs:${var.aws_region}:*:${var.project_name}-*"
       },
       {
         Effect   = "Allow"
@@ -75,8 +76,19 @@ resource "aws_lambda_function" "sample_app" {
 
   environment {
     variables = {
+      # Region — MUST match the deployment region.
+      # Without this, boto3 falls back to us-east-1 and fails to find resources.
+      DEFAULT_REGION      = var.aws_region
+
+      # DynamoDB table for the /fail/throttle endpoint
       DYNAMODB_TABLE_NAME = aws_dynamodb_table.sample.name
+
+      # Main SQS queue — /fail/dlq sends messages here;
+      # messages that fail 3x automatically flow to sample_dlq (via redrive policy)
       SQS_QUEUE_URL       = aws_sqs_queue.sample_queue.url
+
+      # DLQ URL — available as context if Lambda needs to reference it directly
+      DLQ_URL             = aws_sqs_queue.sample_dlq.url
     }
   }
 }

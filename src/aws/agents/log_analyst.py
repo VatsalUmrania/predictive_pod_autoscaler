@@ -62,9 +62,28 @@ Your job:
 
 Be SPECIFIC:
 - "AccessDeniedException" → name the exact IAM action and resource ARN
-- "QueueDoesNotExist" → SQS_QUEUE_URL env var is wrong or queue not created
+- "QueueDoesNotExist" → SQS_QUEUE_URL env var missing, wrong, or points to wrong region
 - "Task timed out" → Lambda timeout setting is too low
 - OOM / MemoryError → Lambda memory_size too low
+- "NoSuchBucket", "ResourceNotFoundException", "TableNotFoundException" → resource doesn't exist or wrong region
+
+## Detecting env var / config issues
+You are given the Lambda's current env var KEY NAMES (not values) in the prompt.
+Use this to detect configuration problems:
+
+- If SQS_QUEUE_URL is missing from env vars → the URL was never set → fix: update_function_configuration
+- If DEFAULT_REGION is missing → boto3 will fall back to us-east-1 even if resources are in another region
+  → fix: update_function_configuration to add DEFAULT_REGION = <region from prompt header>
+- If a "QueueDoesNotExist" error occurs AND DEFAULT_REGION is absent from env vars
+  → the queue exists but boto3 is looking in the wrong region
+  → fix: add DEFAULT_REGION, do NOT create a new queue
+- If "QueueDoesNotExist" AND the queue URL looks correct in env vars
+  → the queue was deleted or never created → fix: create_queue + update env var
+
+When you detect a config/env var issue, use action=alert_only and populate suggested_commands
+with the exact update_function_configuration call using the real function name and real region
+from the prompt header. Never guess the region — it is always given at the top.
+
 
 ## Predefined actions (auto-executed if confidence is high)
 | action | when to use | params |
@@ -129,12 +148,19 @@ and Lambda role is nexus-ai-agent-sample-app-role:
 ]
 
 ## CRITICAL RULE: NO PLACEHOLDERS
-Never use <placeholder> syntax in params. The system will REJECT commands with angle-bracket values.
-You will be given the actual function name, IAM role name, region, and account ID in the prompt.
-Use those exact values. If you don't have a required value (e.g. the queue URL), omit that command
-and explain what the user needs to fill in via how_to_fix. An empty suggested_commands is better
-than commands with placeholder values.
+Never use <placeholder> syntax or ${placeholder} syntax in params. The system will REJECT commands containing these formats.
+You will be given the actual function name, IAM role name, region, and account ID in the prompt. Use those exact values.
+Use those exact values. If you don't have a required value (e.g. the queue URL), omit that command and explain what the user needs to fill in via how_to_fix. An empty suggested_commands is better than commands with placeholder values.
 
+Exception: When updating Lambda environment variables with `update_function_configuration`, if there are existing environment variables that you do NOT want to change, you MUST set their values to the exact string `"__PRESERVE__"`. The system will automatically ignore `"__PRESERVE__"` values and keep the current live values.
+Example:
+"Environment": {
+  "Variables": {
+    "DEFAULT_REGION": "ap-south-1",
+    "SQS_QUEUE_URL": "__PRESERVE__",
+    "DYNAMODB_TABLE_NAME": "__PRESERVE__"
+  }
+}
 
 Respond ONLY with valid JSON, no markdown fences:
 {
@@ -259,6 +285,19 @@ def _build_prompt(
         if lambda_ctx.get("env_var_names"):
             lines.append(f"## Env Var Keys: {', '.join(lambda_ctx['env_var_names'])}")
 
+    # Rule-based pre-detection — inject high-confidence findings so the LLM can't miss them
+    detected = _detect_config_issues(function_name, region, log_lines, lambda_ctx)
+    if detected:
+        lines.append("")
+        lines.append("## DETECTED CONFIG ISSUES (high confidence, pre-analyzed):")
+        for finding in detected:
+            lines.append(f"- {finding}")
+        lines.append("")
+        lines.append(
+            "IMPORTANT: The config issues above were detected automatically from live Lambda metadata."
+            " Your suggested_commands MUST fix these specific issues using the exact values provided."
+        )
+
     lines += [
         "",
         "## Raw Error Log Lines:",
@@ -274,6 +313,95 @@ def _build_prompt(
         "Be specific about IAM permissions, missing resources, configuration, or code bugs."
     )
     return "\n".join(lines)
+
+
+def _detect_config_issues(
+    function_name: str,
+    region: str,
+    log_lines: list[str],
+    lambda_ctx: dict[str, Any] | None,
+) -> list[str]:
+    """
+    Rule-based pre-detection of common Lambda configuration problems.
+    Returns a list of human-readable finding strings to inject into the prompt.
+    Each finding is specific and actionable — the LLM only needs to generate the boto3 call.
+
+    Runs BEFORE the LLM so findings are deterministic, not guessed.
+    """
+    findings: list[str] = []
+    if not lambda_ctx:
+        return findings
+
+    env_keys: set[str] = set(lambda_ctx.get("env_var_names", []))
+    account_id = lambda_ctx.get("account_id", "unknown")
+    role_name  = lambda_ctx.get("role_name", "unknown")
+
+    # Join log lines for pattern matching
+    log_text = "\n".join(log_lines).lower()
+
+    # ── Rule 1: QueueDoesNotExist + DEFAULT_REGION missing ───────────────────
+    # Most common: boto3 defaults to us-east-1 when DEFAULT_REGION is absent,
+    # so the SQS client looks in the wrong region even though the queue exists.
+    if (
+        ("queuedoesnotexist" in log_text or "nonexistentqueue" in log_text)
+        and "DEFAULT_REGION" not in env_keys
+    ):
+        findings.append(
+            f"REGION MISMATCH: DEFAULT_REGION is NOT set in Lambda env vars. "
+            f"boto3 is falling back to 'us-east-1' but all resources are in '{region}'. "
+            f"Fix: add DEFAULT_REGION='{region}' via update_function_configuration. "
+            f"Do NOT create a new queue — the queue likely exists in '{region}'."
+        )
+
+    # ── Rule 2: QueueDoesNotExist + SQS_QUEUE_URL missing ────────────────────
+    # The env var that holds the queue URL was never set.
+    if (
+        ("queuedoesnotexist" in log_text or "nonexistentqueue" in log_text)
+        and "SQS_QUEUE_URL" not in env_keys
+        and "DEFAULT_REGION" in env_keys   # region is correct so it's a missing URL issue
+    ):
+        findings.append(
+            f"MISSING ENV VAR: SQS_QUEUE_URL is not set in Lambda env vars. "
+            f"The function has no queue URL to send messages to. "
+            f"Fix: create the SQS queue (if missing) and set SQS_QUEUE_URL in update_function_configuration."
+        )
+
+    # ── Rule 3: AccessDeniedException — extract the exact action from logs ────
+    import re
+    access_denied = re.search(
+        r"not authorized to perform: ([\w:]+) on resource: ([^\s]+)",
+        "\n".join(log_lines),
+        re.IGNORECASE,
+    )
+    if access_denied:
+        iam_action   = access_denied.group(1)
+        resource_arn = access_denied.group(2).rstrip(".")
+        findings.append(
+            f"MISSING IAM PERMISSION: '{iam_action}' on '{resource_arn}'. "
+            f"Fix: add inline policy to role '{role_name}' "
+            f"(account: {account_id}) via iam.put_role_policy."
+        )
+
+    # ── Rule 4: Timeout near the Lambda timeout setting ───────────────────────
+    if "task timed out after" in log_text:
+        configured_timeout = lambda_ctx.get("timeout", 0)
+        findings.append(
+            f"TIMEOUT: Lambda timed out. Current timeout is {configured_timeout}s. "
+            f"Fix: increase timeout via update_function_configuration "
+            f"(consider {min(configured_timeout * 3, 900)}s)."
+        )
+
+    # ── Rule 5: Memory near limit ─────────────────────────────────────────────
+    oom_match = re.search(r"process exited before completing|runtime exited|oom", log_text)
+    if oom_match:
+        configured_memory = lambda_ctx.get("memory", 0)
+        findings.append(
+            f"OOM: Lambda ran out of memory. Current memory is {configured_memory}MB. "
+            f"Fix: increase MemorySize to {min(configured_memory * 2, 10240)}MB "
+            f"via update_function_configuration."
+        )
+
+    return findings
 
 
 def _get_lambda_context(function_name: str, region: str) -> dict[str, Any] | None:
