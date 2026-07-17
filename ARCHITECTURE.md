@@ -64,11 +64,7 @@ respective source tree.
 
 - [src/ppa/operator/](src/ppa/operator/) — Kopf operator entrypoint, state
   machine, predictor, scaler, model bundle, prometheus client, features
-  builder, retraining controller.
-- [src/ppa/model/](src/ppa/model/) — model train, convert, evaluate, and
-  qualification pipeline (Keras → TFLite).
-- [src/ppa/dataflow/](src/ppa/dataflow/) — training-data export and
-  validation; the Airflow / cronjob-driven side of the system.
+  builder.
 - [src/ppa/domain/](src/ppa/domain/) — pure-Python state types and scaling
   invariants. No I/O.
 - [src/ppa/common/](src/ppa/common/) — shared feature spec, types, PromQL
@@ -136,17 +132,16 @@ Kubernetes clusters:
   [deploy/crd.yaml](deploy/crd.yaml) for the source of truth.
 - The `ppa operator build|deploy` lifecycle: building the operator image,
   applying the CRD, RBAC, and operator deployment, and watching rollout.
-- The `ppa add|train|run|push|status|init|...` commands: managing PP
-  resources, training-data export, model conversion, deployment, and
-  operational inspection.
+- The `ppa model push` command (`ppa` CLI): delivering a baked TFLite
+  bundle + training CSV to the operator's `ppa-models` PVC and regenerating
+  the feature scalers in a loader pod, plus operational inspection.
 - The reconciliation loop: given a Prometheus metric and a PP spec, the
   operator must produce a target replica count within the configured
   horizon, respecting cooldown, min/max bounds, and override intervals.
-- The retraining flow: a Kubernetes CronJob that exports fresh training
-  data, validates it via [src/ppa/dataflow/validate_training_data.py](src/ppa/dataflow/validate_training_data.py),
-  retrains via [src/ppa/model/pipeline.py](src/ppa/model/pipeline.py),
-  converts to TFLite, qualifies via [src/ppa/model/model_qualifier.py](src/ppa/model/model_qualifier.py),
-  and rolls the new model forward under cooldown.
+- Drift-triggered retraining: concept drift detected by the predictor
+  ([src/ppa/operator/predictor.py](src/ppa/operator/predictor.py)) surfaces
+  `retrainingRecommended` in CR status; the actual retrain/export/qualification
+  runs in the centralized model plane, not in the PPA operator image.
 - NEXUS governance: failure signals detected by any of the seven agents
   must lead to a governed ActionLadder outcome — never an out-of-band
   write to a workload owned by PPA.
@@ -349,49 +344,43 @@ The prediction layer has three owners:
 - [src/ppa/common/feature_spec.py](src/ppa/common/feature_spec.py) —
   column names, ordering, schema validation. Schema-identical across
   train, export, and inference.
-- [src/ppa/model/pipeline.py](src/ppa/model/pipeline.py) — the training
-  pipeline. Reads training data, fits the LSTM, emits a Keras model.
-- [src/ppa/model/convert.py](src/ppa/model/convert.py) — Keras → TFLite
-  conversion.
-- [src/ppa/model/model_qualifier.py](src/ppa/model/model_qualifier.py) —
-  acceptance gating: new TFLite model must match the champion within a
-  configured tolerance before promotion.
-- [src/ppa/operator/predictor.py](src/ppa/operator/predictor.py) —
-  runtime inference. Feature builder + TFLite call + postprocess to
-  replica count.
+- [src/ppa/operator/predictor.py](src/ppa/operator/predictor.py) — runtime
+  inference. Loads the TFLite bundle + feature scalers, runs the LSTM call,
+  and postprocesses the normalized output to a predicted req/s.
+- [src/ppa/operator/model_bundle.py](src/ppa/operator/model_bundle.py) —
+  versioned TFLite bundle resolution (model/scaler/metadata + checksums),
+  decoupled from the training pipeline that produced the bundle.
 
 The data path is:
 
 ```mermaid
 flowchart LR
-    Prom[Prometheus] -->|range query| Export[export_training_data.py]
-    Export -->|parquet| Validate[validate_training_data.py]
-    Validate -->|features.parquet| Train[pipeline.py]
-    Train -->|model.keras| Convert[convert.py]
-    Convert -->|model.tflite| Qualify[model_qualifier.py]
-    Qualify -->|promote| Champion[(champion tflite)]
-    Champion --> Predictor[operator/predictor.py]
-    Verify[verify_features.py] -.-> Export
+    Prom[Prometheus] -->|range query| Features[operator/features.py]
+    Features -->|14-col vector| History[predictor history deque]
+    History -->|60-step window| Predictor[operator/predictor.py]
+    Bundle[(TFLite bundle on PVC)] --> Predictor
+    Predictor -->|predicted req/s| Scaler[operator/scaler.py]
+    Bundle -->|delivered by| Push[ppa model push]
 ```
+
+The pipeline that produces a TFLite bundle (data export → LSTM train → Keras
+→ TFLite → qualification) is no longer part of the PPA image; the bundle is
+baked in the centralized model plane and delivered to the `ppa-models` PVC.
 
 Critical rules:
 
 - Feature columns are immutable at runtime. Adding a feature is a
-  coordinated change in `ppa/common/feature_spec.py`, training-data
-  export, model training, and predictor feature builder.
-- TFLite is the only model format the operator accepts. Conversion is
-  offline; the operator never invokes the Keras runtime.
-- The qualifier gates promotion. Champion replacement only happens when
-  the candidate passes the configured tolerance; failure leaves the
-  existing champion in place and surfaces the rejection in the model
-  registry.
-- Retraining runs as a Kubernetes CronJob
-  ([src/ppa/operator/retraining/](src/ppa/operator/retraining/)). The
-  controller coordinates with the CronJob and rolls champion forward
-  under the same cooldown as live decisions.
-- Verify step ([src/ppa/dataflow/verify_features.py](src/ppa/dataflow/verify_features.py))
-  is the smoke test that exported data matches the feature spec; it is
-  invoked both in CI and as a pre-train gate.
+  coordinated change in `ppa/common/feature_spec.py`, the centralized
+  training plane, and the predictor feature builder.
+- TFLite is the only model format the operator accepts. The operator never
+  invokes the Keras runtime; it loads the baked bundle from the PVC.
+- Champion selection, retrain, export, and qualification live in the
+  centralized model plane — not in the PPA image. `resolve_model_bundle`
+  picks up a new bundle version on change, under the same cooldown as live
+  scaling decisions.
+- Concept drift surfaced by the predictor advertises
+  `retrainingRecommended` in CR status; the retrain itself is triggered
+  from the centralized model plane, not from a CronJob inside PPA.
 
 ## NEXUS Agent And Governance Architecture
 
@@ -729,22 +718,18 @@ push.
 
 1. Update `QUERIED_FEATURES` in
    [src/ppa/common/feature_spec.py](src/ppa/common/feature_spec.py).
-2. Update training-data export in
-   [src/ppa/dataflow/export_training_data.py](src/ppa/dataflow/export_training_data.py)
-   (PromQL → DataFrame column).
-3. Update validate + verify in
-   [src/ppa/dataflow/validate_training_data.py](src/ppa/dataflow/validate_training_data.py)
-   and
-   [src/ppa/dataflow/verify_features.py](src/ppa/dataflow/verify_features.py).
-4. Update training in
-   [src/ppa/model/pipeline.py](src/ppa/model/pipeline.py).
-5. Update runtime feature builder in
-   [src/ppa/operator/features.py](src/ppa/operator/features.py).
-6. Retrain + qualify + promote via
-   [`ppa train`](src/ppa/cli/commands/train.py).
-7. Add column-level coverage test in
-   [tests/unit/](tests/unit/) and verify-features test in
-   [tests/integration/](tests/integration/).
+2. Update the centralized training pipeline so the new PromQL metric maps
+   to a matched DataFrame column (export/train/qualify live outside the
+   PPA image).
+3. Update the runtime feature builder in
+   [src/ppa/operator/features.py](src/ppa/operator/features.py) so
+   inference produces a vector in the same column order.
+4. Regenerate the feature scalers on the PVC via `ppa model push` so they
+   match the new column count.
+5. Produce a new TFLite bundle in the centralized model plane and deliver
+   it with `ppa model push`.
+6. Add column-level coverage tests in
+   [tests/unit/](tests/unit/).
 
 ### Add A CLI Subcommand
 
@@ -774,12 +759,9 @@ worked example) must:
 2. Define both old and new field names in
    [`feature_spec.py`](src/ppa/common/feature_spec.py) until all in-cluster
    PPs are migrated.
-3. Update the data export, training, and inference paths to read both
-   shapes.
-4. Update
-   [`verify_features.py`](src/ppa/dataflow/verify_features.py) to assert
-   the dual-shape transition is safe.
-5. Document the migration window in
+3. Update the centralized training pipeline and the inference path
+   (`src/ppa/operator/`) to read both shapes during the migration window.
+4. Document the migration window in
    [docs/](docs/).
 
 ## Maintenance Rules For This Document

@@ -129,17 +129,15 @@ def _apply_scaling(cr_name, cr_ns, config, state, desired, current, patch):
 
 ### Model Training {#model-training}
 
-**Source:** `src/ppa/model/`
+**Source:** centralized model plane (external to the PPA image; no longer in `src/ppa/`)
 
 ```
-Historical Data → Feature Extraction → Train LSTM → Convert to TFLite → Upload
+Historical Data → Feature Extraction → Train LSTM → Convert to TFLite → Deliver
 ```
 
-**Training pipeline:**
-1. Extract 60-step sliding windows from Prometheus
-2. Train LSTM with 10-minute lookahead target
-3. Convert to TensorFlow Lite (`.tflite`)
-4. Upload to model registry
+The LSTM training, Keras→TFLite conversion, and qualification pipeline run
+in the centralized model plane. PPA consumes only the baked `.tflite` bundle,
+delivered to the `ppa-models` PVC by `ppa model push`.
 
 ### Inference {#inference}
 

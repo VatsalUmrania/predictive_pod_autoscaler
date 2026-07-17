@@ -158,9 +158,7 @@ class GeminiProvider(LLMProvider):
 
             self._client = genai.Client(api_key=self._api_key)
         except ImportError:
-            logger.warning(
-                "[LLM] google-genai not installed: pip install google-genai"
-            )
+            logger.warning("[LLM] google-genai not installed: pip install google-genai")
             return False
         except Exception as exc:
             logger.warning(f"[LLM] Gemini init failed: {exc}")
@@ -173,6 +171,7 @@ class GeminiProvider(LLMProvider):
         if not self._ensure_client():
             raise RuntimeError("Gemini client not available")
         from google.genai import types
+
         response = self._client.models.generate_content(
             model=self._model_name,
             contents=prompt,
@@ -181,7 +180,7 @@ class GeminiProvider(LLMProvider):
                 temperature=0.2,
                 max_output_tokens=512,
                 response_mime_type="application/json",
-            )
+            ),
         )
         return response.text.strip()
 
@@ -309,9 +308,7 @@ class AnthropicProvider(LLMProvider):
             system=SYSTEM_INSTRUCTION,
             messages=[{"role": "user", "content": prompt}],
         )
-        text_block = next(
-            (blk for blk in message.content if blk.type == "text"), None
-        )
+        text_block = next((blk for blk in message.content if blk.type == "text"), None)
         if text_block is None:
             raise RuntimeError("No text block found in Claude response")
         return text_block.text.strip()

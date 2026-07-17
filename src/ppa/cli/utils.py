@@ -8,7 +8,9 @@ from rich.console import Console
 
 from ppa.config import PPA_THEME
 
-console = Console(theme=PPA_THEME, highlight=False) if PPA_THEME else Console(highlight=False)
+console = (
+    Console(theme=PPA_THEME, highlight=False) if PPA_THEME else Console(highlight=False)
+)
 
 
 def success(msg: str) -> None:

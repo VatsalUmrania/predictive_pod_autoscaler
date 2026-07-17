@@ -199,7 +199,7 @@ kubectl logs -l app=ppa-operator -f
 | Prometheus unreachable | `circuit breaker tripped` | Verify `PPA_PROMETHEUS_URL` and network connectivity |
 | Warmup period too long | 30 min before scaling | History window requires 60 steps (30 min at 30s interval) |
 | Scale oscillation | Frequent up/down scaling | Increase `stabilizationSteps` or adjust `safetyFactor` |
-| Prediction error high | `concept drift detected` | Model needs retraining (`ppa model retrain --app {app}`) |
+| Prediction error high | `concept drift detected` | Retrain in the centralized model plane, then deliver the new bundle with `ppa model push` |
 
 ### Diagnostic Commands {#diagnostics}
 

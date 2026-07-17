@@ -604,54 +604,6 @@ class Predictor:
             "checked": True,
         }
 
-    def should_trigger_retraining(self, drift_severity: str, error_pct: float) -> dict:
-        """
-        FIX (PR#16): Determine if retraining should be triggered based on drift severity.
-
-        Returns: dict with 'trigger', 'reason', 'suggested_action'
-        """
-        current_time = time.time()
-
-        # Track severe drift duration
-        if not hasattr(self, "_severe_drift_start_time"):
-            self._severe_drift_start_time = None
-            self._retraining_triggered = False
-
-        if drift_severity == "severe" and error_pct > 50:
-            if self._severe_drift_start_time is None:
-                self._severe_drift_start_time = current_time
-                logger.info("Severe drift detected, starting 1-hour retraining timer")
-
-            # Check if severe drift has persisted for >1 hour
-            drift_duration = current_time - self._severe_drift_start_time
-            if drift_duration > 3600 and not self._retraining_triggered:  # 1 hour
-                self._retraining_triggered = True
-                return {
-                    "trigger": True,
-                    "reason": f"Severe drift ({error_pct:.1f}%) persisted for {drift_duration / 60:.0f} minutes",
-                    "suggested_action": "trigger_retraining_job",
-                    "drift_duration_minutes": drift_duration / 60,
-                }
-        else:
-            # Reset timer if drift clears
-            if self._severe_drift_start_time is not None:
-                logger.info(
-                    f"Drift cleared after {(current_time - self._severe_drift_start_time) / 60:.0f} minutes"
-                )
-            self._severe_drift_start_time = None
-
-        return {
-            "trigger": False,
-            "reason": "No sustained severe drift detected",
-            "suggested_action": "continue_monitoring",
-        }
-
-    def reset_retraining_flag(self):
-        """Call after retraining job completes successfully."""
-        self._retraining_triggered = False
-        self._severe_drift_start_time = None
-        logger.info("Retraining flag reset - monitoring resumed")
-
 
 def _load_ai_edge_litert_interpreter():
     """Load the LiteRT interpreter from the most common import locations."""
