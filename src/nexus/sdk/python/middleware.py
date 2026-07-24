@@ -90,7 +90,7 @@ class SelfHealMiddleware:
                 )
                 # Fire-and-forget — does not block the response
                 try:
-                    asyncio.get_event_loop().create_task(
+                    asyncio.get_running_loop().create_task(
                         self._emit(
                             path,
                             method,

@@ -498,10 +498,35 @@ async def approve_action(action_id: str) -> dict[str, str]:
     orc = _require(context.orchestrator, "NexusOrchestrator")
     try:
         ladder = orc.executor.ladder
-        queue = ladder.human_queue
-        ok = await queue.approve(action_id)
+        queue = ladder.approval_queue
+        ok = queue.approve(action_id)
         if ok:
+            if context.audit_trail:
+                await context.audit_trail.record_approval(action_id, "api_user")
             return {"status": "approved", "action_id": action_id}
+        raise HTTPException(
+            status_code=404, detail=f"Action {action_id!r} not found in approval queue"
+        )
+    except AttributeError:
+        raise HTTPException(
+            status_code=503, detail="HumanApprovalQueue not accessible"
+        ) from None
+
+
+@app.post("/reject/{action_id}", tags=["governance"])
+async def reject_action(action_id: str) -> dict[str, str]:
+    """
+    Reject a pending human-review action.
+    """
+    orc = _require(context.orchestrator, "NexusOrchestrator")
+    try:
+        ladder = orc.executor.ladder
+        queue = ladder.approval_queue
+        ok = queue.reject(action_id)
+        if ok:
+            if context.audit_trail:
+                await context.audit_trail.record_rejection(action_id, "api_user")
+            return {"status": "rejected", "action_id": action_id}
         raise HTTPException(
             status_code=404, detail=f"Action {action_id!r} not found in approval queue"
         )
@@ -516,7 +541,7 @@ async def pending_approvals() -> list[dict[str, Any]]:
     """List all actions currently waiting in the HumanApprovalQueue."""
     orc = _require(context.orchestrator, "NexusOrchestrator")
     try:
-        queue = orc.executor.ladder.human_queue
+        queue = orc.executor.ladder.approval_queue
         return queue.pending_list()
     except AttributeError:
         return []

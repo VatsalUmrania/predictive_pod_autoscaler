@@ -89,7 +89,7 @@ class K8sAgent(BaseAgent):
 
     async def on_start(self) -> None:
         """Initialize Kubernetes API clients."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._init_k8s)
         logger.info(
             f"[K8sAgent] Watching namespaces: "
@@ -354,7 +354,7 @@ class K8sAgent(BaseAgent):
         events: list[IncidentEvent] = []
         self._emitted_this_cycle.clear()
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         # ── Pods ──────────────────────────────────────────────────────────────
         if self.namespaces:

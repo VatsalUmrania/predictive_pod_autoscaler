@@ -484,7 +484,7 @@ class GitAgent(BaseAgent):
             )
 
         # 3. .env contract validation (CPU-bound — run in thread pool)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         validation = await loop.run_in_executor(None, self.validator.validate)
 
         if not validation["passed"]:

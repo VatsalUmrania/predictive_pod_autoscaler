@@ -201,6 +201,26 @@ class AuditTrail:
             )
             await self._db.commit()
 
+    async def record_approval(self, approval_id: str, username: str) -> str:
+        """Record an explicit human approval."""
+        return await self.write(
+            triggered_by=f"human:{username}",
+            runbook_id="system_approval",
+            execution_outcome="approved",
+            target=approval_id,
+            action_id=f"approve_{approval_id}"
+        )
+
+    async def record_rejection(self, approval_id: str, username: str) -> str:
+        """Record an explicit human rejection."""
+        return await self.write(
+            triggered_by=f"human:{username}",
+            runbook_id="system_rejection",
+            execution_outcome="rejected",
+            target=approval_id,
+            action_id=f"reject_{approval_id}"
+        )
+
     # ── Query ─────────────────────────────────────────────────────────────────
 
     async def query_by_incident(self, incident_id: str) -> list[dict[str, Any]]:

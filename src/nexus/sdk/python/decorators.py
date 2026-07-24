@@ -65,17 +65,17 @@ def critical(
         }
 
         # Register with NEXUS (fire-and-forget)
-        (
-            asyncio.get_event_loop().call_soon_threadsafe(
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon_threadsafe(
                 lambda: asyncio.create_task(
                     _register_critical(
                         route_name, _CRITICAL_ROUTES[route_name], token, nexus_url
                     )
                 )
             )
-            if asyncio.get_event_loop().is_running()
-            else None
-        )
+        except RuntimeError:
+            pass
 
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):

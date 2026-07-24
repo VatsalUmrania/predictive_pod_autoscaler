@@ -321,6 +321,29 @@ class NATSClient:
     async def publish_incident(self, event: IncidentEvent) -> None:
         await self.publish(event)
 
+    async def publish_raw(self, subject: str, payload: dict) -> None:
+        """
+        Publish a raw dict payload to a non-IncidentEvent subject on the bus.
+
+        Counterpart to ``subscribe_raw()``. Used by governance/notifications
+        for events that are not IncidentEvents — e.g. ``nexus.approvals.required``
+        to alert the Notifier of a pending L3 human-approval action.
+
+        The subject must be covered by an existing JetStream stream binding
+        (``nexus.>`` is bound to NEXUS_INCIDENTS by default).
+
+        Args:
+            subject: Full NATS subject, e.g. ``"nexus.approvals.required"``.
+            payload: JSON-serializable dict.
+        """
+        if not self._js:
+            raise RuntimeError("NATSClient not connected. Call connect() first.")
+        import json
+
+        data = json.dumps(payload).encode("utf-8")
+        ack = await self._js.publish(subject, data, stream=NEXUS_STREAM)
+        logger.debug(f"[NATS] Published raw {subject} seq={ack.seq}")
+
     # ── Subscribe ─────────────────────────────────────────────────────────────
 
     async def subscribe(

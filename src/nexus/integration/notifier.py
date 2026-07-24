@@ -202,6 +202,64 @@ class Notifier:
             f"[Notifier] SRE escalation sent for app='{app_name}' failures={failed_attempts}"
         )
 
+    async def notify_approval_required(
+        self,
+        app_name: str,
+        approval_id: str,
+        runbook_id: str,
+        target: str,
+        healing_level: int,
+        confidence: float,
+    ) -> None:
+        """Send a notification when an L3 action requires human approval."""
+        webhook = self._get_webhook(app_name)
+        if not webhook:
+            return
+
+        payload = {
+            "attachments": [
+                {
+                    "color": "#ff9900",
+                    "fallback": f"NEXUS L{healing_level} Action Requires Approval: {runbook_id} for {target}",
+                    "blocks": [
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"*✋ NEXUS L{healing_level} Action Requires Approval*",
+                            },
+                        },
+                        {
+                            "type": "section",
+                            "fields": [
+                                {
+                                    "type": "mrkdwn",
+                                    "text": f"*Runbook:*\n`{runbook_id}`",
+                                },
+                                {"type": "mrkdwn", "text": f"*Target:*\n`{target}`"},
+                                {
+                                    "type": "mrkdwn",
+                                    "text": f"*Confidence:*\n`{confidence:.2f}`",
+                                },
+                                {
+                                    "type": "mrkdwn",
+                                    "text": f"*Approval ID:*\n`{approval_id}`",
+                                },
+                            ],
+                        },
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"To approve this action, run:\n`nexus approve {approval_id}`",
+                            },
+                        },
+                    ],
+                }
+            ]
+        }
+        await self._send(webhook, payload, app_name)
+
     # ── Policy helpers ────────────────────────────────────────────────────────
 
     def _get_webhook(self, app_name: str) -> str | None:
@@ -293,11 +351,15 @@ class Notifier:
         async def _prescale_wrapper(data: dict, subject: str) -> None:
             await self._on_prescale_message(data)
 
+        async def _approval_wrapper(data: dict, subject: str) -> None:
+            await self._on_approval_message(data)
+
         # Retry both subscriptions until both succeed, with capped backoff
         action_ok = False
         prescale_ok = False
+        approval_ok = False
         backoff = 1.0
-        while self._running and not (action_ok and prescale_ok):
+        while self._running and not (action_ok and prescale_ok and approval_ok):
             if not action_ok:
                 try:
                     await nc.subscribe_raw("nexus.actions.*", handler=_action_wrapper)
@@ -314,12 +376,23 @@ class Notifier:
                     logger.warning(
                         f"[Notifier] nexus.prescale.* subscribe retry: {exc}"
                     )
-            if not (action_ok and prescale_ok):
+            if not approval_ok:
+                try:
+                    await nc.subscribe_raw(
+                        "nexus.approvals.*", handler=_approval_wrapper
+                    )
+                    approval_ok = True
+                except Exception as exc:
+                    logger.warning(
+                        f"[Notifier] nexus.approvals.* subscribe retry: {exc}"
+                    )
+
+            if not (action_ok and prescale_ok and approval_ok):
                 await asyncio.sleep(min(backoff, 30.0))
                 backoff *= 2
             else:
                 logger.info(
-                    "[Notifier] Subscribed to NATS nexus.actions.* + nexus.prescale.*"
+                    "[Notifier] Subscribed to NATS nexus.actions.* + nexus.prescale.* + nexus.approvals.*"
                 )
 
         # Park until stopped. If the NATS connection is severed the
@@ -354,3 +427,16 @@ class Notifier:
             )
         except Exception as exc:
             logger.debug(f"[Notifier] prescale message error: {exc}")
+
+    async def _on_approval_message(self, data: dict) -> None:
+        try:
+            await self.notify_approval_required(
+                app_name=data.get("app", "unknown"),
+                approval_id=data.get("approval_id", ""),
+                runbook_id=data.get("runbook_id", ""),
+                target=data.get("target", ""),
+                healing_level=data.get("healing_level", 3),
+                confidence=data.get("confidence", 0.0),
+            )
+        except Exception as exc:
+            logger.debug(f"[Notifier] approval message error: {exc}")

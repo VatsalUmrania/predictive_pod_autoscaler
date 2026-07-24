@@ -145,10 +145,11 @@ class HumanApprovalQueue:
     and PagerDuty webhook so approvals can arrive from any channel.
     """
 
-    def __init__(self):
+    def __init__(self, nats_client=None):
         self._pending: dict[str, PendingApproval] = {}
         self._approved: set[str] = set()
         self._rejected: set[str] = set()
+        self._nats = nats_client
 
     def enqueue(
         self,
@@ -181,6 +182,30 @@ class HumanApprovalQueue:
             f"runbook={runbook_id} target={target} confidence={confidence:.2f}\n"
             f"  → Run: nexus approve {approval_id}  OR  nexus reject {approval_id}"
         )
+
+        if self._nats:
+            import asyncio
+
+            try:
+                # Fire and forget event to trigger Slack webhook
+                asyncio.get_running_loop().create_task(
+                    self._nats.publish_raw(
+                        "nexus.approvals.required",
+                        {
+                            "approval_id": approval_id,
+                            "runbook_id": runbook_id,
+                            "action_type": action_type,
+                            "target": target,
+                            "incident_id": incident_id,
+                            "healing_level": healing_level,
+                            "confidence": confidence,
+                            "app": (context or {}).get("namespace", "unknown"),
+                        },
+                    )
+                )
+            except RuntimeError:
+                pass
+
         return approval_id
 
     def approve(self, approval_id: str) -> bool:

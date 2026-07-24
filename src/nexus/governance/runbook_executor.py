@@ -633,7 +633,7 @@ def build_executor(
     from nexus.governance.rollback_registry import RollbackRegistry
 
     cooldown = CooldownStore(redis_url=redis_url)
-    approval = HumanApprovalQueue()
+    approval = HumanApprovalQueue(nats_client=nats_client)
     cb = GovernanceCircuitBreaker(failure_threshold=3)
     policy = PolicyEngine(opa_url=opa_url)
     ladder = ActionLadder(policy, cooldown, approval, cb)

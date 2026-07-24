@@ -47,7 +47,9 @@ async def test_create_wires_all_components():
 
     mock_agent_manager = MagicMock()
     mock_agent_manager.start = AsyncMock()
-    mock_agent_manager.stop = MagicMock()
+    mock_agent_manager.stop = (
+        AsyncMock()
+    )  # NexusServer.stop() awaits agent_manager.stop()
     mock_agent_manager._tasks = []
 
     mock_notifier = MagicMock()
@@ -323,7 +325,9 @@ async def test_stop_cleans_up_all_subsystems():
     mock_prescaler.subscribe_to_ppa_predictions = AsyncMock()
 
     mock_agent_manager = MagicMock()
-    mock_agent_manager.stop = MagicMock()
+    mock_agent_manager.stop = (
+        AsyncMock()
+    )  # NexusServer.stop() awaits agent_manager.stop()
     mock_agent_manager._tasks = []
 
     mock_notifier = MagicMock()

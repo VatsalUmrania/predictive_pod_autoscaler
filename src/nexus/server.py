@@ -147,7 +147,7 @@ class NexusServer:
         ladder = ActionLadder(
             policy_engine=PolicyEngine(opa_url=opa_url),
             cooldown_store=CooldownStore(redis_url=redis_url),
-            approval_queue=HumanApprovalQueue(),
+            approval_queue=HumanApprovalQueue(nats_client=nats),
             governance_cb=GovernanceCircuitBreaker(
                 failure_threshold=3,
                 nats_client=nats,
@@ -213,7 +213,13 @@ class NexusServer:
             prometheus_url=prometheus_url,
         )
 
-        rca_engine = RCAEngine(api_key=gemini_api_key)
+        # ── Learning plane stores (must be initialized before reasoning/feedback) ──
+        outcome_store = OutcomeStore(db_path=audit_db_path)
+        await outcome_store.connect()
+        knowledge_base = KnowledgeBase(db_path=knowledge_db_path)
+        await knowledge_base.initialize()
+
+        rca_engine = RCAEngine(api_key=gemini_api_key, model=None, knowledge_base=knowledge_base)
         confidence_scorer = ConfidenceScorer()
         correlator = EventCorrelator()
 
@@ -244,14 +250,8 @@ class NexusServer:
         notifier = Notifier()
         notifier.start_background(nats)  # returns None; _listen loop is internal
 
-        # ── Learning plane: OutcomeStore + KnowledgeBase + FeedbackLoop ──────
-        # Open OutcomeStore + KnowledgeBase ONCE and share between FeedbackLoop and
-        # NexusContext — earlier opening them twice led to two SQLite connections
-        # racing on the same database file.
-        outcome_store = OutcomeStore(db_path=audit_db_path)
-        await outcome_store.connect()
-        knowledge_base = KnowledgeBase(db_path=knowledge_db_path)
-        await knowledge_base.initialize()
+        # ── Learning plane: FeedbackLoop ──────
+        # OutcomeStore and KnowledgeBase are passed in from above.
 
         feedback_loop = await build_feedback_loop(
             confidence_scorer=confidence_scorer,
@@ -313,8 +313,9 @@ class NexusServer:
                 ).serve(),
                 name="status-api",
             ),
-            *self.agent_manager._tasks,  # agent run-loop handles
         ]
+        if self.agent_manager._monitor_task:
+            self._tasks.append(self.agent_manager._monitor_task)
 
     async def stop(self) -> None:
         """
@@ -325,7 +326,7 @@ class NexusServer:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks = []
 
-        self.agent_manager.stop()
+        await self.agent_manager.stop()
         await self.outcome_tracker.stop()
         if self.feedback_loop is not None:
             await self.feedback_loop.stop()

@@ -124,7 +124,7 @@ class ConfigAgent(BaseAgent):
     async def on_start(self) -> None:
         import asyncio
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._init_k8s)
 
     async def on_stop(self) -> None:
@@ -323,7 +323,7 @@ class ConfigAgent(BaseAgent):
     async def sense(self) -> list[IncidentEvent]:
         import asyncio
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         events: list[IncidentEvent] = []
 
         # IaC drift (file I/O + K8s API — run in thread)

@@ -158,7 +158,7 @@ class NetworkAgent(BaseAgent):
         Resolve hostname via getaddrinfo.
         Returns latency in ms, or None on failure.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             start = time.monotonic()
             await asyncio.wait_for(
@@ -262,7 +262,7 @@ class NetworkAgent(BaseAgent):
     # ── Service discovery refresh ─────────────────────────────────────────────
 
     async def _refresh_services(self) -> None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self._service_hostnames = await loop.run_in_executor(
             None, discover_k8s_service_hostnames, self.namespaces
         )

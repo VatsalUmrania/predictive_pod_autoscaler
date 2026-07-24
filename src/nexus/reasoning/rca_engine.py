@@ -567,8 +567,13 @@ Required schema:
 """
 
 
-def _build_gemini_prompt(cluster: IncidentCluster) -> str:
-    return cluster.to_llm_context()
+def _build_gemini_prompt(
+    cluster: IncidentCluster, historical_runbook: str | None = None
+) -> str:
+    base = cluster.to_llm_context()
+    if historical_runbook:
+        base += f"\n\nHistorical Note: In the past, the runbook '{historical_runbook}' was successfully used for this exact combination of incident signals. Strongly consider it if it fits the current context."
+    return base
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -594,13 +599,15 @@ class RCAEngine:
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = "gemini",
+        model: str = "gemini-2.5-flash",
         timeout_s: float = 10.0,
         use_fallback: bool = True,
+        knowledge_base: Any = None,
     ):
         # Legacy compat: NEXUS_GEMINI_API_KEY still works for Gemini provider
         self._timeout_s = float(os.getenv("NEXUS_RCA_TIMEOUT_S", str(timeout_s)))
         self._use_fallback = use_fallback
+        self._knowledge_base = knowledge_base
         self._llm_calls = 0
         self._llm_errors = 0
 
@@ -616,9 +623,19 @@ class RCAEngine:
         Tries the configured LLM first; falls back to rule-based on any failure.
         Never raises — always returns a valid RCAResult.
         """
+        historical_runbook = None
+        if self._knowledge_base:
+            historical_runbook = (
+                await self._knowledge_base.get_best_runbook_for_pattern(
+                    cluster.signal_types
+                )
+            )
+
         if self._provider.is_available():
             try:
-                prompt = _build_gemini_prompt(cluster)  # prompt works for all LLMs
+                prompt = _build_gemini_prompt(
+                    cluster, historical_runbook=historical_runbook
+                )
                 raw_text = await asyncio.wait_for(
                     self._provider.complete(prompt),
                     timeout=self._timeout_s,
@@ -634,16 +651,45 @@ class RCAEngine:
                         f"conf={result.confidence:.2f} runbook={result.runbook_id}"
                     )
                     return result
-            except asyncio.TimeoutError:
+            except (asyncio.TimeoutError, Exception) as exc:
                 self._llm_errors += 1
                 logger.warning(
-                    f"[RCAEngine] {self._provider.name} timeout ({self._timeout_s}s) — using fallback"
+                    f"[RCAEngine] {self._provider.name} error: {exc} — trying fallback"
                 )
-            except Exception as exc:
-                self._llm_errors += 1
-                logger.warning(
-                    f"[RCAEngine] {self._provider.name} error: {exc} — using fallback"
-                )
+
+                # OpenAI Fallback
+                if self._provider.name == "gemini" and os.getenv(
+                    "NEXUS_OPENAI_API_KEY"
+                ):
+                    try:
+                        logger.info("[RCAEngine] Falling back to OpenAI provider")
+                        from nexus.reasoning.llm_provider import OpenAIProvider
+
+                        openai_provider = OpenAIProvider(
+                            api_key=os.getenv("NEXUS_OPENAI_API_KEY")
+                        )
+                        prompt = _build_gemini_prompt(
+                            cluster, historical_runbook=historical_runbook
+                        )
+                        raw_text = await asyncio.wait_for(
+                            openai_provider.complete(prompt),
+                            timeout=self._timeout_s,
+                        )
+                        self._llm_calls += 1
+                        result = self._parse_response(raw_text)
+                        if result:
+                            result.source = "openai"
+                            logger.info(
+                                f"[RCAEngine] OPENAI RCA: "
+                                f"class={result.failure_class} L{result.healing_level} "
+                                f"conf={result.confidence:.2f} runbook={result.runbook_id}"
+                            )
+                            return result
+                    except Exception as fallback_exc:
+                        self._llm_errors += 1
+                        logger.warning(
+                            f"[RCAEngine] OpenAI fallback error: {fallback_exc} — using rule-based fallback"
+                        )
 
         # Rule-based fallback
         result = _rule_based_rca(cluster)
