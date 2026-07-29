@@ -45,12 +45,7 @@ from nexus.bus.nats_client import NATSClient
 
 logger = logging.getLogger(__name__)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # K8s Service discovery
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def discover_k8s_service_hostnames(namespaces: list[str] | None = None) -> list[str]:
     """
     Return a list of DNS names for all Kubernetes Services in the given namespaces.
@@ -92,12 +87,7 @@ def discover_k8s_service_hostnames(namespaces: list[str] | None = None) -> list[
 
     return hostnames
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Network Agent
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class NetworkAgent(BaseAgent):
     """
     Synthetic network prober for DNS and HTTP inter-service connectivity.

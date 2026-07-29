@@ -44,10 +44,7 @@ from nexus.reasoning.incident_cluster import IncidentCluster
 
 logger = logging.getLogger(__name__)
 
-# ──────────────────────────────────────────────────────────────────────────────
 # RCA Result
-# ──────────────────────────────────────────────────────────────────────────────
-
 VALID_FAILURE_CLASSES = frozenset(
     {
         "bad_deploy",
@@ -60,7 +57,6 @@ VALID_FAILURE_CLASSES = frozenset(
 )
 
 VALID_HEALING_LEVELS = (0, 1, 2, 3)
-
 
 @dataclass
 class RCAResult:
@@ -101,11 +97,7 @@ class RCAResult:
             f"src={self.source})"
         )
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Rule-based fallback
-# ──────────────────────────────────────────────────────────────────────────────
-
 # Rules are (required_signals, partial_ok, result_template)
 # required_signals ⊆ cluster.signal_types for the rule to match.
 # partial_ok=True means ANY signal in the set triggers the rule (OR match).
@@ -113,7 +105,7 @@ class RCAResult:
 # Rules are evaluated top-to-bottom; first match wins.
 
 _RULES: list[tuple[frozenset[str], bool, dict[str, Any]]] = [
-    # ── Highest confidence first ───────────────────────────────────────────────
+    # Highest confidence first
     # 1. ENV contract violation — deterministic, always L0 block
     (
         frozenset({"env_contract_violation"}),
@@ -372,7 +364,7 @@ _RULES: list[tuple[frozenset[str], bool, dict[str, Any]]] = [
             "Increasing memory 50% is the standard first response.",
         },
     ),
-    # ── AWS SQS ────────────────────────────────────────────────────────────────
+    # AWS SQS
     # 18. SQS DLQ depth high
     (
         frozenset({"sqs_dlq_depth_high"}),
@@ -403,7 +395,7 @@ _RULES: list[tuple[frozenset[str], bool, dict[str, Any]]] = [
             "or scaling behind. Alert to investigate.",
         },
     ),
-    # ── AWS DynamoDB ───────────────────────────────────────────────────────────
+    # AWS DynamoDB
     # 20. DynamoDB read throttle
     (
         frozenset({"dynamo_throttle_read"}),
@@ -448,7 +440,7 @@ _RULES: list[tuple[frozenset[str], bool, dict[str, Any]]] = [
             "investigation and potential AWS Support case.",
         },
     ),
-    # ── AWS API Gateway ────────────────────────────────────────────────────────
+    # AWS API Gateway
     # 23. API GW 5XX spike + Lambda error rate
     (
         frozenset({"apigw_5xx_spike", "lambda_error_rate_high"}),
@@ -480,7 +472,6 @@ _RULES: list[tuple[frozenset[str], bool, dict[str, Any]]] = [
         },
     ),
 ]
-
 
 def _rule_based_rca(cluster: IncidentCluster) -> RCAResult:
     """
@@ -518,55 +509,7 @@ def _rule_based_rca(cluster: IncidentCluster) -> RCAResult:
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Gemini prompt builder
-# ──────────────────────────────────────────────────────────────────────────────
-
-_SYSTEM_INSTRUCTION = """\
-You are NEXUS, an autonomous cloud infrastructure Root Cause Analysis (RCA) system.
-You receive correlated incident signals from multiple domain agents monitoring a production application.
-You support both Kubernetes workloads and AWS serverless applications (Lambda, API Gateway, SQS, DynamoDB).
-
-Your task: analyze the signals and determine the most likely root cause.
-
-Rules:
-- Be specific and technical — not generic filler text
-- Prefer the simplest hypothesis that explains all signals (Occam's razor)
-- Use the available runbook list to constrain your action recommendation
-- healing_level 0 = alert only, 1 = no-regret (restart), 2 = bounded mitigation (scale/canary halt/memory increase), 3 = significant change (rollout undo/Lambda alias rollback)
-- confidence 0.0-1.0 — be conservative; prefer 0.5-0.8 range unless signals are deterministic
-- If multiple explanations are equally plausible, choose the more conservative (lower healing_level)
-
-Available Kubernetes runbooks:
-- runbook_pod_crashloop_v1 (L1): Restart pod + VPA hint
-- runbook_high_error_rate_post_deploy_v1 (L2): Halt canary + alert
-- runbook_missing_env_key_v1 (L0): Block deploy + alert
-- runbook_dns_resolution_failure_v1 (L1): Flush CoreDNS cache + escalate
-- runbook_db_connection_exhaustion_v1 (L2): Alert + annotate deployment
-
-Available AWS Serverless runbooks:
-- runbook_lambda_error_spike_v1 (L3): Alert + rollback Lambda alias to previous version
-- runbook_lambda_throttle_v1 (L2): Alert + increase Lambda reserved concurrency
-- runbook_lambda_timeout_v1 (L2): Alert + increase Lambda timeout
-- runbook_lambda_oom_v1 (L2): Alert + increase Lambda memory
-- runbook_sqs_dlq_v1 (L2): Alert + replay DLQ messages to source queue
-- runbook_dynamo_throttle_v1 (L0): Alert only — capacity change requires human review
-
-Respond ONLY with valid JSON. No markdown fences, no prose outside the JSON structure.
-
-Required schema:
-{
-  "root_cause": "string — 1-2 sentences, specific technical cause",
-  "failure_class": "one of: bad_deploy | resource_exhaustion | dependency_failure | config_error | cascading_failure | unknown",
-  "healing_level": 0,
-  "runbook_id": "exact runbook ID from the list above, or null",
-  "confidence": 0.0,
-  "reasoning": "string — 2-3 sentences of chain-of-thought",
-  "actions_to_avoid": ["list of action types that would make this worse"]
-}\
-"""
-
-
 def _build_gemini_prompt(
     cluster: IncidentCluster, historical_runbook: str | None = None
 ) -> str:
@@ -575,12 +518,7 @@ def _build_gemini_prompt(
         base += f"\n\nHistorical Note: In the past, the runbook '{historical_runbook}' was successfully used for this exact combination of incident signals. Strongly consider it if it fits the current context."
     return base
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # RCA Engine
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class RCAEngine:
     """
     Root Cause Analysis engine.
@@ -703,14 +641,23 @@ class RCAEngine:
     def _parse_response(self, raw: str) -> RCAResult | None:
         """Parse LLM JSON response into an RCAResult."""
         import re as _re
-
         clean = _re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
 
         try:
             data = json.loads(clean)
         except json.JSONDecodeError as exc:
-            logger.warning(f"[RCAEngine] JSON parse failed: {exc}\nRaw: {raw[:200]}")
-            return None
+            first = clean.find("{")
+            last = clean.rfind("}")
+            if first >= 0 and last > first:
+                snippet = clean[first:last + 1]
+                try:
+                    data = json.loads(snippet)
+                except json.JSONDecodeError:
+                    logger.warning(f"[RCAEngine] JSON parse failed: {exc}\nRaw: {raw[:200]}")
+                    return None
+            else:
+                logger.warning(f"[RCAEngine] JSON parse failed: {exc}\nRaw: {raw[:200]}")
+                return None
 
         try:
             return RCAResult(

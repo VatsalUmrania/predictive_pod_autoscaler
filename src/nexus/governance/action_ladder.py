@@ -39,12 +39,7 @@ from nexus.governance.runbook import Runbook, RunbookAction
 
 logger = logging.getLogger(__name__)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Governance Circuit Breaker
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class GovernanceCircuitBreaker:
     """
     Stops autonomous healing when consecutive post-check failures indicate
@@ -118,9 +113,7 @@ class GovernanceCircuitBreaker:
         }
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Human Approval Queue
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -244,9 +237,7 @@ class HumanApprovalQueue:
             self._pending.pop(rid, None)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Ladder Decision
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -259,9 +250,7 @@ class LadderDecision:
     cooldown_remaining_s: float = 0.0
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Action Ladder
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 class ActionLadder:

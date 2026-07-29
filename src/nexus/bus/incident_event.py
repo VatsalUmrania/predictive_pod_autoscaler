@@ -24,11 +24,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Enums
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class AgentType(str, Enum):
     NGINX = "nginx"
     GIT = "git"
@@ -142,12 +138,7 @@ class HealingLevel(int, Enum):
         3  # Rollback, config patch, DNS mutation — human approval if confidence < 0.85
     )
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Core Event
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class IncidentEvent(BaseModel):
     """
     The normalized NEXUS incident event.
@@ -238,13 +229,8 @@ class IncidentEvent(BaseModel):
         order = ["info", "warning", "critical", "emergency"]
         return order.index(self.severity) >= order.index(minimum)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Typed context helpers (use .model_dump() to populate IncidentEvent.context)
 # These are not enforced — they serve as documentation + IDE support
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class MetricsAnomalyContext(BaseModel):
     metric_name: str
     current_value: float

@@ -47,7 +47,6 @@ from nexus.reasoning.rca_engine import RCAEngine, RCAResult
 
 logger = logging.getLogger(__name__)
 
-
 class NexusOrchestrator:
     """
     Central NEXUS reasoning controller.
@@ -94,8 +93,7 @@ class NexusOrchestrator:
         # Background task handles
         self._flush_task: asyncio.Task | None = None
 
-    # ── Lifecycle ─────────────────────────────────────────────────────────────
-
+    # Lifecycle
     async def start(self) -> None:
         """
         Subscribe to NATS and start the periodic flush loop.
@@ -135,8 +133,7 @@ class NexusOrchestrator:
             f"actions_dispatched={self._actions_dispatched}"
         )
 
-    # ── NATS event handler ────────────────────────────────────────────────────
-
+    # NATS event handler
     async def _on_event(self, event: IncidentEvent) -> None:
         """
         NATS subscription handler. Ingest each event into the correlator.
@@ -154,8 +151,7 @@ class NexusOrchestrator:
                 name=f"process-{cluster.cluster_id}",
             )
 
-    # ── Flush loop ────────────────────────────────────────────────────────────
-
+    # Flush loop 
     async def _flush_loop(self) -> None:
         """Periodically flush stale clusters that never reached quorum."""
         while True:
@@ -172,8 +168,7 @@ class NexusOrchestrator:
             except Exception as exc:
                 logger.error(f"[Orchestrator] Flush loop error: {exc}")
 
-    # ── Cluster processing ────────────────────────────────────────────────────
-
+    # Cluster processing
     async def _safe_process(self, cluster: IncidentCluster) -> None:
         """Wrapper that respects the concurrency semaphore and swallows exceptions."""
         async with self._semaphore:
@@ -263,8 +258,7 @@ class NexusOrchestrator:
         self._actions_dispatched += 1
         await self.executor.handle_event(primary_event)
 
-    # ── Event helpers ─────────────────────────────────────────────────────────
-
+    # Event helpers
     def _build_enriched_event(
         self,
         cluster: IncidentCluster,
@@ -362,11 +356,7 @@ class NexusOrchestrator:
         """Return the N most recent RCA records (newest first)."""
         return list(reversed(self._rca_results[-n:]))
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Factory
-# ──────────────────────────────────────────────────────────────────────────────
-
 
 def build_orchestrator(
     nats_client: NATSClient,

@@ -91,7 +91,7 @@ class FeedbackLoop:
         self._last_recs: list[dict[str, Any]] = []
         self._start_time: float | None = None
 
-    # ── Lifecycle ─────────────────────────────────────────────────────────────
+    # Lifecycle
 
     async def start(self) -> None:
         """Start the background polling loop (non-blocking)."""
@@ -103,11 +103,11 @@ class FeedbackLoop:
         if self._nats is not None:
             try:
                 await self._nats.subscribe_raw(
-                    subject_pattern="nexus.actions.*",
+                    subject_pattern="nexus.actions.>",
                     handler=self._on_action_event,
                 )
                 logger.info(
-                    "[FeedbackLoop] Subscribed to nexus.actions.* for pattern recording"
+                    "[FeedbackLoop] Subscribed to nexus.actions.> for pattern recording"
                 )
             except Exception as exc:
                 logger.warning(
@@ -316,12 +316,7 @@ class FeedbackLoop:
             "last_recommendations": len(self._last_recs),
         }
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Factory
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 async def build_feedback_loop(
     confidence_scorer: ConfidenceScorer,
     nats_client: NATSClient | None = None,

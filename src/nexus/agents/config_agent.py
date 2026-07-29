@@ -38,12 +38,7 @@ from nexus.bus.nats_client import NATSClient
 
 logger = logging.getLogger(__name__)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Helpers
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def _checksum(data: dict) -> str:
     """Stable SHA-256 of a dict (sorted keys for determinism)."""
     canonical = json.dumps(data, sort_keys=True, default=str)
@@ -69,12 +64,7 @@ def _normalise_deployment(dep_dict: dict) -> dict:
         "resources": [c.get("resources") for c in template.get("containers", [])],
     }
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Config Agent
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class ConfigAgent(BaseAgent):
     """
     Detects Kubernetes configuration drift and missing runtime env vars.

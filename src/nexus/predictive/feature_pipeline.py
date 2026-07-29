@@ -36,10 +36,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Feature bounds (clamp to training distribution)
-# ──────────────────────────────────────────────────────────────────────────────
-
 FEATURE_BOUNDS: dict[str, tuple[float, float]] = {
     "cpu_utilization_pct": (0.0, 100.0),
     "memory_utilization_pct": (0.0, 100.0),
@@ -55,12 +52,7 @@ FILL_ZERO = "zero"
 FILL_MEAN = "mean"
 FILL_LAST = "last"
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Query Snapshot
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @dataclass
 class QuerySnapshot:
     """
@@ -86,12 +78,7 @@ class QuerySnapshot:
             table_counts={k: int(v) for k, v in table_counts.items()},
         )
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Feature vector
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @dataclass
 class FeatureVector:
     """
@@ -114,12 +101,7 @@ class FeatureVector:
     def __len__(self) -> int:
         return len(self.features)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Feature Pipeline
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def _safe_div(a: float, b: float, fallback: float = 0.0) -> float:
     """Division with NaN/Inf guard."""
     if b == 0.0 or not math.isfinite(b) or not math.isfinite(a):
@@ -127,13 +109,11 @@ def _safe_div(a: float, b: float, fallback: float = 0.0) -> float:
     result = a / b
     return result if math.isfinite(result) else fallback
 
-
 def _clamp(value: float, lo: float, hi: float) -> float:
     """Clamp value to [lo, hi], guarding against NaN."""
     if not math.isfinite(value):
         return lo
     return max(lo, min(hi, value))
-
 
 def _guard(value: Any, fallback: float = 0.0) -> float:
     """Convert arbitrary value to a finite float."""
@@ -142,7 +122,6 @@ def _guard(value: Any, fallback: float = 0.0) -> float:
         return v if math.isfinite(v) else fallback
     except (TypeError, ValueError):
         return fallback
-
 
 class FeaturePipeline:
     """
@@ -177,8 +156,7 @@ class FeaturePipeline:
         # Last seen feature values for FILL_LAST strategy
         self._last_values: dict[str, float] = {}
 
-    # ── DB features ───────────────────────────────────────────────────────────
-
+    # DB features 
     def ingest_snapshot(self, snapshot: QuerySnapshot) -> None:
         """Add a QuerySnapshot to the rolling history."""
         self._snapshots.append(snapshot)
@@ -230,8 +208,7 @@ class FeaturePipeline:
         )
         return features
 
-    # ── Metrics features ──────────────────────────────────────────────────────
-
+    # Metrics features
     @staticmethod
     def _extract_metrics_features(context: dict[str, Any]) -> dict[str, float]:
         """
@@ -256,8 +233,7 @@ class FeaturePipeline:
             for name, value in raw.items()
         }
 
-    # ── Feature vector construction ───────────────────────────────────────────
-
+    # Feature vector construction 
     def build_vector(
         self,
         metrics_context: dict[str, Any] | None = None,

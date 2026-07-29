@@ -50,12 +50,7 @@ from nexus.bus.nats_client import NATSClient
 
 logger = logging.getLogger(__name__)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Shared data types
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @dataclass
 class DBConnectionStats:
     db_engine: str
@@ -83,12 +78,7 @@ class QuerySnapshot:
         default_factory=dict
     )  # table → read+write count
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # PostgreSQL Adapter
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class PostgresAdapter:
     """
     Monitors PostgreSQL via pg_stat_activity and pg_stat_statements.
@@ -221,12 +211,7 @@ class PostgresAdapter:
         if self._pool:
             await self._pool.close()
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # MySQL Adapter
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class MySQLAdapter:
     """
     Monitors MySQL/MariaDB via performance_schema.
@@ -329,12 +314,7 @@ class MySQLAdapter:
             self._pool.close()
             await self._pool.wait_closed()
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # MongoDB Adapter
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class MongoDBAdapter:
     """
     Monitors MongoDB via serverStatus and currentOp.
@@ -410,13 +390,8 @@ class MongoDBAdapter:
         if self._client:
             self._client.close()
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # DB Agent
-# ──────────────────────────────────────────────────────────────────────────────
-
 _AdapterType = PostgresAdapter | MySQLAdapter | MongoDBAdapter
-
 
 class DBAgent(BaseAgent):
     """
@@ -571,12 +546,7 @@ class DBAgent(BaseAgent):
             except Exception:
                 pass
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Factory helper
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def db_agent_from_env(nats_client: NATSClient) -> DBAgent:
     """
     Build a DBAgent from environment variable configuration.

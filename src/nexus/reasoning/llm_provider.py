@@ -35,10 +35,7 @@ from abc import ABC, abstractmethod
 
 logger = logging.getLogger(__name__)
 
-# ──────────────────────────────────────────────────────────────────────────────
 # System instruction (shared across all providers)
-# ──────────────────────────────────────────────────────────────────────────────
-
 SYSTEM_INSTRUCTION = """\
 You are NEXUS, an autonomous cloud infrastructure Root Cause Analysis (RCA) system.
 You receive correlated incident signals from multiple domain agents monitoring a production application.
@@ -83,12 +80,7 @@ Required schema:
 }\
 """
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Abstract base
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class LLMProvider(ABC):
     """Abstract base for all LLM provider backends."""
 
@@ -113,16 +105,11 @@ class LLMProvider(ABC):
         Raises on error — caller handles fallback.
         """
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Gemini provider
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class GeminiProvider(LLMProvider):
     """Google Gemini via google-generativeai SDK."""
 
-    DEFAULT_MODEL = "gemini-2.5-flash"
+    DEFAULT_MODEL = "gemini-flash-latest"
 
     def __init__(self, api_key: str | None = None, model: str | None = None):
         self._api_key = (
@@ -130,11 +117,7 @@ class GeminiProvider(LLMProvider):
             or os.getenv("NEXUS_LLM_API_KEY")
             or os.getenv("NEXUS_GEMINI_API_KEY", "")
         )
-        self._model_name = (
-            model
-            or os.getenv("NEXUS_LLM_MODEL")
-            or os.getenv("NEXUS_GEMINI_MODEL", self.DEFAULT_MODEL)
-        )
+        self._model_name = self.DEFAULT_MODEL
         self._client = None
 
     @property
@@ -187,12 +170,7 @@ class GeminiProvider(LLMProvider):
     async def complete(self, user_prompt: str) -> str:
         return await asyncio.to_thread(self._sync_complete, user_prompt)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # OpenAI provider
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class OpenAIProvider(LLMProvider):
     """OpenAI ChatCompletion via openai SDK."""
 
@@ -251,12 +229,7 @@ class OpenAIProvider(LLMProvider):
     async def complete(self, user_prompt: str) -> str:
         return await asyncio.to_thread(self._sync_complete, user_prompt)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Anthropic provider
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class AnthropicProvider(LLMProvider):
     """Anthropic Claude via anthropic SDK."""
 
@@ -316,12 +289,7 @@ class AnthropicProvider(LLMProvider):
     async def complete(self, user_prompt: str) -> str:
         return await asyncio.to_thread(self._sync_complete, user_prompt)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # No-op provider (rule-based only mode)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class NullProvider(LLMProvider):
     """Placeholder when LLM is explicitly disabled (NEXUS_LLM_PROVIDER=none)."""
 
@@ -339,11 +307,7 @@ class NullProvider(LLMProvider):
     async def complete(self, user_prompt: str) -> str:
         raise RuntimeError("LLM disabled (NEXUS_LLM_PROVIDER=none)")
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Factory
-# ──────────────────────────────────────────────────────────────────────────────
-
 _PROVIDERS = {
     "gemini": GeminiProvider,
     "openai": OpenAIProvider,
@@ -352,7 +316,6 @@ _PROVIDERS = {
 }
 
 _cached_provider: LLMProvider | None = None
-
 
 def get_llm_provider(
     provider: str | None = None,
@@ -395,7 +358,6 @@ def get_llm_provider(
     _cached_provider = instance
     return instance
 
-
 def _autodetect_provider() -> str:
     """Return provider name based on which API key is set in the environment.
 
@@ -407,7 +369,7 @@ def _autodetect_provider() -> str:
         return "openai"
     if os.getenv("ANTHROPIC_API_KEY"):
         return "anthropic"
-    if os.getenv("NEXUS_GEMINI_API_KEY"):
+    if os.getenv("NEXUS_GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY"):
         return "gemini"
     if os.getenv("NEXUS_LLM_API_KEY"):
         # Generic key alone — Gemini is the historical default

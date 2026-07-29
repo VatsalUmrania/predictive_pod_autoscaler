@@ -35,12 +35,7 @@ logger = logging.getLogger(__name__)
 # Severity ordering for minimum-severity filtering
 _SEV_ORDER = ["info", "warning", "critical", "emergency"]
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Enums
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class BlastRadius(str, Enum):
     NONE = "none"
     SINGLE_POD = "single_pod"
@@ -49,12 +44,7 @@ class BlastRadius(str, Enum):
     CLUSTER_DNS = "cluster_dns"
     CLUSTER_WIDE = "cluster_wide"
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Sub-models
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class PreCheck(BaseModel):
     """Assertion that must pass before executing the runbook's actions."""
 
@@ -103,9 +93,7 @@ class RunbookTrigger(BaseModel):
     conditions: list[dict[str, Any]] = Field(default_factory=list)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Runbook
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 class Runbook(BaseModel):
@@ -155,9 +143,7 @@ class Runbook(BaseModel):
         return True
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # RunbookLibrary
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 class RunbookLibrary:

@@ -39,9 +39,7 @@ from nexus.bus.incident_event import IncidentEvent
 
 logger = logging.getLogger(__name__)
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Constants
-# ──────────────────────────────────────────────────────────────────────────────
 
 NEXUS_STREAM = "NEXUS_INCIDENTS"
 NEXUS_SUBJECT = (
@@ -77,12 +75,7 @@ _PPA_STREAM_CONFIG = StreamConfig(
 
 HandlerType = Callable[[IncidentEvent], Awaitable[None]]
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Client
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class NATSClient:
     """
     Async NATS JetStream client for the NEXUS incident event bus.

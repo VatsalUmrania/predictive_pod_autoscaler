@@ -47,11 +47,7 @@ from nexus.telemetry.log_shipper import EndpointStats, parse_nginx_line
 
 logger = logging.getLogger(__name__)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # NGINX status page parser  (stub_status module)
-# ──────────────────────────────────────────────────────────────────────────────
-
 _STUB_STATUS_RE = re.compile(
     r"Active connections:\s*(\d+)\s+"
     r"server accepts handled requests\s+(\d+)\s+(\d+)\s+(\d+)\s+"
@@ -73,12 +69,7 @@ def parse_stub_status(text: str) -> dict | None:
         "waiting": int(m.group(7)),
     }
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # NGINX Agent
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class NginxAgent(BaseAgent):
     """
     Full NGINX observability agent.

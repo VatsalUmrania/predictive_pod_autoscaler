@@ -106,12 +106,7 @@ def _compute_delta(stats: RunbookStats) -> float:
     # No adjustment in the middle — neither promote nor penalize
     return 0.0
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Knowledge Base
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @dataclass
 class AdjustmentRecord:
     """One row from the confidence_adjustments table."""

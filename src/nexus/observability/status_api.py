@@ -76,12 +76,7 @@ def _include_integration_routers(app: FastAPI) -> None:
             f"[StatusAPI] Integration routers not loaded: {exc}"
         )
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Context container (holds all NEXUS runtime singletons)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @dataclass
 class NexusContext:
     """
@@ -107,12 +102,7 @@ class NexusContext:
 # Global context — set fields before running the server
 context = NexusContext()
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # FastAPI app
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Initialize async resources on startup.
@@ -266,13 +256,9 @@ def _require(component: Any, name: str) -> Any:
         raise HTTPException(status_code=503, detail=f"{name} not configured")
     return component
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Developer Dashboard (served at /)
-# ──────────────────────────────────────────────────────────────────────────────
 
 _DASHBOARD_HTML = Path(__file__).parent / "developer-dashboard.html"
-
 
 @app.get("/", include_in_schema=False)
 def serve_dashboard() -> Response:
@@ -288,12 +274,7 @@ def serve_dashboard() -> Response:
         headers={"Cache-Control": "no-cache"},
     )
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Health + info
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @app.get("/health", tags=["system"])
 def health() -> dict[str, Any]:
     """Liveness probe — always returns 200 if the server is up."""
@@ -323,12 +304,7 @@ async def status() -> dict[str, Any]:
 
     return out
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Prometheus metrics
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @app.get("/metrics", tags=["observability"], include_in_schema=False)
 def prometheus_metrics() -> Response:
     """Expose Prometheus metrics in text format."""
@@ -338,24 +314,14 @@ def prometheus_metrics() -> Response:
         media_type=m.content_type,
     )
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # RCA
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @app.get("/rca/last", tags=["reasoning"])
 def last_rca(n: int = 10) -> list[dict[str, Any]]:
     """Return the N most recent RCA decisions from the Orchestrator."""
     orc = _require(context.orchestrator, "NexusOrchestrator")
     return orc.last_rca_results(n)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Runbooks
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @app.get("/runbooks/stats", tags=["governance"])
 async def runbook_stats(days: int = 30) -> dict[str, Any]:
     """Per-runbook statistics from the AuditTrail (success_rate, false_heal_rate)."""
@@ -370,12 +336,7 @@ def runbook_list() -> list[str]:
     lib = _require(context.runbook_library, "RunbookLibrary")
     return list(lib._runbooks.keys())
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Prescaler
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @app.get("/prescaler", tags=["predictive"])
 def prescaler_status() -> dict[str, Any]:
     """Prescaler statistics, mode, and recent decisions."""
@@ -412,12 +373,7 @@ def prescaler_set_mode(mode: str) -> dict[str, str]:
     result = p.promote(PrescaleMode(mode))
     return {"status": "ok", "result": result}
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Learning Plane
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @app.get("/learning", tags=["learning"])
 def learning_status() -> dict[str, Any]:
     """FeedbackLoop status and latest system KPIs."""
@@ -455,12 +411,7 @@ async def advisor_recommendations(days: int = 30) -> list[dict[str, Any]]:
     recs.extend(chronic)
     return [r.to_dict() for r in recs]
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Audit Trail
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @app.get("/audit/tail", tags=["governance"])
 async def audit_tail(n: int = 20) -> list[dict[str, Any]]:
     """Return the N most recent audit records from the AuditTrail."""
@@ -476,19 +427,13 @@ async def audit_tail(n: int = 20) -> list[dict[str, Any]]:
         for row in rows
     ]
 
-
 @app.get("/audit/{incident_id}", tags=["governance"])
 async def audit_by_incident(incident_id: str) -> list[dict[str, Any]]:
     """Return all audit records for a specific incident/correlation ID."""
     at = _require(context.audit_trail, "AuditTrail")
     return await at.query_by_incident(incident_id)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Human approvals
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @app.post("/approve/{action_id}", tags=["governance"])
 async def approve_action(action_id: str) -> dict[str, str]:
     """
@@ -512,7 +457,6 @@ async def approve_action(action_id: str) -> dict[str, str]:
             status_code=503, detail="HumanApprovalQueue not accessible"
         ) from None
 
-
 @app.post("/reject/{action_id}", tags=["governance"])
 async def reject_action(action_id: str) -> dict[str, str]:
     """
@@ -535,7 +479,6 @@ async def reject_action(action_id: str) -> dict[str, str]:
             status_code=503, detail="HumanApprovalQueue not accessible"
         ) from None
 
-
 @app.get("/approvals/pending", tags=["governance"])
 async def pending_approvals() -> list[dict[str, Any]]:
     """List all actions currently waiting in the HumanApprovalQueue."""
@@ -546,14 +489,10 @@ async def pending_approvals() -> list[dict[str, Any]]:
     except AttributeError:
         return []
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # PPA Integration Endpoints
 # Backed by the PpaOutcomeTracker started in the lifespan.
 # These are available without a full Orchestrator / Prescaler — the
 # OutcomeTracker subscribes to ppa.predictions.* via NATS directly.
-# ──────────────────────────────────────────────────────────────────────────────
-
 
 @app.get("/ppa/decisions", tags=["predictive"])
 def ppa_decisions(n: int = 20) -> list[dict[str, Any]]:
@@ -618,7 +557,6 @@ def ppa_decisions(n: int = 20) -> list[dict[str, Any]]:
     )
     return all_decisions[:n]
 
-
 @app.get("/ppa/stats", tags=["predictive"])
 def ppa_stats() -> dict[str, Any]:
     """
@@ -660,7 +598,6 @@ def ppa_stats() -> dict[str, Any]:
         "spike_hit_rate": hit_rate,
         "ready_for_advisory": (hit_rate or 0) >= 0.7 and total_resolved >= 10,
     }
-
 
 @app.get("/ppa/pending", tags=["predictive"])
 def ppa_pending() -> list[dict[str, Any]]:

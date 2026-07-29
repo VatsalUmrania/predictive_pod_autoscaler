@@ -46,11 +46,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Policy Decision
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @dataclass
 class PolicyDecision:
     allowed: bool
@@ -68,11 +64,6 @@ class PolicyDecision:
             status = "PENDING_APPROVAL"
         reasons = f" [{', '.join(self.deny_reasons)}]" if self.deny_reasons else ""
         return f"PolicyDecision({status}{reasons} source={self.source})"
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Fallback policy (pure Python — mirrors nexus_policies.rego)
-# ──────────────────────────────────────────────────────────────────────────────
 
 # Action type allowlists per healing level
 _L0_ALLOWED = {"emit_alert", "patch_annotation"}
@@ -153,9 +144,7 @@ def _fallback_evaluate(
     return PolicyDecision(allowed=True, source="fallback")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # OPA HTTP Client
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 class PolicyEngine:

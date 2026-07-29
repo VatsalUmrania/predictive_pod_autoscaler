@@ -114,12 +114,12 @@ spec:
             # Prometheus — kube-prometheus-stack service in monitoring namespace
             - name: PROMETHEUS_URL
               value: "http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090"
-            # Optional: mount via Secret named "nexus-secrets" with key "gemini-api-key"
-            - name: NEXUS_GEMINI_API_KEY
+            # Optional: mount via Secret named "nexus-secrets", data key "NEXUS_LLM_API_KEY"
+            - name: NEXUS_LLM_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: nexus-secrets
-                  key: gemini-api-key
+                  key: NEXUS_LLM_API_KEY
                   optional: true
           volumeMounts:
             - name: nexus-data

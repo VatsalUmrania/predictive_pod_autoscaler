@@ -309,8 +309,7 @@ class Notifier:
         except Exception as exc:
             logger.debug(f"[Notifier] Slack send failed for '{app_name}': {exc}")
 
-    # ── NATS background listener ──────────────────────────────────────────────
-
+    # NATS background listener
     def start_background(self, nats_client: Any) -> None:
         """Subscribe to NATS healing action subjects and auto-notify."""
         self._running = True
@@ -362,29 +361,27 @@ class Notifier:
         while self._running and not (action_ok and prescale_ok and approval_ok):
             if not action_ok:
                 try:
-                    await nc.subscribe_raw("nexus.actions.*", handler=_action_wrapper)
+                    await nc.subscribe_raw("nexus.actions.>", handler=_action_wrapper)
                     action_ok = True
                 except Exception as exc:
-                    logger.warning(f"[Notifier] nexus.actions.* subscribe retry: {exc}")
+                    logger.warning(f"[Notifier] nexus.actions.> subscribe retry: {exc}")
             if not prescale_ok:
                 try:
-                    await nc.subscribe_raw(
-                        "nexus.prescale.*", handler=_prescale_wrapper
-                    )
+                    await nc.subscribe_raw("nexus.prescale.>", handler=_prescale_wrapper)
                     prescale_ok = True
                 except Exception as exc:
                     logger.warning(
-                        f"[Notifier] nexus.prescale.* subscribe retry: {exc}"
+                        f"[Notifier] nexus.prescale.> subscribe retry: {exc}"
                     )
             if not approval_ok:
                 try:
                     await nc.subscribe_raw(
-                        "nexus.approvals.*", handler=_approval_wrapper
+                        "nexus.approvals.>", handler=_approval_wrapper
                     )
                     approval_ok = True
                 except Exception as exc:
                     logger.warning(
-                        f"[Notifier] nexus.approvals.* subscribe retry: {exc}"
+                        f"[Notifier] nexus.approvals.> subscribe retry: {exc}"
                     )
 
             if not (action_ok and prescale_ok and approval_ok):
@@ -392,7 +389,7 @@ class Notifier:
                 backoff *= 2
             else:
                 logger.info(
-                    "[Notifier] Subscribed to NATS nexus.actions.* + nexus.prescale.* + nexus.approvals.*"
+                    "[Notifier] Subscribed to NATS nexus.actions.> + nexus.prescale.> + nexus.approvals.>"
                 )
 
         # Park until stopped. If the NATS connection is severed the

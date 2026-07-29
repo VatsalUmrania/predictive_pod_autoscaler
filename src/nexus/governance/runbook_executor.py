@@ -61,12 +61,7 @@ from nexus.governance.runbook import Runbook, RunbookAction, RunbookLibrary
 
 logger = logging.getLogger(__name__)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Runbook Executor
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class RunbookExecutor:
     """
     Phase 3 governance-aware runbook executor.
@@ -257,24 +252,38 @@ class RunbookExecutor:
                 )
 
             elif action_type == "kubectl_rollout_undo":
-                patch = {
-                    "spec": {
-                        "template": {
-                            "metadata": {
-                                "annotations": {
-                                    "nexus.io/rollback-triggered": datetime.now(
-                                        timezone.utc
-                                    ).isoformat()
-                                }
-                            }
-                        }
-                    }
-                }
-                self._k8s_apps.patch_namespaced_deployment(name, namespace, patch)
-                result.update(
-                    status="executed",
-                    message=f"Rollback annotation applied to {namespace}/{name}",
-                )
+                # Kubernetes Python client 30+ dropped the typed rollback subresource.
+                # Roll back manually: find the previous ReplicaSet and patch the
+                # deployment template to its pod template. Equivalent to
+                # `kubectl rollout undo --to-revision=<previous>`.
+                ns_api = self._k8s_apps
+                try:
+                    rs_list = ns_api.list_namespaced_replica_set(
+                        namespace,
+                        label_selector=f"app={name}",
+                    ).items
+                    # ReplicaSets are sorted by name; current one has matching
+                    # pod template hash annotation. Pick the second-newest.
+                    sorted_rs = sorted(
+                        rs_list,
+                        key=lambda r: r.metadata.creation_timestamp or 0,
+                        reverse=True,
+                    )
+                    if len(sorted_rs) < 2:
+                        result.update(
+                            status="skipped",
+                            message=f"No previous ReplicaSet found for {namespace}/{name}",
+                        )
+                    else:
+                        prev_template = sorted_rs[1].spec.template
+                        patch = {"spec": {"template": prev_template.to_dict()}}
+                        ns_api.patch_namespaced_deployment(name, namespace, patch)
+                        result.update(
+                            status="executed",
+                            message=f"Rolled back {namespace}/{name} to revision on ReplicaSet {sorted_rs[1].metadata.name}",
+                        )
+                except Exception as exc:
+                    result.update(status="failed", error=str(exc))
 
             elif action_type == "scale_deployment":
                 target_replicas = params.get("replicas")
@@ -602,12 +611,7 @@ class RunbookExecutor:
     # invokes ``handle_event()`` directly. Calling both paths would double-fire
     # every runbook.
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Factory — build a fully-configured executor from env + defaults
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def build_executor(
     nats_client: NATSClient,
     runbook_dir: Path,

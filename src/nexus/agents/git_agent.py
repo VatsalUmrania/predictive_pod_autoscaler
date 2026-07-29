@@ -46,9 +46,7 @@ from nexus.bus.nats_client import NATSClient
 
 logger = logging.getLogger(__name__)
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Secret detection heuristics
-# ──────────────────────────────────────────────────────────────────────────────
 
 _SECRET_PATTERNS: list[tuple] = [
     (r'(?i)(api_key|api-key|apikey)\s*[=:]\s*["\'][a-zA-Z0-9_\-]{20,}["\']', "api_key"),
@@ -89,12 +87,7 @@ _SYSTEM_ENV_VARS: set[str] = {
     "RUNNER_OS",
 }
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # AST-based env key extraction (Python)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def extract_env_keys_python(source: str, filepath: str = "<unknown>") -> set[str]:
     """
     Extract all env var keys referenced in Python source code via AST walking.
@@ -157,14 +150,9 @@ def extract_env_keys_python(source: str, filepath: str = "<unknown>") -> set[str
 
     return keys
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Regex-based env key extraction (JavaScript / TypeScript)
-# ──────────────────────────────────────────────────────────────────────────────
-
 _ENV_JS_DOT = re.compile(r"process\.env\.([A-Z_][A-Z0-9_]*)")
 _ENV_JS_BRACKET = re.compile(r'process\.env\[[\'"]([\w]+)[\'"]\]')
-
 
 def extract_env_keys_js(source: str) -> set[str]:
     """
@@ -180,12 +168,7 @@ def extract_env_keys_js(source: str) -> set[str]:
     keys.update(_ENV_JS_BRACKET.findall(source))
     return keys
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Secret scanner
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def scan_diff_for_secrets(diff: str) -> list[dict]:
     """
     Scan a git diff for accidentally committed secrets.
@@ -207,12 +190,7 @@ def scan_diff_for_secrets(diff: str) -> list[dict]:
                 )
     return findings
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # .env Contract Validator
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class EnvContractValidator:
     """
     Determines the 'env contract' of a codebase (what keys it requires)
@@ -339,12 +317,7 @@ class EnvContractValidator:
             "passed": len(missing) == 0,
         }
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Git Agent
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class GitAgent(BaseAgent):
     """
     Monitors a local Git repository for new commits and validates them.

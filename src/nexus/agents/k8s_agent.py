@@ -122,7 +122,7 @@ class K8sAgent(BaseAgent):
 
         phase = (pod.status.phase or "").lower()
 
-        # ── Pending too long ──────────────────────────────────────────────────
+        # Pending too long 
         if phase == "pending":
             now = time.monotonic()
             if key not in self._pending_since:
@@ -194,17 +194,7 @@ class K8sAgent(BaseAgent):
             ):
                 self._emitted_this_cycle.add(key)
                 deployment_name = self._get_deployment_name(pod) or name
-                mem_limit = None
-                try:
-                    lim = (
-                        cs.resources.limits.get("memory")
-                        if cs.resources and cs.resources.limits
-                        else None
-                    )
-                    if lim:
-                        mem_limit = self._parse_memory_mi(lim)
-                except Exception:
-                    pass
+                mem_limit = self._get_container_memory_limit(pod, cs.name)
 
                 events.append(
                     IncidentEvent(
@@ -249,7 +239,20 @@ class K8sAgent(BaseAgent):
                 return float(mem_str[: -len(suffix)]) * mult
         return float(mem_str) / (1024 * 1024)  # Assume bytes
 
-    # ── Deployment inspection ─────────────────────────────────────────────────
+    @staticmethod
+    def _get_container_memory_limit(pod, container_name: str) -> float | None:
+        """Extract memory limit for a specific container from the pod spec."""
+        try:
+            for cspec in pod.spec.containers:
+                if cspec.name == container_name and cspec.resources and cspec.resources.limits:
+                    lim = cspec.resources.limits.get("memory")
+                    if lim:
+                        return K8sAgent._parse_memory_mi(lim)
+        except Exception:
+            pass
+        return None
+
+    # Deployment inspection 
 
     def _check_deployment(self, dep) -> list[IncidentEvent]:
         events: list[IncidentEvent] = []

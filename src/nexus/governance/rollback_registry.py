@@ -31,11 +31,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Pre-action state snapshot
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @dataclass
 class PreActionState:
     """Snapshot of resource state captured before a healing action executes."""
@@ -52,12 +48,7 @@ class PreActionState:
     def rollback_key(self) -> str:
         return f"{self.action_type}::{self.target_namespace}/{self.target_name}"
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Rollback Registry
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class RollbackRegistry:
     """
     Captures pre-action state and provides undo operations.

@@ -52,10 +52,7 @@ from nexus.bus.nats_client import NATSClient
 
 logger = logging.getLogger(__name__)
 
-# ──────────────────────────────────────────────────────────────────────────────
 # NGINX Combined Log Format parser
-# ──────────────────────────────────────────────────────────────────────────────
-
 _COMBINED_RE = re.compile(
     r"(?P<remote_addr>\S+)\s+-\s+\S+\s+"
     r"\[(?P<time_local>[^\]]+)\]\s+"
@@ -68,7 +65,6 @@ _COMBINED_RE = re.compile(
 )
 
 _NGINX_TIME_FMT = "%d/%b/%Y:%H:%M:%S %z"
-
 
 def parse_nginx_line(line: str) -> dict | None:
     """Parse a single NGINX combined log line. Returns None on parse failure."""
@@ -85,12 +81,7 @@ def parse_nginx_line(line: str) -> dict | None:
         return None
     return d
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Endpoint statistics (rolling window for anomaly detection)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class EndpointStats:
     """Rolling-window per-endpoint statistics for anomaly detection."""
 
@@ -127,12 +118,7 @@ class EndpointStats:
         idx = int(len(times) * 0.95)
         return times[min(idx, len(times) - 1)]
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Log Shipper
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class NginxLogShipper:
     """
     Async NGINX access log tailer with OTel shipping and NATS anomaly events.
@@ -193,8 +179,7 @@ class NginxLogShipper:
         otel_logger.setLevel(logging.DEBUG)
         return otel_logger
 
-    # ── Async file tailer ─────────────────────────────────────────────────────
-
+    # Async file tailer
     async def _tail(self) -> AsyncIterator[str]:
         """Async generator that yields new lines as NGINX writes them."""
         if not self.log_path.exists():
@@ -213,8 +198,7 @@ class NginxLogShipper:
                 else:
                     await asyncio.sleep(0.1)
 
-    # ── Processing ────────────────────────────────────────────────────────────
-
+    # Processing
     async def _process_line(self, line: str) -> None:
         record = parse_nginx_line(line)
         if not record:
@@ -292,8 +276,7 @@ class NginxLogShipper:
                     )
                 )
 
-    # ── Run ───────────────────────────────────────────────────────────────────
-
+    # Run
     async def run(self) -> None:
         """Start tailing and shipping. Runs indefinitely."""
         logger.info(
@@ -314,12 +297,7 @@ class NginxLogShipper:
         async for line in self._tail():
             await self._process_line(line)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Entrypoint (for running as a standalone sidecar / process)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 async def _main() -> None:
     import os
 

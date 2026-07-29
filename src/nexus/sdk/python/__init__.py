@@ -49,14 +49,8 @@ import time as _time
 from typing import Any
 
 logger = logging.getLogger(__name__)
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Lazy imports (so sdk can be installed without nexus core)
-# ──────────────────────────────────────────────────────────────────────────────
-
 _middleware_cls = None
 _decorators_mod = None
-
 
 def _get_middleware():
     global _middleware_cls
@@ -66,7 +60,6 @@ def _get_middleware():
         _middleware_cls = SelfHealMiddleware
     return _middleware_cls
 
-
 def _get_decorators():
     global _decorators_mod
     if _decorators_mod is None:
@@ -75,12 +68,7 @@ def _get_decorators():
         _decorators_mod = decorators
     return _decorators_mod
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Public SelfHeal class
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class _SelfHeal:
     """
     Developer-facing SDK entry point.
@@ -267,19 +255,14 @@ class _SelfHeal:
             label=label or type(engine_or_pool).__name__,
         )
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # _DBWrapper — transparent proxy that instruments .execute() and .query()
-# ──────────────────────────────────────────────────────────────────────────────
 
 _SQL_TABLE_RE = _re.compile(
     r'(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+["\' `]?(\w+)["\' `]?', _re.IGNORECASE
 )
 
-
 def _extract_tables(sql: str):
     return list(set(m.group(1).lower() for m in _SQL_TABLE_RE.finditer(sql)))
-
 
 class _DBWrapper:
     """
@@ -391,7 +374,6 @@ class _DBWrapper:
     async def __aexit__(self, *args):
         return await object.__getattribute__(self, "_wrapped").__aexit__(*args)
 
-
 def _sql_from_args(args) -> str:
     """Extract SQL string from the first positional argument."""
     if not args:
@@ -405,7 +387,6 @@ def _sql_from_args(args) -> str:
     if hasattr(first, "string"):
         return str(first.string)[:200]
     return str(first)[:200]
-
 
 def _emit_query_sync(sql, duration_ms, track_tables, slow_ms, token, url, label):
     try:
@@ -425,7 +406,6 @@ def _emit_query_sync(sql, duration_ms, track_tables, slow_ms, token, url, label)
     except Exception:
         pass
 
-
 async def _emit_query_async(sql, duration_ms, track_tables, slow_ms, token, url, label):
     try:
         import httpx
@@ -443,7 +423,6 @@ async def _emit_query_async(sql, duration_ms, track_tables, slow_ms, token, url,
             )
     except Exception:
         pass
-
 
 # Module-level singleton — mirrors the JS SDK pattern
 SelfHeal = _SelfHeal()
