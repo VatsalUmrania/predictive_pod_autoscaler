@@ -67,13 +67,13 @@ spec:
                 configMapKeyRef:
                   name: nexus-server
                   key: PROMETHEUS_URL
-            - name: GEMINI_API_KEY
+            - name: NEXUS_LLM_API_KEY
               valueFrom:
                 secretKeyRef:
                   # create via: kubectl create secret generic nexus-secrets \
-                  #   --from-literal=GEMINI_API_KEY=your-key
+                  #   --from-literal=NEXUS_LLM_API_KEY=your-key
                   name: nexus-secrets
-                  key: gemini-api-key
+                  key: NEXUS_LLM_API_KEY
                   optional: true
           ports:
             - name: http

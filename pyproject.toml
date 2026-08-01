@@ -56,6 +56,11 @@ nexus = [
     "redis[hiredis]>=5.0.0",
     # LLM for RCA Engine — Gemini is default; openai/anthropic installed via extras
     "google-genai>=1.0.0",
+    # LangGraph remediation agent (multi-turn investigation + interrupt/resume approval)
+    "langgraph>=0.2.50",
+    "langchain-core>=0.3.0",
+    "langchain-google-genai>=2.1.0",
+    "langgraph-checkpoint-sqlite>=2.0.0",
     # Phase 7: Observability + CLI
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.30.0",

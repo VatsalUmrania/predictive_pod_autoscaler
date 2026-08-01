@@ -64,7 +64,7 @@ services:
       NEXUS_AUDIT_DB_PATH: /data/nexus_audit.db
       NEXUS_KNOWLEDGE_DB_PATH: /data/nexus_knowledge.db
       NATS_URL: nats://nats:4222
-      NEXUS_GEMINI_API_KEY: ${NEXUS_GEMINI_API_KEY:-}
+      NEXUS_LLM_API_KEY: ${NEXUS_LLM_API_KEY:-}
     volumes:
       - nexus_data:/data
       - ./selfheal.yaml:/app/selfheal.yaml:ro
@@ -90,7 +90,7 @@ services:
       DEMO_DB_PATH: /data/shop.db
       NATS_URL: nats://nats:4222
       SELFHEAL_TOKEN: ${SELFHEAL_TOKEN:-}
-      NEXUS_GEMINI_API_KEY: ${NEXUS_GEMINI_API_KEY:-}
+      NEXUS_LLM_API_KEY: ${NEXUS_LLM_API_KEY:-}
     volumes:
       - shop_data:/data
     depends_on:
@@ -109,7 +109,7 @@ services:
       NEXUS_API_URL: http://nexus-api:8080
       DEMO_API_URL: http://shop-backend:8001
       NEXUS_AUDIT_DB_PATH: /data/nexus_audit.db
-      NEXUS_GEMINI_API_KEY: ${NEXUS_GEMINI_API_KEY:-}
+      NEXUS_LLM_API_KEY: ${NEXUS_LLM_API_KEY:-}
       SELFHEAL_TOKEN: ${SELFHEAL_TOKEN:-}
     volumes:
       - nexus_data:/data

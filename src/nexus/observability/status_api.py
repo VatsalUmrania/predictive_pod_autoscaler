@@ -48,6 +48,7 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -98,6 +99,8 @@ class NexusContext:
     def uptime_seconds(self) -> float:
         return round(time.monotonic() - self.started_at, 1)
 
+# Logger
+_log = logging.getLogger(__name__)
 
 # Global context — set fields before running the server
 context = NexusContext()
@@ -439,15 +442,55 @@ async def approve_action(action_id: str) -> dict[str, str]:
     """
     Approve a pending human-review action (from Phase 3 HumanApprovalQueue).
     Triggers the queued executor callback.
+    For LLM-approved actions (runbook_id="llm_dynamic"), executes the remediation directly.
     """
     orc = _require(context.orchestrator, "NexusOrchestrator")
     try:
         ladder = orc.executor.ladder
         queue = ladder.approval_queue
+
+        # Get the pending approval details before approving
+        pending_items = queue.pending_list()
+        pending_item = None
+        for item in pending_items:
+            # Note: This assumes approval_id is accessible; we may need to adjust based on PendingApproval structure
+            if hasattr(item, 'approval_id') and item.approval_id == action_id:
+                pending_item = item
+                break
+
+        # Idempotent: a repeat approve on the same id (e.g. double-click) must be
+        # a no-op — re-executing the remediation or re-INSERTing the audit row
+        # (PK approve_{id}) 500s with UNIQUE constraint failed.
+        if queue.is_approved(action_id):
+            return {"status": "already_approved", "action_id": action_id}
+
         ok = queue.approve(action_id)
         if ok:
             if context.audit_trail:
                 await context.audit_trail.record_approval(action_id, "api_user")
+
+            # Check if this is an LLM-generated action that needs direct execution
+            if pending_item and getattr(pending_item, 'runbook_id', None) == "llm_dynamic":
+                # Execute the LLM-proposed remediation directly
+                try:
+                    from nexus.reasoning.llm_orchestrator import orchestrator as llm_orchestrator
+
+                    # Extract the proposed tool and arguments from context
+                    if hasattr(pending_item, 'context') and pending_item.context:
+                        tool_name = pending_item.context.get('proposed_tool')
+                        tool_args = pending_item.context.get('tool_args', {})
+
+                        if tool_name and tool_args:
+                            result = llm_orchestrator.execute_remediation(tool_name, tool_args)
+                            return {
+                                "status": "approved_and_executed",
+                                "action_id": action_id,
+                                "result": result
+                            }
+                except Exception as e:
+                    # If direct execution fails, fall back to normal approval
+                    _log.warning(f"Failed to execute LLM remediation directly: {e}")
+
             return {"status": "approved", "action_id": action_id}
         raise HTTPException(
             status_code=404, detail=f"Action {action_id!r} not found in approval queue"
@@ -466,6 +509,9 @@ async def reject_action(action_id: str) -> dict[str, str]:
     try:
         ladder = orc.executor.ladder
         queue = ladder.approval_queue
+        # Idempotent: a repeat reject re-INSERTs the audit row (PK reject_{id}).
+        if queue.is_rejected(action_id):
+            return {"status": "already_rejected", "action_id": action_id}
         ok = queue.reject(action_id)
         if ok:
             if context.audit_trail:
@@ -485,7 +531,9 @@ async def pending_approvals() -> list[dict[str, Any]]:
     orc = _require(context.orchestrator, "NexusOrchestrator")
     try:
         queue = orc.executor.ladder.approval_queue
-        return queue.pending_list()
+        # pending_list() returns PendingApproval dataclasses; serialize so the
+        # declared list[dict] response model validates under pydantic v2.
+        return [p.to_dict() for p in queue.pending_list()]
     except AttributeError:
         return []
 
@@ -618,3 +666,21 @@ def ppa_pending() -> list[dict[str, Any]]:
         }
         for p in tracker._pending.values()
     ]
+
+# AlertManager Webhook Integration
+@app.post("/webhook/alertmanager", tags=["integration"])
+async def alertmanager_webhook(payload: dict[str, Any]) -> dict[str, str]:
+    """
+    Receive alerts from Prometheus Alertmanager and trigger the LLM Orchestrator.
+    """
+    try:
+        from nexus.reasoning.llm_orchestrator import orchestrator
+        import asyncio
+        
+        # Fire and forget the LLM handling so we don't block the webhook response
+        asyncio.create_task(orchestrator.handle_alert(payload))
+        return {"status": "accepted"}
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Failed to process alert webhook: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error processing webhook")

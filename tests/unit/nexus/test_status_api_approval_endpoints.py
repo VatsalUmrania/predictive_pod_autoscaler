@@ -146,12 +146,22 @@ async def test_reject_404_when_id_unknown(fresh_context):
 
 @pytest.mark.asyncio
 async def test_pending_approvals_returns_queue_list(fresh_context):
-    pending_objs = [MagicMock(approval_id="A1"), MagicMock(approval_id="A2")]
-    ladder, _ = _ladder_with_queue(pending=pending_objs)
+    from nexus.governance.action_ladder import PendingApproval
+
+    p1 = PendingApproval(
+        approval_id="A1", runbook_id="llm_dynamic",
+        action_type="restart_deployment", target="shop-demo",
+        incident_id="CL-1", healing_level=2, confidence=0.8,
+        enqueued_at="2026-07-31T07:04:27.285226+00:00", context={"proposed_tool": "x"},
+    )
+    ladder, _ = _ladder_with_queue(pending=[p1])
     fresh_context.orchestrator = _orchestrator(ladder)
 
     out = await status_api_module.pending_approvals()
-    assert out == pending_objs
+    # Endpoint serializes PendingApproval → dict so the list[dict] response
+    # model validates under pydantic v2 (was 500ing on dataclass-as-dict).
+    assert out == [p1.to_dict()]
+    assert out[0]["approval_id"] == "A1"
 
 
 @pytest.mark.asyncio

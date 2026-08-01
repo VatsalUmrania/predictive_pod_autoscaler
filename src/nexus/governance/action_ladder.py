@@ -128,6 +128,19 @@ class PendingApproval:
     enqueued_at: str
     context: dict = field(default_factory=dict)
 
+    def to_dict(self) -> dict:
+        return {
+            "approval_id": self.approval_id,
+            "runbook_id": self.runbook_id,
+            "action_type": self.action_type,
+            "target": self.target,
+            "incident_id": self.incident_id,
+            "healing_level": self.healing_level,
+            "confidence": round(self.confidence, 3),
+            "enqueued_at": self.enqueued_at,
+            "context": self.context,
+        }
+
 
 class HumanApprovalQueue:
     """

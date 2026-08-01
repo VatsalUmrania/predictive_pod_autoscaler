@@ -26,8 +26,8 @@ RCAResult fields:
     source:        "gemini" | "rule_based"
 
 Configuration:
-    NEXUS_GEMINI_API_KEY   — required for Gemini; fallback used if absent
-    NEXUS_GEMINI_MODEL     — model name (default: gemini-2.5-flash)
+    NEXUS_LLM_API_KEY     — required for Gemini; fallback used if absent
+    NEXUS_GEMINI_MODEL     — model name (default: gemini-3.1-flash-lite)
     NEXUS_RCA_TIMEOUT_S    — Gemini request timeout in seconds (default: 10)
 """
 
@@ -537,12 +537,11 @@ class RCAEngine:
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = "gemini-2.5-flash",
+        model: str = "gemini-3.1-flash-lite",
         timeout_s: float = 10.0,
         use_fallback: bool = True,
         knowledge_base: Any = None,
     ):
-        # Legacy compat: NEXUS_GEMINI_API_KEY still works for Gemini provider
         self._timeout_s = float(os.getenv("NEXUS_RCA_TIMEOUT_S", str(timeout_s)))
         self._use_fallback = use_fallback
         self._knowledge_base = knowledge_base

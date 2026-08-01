@@ -76,7 +76,7 @@ def server() -> None:
 )
 @click.option(
     "--gemini-api-key",
-    default=lambda: os.environ.get("GEMINI_API_KEY"),
+    default=lambda: os.environ.get("NEXUS_LLM_API_KEY"),
     help="Gemini API key for LLM-powered RCA",
 )
 @click.option(

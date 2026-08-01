@@ -24,7 +24,7 @@ services:
       DEMO_DB_PATH: /data/shop.db
       NEXUS_API_URL: ""   # NEXUS not running; leave empty for local-only mode
       SELFHEAL_TOKEN: ${SELFHEAL_TOKEN:-}
-      NEXUS_GEMINI_API_KEY: ${NEXUS_GEMINI_API_KEY:-}
+      NEXUS_LLM_API_KEY: ${NEXUS_LLM_API_KEY:-}
     volumes:
       - shop_data:/data
 
@@ -39,7 +39,7 @@ services:
       NEXUS_API_URL: ""    # NEXUS not running; leave empty for local-only mode
       DEMO_API_URL: http://shop-backend:8001
       NEXUS_AUDIT_DB_PATH: /data/nexus_audit.db
-      NEXUS_GEMINI_API_KEY: ${NEXUS_GEMINI_API_KEY:-}
+      NEXUS_LLM_API_KEY: ${NEXUS_LLM_API_KEY:-}
       SELFHEAL_TOKEN: ${SELFHEAL_TOKEN:-}
     volumes:
       - nexus_data:/data

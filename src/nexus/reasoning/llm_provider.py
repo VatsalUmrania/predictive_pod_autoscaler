@@ -15,10 +15,6 @@ Environment variables:
     NEXUS_LLM_MODEL         — Model name override (optional)
     NEXUS_RCA_TIMEOUT_S     — Request timeout in seconds (default: 10)
 
-    # Legacy (still supported):
-    NEXUS_GEMINI_API_KEY    — Equivalent to NEXUS_LLM_API_KEY when provider=gemini
-    NEXUS_GEMINI_MODEL      — Equivalent to NEXUS_LLM_MODEL when provider=gemini
-
 Architecture:
     LLMProvider is an abstract base.
     Concrete subclasses: GeminiProvider, OpenAIProvider, AnthropicProvider.
@@ -107,16 +103,12 @@ class LLMProvider(ABC):
 
 # Gemini provider
 class GeminiProvider(LLMProvider):
-    """Google Gemini via google-generativeai SDK."""
+    """Google Gemini via google-genai SDK."""
 
-    DEFAULT_MODEL = "gemini-flash-latest"
+    DEFAULT_MODEL = "gemini-3.1-flash-lite"
 
     def __init__(self, api_key: str | None = None, model: str | None = None):
-        self._api_key = (
-            api_key
-            or os.getenv("NEXUS_LLM_API_KEY")
-            or os.getenv("NEXUS_GEMINI_API_KEY", "")
-        )
+        self._api_key = api_key or os.getenv("NEXUS_LLM_API_KEY", "")
         self._model_name = self.DEFAULT_MODEL
         self._client = None
 
@@ -369,9 +361,6 @@ def _autodetect_provider() -> str:
         return "openai"
     if os.getenv("ANTHROPIC_API_KEY"):
         return "anthropic"
-    if os.getenv("NEXUS_GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY"):
-        return "gemini"
     if os.getenv("NEXUS_LLM_API_KEY"):
-        # Generic key alone — Gemini is the historical default
         return "gemini"
     return "none"

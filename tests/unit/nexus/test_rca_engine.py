@@ -46,9 +46,7 @@ def _engine_with_provider(provider: MagicMock) -> RCAEngine:
     return engine
 
 
-# ── F2 enrichment: prompt building ────────────────────────────────────────────
-
-
+# F2 enrichment: prompt building
 def test_build_gemini_prompt_appends_historical_runbook_note():
     """When a historical runbook is supplied, the prompt gains a Historical Note."""
     cluster = _entity_with_signals({"pod_crashloop"})
@@ -58,7 +56,6 @@ def test_build_gemini_prompt_appends_historical_runbook_note():
     assert "Historical Note" in prompt
     assert "Strongly consider it" in prompt
 
-
 def test_build_gemini_prompt_without_historical_runbook_is_plain():
     """No runbook → prompt is just the base context (no Historical Note section)."""
     cluster = _entity_with_signals({"pod_crashloop"})
@@ -66,17 +63,13 @@ def test_build_gemini_prompt_without_historical_runbook_is_plain():
     assert prompt == "BASE LLM CONTEXT"
     assert "Historical Note" not in prompt
 
-
 def test_build_gemini_prompt_empty_string_runbook_treated_as_absent():
     """An empty-string runbook (KB returned '') must not emit a note section."""
     cluster = _entity_with_signals({"pod_crashloop"})
     prompt = _build_gemini_prompt(cluster, historical_runbook="")
     assert "Historical Note" not in prompt
 
-
-# ── F2 enrichment: KB lookup is driven into analyze() ─────────────────────────
-
-
+# F2 enrichment: KB lookup is driven into analyze()
 @pytest.mark.asyncio
 async def test_analyze_queries_knowledge_base_for_runbook(monkeypatch):
     """analyze() must call get_best_runbook_for_pattern when a KB is present."""
@@ -85,7 +78,7 @@ async def test_analyze_queries_knowledge_base_for_runbook(monkeypatch):
     captured_prompts: list[str] = []
     provider = MagicMock()
     provider.name = "gemini"
-    provider.model = "gemini-pro"
+    provider.model = "gemini-3.1-flash-lite"
     provider.is_available = MagicMock(return_value=True)
 
     async def fake_complete(prompt: str) -> str:
@@ -121,7 +114,6 @@ async def test_analyze_queries_knowledge_base_for_runbook(monkeypatch):
     # _parse_response fails on garbage → rule-based fallback still returns a result.
     assert result.source == "rule_based"
 
-
 @pytest.mark.asyncio
 async def test_analyze_without_knowledge_base_does_not_lookup(monkeypatch):
     """No KB → analyze skips the lookup entirely (graceful)."""
@@ -139,10 +131,7 @@ async def test_analyze_without_knowledge_base_does_not_lookup(monkeypatch):
     result = await engine.analyze(cluster)
     assert result.source == "rule_based"
 
-
-# ── OpenAI fallback ───────────────────────────────────────────────────────────
-
-
+#  OpenAI fallback
 @pytest.mark.asyncio
 async def test_openai_fallback_used_when_gemini_fails(monkeypatch):
     """Gemini raises → OpenAI available → result tagged source='openai'."""
@@ -152,7 +141,7 @@ async def test_openai_fallback_used_when_gemini_fails(monkeypatch):
     # Primary provider (gemini) is available but throws.
     gemini = MagicMock()
     gemini.name = "gemini"
-    gemini.model = "gemini-pro"
+    gemini.model = "gemini-3.1-flash-lite"
     gemini.is_available = MagicMock(return_value=True)
     gemini.complete = AsyncMock(side_effect=RuntimeError("gemini 503"))
 

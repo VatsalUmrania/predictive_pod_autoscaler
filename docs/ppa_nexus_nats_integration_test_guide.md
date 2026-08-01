@@ -1,5 +1,3 @@
----
-
 ## Running the Shop-Demo + NEXUS + PPA Stack
 
 The guide outlines **9 sequential phases**. Here's the condensed, practical version:
@@ -257,6 +255,49 @@ open $NEXUS/docs                                      # Swagger UI
 
 ---
 
+### Phase 9 — Test LLM Self-Healing Orchestrator
+> Test the new Gemini-based event-driven agent architecture that diagnoses anomalies and proposes fixes via Slack.
+
+```bash
+# 1. Apply the new RBAC permissions for the agent
+kubectl apply -f infra/nexus-rbac.yaml
+
+# 2. Add API keys to the Nexus API deployment (replace with your real keys)
+kubectl set env deployment/nexus-api -n nexus \
+  NEXUS_LLM_API_KEY="your_gemini_api_key" \
+  SLACK_WEBHOOK_URL="your_slack_webhook_url"
+
+# 3. Wait for pod to restart and inject a synthetic AlertManager webhook
+kubectl rollout status deployment/nexus-api -n nexus --timeout=60s
+NEXUS=http://$(minikube ip):30081
+
+curl -X POST "$NEXUS/webhook/alertmanager" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "receiver": "nexus-webhook",
+    "status": "firing",
+    "alerts": [
+      {
+        "status": "firing",
+        "labels": {
+          "alertname": "HighErrorRate",
+          "severity": "critical",
+          "namespace": "default",
+          "pod": "shop-demo-54f67c8b9d-abcde"
+        },
+        "annotations": {
+          "description": "Error rate exceeds 5% for shop-demo"
+        }
+      }
+    ]
+  }'
+
+# 4. Check the LLM orchestrator logs to verify diagnosis and Slack integration
+kubectl logs -n nexus deployment/nexus-api -f | grep -i "llm\|diagnosis\|chatops\|slack"
+```
+
+---
+
 ### 🐛 Common Issues
 
 | Issue | Fix |
@@ -268,4 +309,4 @@ open $NEXUS/docs                                      # Swagger UI
 
 ---
 
-**TL;DR order:** Phase 1 (NEXUS K8s) → Phase 2 (minikube+helm+shop-demo) → Phase 3 (apply PredictiveAutoscaler CRs) → Phase 4 (`ppa model push`) → Phase 5 (build + deploy operator) → verify logs. Use the **synthetic inject script** in Phase 9 for instant end-to-end testing without waiting for the full ML cycle.
+**TL;DR order:** Phase 1 (NEXUS K8s) → Phase 2 (minikube+helm+shop-demo) → Phase 3 (apply PredictiveAutoscaler CRs) → Phase 4 (`ppa model push`) → Phase 5 (build + deploy operator) → verify logs. Use the **synthetic inject script** in the Fast Verification step for instant testing, and run **Phase 9** to test the new Gemini LLM auto-remediation workflow.

@@ -223,12 +223,32 @@ class NexusServer:
         confidence_scorer = ConfidenceScorer()
         correlator = EventCorrelator()
 
+        # ── LLM Orchestrator (Gemini agent for cluster-driven remediation) ──────
+        # Lazy import to avoid pulling google-cloud libs when API key is absent.
+        try:
+            from nexus.reasoning.llm_orchestrator import orchestrator as llm_orchestrator
+        except ImportError as _llm_err:
+            logger.warning(f"[NexusServer] LLMOrchestrator import failed: {_llm_err}")
+            llm_orchestrator = None
+        # _client is created lazily on first request, so it's None at startup even
+        # when the key IS set — testing _client can't tell the cases apart. Probe
+        # key readiness via _ensure_client(), and actually null it out when absent so
+        # the Orchestrator's LLM branch is skipped and it falls back to RunbookExecutor.
+        if llm_orchestrator is not None and not llm_orchestrator._ensure_client():
+            logger.warning(
+                "[NexusServer] LLMOrchestrator not initialised "
+                "(NEXUS_LLM_API_KEY missing?). LLM-driven remediation disabled; "
+                "falling back to deterministic RunbookExecutor."
+            )
+            llm_orchestrator = None
+
         orchestrator = NexusOrchestrator(
             nats_client=nats,
             correlator=correlator,
             rca_engine=rca_engine,
             confidence_scorer=confidence_scorer,
             executor=executor,
+            llm_orchestrator=llm_orchestrator,
         )
 
         # ── Notifier (sync — manages its own background task internally) ────────

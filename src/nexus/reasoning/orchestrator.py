@@ -35,7 +35,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
 from nexus.bus.nats_client import NATSClient
@@ -57,6 +57,7 @@ class NexusOrchestrator:
         rca_engine:         RCAEngine instance (Gemini + fallback).
         confidence_scorer:  ConfidenceScorer instance.
         executor:           RunbookExecutor (Phase 3, full governance).
+        llm_orchestrator:   LLMOrchestrator instance for LLM-driven remediation (optional).
         flush_interval_s:   How often to flush stale clusters (default 30s).
         max_concurrent:     Max concurrent cluster analyses (semaphore, default 5).
         dry_run:            If True, perform RCA but don't call executor.
@@ -69,6 +70,7 @@ class NexusOrchestrator:
         rca_engine: RCAEngine,
         confidence_scorer: ConfidenceScorer,
         executor: RunbookExecutor,
+        llm_orchestrator: Optional['LLMOrchestrator'] = None,
         flush_interval_s: float = 30.0,
         max_concurrent: int = 5,
         dry_run: bool = False,
@@ -78,6 +80,7 @@ class NexusOrchestrator:
         self.rca = rca_engine
         self.scorer = confidence_scorer
         self.executor = executor
+        self.llm_orchestrator = llm_orchestrator
         self._flush_interval = flush_interval_s
         self._dry_run = dry_run
         self._semaphore = asyncio.Semaphore(max_concurrent)
@@ -234,7 +237,19 @@ class NexusOrchestrator:
             cluster, rca_result, confidence, effective_level
         )
 
-        # ── Step 4: Route to RunbookExecutor ─────────────────────────────────
+        # ── Step 4: Route to LLMOrchestrator for LLM-driven remediation ─────────────────
+        # Check if we have LLM orchestrator available and the RCA suggests LLM handling
+        if hasattr(self, 'llm_orchestrator') and self.llm_orchestrator and rca_result.source in ['gemini', 'openai']:
+            logger.info(
+                f"[Orchestrator] Routing {cluster.cluster_id} to LLMOrchestrator for LLM-driven remediation "
+                f"(source={rca_result.source})"
+            )
+            # Convert cluster to summary for LLM processing
+            cluster_summary = cluster.to_summary()
+            await self.llm_orchestrator.handle_cluster(cluster_summary, self.executor.ladder.approval_queue)
+            return
+
+        # Fallback to traditional RunbookExecutor path
         if not rca_result.runbook_id and effective_level == 0:
             logger.info(
                 f"[Orchestrator] L0 / no runbook for {cluster.cluster_id} "
@@ -366,6 +381,7 @@ def build_orchestrator(
     quorum_events: int = 3,
     flush_interval_s: float = 30.0,
     dry_run: bool = False,
+    llm_orchestrator: Optional['LLMOrchestrator'] = None,
 ) -> NexusOrchestrator:
     """
     Build a fully-configured NexusOrchestrator with default component settings.
@@ -373,11 +389,12 @@ def build_orchestrator(
     Args:
         nats_client:          Connected NATSClient.
         executor:             Phase 3 RunbookExecutor.
-        gemini_api_key:       Google AI API key (reads NEXUS_GEMINI_API_KEY if None).
+        gemini_api_key:       Google AI API key (reads NEXUS_LLM_API_KEY if None).
         correlation_window_s: EventCorrelator time window (default 60s).
         quorum_events:        Events needed to form a cluster (default 3).
         flush_interval_s:     Stale cluster flush interval (default 30s).
         dry_run:              Don't call executor — only log decisions.
+        llm_orchestrator:     LLMOrchestrator instance for LLM-driven remediation (optional).
     """
     correlator = EventCorrelator(
         correlation_window_s=correlation_window_s,
@@ -393,6 +410,7 @@ def build_orchestrator(
         rca_engine=rca_engine,
         confidence_scorer=scorer,
         executor=executor,
+        llm_orchestrator=llm_orchestrator,
         flush_interval_s=flush_interval_s,
         dry_run=dry_run,
     )
