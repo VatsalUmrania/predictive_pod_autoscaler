@@ -335,7 +335,7 @@ class Prescaler:
         )
         logger.info("[PreScaler] Subscribed to ppa.predictions.*")
 
-    # NATS handler 
+    # NATS handler
     async def handle_spike_prediction(self, event: IncidentEvent) -> None:
         """
         Entry point: called when a TRAFFIC_SPIKE_PREDICTED event arrives.
@@ -355,7 +355,7 @@ class Prescaler:
         namespace = event.namespace or "default"
         deployment = event.resource_name or self._endpoint_to_deployment(endpoint)
 
-        # Gates 
+        # Gates
         if confidence < self._min_confidence:
             self._skipped_confidence += 1
             logger.info(
@@ -376,7 +376,7 @@ class Prescaler:
             logger.info(f"[Prescaler] Skipped {deployment}: in cooldown")
             return
 
-        #  Compute recommendation 
+        #  Compute recommendation
         recommended_replicas = min(
             self._max_replicas, max(1, int(predicted_rps / max(self._target_rps, 1.0)))
         )
@@ -419,7 +419,7 @@ class Prescaler:
             f"horizon={horizon}min"
         )
 
-        # Mode dispatch 
+        # Mode dispatch
         if self.mode == PrescaleMode.SHADOW:
             await self._shadow_execute(decision)
         elif self.mode == PrescaleMode.ADVISORY:
@@ -432,7 +432,7 @@ class Prescaler:
 
         self._set_cooldown(deployment)
 
-    # Mode implementations 
+    # Mode implementations
     async def _shadow_execute(self, decision: PrescaleDecision) -> None:
         """
         SHADOW mode: log the decision, record for precision tracking.
@@ -611,7 +611,7 @@ class Prescaler:
             # Notifications are best-effort — never fail prescaler on publish error
             logger.debug(f"[Prescaler] prescale publish failed: {exc}")
 
-    # Helpers 
+    # Helpers
     async def _get_current_replicas(self, deployment: str, namespace: str) -> int:
         """Query K8s for current replica count. Returns 1 on error (safe fallback)."""
         try:
@@ -648,7 +648,7 @@ class Prescaler:
 
         self._cooldowns[deployment] = time.monotonic() + self._cooldown
 
-    # Mode promotion 
+    # Mode promotion
     def promote(self, target_mode: PrescaleMode) -> str:
         """Promote the prescaler to a higher autonomy mode (operator command)."""
         old = self.mode
@@ -659,7 +659,7 @@ class Prescaler:
         )
         return f"Mode changed: {old.value} → {target_mode.value}"
 
-    # Observability 
+    # Observability
     @property
     def stats(self) -> dict[str, Any]:
         prec = self._tracker.stats()

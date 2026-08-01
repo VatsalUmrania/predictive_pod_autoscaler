@@ -8,12 +8,17 @@ to diagnose and remediate cluster issues.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+import os
 
+import httpx
+import yaml
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 
 logger = logging.getLogger(__name__)
+
+# Prometheus URL for metrics queries (fallback to common in-cluster default)
+PROMETHEUS_URL = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090")
 
 def _get_api() -> k8s_client.CoreV1Api:
     try:
@@ -74,16 +79,98 @@ def get_events(namespace: str, resource_name: str = None) -> str:
         return f"Error fetching events: {str(e)}"
 
 def get_metrics(namespace: str, pod_name: str) -> str:
-    """Fetch basic metrics for a pod (CPU/Memory)."""
-    # Placeholder for metric fetching (e.g. from metrics-server or prometheus)
-    return f"Metrics for {pod_name} in {namespace}: CPU 150m, Memory 256Mi (Simulated)"
+    """Fetch real CPU/Memory metrics for a pod from Prometheus.
+
+    Queries container_cpu_usage_seconds_total and container_memory_working_set_bytes
+    via PromQL, returns human-readable string. Falls back to simulated if Prometheus
+    is unavailable.
+    """
+    try:
+        # Query for CPU (rate over 1m) and current memory
+        cpu_query = f'sum(rate(container_cpu_usage_seconds_total{{namespace="{namespace}",pod="{pod_name}",container!=""}}[1m])) by (pod)'
+        mem_query = f'sum(container_memory_working_set_bytes{{namespace="{namespace}",pod="{pod_name}",container!=""}}) by (pod)'
+
+        cpu_val = None
+        mem_val = None
+
+        # Blocking httpx calls (tool functions are sync)
+        with httpx.Client(timeout=5.0) as client:
+            # CPU
+            resp = client.get(
+                f"{PROMETHEUS_URL}/api/v1/query",
+                params={"query": cpu_query}
+            )
+            if resp.status_code == 200:
+                data = resp.json().get("data", {}).get("result", [])
+                if data:
+                    cpu_val = float(data[0]["value"][1])
+
+            # Memory
+            resp = client.get(
+                f"{PROMETHEUS_URL}/api/v1/query",
+                params={"query": mem_query}
+            )
+            if resp.status_code == 200:
+                data = resp.json().get("data", {}).get("result", [])
+                if data:
+                    mem_val = float(data[0]["value"][1])
+
+        if cpu_val is not None and mem_val is not None:
+            # Convert: CPU cores -> millicores, memory bytes -> Mi
+            cpu_m = cpu_val * 1000
+            mem_mi = mem_val / (1024 * 1024)
+            return f"Metrics for {pod_name} in {namespace}: CPU {cpu_m:.0f}m, Memory {mem_mi:.0f}Mi"
+        elif cpu_val is not None:
+            cpu_m = cpu_val * 1000
+            return f"Metrics for {pod_name} in {namespace}: CPU {cpu_m:.0f}m, Memory unavailable"
+        elif mem_val is not None:
+            mem_mi = mem_val / (1024 * 1024)
+            return f"Metrics for {pod_name} in {namespace}: CPU unavailable, Memory {mem_mi:.0f}Mi"
+        else:
+            return f"Metrics for {pod_name} in {namespace}: no data from Prometheus"
+
+    except Exception as e:
+        logger.warning(f"get_metrics failed for {pod_name}: {e}")
+        return f"Metrics for {pod_name} in {namespace}: error fetching ({e})"
 
 def get_yaml(namespace: str, resource_kind: str, resource_name: str) -> str:
-    """Fetch the YAML definition of a resource."""
-    # Placeholder for YAML fetching
-    return f"YAML for {resource_kind} {resource_name} in {namespace} (Simulated)"
+    """Fetch the actual YAML definition of a resource from the kube API."""
+    api = _get_api()
+    try:
+        kind = resource_kind.lower()
+        if kind == "pod":
+            obj = api.read_namespaced_pod(name=resource_name, namespace=namespace)
+        elif kind == "deployment":
+            api = _get_apps_api()
+            obj = api.read_namespaced_deployment(name=resource_name, namespace=namespace)
+        elif kind == "service":
+            obj = api.read_namespaced_service(name=resource_name, namespace=namespace)
+        elif kind == "configmap":
+            obj = api.read_namespaced_config_map(name=resource_name, namespace=namespace)
+        elif kind == "secret":
+            obj = api.read_namespaced_secret(name=resource_name, namespace=namespace)
+        elif kind == "statefulset":
+            api = _get_apps_api()
+            obj = api.read_namespaced_stateful_set(name=resource_name, namespace=namespace)
+        elif kind == "daemonset":
+            api = _get_apps_api()
+            obj = api.read_namespaced_daemon_set(name=resource_name, namespace=namespace)
+        else:
+            return f"YAML fetch not implemented for {resource_kind}"
 
-# Write Tools 
+        # Convert to dict and dump as YAML (strip managed fields)
+        data = obj.to_dict()
+        for key in ["status", "managed_fields", "creation_timestamp", "resource_version", "uid"]:
+            data.pop(key, None)
+        if "metadata" in data:
+            for key in ["creation_timestamp", "resource_version", "uid", "generation"]:
+                data["metadata"].pop(key, None)
+        return yaml.dump(data, default_flow_style=False)
+
+    except Exception as e:
+        return f"Error fetching YAML for {resource_kind} {resource_name}: {str(e)}"
+
+# Write Tools
 
 def restart_deployment(namespace: str, deployment_name: str) -> str:
     """Perform a rolling restart of a deployment."""
@@ -137,7 +224,7 @@ def rollback_deployment(namespace: str, deployment_name: str) -> str:
     except Exception as e:
         return f"Error rolling back deployment: {str(e)}"
 
-def patch_configmap(namespace: str, configmap_name: str, patch_data: Dict[str, str]) -> str:
+def patch_configmap(namespace: str, configmap_name: str, patch_data: dict[str, str]) -> str:
     """Patch a ConfigMap with new key/value pairs."""
     api = _get_api()
     try:
@@ -169,6 +256,42 @@ def cordon_node(node_name: str) -> str:
     except Exception as e:
         return f"Error cordoning node: {str(e)}"
 
+
 def drain_node(node_name: str) -> str:
-    """Drain a node in preparation for maintenance."""
-    return f"Node {node_name} draining initiated. (Simulated)"
+    """Drain a node: cordon + evict all pods (respecting PDBs)."""
+    api = _get_api()
+    try:
+        # First cordon
+        api.patch_node(name=node_name, body={"spec": {"unschedulable": True}})
+
+        # List pods on the node
+        pods = api.list_pod_for_all_namespaces(
+            field_selector=f"spec.nodeName={node_name}"
+        ).items
+
+        # Evict each pod using the eviction/v1 API
+        evicted = 0
+        failed = 0
+        for pod in pods:
+            ns = pod.metadata.namespace
+            pname = pod.metadata.name
+            # Skip DaemonSet pods (they'll be rescheduled immediately)
+            owner_refs = pod.metadata.owner_references or []
+            if any(ref.kind == "DaemonSet" for ref in owner_refs):
+                continue
+
+            eviction = k8s_client.V1Eviction(
+                metadata=k8s_client.V1ObjectMeta(name=pname, namespace=ns),
+                delete_options=k8s_client.V1DeleteOptions(),
+            )
+            try:
+                api.create_namespaced_pod_eviction(name=pname, namespace=ns, body=eviction)
+                evicted += 1
+            except Exception as e:
+                failed += 1
+                logger.warning(f"Failed to evict {ns}/{pname}: {e}")
+
+        return f"Node {node_name} drained: cordoned, evicted {evicted} pod(s), {failed} failed."
+
+    except Exception as e:
+        return f"Error draining node {node_name}: {str(e)}"

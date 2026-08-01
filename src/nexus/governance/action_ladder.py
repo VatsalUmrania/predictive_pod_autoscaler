@@ -306,6 +306,7 @@ class ActionLadder:
         target: str,
         confidence: float = 1.0,
         human_approved: bool = False,
+        override_blast_radius: bool = False,
     ) -> LadderDecision:
         """
         Evaluate whether an action may proceed.
@@ -366,7 +367,8 @@ class ActionLadder:
             governance_cb_open=self._cb.is_open,
             confidence=confidence,
             human_approved=human_approved,
-            override_blast_radius=getattr(event, "override_blast_radius", False),
+            override_blast_radius=override_blast_radius
+            or getattr(event, "override_blast_radius", False),
         )
 
         # ── L3 + confidence gate → human approval ────────────────────────────
@@ -383,6 +385,15 @@ class ActionLadder:
                     "signal_type": event.signal_type,
                     "namespace": event.namespace,
                     "resource": event.resource_name,
+                    # Full snapshots so RunbookExecutor.execute_approved() can
+                    # re-dispatch ONE action through the governance plane without
+                    # the original cluster/event still in scope. Pydantic
+                    # round-trips via model_dump / model_validate.
+                    "action": (action.model_dump() if hasattr(action, "model_dump")
+                               else {"type": action_type, "params": action.params}),
+                    "event": (event.model_dump()
+                              if hasattr(event, "model_dump") else None),
+                    "blast_radius": blast_radius,
                 },
             )
             return LadderDecision(

@@ -27,10 +27,46 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Slack interactivity URL — when set, `notify_approval_required` emits
+# functional Approve/Reject buttons that POST to /slack/interactive on the
+# status API (see nexus.observability.status_api). The same URL is used by
+# chatops.send_approval_request for the LLM path. Defaults to "" (disabled).
+SLACK_INTERACTIVE_URL = os.environ.get("SLACK_INTERACTIVE_URL", "")
+
+def _approval_buttons_block(approval_id: str) -> dict:
+    """Slack Block Kit action block with Approve/Reject buttons.
+
+    The buttons POST to SLACK_INTERACTIVE_URL with a payload the
+    /slack/interactive endpoint parses. If SLACK_INTERACTIVE_URL is empty,
+    returns an empty block (caller must filter) — this keeps the notifier's
+    Slack message renderable even without the interactive endpoint configured.
+    """
+    if not SLACK_INTERACTIVE_URL:
+        return {"type": "context", "elements": [{"type": "mrkdwn", "text": ""}]}
+    return {
+        "type": "actions",
+        "elements": [
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "Approve ✅"},
+                "style": "primary",
+                "action_id": "nexus_approve",
+                "value": approval_id,
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "Reject ❌"},
+                "style": "danger",
+                "action_id": "nexus_reject",
+                "value": approval_id,
+            },
+        ],
+    }
 
 class Notifier:
     """
@@ -45,7 +81,7 @@ class Notifier:
         self._nats_task: asyncio.Task | None = None
         self._running: bool = False
 
-    # ── Public notification API ───────────────────────────────────────────────
+    #  Public notification API
 
     async def notify_heal(
         self,
@@ -254,13 +290,14 @@ class Notifier:
                                 "text": f"To approve this action, run:\n`nexus approve {approval_id}`",
                             },
                         },
+                        _approval_buttons_block(approval_id),
                     ],
                 }
             ]
         }
         await self._send(webhook, payload, app_name)
 
-    # ── Policy helpers ────────────────────────────────────────────────────────
+    # Policy helpers
 
     def _get_webhook(self, app_name: str) -> str | None:
         """Return the Slack webhook URL for an app, or None if not configured."""
@@ -283,7 +320,7 @@ class Notifier:
         except Exception:
             return 3
 
-    # ── HTTP send ─────────────────────────────────────────────────────────────
+    # HTTP send
 
     async def _send(
         self,

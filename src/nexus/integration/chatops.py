@@ -9,27 +9,33 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict
+from typing import Any
+
+from nexus.integration.notifier import SLACK_INTERACTIVE_URL, _approval_buttons_block
 
 logger = logging.getLogger(__name__)
 
 # Assumes SLACK_WEBHOOK_URL is set in the environment
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
 
-async def send_approval_request(diagnosis: str, context: Dict[str, Any]) -> bool:
+async def send_approval_request(
+    diagnosis: str, context: dict[str, Any], approval_id: str | None = None
+) -> bool:
     """
     Sends a diagnosis and proposed remediation to Slack with Approve/Reject buttons.
+
+    If `approval_id` is provided and `SLACK_INTERACTIVE_URL` is configured,
+    the message includes functional buttons that POST to the FastAPI endpoint.
+    Falls back to CLI instructions (`nexus approve <id>`) when not configured.
     """
     if not SLACK_WEBHOOK_URL:
         logger.warning("SLACK_WEBHOOK_URL not set. Skipping ChatOps notification.")
-        # For testing, we might want to automatically approve or just log
         logger.info(f"Simulating sending approval request:\nDiagnosis: {diagnosis}\nContext: {context}")
         return True
-        
+
     try:
         import httpx
-        
-        # Construct Slack Block Kit message
+
         blocks = [
             {
                 "type": "header",
@@ -52,41 +58,27 @@ async def send_approval_request(diagnosis: str, context: Dict[str, Any]) -> bool
                     "text": f"*Diagnosis & Proposal:*\n{diagnosis}"
                 }
             },
-            {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "text": {
-                            "type": "plain_text",
-                            "text": "Approve Fix"
-                        },
-                        "style": "primary",
-                        "value": "approve"
-                    },
-                    {
-                        "type": "button",
-                        "text": {
-                            "type": "plain_text",
-                            "text": "Reject"
-                        },
-                        "style": "danger",
-                        "value": "reject"
-                    }
-                ]
-            }
         ]
-        
+
+        if approval_id:
+            blocks.append(_approval_buttons_block(approval_id))
+            if not SLACK_INTERACTIVE_URL:
+                blocks.append(
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"To approve this action, run:\n`nexus approve {approval_id}`",
+                        }
+                    }
+                )
+
         async with httpx.AsyncClient() as client:
             response = await client.post(SLACK_WEBHOOK_URL, json={"blocks": blocks})
             response.raise_for_status()
             logger.info("Successfully sent approval request to Slack.")
             return True
-            
+
     except Exception as e:
         logger.error(f"Error sending Slack notification: {e}")
         return False
-
-# In a real implementation, we would also have an endpoint handler here 
-# (e.g., FastAPI route) to receive the interactive callback from Slack when 
-# the user clicks "Approve" or "Reject". For this iteration, we focus on sending the request.

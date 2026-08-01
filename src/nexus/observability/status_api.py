@@ -438,67 +438,69 @@ async def audit_by_incident(incident_id: str) -> list[dict[str, Any]]:
 
 # Human approvals
 @app.post("/approve/{action_id}", tags=["governance"])
-async def approve_action(action_id: str) -> dict[str, str]:
-    """
-    Approve a pending human-review action (from Phase 3 HumanApprovalQueue).
-    Triggers the queued executor callback.
-    For LLM-approved actions (runbook_id="llm_dynamic"), executes the remediation directly.
+async def approve_action(action_id: str) -> dict[str, Any]:
+    """Approve a pending human-review action, then dispatch it through the
+    governance plane (ladder + cooldown + circuit breaker + audit + rollback).
+
+    All approved actions — rule-based runbooks *and* LLM proposals — flow
+    through RunbookExecutor.execute_approved(), the single point where a
+    human-approved action touches the cluster. Governance gates still apply
+    after approval: cooldown or a tripped circuit breaker can block an action a
+    human signed off on (the human may not have known a heal ran 60s ago or that
+    the breaker is open). Returns outcome fields from execute_approved.
     """
     orc = _require(context.orchestrator, "NexusOrchestrator")
     try:
-        ladder = orc.executor.ladder
-        queue = ladder.approval_queue
-
-        # Get the pending approval details before approving
-        pending_items = queue.pending_list()
-        pending_item = None
-        for item in pending_items:
-            # Note: This assumes approval_id is accessible; we may need to adjust based on PendingApproval structure
-            if hasattr(item, 'approval_id') and item.approval_id == action_id:
-                pending_item = item
-                break
-
-        # Idempotent: a repeat approve on the same id (e.g. double-click) must be
-        # a no-op — re-executing the remediation or re-INSERTing the audit row
-        # (PK approve_{id}) 500s with UNIQUE constraint failed.
-        if queue.is_approved(action_id):
-            return {"status": "already_approved", "action_id": action_id}
-
-        ok = queue.approve(action_id)
-        if ok:
-            if context.audit_trail:
-                await context.audit_trail.record_approval(action_id, "api_user")
-
-            # Check if this is an LLM-generated action that needs direct execution
-            if pending_item and getattr(pending_item, 'runbook_id', None) == "llm_dynamic":
-                # Execute the LLM-proposed remediation directly
-                try:
-                    from nexus.reasoning.llm_orchestrator import orchestrator as llm_orchestrator
-
-                    # Extract the proposed tool and arguments from context
-                    if hasattr(pending_item, 'context') and pending_item.context:
-                        tool_name = pending_item.context.get('proposed_tool')
-                        tool_args = pending_item.context.get('tool_args', {})
-
-                        if tool_name and tool_args:
-                            result = llm_orchestrator.execute_remediation(tool_name, tool_args)
-                            return {
-                                "status": "approved_and_executed",
-                                "action_id": action_id,
-                                "result": result
-                            }
-                except Exception as e:
-                    # If direct execution fails, fall back to normal approval
-                    _log.warning(f"Failed to execute LLM remediation directly: {e}")
-
-            return {"status": "approved", "action_id": action_id}
-        raise HTTPException(
-            status_code=404, detail=f"Action {action_id!r} not found in approval queue"
-        )
+        executor = orc.executor
+        queue = executor.ladder.approval_queue
     except AttributeError:
         raise HTTPException(
             status_code=503, detail="HumanApprovalQueue not accessible"
         ) from None
+
+    # Snapshot the pending item before approving (it's removed from
+    # pending_list() once approved, so we can't look it up afterwards).
+    pending_item = next(
+        (p for p in queue.pending_list() if p.approval_id == action_id), None
+    )
+
+    # Idempotent: a repeat approve (e.g. double-click) must be a no-op —
+    # re-executing would re-run the remediation and re-INSERT the audit row
+    # (PK approve_{id}) 500ing with UNIQUE constraint failed.
+    if queue.is_approved(action_id):
+        return {"status": "already_approved", "action_id": action_id}
+
+    if not queue.approve(action_id):
+        raise HTTPException(
+            status_code=404, detail=f"Action {action_id!r} not found in approval queue"
+        )
+
+    if context.audit_trail:
+        await context.audit_trail.record_approval(action_id, "api_user")
+
+    # Re-dispatch the approved action through the governance plane.
+    if pending_item is None:
+        return {"status": "approved", "action_id": action_id}
+    try:
+        outcome = await executor.execute_approved(pending_item)
+        # Nest under ``outcome`` — execute_approved's own ``status`` field
+        # (success/failed/governance_blocked) must not clobber the approval
+        # status the caller is polling for.
+        return {"status": "approved", "action_id": action_id, "outcome": outcome}
+    except ValueError as exc:
+        # Staged snapshot missing / runbook not in library — record the approve
+        # (already done) but report we couldn't re-dispatch.
+        _log.warning(f"Could not re-dispatch approved action {action_id}: {exc}")
+        return {"status": "approved", "action_id": action_id, "error": str(exc)}
+    except Exception as exc:
+        _log.error(
+            f"Re-dispatch of approved action {action_id} failed: {exc}", exc_info=True
+        )
+        return {
+            "status": "approved",
+            "action_id": action_id,
+            "error": f"dispatch_failed: {exc}",
+        }
 
 @app.post("/reject/{action_id}", tags=["governance"])
 async def reject_action(action_id: str) -> dict[str, str]:
@@ -524,6 +526,99 @@ async def reject_action(action_id: str) -> dict[str, str]:
         raise HTTPException(
             status_code=503, detail="HumanApprovalQueue not accessible"
         ) from None
+
+
+# ── Slack interactivity callback ─────────────────────────────────────────────
+# Receives button clicks from chatops.send_approval_request / notifier
+# notify_approval_required messages. Parse Slack's interaction payload and
+# call the SAME approval/reject logic the CLI and HTTP endpoints use.
+
+@app.post("/slack/interactive", tags=["governance"])
+async def slack_interactive(payload: str = None) -> dict[str, Any]:
+    """
+    Slack interactive callback handler.
+
+    Slack sends `application/x-www-form-urlencoded` with a `payload` field
+    containing JSON:
+        {
+            "type": "block_actions",
+            "user": {"id": "U...", "username": ".."},
+            "actions": [
+                {"action_id": "nexus_approve" | "nexus_reject", "value": "APPROVAL123"}
+            ],
+            ...
+        }
+
+    Returns 200 + empty JSON on success, or 200 + response_action "errors"
+    with an error message Slack will surface to the user.
+    """
+    import json
+
+
+    # FastAPI doesn't auto-decode application/x-www-form-urlencoded into a
+    # body model; we accept the raw `payload` form field here.
+    if payload is None:
+        _log.warning("Slack interactivity: missing payload field")
+        return {"response_action": "errors", "errors": "missing payload"}
+
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        _log.warning("Slack interactivity: invalid JSON in payload")
+        return {"response_action": "errors", "errors": "invalid payload"}
+
+    actions = data.get("actions", [])
+    if not actions:
+        _log.warning("Slack interactivity: no actions in payload")
+        return {"response_action": "errors", "errors": "no actions"}
+
+    action = actions[0]
+    action_id = action.get("action_id")  # "nexus_approve" / "nexus_reject"
+    approval_id = action.get("value")  # the approval UUID
+    user = data.get("user", {}).get("username") or data.get("user", {}).get("id", "unknown")
+
+    if not approval_id or action_id not in ("nexus_approve", "nexus_reject"):
+        _log.warning(f"Slack interactivity: malformed action={action_id} value={approval_id}")
+        return {"response_action": "errors", "errors": "malformed action"}
+
+    orc = _require(context.orchestrator, "NexusOrchestrator")
+    try:
+        queue = orc.executor.ladder.approval_queue
+    except AttributeError:
+        _log.warning("Slack interactivity: approval queue not accessible")
+        return {"response_action": "errors", "errors": "queue unavailable"}
+
+    # Route to the same logic the CLI/HTTP endpoints use, but record the
+    # Slack username as the auditor.
+    if action_id == "nexus_approve":
+        if queue.is_approved(approval_id):
+            return {"text": f"✅ Action {approval_id} already approved."}
+        if not queue.approve(approval_id):
+            return {"text": f"❌ Action {approval_id} not found."}
+        if context.audit_trail:
+            await context.audit_trail.record_approval(approval_id, f"slack:{user}")
+        # Re-dispatch through governance plane (same as /approve/{id})
+        pending_item = next(
+            (p for p in queue.pending_list() if p.approval_id == approval_id), None
+        )
+        if pending_item:
+            try:
+                outcome = await orc.executor.execute_approved(pending_item)
+                return {"text": f"✅ Approved {approval_id} → {outcome['status']} (audit {outcome['action_id']})"}
+            except Exception as exc:
+                _log.error(f"Slack approve dispatch failed: {exc}")
+                return {"text": f"✅ Approved {approval_id} but dispatch errored: {exc}"}
+        return {"text": f"✅ Approved {approval_id} (staged item lost, queued only)"}
+
+    # Reject path
+    if queue.is_rejected(approval_id):
+        return {"text": f"❌ Action {approval_id} already rejected."}
+    if not queue.reject(approval_id):
+        return {"text": f"❌ Action {approval_id} not found."}
+    if context.audit_trail:
+        await context.audit_trail.record_rejection(approval_id, f"slack:{user}")
+    return {"text": f"❌ Rejected {approval_id}."}
+
 
 @app.get("/approvals/pending", tags=["governance"])
 async def pending_approvals() -> list[dict[str, Any]]:
@@ -674,13 +769,14 @@ async def alertmanager_webhook(payload: dict[str, Any]) -> dict[str, str]:
     Receive alerts from Prometheus Alertmanager and trigger the LLM Orchestrator.
     """
     try:
-        from nexus.reasoning.llm_orchestrator import orchestrator
         import asyncio
-        
+
+        from nexus.reasoning.llm_orchestrator import orchestrator
+
         # Fire and forget the LLM handling so we don't block the webhook response
         asyncio.create_task(orchestrator.handle_alert(payload))
         return {"status": "accepted"}
     except Exception as e:
         import logging
         logging.getLogger(__name__).error(f"Failed to process alert webhook: {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error processing webhook")
+        raise HTTPException(status_code=500, detail="Internal Server Error processing webhook") from e

@@ -156,7 +156,7 @@ class FeaturePipeline:
         # Last seen feature values for FILL_LAST strategy
         self._last_values: dict[str, float] = {}
 
-    # DB features 
+    # DB features
     def ingest_snapshot(self, snapshot: QuerySnapshot) -> None:
         """Add a QuerySnapshot to the rolling history."""
         self._snapshots.append(snapshot)
@@ -233,7 +233,7 @@ class FeaturePipeline:
             for name, value in raw.items()
         }
 
-    # Feature vector construction 
+    # Feature vector construction
     def build_vector(
         self,
         metrics_context: dict[str, Any] | None = None,

@@ -114,7 +114,7 @@ class _PrometheusCircuitBreaker:
 
     def __repr__(self) -> str:
         return f"CircuitBreaker(state={self.state}, failures={self._failures})"
-    
+
 # Metrics Agent
 class MetricsAgent(BaseAgent):
     """

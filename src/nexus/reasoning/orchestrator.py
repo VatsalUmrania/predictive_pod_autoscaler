@@ -35,7 +35,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
 from nexus.bus.nats_client import NATSClient
@@ -44,6 +44,9 @@ from nexus.reasoning.confidence_scorer import ConfidenceScorer
 from nexus.reasoning.event_correlator import EventCorrelator
 from nexus.reasoning.incident_cluster import IncidentCluster
 from nexus.reasoning.rca_engine import RCAEngine, RCAResult
+
+if TYPE_CHECKING:
+    from nexus.reasoning.llm_orchestrator import LLMOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +73,7 @@ class NexusOrchestrator:
         rca_engine: RCAEngine,
         confidence_scorer: ConfidenceScorer,
         executor: RunbookExecutor,
-        llm_orchestrator: Optional['LLMOrchestrator'] = None,
+        llm_orchestrator: LLMOrchestrator | None = None,
         flush_interval_s: float = 30.0,
         max_concurrent: int = 5,
         dry_run: bool = False,
@@ -154,7 +157,7 @@ class NexusOrchestrator:
                 name=f"process-{cluster.cluster_id}",
             )
 
-    # Flush loop 
+    # Flush loop
     async def _flush_loop(self) -> None:
         """Periodically flush stale clusters that never reached quorum."""
         while True:
@@ -246,7 +249,15 @@ class NexusOrchestrator:
             )
             # Convert cluster to summary for LLM processing
             cluster_summary = cluster.to_summary()
-            await self.llm_orchestrator.handle_cluster(cluster_summary, self.executor.ladder.approval_queue)
+            # Pass the SCORED confidence + scorer-gated level so the LLM
+            # proposal is staged at its real blast radius with an honest gate —
+            # not the hard-coded L2/0.8 that previously bypassed calibration.
+            await self.llm_orchestrator.handle_cluster(
+                cluster_summary,
+                self.executor.ladder.approval_queue,
+                confidence=confidence,
+                effective_level=effective_level,
+            )
             return
 
         # Fallback to traditional RunbookExecutor path
@@ -381,7 +392,7 @@ def build_orchestrator(
     quorum_events: int = 3,
     flush_interval_s: float = 30.0,
     dry_run: bool = False,
-    llm_orchestrator: Optional['LLMOrchestrator'] = None,
+    llm_orchestrator: LLMOrchestrator | None = None,
 ) -> NexusOrchestrator:
     """
     Build a fully-configured NexusOrchestrator with default component settings.

@@ -10,12 +10,13 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from google import genai
 from google.genai import types
 
 from nexus.agents import k8s_tools
+from nexus.governance.policy_engine import LLM_TOOL_LEVEL
 from nexus.integration.chatops import send_approval_request
 
 logger = logging.getLogger(__name__)
@@ -75,7 +76,7 @@ class LLMOrchestrator:
             logger.error(f"Failed to initialize Gemini client: {e}")
             return False
 
-    async def handle_alert(self, alert_payload: Dict[str, Any]):
+    async def handle_alert(self, alert_payload: dict[str, Any]):
         """
         Entry point for handling an alert.
         """
@@ -114,11 +115,15 @@ class LLMOrchestrator:
         except Exception as e:
             logger.error(f"Error during LLM orchestration: {e}")
 
-    def execute_remediation(self, tool_name: str, kwargs: Dict[str, Any]) -> str:
-        """
-        Executes a write tool after human approval.
-        Dispatch derives from self.write_tools (the same list registered with
-        the model) so the two can never drift.
+    def execute_remediation(self, tool_name: str, kwargs: dict[str, Any]) -> str:
+        """Executes a write tool directly — UNGOVERNED.
+
+        Kept for ad-hoc/diagnostic use only. The approval flow does NOT call
+        this: an approved LLM action is re-dispatched through
+        RunbookExecutor.execute_approved(), which wraps the same k8s_tools
+        function with the ladder, cooldown, circuit breaker, audit trail, and
+        rollback registry. Call this only if you intentionally want to bypass
+        governance.
         """
         tool_func = next((t for t in self.write_tools if t.__name__ == tool_name), None)
         if tool_func is None:
@@ -130,16 +135,35 @@ class LLMOrchestrator:
         except Exception as e:
             return f"Error executing tool {tool_name}: {e}"
 
-    async def handle_cluster(self, cluster_summary: Dict[str, Any], approval_queue: Any) -> None:
+    async def handle_cluster(
+        self,
+        cluster_summary: dict[str, Any],
+        approval_queue: Any,
+        confidence: float = 0.0,
+        effective_level: int = 0,
+    ) -> None:
         """
         Entry point for handling internal incident clusters.
         Processes cluster summary and proposes remediation via function calling.
+
+        Args:
+            confidence:      ConfidenceScorer-calibrated score for this cluster
+                             (LLM_raw * w + signal_agreement + class_adj + …).
+                             Stages the proposal at THIS confidence so the gate
+                             (auto-run vs human-approval) is honest — never the
+                             LLM's self-assessed confidence taken at face value.
+            effective_level: Max level the scorer will permit for this cluster.
+                             Caps an over-eager proposal: a cluster scored at
+                             L1 can't stage a cordon (L3).
         """
         if not self._ensure_client():
             logger.error("Model not initialized. Cannot handle cluster.")
             return
 
-        logger.info(f"Handling cluster: {cluster_summary}")
+        logger.info(
+            f"Handling cluster: {cluster_summary} "
+            f"(scored confidence={confidence:.2f}, effective_level=L{effective_level})"
+        )
 
         # Construct the prompt for cluster analysis with explicit function calling instruction
         prompt = f"""
@@ -179,36 +203,58 @@ class LLMOrchestrator:
                 else:
                     logger.info(f"LLM proposed remediation: {tool_name} with args {kwargs}")
 
+                    # Staged at the tool's nominal level + the scorer's
+                    # calibrated confidence (never the hard-coded 0.8). The LLM
+                    # path always enqueues for human review, so confidence here
+                    # is the honest gate label the human sees + what
+                    # execute_approved passes to the ladder. A cluster-wide L3
+                    # proposal (cordon/drain) surfaces with its real blast.
+                    spec = LLM_TOOL_LEVEL.get(tool_name)
+                    tool_level = spec[0] if spec else 3  # unknown tool → L3 (safe)
+                    blast_radius = spec[1] if spec else "cluster_wide"
+
                     # Stage the proposed action in the HumanApprovalQueue for human approval
                     approval_id = approval_queue.enqueue(
                         runbook_id="llm_dynamic",
                         action_type=tool_name,
                         target=kwargs.get("name", kwargs.get("deployment_name", "unknown")),
                         incident_id=cluster_summary.get("cluster_id", "unknown"),
-                        healing_level=2,  # Default to L2 for LLM-proposed actions
-                        confidence=0.8,   # Default confidence for LLM proposals
+                        healing_level=tool_level,
+                        confidence=confidence,  # scored, not hard-coded 0.8
                         context={
                             "cluster_summary": cluster_summary,
                             "proposed_tool": tool_name,
                             "tool_args": kwargs,
-                            "llm_diagnosis": str(response.text) if hasattr(response, 'text') and response.text else "See function call"
+                            "llm_diagnosis": str(response.text) if hasattr(response, 'text') and response.text else "See function call",
+                            "tool_level": tool_level,
+                            "blast_radius": blast_radius,
+                            "effective_level": effective_level,
                         }
                     )
 
                     logger.info(f"Staged LLM remediation for approval: {approval_id}")
+
+                    # Send to ChatOps with the approval_id so the message has
+                    # functional Approve/Reject buttons (if SLACK_INTERACTIVE_URL
+                    # is set) or CLI fallback.
+                    await send_approval_request(
+                        diagnosis=str(response.text) if hasattr(response, 'text') and response.text else "See function call",
+                        context=cluster_summary,
+                        approval_id=approval_id,
+                    )
             else:
                 # Fallback: no function call — send to ChatOps AND stage the
                 # raw diagnosis for human review so /approvals/pending surfaces it.
                 diagnosis = response.text.strip() if response.text else "No clear remediation proposed"
                 logger.info(f"No function call in LLM response. Sending to ChatOps for manual review: {diagnosis}")
 
-                approval_queue.enqueue(
+                approval_id = approval_queue.enqueue(
                     runbook_id="llm_dynamic",
                     action_type="manual_review",
                     target=cluster_summary.get("primary_resource", "unknown"),
                     incident_id=cluster_summary.get("cluster_id", "unknown"),
                     healing_level=0,
-                    confidence=0.0,
+                    confidence=confidence,
                     context={
                         "cluster_summary": cluster_summary,
                         "llm_diagnosis": diagnosis,
@@ -217,7 +263,8 @@ class LLMOrchestrator:
 
                 await send_approval_request(
                     diagnosis=diagnosis,
-                    context=cluster_summary
+                    context=cluster_summary,
+                    approval_id=approval_id,
                 )
 
         except Exception as e:

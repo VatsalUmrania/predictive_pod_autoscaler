@@ -24,6 +24,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+
 # Enums
 class AgentType(str, Enum):
     NGINX = "nginx"

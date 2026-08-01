@@ -234,7 +234,7 @@ class DBTrafficCorrelator:
         self._snapshots_ingested = 0
         self._spikes_predicted = 0
 
-    # Ingestion 
+    # Ingestion
     async def ingest_db_event(self, event: IncidentEvent) -> None:
         """
         Process a DB_QUERY_SPIKE event from DBAgent.
@@ -293,7 +293,7 @@ class DBTrafficCorrelator:
             await self._publish_prediction(pred, event)
             self._spikes_predicted += 1
 
-    # Publishing 
+    # Publishing
     async def _publish_prediction(
         self, pred: SpikePrediction, source_event: IncidentEvent
     ) -> None:

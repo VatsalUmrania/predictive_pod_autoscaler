@@ -66,14 +66,44 @@ class PolicyDecision:
         return f"PolicyDecision({status}{reasons} source={self.source})"
 
 # Action type allowlists per healing level
+#
+# Two execution vocabularies share one ladder:
+#   - runbook executor actions (restart_pod, scale_deployment, kubectl_rollout_undo …)
+#   - LLM-proposed tools       (restart_deployment, scale_resource, cordon_node …)
+# A human-approved L3 must still pass the allowlist (and cooldown / circuit
+# breaker), so every LLM tool is mapped onto the level it requires. Without
+# this, a routed-L0 governance check would deny every LLM proposal at the
+# allowlist gate — see _LLM_TOOL_LEVEL in llm_orchestrator.py for the mapping.
 _L0_ALLOWED = {"emit_alert", "patch_annotation"}
-_L1_ALLOWED = _L0_ALLOWED | {"restart_pod", "flush_coredns_cache"}
-_L2_ALLOWED = _L1_ALLOWED | {"scale_deployment"}
-_L3_ALLOWED = _L2_ALLOWED | {"kubectl_rollout_undo", "http_webhook"}
+_L1_ALLOWED = _L0_ALLOWED | {"restart_pod", "flush_coredns_cache", "restart_deployment"}
+_L2_ALLOWED = _L1_ALLOWED | {"scale_deployment", "scale_resource"}
+_L3_ALLOWED = _L2_ALLOWED | {
+    "kubectl_rollout_undo",
+    "http_webhook",
+    "rollback_deployment",
+    "patch_configmap",
+    "cordon_node",
+    "drain_node",
+}
 
 _LEVEL_LISTS = {0: _L0_ALLOWED, 1: _L1_ALLOWED, 2: _L2_ALLOWED, 3: _L3_ALLOWED}
 
 _CLUSTER_WIDE_BLAST_RADIUS = {"cluster_wide"}
+
+# LLM-proposed tool → (healing_level, blast_radius). The level is the tool's
+# NOMINAL blast — a cordon is L3 regardless of confidence; confidence only
+# decides auto-run vs human-approval, not the action's level. The level column
+# mirrors the allowlists above (a tool appears at the level that allows it) —
+# keep them in sync. Used by LLMOrchestrator (staging) and RunbookExecutor
+# (synthesis), so both score an LLM proposal at its real blast.
+LLM_TOOL_LEVEL: dict[str, tuple[int, str]] = {
+    "restart_deployment": (1, "single_deployment"),
+    "scale_resource": (2, "single_deployment"),
+    "rollback_deployment": (3, "single_deployment"),
+    "patch_configmap": (3, "single_deployment"),
+    "cordon_node": (3, "cluster_wide"),
+    "drain_node": (3, "cluster_wide"),
+}
 
 
 def _fallback_evaluate(

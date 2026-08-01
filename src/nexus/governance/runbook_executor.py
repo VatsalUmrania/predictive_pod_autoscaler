@@ -51,15 +51,28 @@ import httpx
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 
+from nexus.agents import k8s_tools
 from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
 from nexus.bus.nats_client import NATSClient
-from nexus.governance.action_ladder import ActionLadder
+from nexus.governance.action_ladder import ActionLadder, PendingApproval
 from nexus.governance.audit_trail import AuditTrail
+from nexus.governance.policy_engine import LLM_TOOL_LEVEL as _LLM_TOOL_LEVEL
 from nexus.governance.policy_engine import PolicyEngine
 from nexus.governance.rollback_registry import RollbackRegistry
-from nexus.governance.runbook import Runbook, RunbookAction, RunbookLibrary
+from nexus.governance.runbook import Runbook, RunbookAction, RunbookLibrary, RunbookTrigger
 
 logger = logging.getLogger(__name__)
+
+
+def _adapt_tool_result(res: str) -> dict[str, str]:
+    """Normalise a k8s_tools string return into the executor result-dict shape.
+
+    k8s_tools returns "Error …" on failure and a success message otherwise.
+    """
+    if isinstance(res, str) and res.startswith("Error"):
+        return {"status": "failed", "message": res}
+    return {"status": "executed", "message": res}
+
 
 # Runbook Executor
 class RunbookExecutor:
@@ -346,6 +359,56 @@ class RunbookExecutor:
                 await self.nats.publish(alert_event)
                 result.update(status="executed", message="Alert published to NATS")
 
+            # ── LLM-proposed tools (dispatch to k8s_tools) ──────────────────
+            # These reuse the governed _execute_action switch so LLM proposals
+            # and runbook actions share ONE execution path.
+            elif action_type == "restart_deployment":
+                ns = params.get("namespace") or namespace
+                dep = params.get("deployment_name") or params.get("name") or name
+                result.update(**_adapt_tool_result(
+                    k8s_tools.restart_deployment(namespace=ns, deployment_name=dep)
+                ))
+
+            elif action_type == "scale_resource":
+                ns = params.get("namespace") or namespace
+                kind = params.get("resource_kind", "deployment")
+                rname = params.get("resource_name") or name
+                replicas = params.get("replicas")
+                if replicas is None:
+                    result.update(status="failed", error="'replicas' param required")
+                else:
+                    result.update(**_adapt_tool_result(
+                        k8s_tools.scale_resource(
+                            namespace=ns, resource_kind=kind,
+                            resource_name=rname, replicas=int(replicas),
+                        )
+                    ))
+
+            elif action_type == "rollback_deployment":
+                ns = params.get("namespace") or namespace
+                dep = params.get("deployment_name") or params.get("name") or name
+                result.update(**_adapt_tool_result(
+                    k8s_tools.rollback_deployment(namespace=ns, deployment_name=dep)
+                ))
+
+            elif action_type == "patch_configmap":
+                ns = params.get("namespace") or namespace
+                cm = params.get("configmap_name") or name
+                result.update(**_adapt_tool_result(
+                    k8s_tools.patch_configmap(
+                        namespace=ns, configmap_name=cm,
+                        patch_data=params.get("patch_data", {}),
+                    )
+                ))
+
+            elif action_type == "cordon_node":
+                node = params.get("node_name") or name
+                result.update(**_adapt_tool_result(k8s_tools.cordon_node(node_name=node)))
+
+            elif action_type == "drain_node":
+                node = params.get("node_name") or name
+                result.update(**_adapt_tool_result(k8s_tools.drain_node(node_name=node)))
+
             else:
                 result.update(
                     status="skipped", message=f"Unknown action type: {action_type}"
@@ -357,6 +420,161 @@ class RunbookExecutor:
 
         logger.info(f"[RunbookExecutor] {action_type} → {result['status']}")
         return result
+
+    # ── Governed re-dispatch of a human-approved action ──────────────────────
+
+    async def execute_approved(self, pending: PendingApproval) -> dict[str, Any]:
+        """Run a single human-approved action through the full governance plane.
+
+        The ONE place an approved action actually touches the cluster. Both
+        rule-based runbooks (runbook looked up in the library) and LLM proposals
+        (runbook_id == 'llm_dynamic', action synthesized from stored tool_args)
+        flow through here. Governance still applies: cooldown, circuit breaker,
+        and allowlist may block an action even after human approval — a human may
+        approve without realising a heal ran 60s ago or that the breaker is open.
+        human_approved flips the L3 confidence gate; override_blast_radius
+        records that the human's sign-off IS the cluster-wide override.
+
+        Returns a dict with ``status`` ∈ {success, failed, governance_blocked}
+        plus ``action_id`` (the audit row) and ``result`` (the per-action dict).
+        """
+        runbook, action, event = self._materialize_pending(pending)
+        target = f"{event.namespace or 'default'}/{event.resource_name or action.type}"
+        confidence = pending.confidence
+
+        decision = await self.ladder.evaluate(
+            runbook=runbook,
+            action=action,
+            event=event,
+            target=target,
+            confidence=confidence,
+            human_approved=True,
+            override_blast_radius=True,
+        )
+        if not decision.can_proceed:
+            logger.warning(
+                f"[RunbookExecutor] Approved action BLOCKED post-approval: "
+                f"{action.type} on {target} — {decision.denial_reason}"
+            )
+            return {
+                "status": "governance_blocked",
+                "reason": decision.denial_reason,
+                "action_id": None,
+            }
+
+        self._ensure_k8s()
+        await self.rollback_reg.capture(
+            action_type=action.type,
+            namespace=event.namespace or "default",
+            name=event.resource_name or "",
+            k8s_apps=self._k8s_apps,
+            k8s_core=self._k8s_core,
+        )
+        action_id = await self.audit.write_pending(
+            triggered_by="human:api_user",
+            runbook_id=runbook.id,
+            healing_level=runbook.healing_level,
+            target=target,
+            pre_check_results={"passed": True, "human_approved": True},
+            incident_id=pending.incident_id,
+            action_id=None,
+        )
+        result = await self._execute_action(action, event)
+
+        # Post-checks: LLM-synthesized runbooks have none (→ pass); rule-based
+        # runbooks re-run their SLO assertions, same as the autonomous path.
+        post_ok = (
+            await self._run_post_checks(runbook)
+            if result["status"] != "failed"
+            else False
+        )
+        if post_ok:
+            self.ladder.record_post_check_success()
+            outcome = "success"
+            await self.ladder.set_cooldown(runbook, target)
+        else:
+            self.ladder.record_post_check_failure()
+            outcome = "failed"
+        await self.audit.update_outcome(
+            action_id,
+            execution_outcome=outcome,
+            post_check_results={"slo_restored": post_ok},
+            action_results=[result],
+        )
+        logger.info(
+            f"[RunbookExecutor] Approved action {action.type} on {target} "
+            f"→ outcome={outcome}"
+        )
+        return {"status": outcome, "action_id": action_id, "result": result}
+
+    def _materialize_pending(
+        self, pending: PendingApproval
+    ) -> tuple[Runbook, RunbookAction, IncidentEvent]:
+        """Reconstruct (runbook, action, event) from a staged PendingApproval.
+
+        Rule-based approvals carry a full snapshot of the staged runbook action
+        and triggering event in their context (see ActionLadder.evaluate). LLM
+        approvals are synthesized from the stored tool name + args.
+        """
+        if pending.runbook_id == "llm_dynamic":
+            return self._materialize_llm_pending(pending)
+
+        ctx = pending.context or {}
+        # Snapshot check first — a missing snapshot means we can't re-dispatch
+        # regardless of whether the runbook is loaded. Surface that distinctly
+        # from "runbook not in library".
+        if "event" not in ctx or "action" not in ctx:
+            raise ValueError(
+                f"approval {pending.approval_id} (runbook={pending.runbook_id}) "
+                "missing staged event/action snapshot — cannot re-dispatch"
+            )
+        runbook = self.library.get(pending.runbook_id)
+        if runbook is None:
+            raise ValueError(
+                f"runbook {pending.runbook_id!r} not found in library — cannot re-dispatch"
+            )
+        action = RunbookAction.model_validate(ctx["action"])
+        event = IncidentEvent.model_validate(ctx["event"])
+        return runbook, action, event
+
+    def _materialize_llm_pending(
+        self, pending: PendingApproval
+    ) -> tuple[Runbook, RunbookAction, IncidentEvent]:
+        """Build a synthetic runbook+action+event for an LLM-proposed tool."""
+        ctx = pending.context or {}
+        tool_name = ctx.get("proposed_tool") or pending.action_type
+        tool_args = ctx.get("tool_args", {}) or {}
+        spec = _LLM_TOOL_LEVEL.get(tool_name)
+        if spec is None:
+            raise ValueError(
+                f"unknown LLM tool {tool_name!r} — no governance level mapping"
+            )
+        level, blast_radius = spec
+        action = RunbookAction(type=tool_name, params={**tool_args}, abort_on_failure=True)
+        runbook = Runbook(
+            id="llm_dynamic",
+            description=f"LLM-proposed remediation: {tool_name}",
+            healing_level=level,
+            trigger=RunbookTrigger(),
+            cooldown_seconds=300,
+            blast_radius=blast_radius,
+        )
+        summary = ctx.get("cluster_summary", {}) or {}
+        event = IncidentEvent(
+            agent=AgentType.ORCHESTRATOR,
+            signal_type=SignalType.THRESHOLD_BREACH,
+            severity=Severity.WARNING,
+            namespace=tool_args.get("namespace") or summary.get("namespace") or "default",
+            resource_name=(
+                tool_args.get("deployment_name")
+                or tool_args.get("resource_name")
+                or tool_args.get("configmap_name")
+                or tool_args.get("node_name")
+                or summary.get("primary_resource")
+            ),
+            correlation_id=summary.get("cluster_id") or pending.incident_id,
+        )
+        return runbook, action, event
 
     # ── Runbook execution (full governance) ───────────────────────────────────
 

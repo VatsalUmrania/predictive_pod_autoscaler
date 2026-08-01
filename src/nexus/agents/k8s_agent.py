@@ -122,7 +122,7 @@ class K8sAgent(BaseAgent):
 
         phase = (pod.status.phase or "").lower()
 
-        # Pending too long 
+        # Pending too long
         if phase == "pending":
             now = time.monotonic()
             if key not in self._pending_since:
@@ -252,7 +252,7 @@ class K8sAgent(BaseAgent):
             pass
         return None
 
-    # Deployment inspection 
+    # Deployment inspection
 
     def _check_deployment(self, dep) -> list[IncidentEvent]:
         events: list[IncidentEvent] = []

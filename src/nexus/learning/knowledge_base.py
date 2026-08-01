@@ -70,6 +70,17 @@ CREATE TABLE IF NOT EXISTS signal_patterns (
 );
 """
 
+_CREATE_INCIDENT_OUTCOMES = """
+CREATE TABLE IF NOT EXISTS incident_outcomes (
+    incident_id   TEXT    PRIMARY KEY,
+    runbook_id    TEXT    NOT NULL,
+    action_type   TEXT    NOT NULL,
+    resolved      INTEGER NOT NULL DEFAULT 0,  -- 1 = resolved, 0 = re-fired
+    reason        TEXT    NOT NULL,            -- 'verified' | 're-fired' | 'timeout'
+    recorded_at   TEXT    NOT NULL
+);
+"""
+
 # Thresholds for adjustment computation
 _HIGH_PERFORMER_RATE = 0.85
 _LOW_PERFORMER_RATE = 0.50
@@ -155,6 +166,7 @@ class KnowledgeBase:
 
         await self._db.execute(_CREATE_ADJUSTMENTS)
         await self._db.execute(_CREATE_PATTERNS)
+        await self._db.execute(_CREATE_INCIDENT_OUTCOMES)
         await self._db.commit()
 
         await self._refresh_cache()
@@ -362,3 +374,56 @@ class KnowledgeBase:
         ) as cur:
             rows = await cur.fetchall()
             self._cache = {r["runbook_id"]: r["delta"] for r in rows}
+
+    # ── Per-incident outcome recording (P3b) ──────────────────────────────────
+
+    async def record_incident_outcome(
+        self,
+        incident_id: str,
+        runbook_id: str,
+        action_type: str,
+        resolved: bool,
+        reason: str,
+    ) -> None:
+        """
+        Record whether an incident was resolved by a specific runbook/action.
+
+        Args:
+            incident_id: The cluster ID from the orchestrator
+            runbook_id: The runbook that was executed
+            action_type: The action type (e.g., 'restart_pod', 'scale_deployment')
+            resolved: True if the incident stopped firing, False if it re-fired
+            reason: 'verified' | 're-fired' | 'timeout'
+        """
+        if not self._db:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            await self._db.execute(
+                """
+                INSERT INTO incident_outcomes
+                    (incident_id, runbook_id, action_type, resolved, reason, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(incident_id) DO UPDATE SET
+                    runbook_id     = excluded.runbook_id,
+                    action_type    = excluded.action_type,
+                    resolved       = excluded.resolved,
+                    reason         = excluded.reason,
+                    recorded_at    = excluded.recorded_at
+                """,
+                (
+                    incident_id,
+                    runbook_id,
+                    action_type,
+                    1 if resolved else 0,
+                    reason,
+                    now,
+                ),
+            )
+            await self._db.commit()
+            logger.debug(
+                f"[KnowledgeBase] Recorded incident outcome: "
+                f"{incident_id} runbook={runbook_id} resolved={resolved} reason={reason}"
+            )
+        except Exception as exc:
+            logger.warning(f"[KnowledgeBase] record_incident_outcome error: {exc}")

@@ -168,7 +168,7 @@ class TokenStore:
         except Exception as exc:
             logger.debug(f"[TokenStore] touch failed: {exc}")
 
-    #  Lookup 
+    #  Lookup
 
     async def get_token(self, app_name: str) -> str | None:
         """Return the current token for an app (for display / ops use)."""
