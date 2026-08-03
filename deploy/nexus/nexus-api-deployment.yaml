@@ -41,6 +41,13 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "nodes", "events", "services", "endpoints", "namespaces"]
     verbs: ["get", "list", "watch"]
+  # L1 restart_pod heal: delete the pod so its ReplicaSet recreates it.
+  # Cluster-wide because NEXUS heals pods across namespaces (shop-demo in
+  # default, its own pods in nexus, ...). Trust level is consistent with the
+  # cluster-wide deployments/scale update/patch already granted below.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
   # K8sAgent: read deployments/replicasets for scaling context
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]

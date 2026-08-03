@@ -8,29 +8,33 @@ for the human-in-the-loop approval workflow.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
-from nexus.integration.notifier import SLACK_INTERACTIVE_URL, _approval_buttons_block
+from nexus.integration.notifier import (
+    SLACK_INTERACTIVE_URL,
+    _approval_buttons_block,
+    resolve_slack_webhook,
+)
 
 logger = logging.getLogger(__name__)
 
-# Assumes SLACK_WEBHOOK_URL is set in the environment
-SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
-
 async def send_approval_request(
-    diagnosis: str, context: dict[str, Any], approval_id: str | None = None
+    diagnosis: str,
+    context: dict[str, Any],
+    approval_id: str | None = None,
+    app_name: str | None = None,
 ) -> bool:
-    """
-    Sends a diagnosis and proposed remediation to Slack with Approve/Reject buttons.
+    """Send a diagnosis + proposed remediation to Slack with Approve/Reject buttons.
 
-    If `approval_id` is provided and `SLACK_INTERACTIVE_URL` is configured,
-    the message includes functional buttons that POST to the FastAPI endpoint.
-    Falls back to CLI instructions (`nexus approve <id>`) when not configured.
+    Webhook is resolved via ``resolve_slack_webhook(app_name)``: a per-app
+    selfheal.yaml override wins, else the global ``SLACK_WEBHOOK`` env fallback.
+    If ``approval_id`` is provided and ``SLACK_INTERACTIVE_URL`` is configured,
+    the message carries functional buttons that POST to /slack/interactive;
+    otherwise it falls back to CLI instructions (``nexus approve <id>``).
     """
-    if not SLACK_WEBHOOK_URL:
-        logger.warning("SLACK_WEBHOOK_URL not set. Skipping ChatOps notification.")
-        logger.info(f"Simulating sending approval request:\nDiagnosis: {diagnosis}\nContext: {context}")
+    webhook = resolve_slack_webhook(app_name)
+    if not webhook:
+        logger.warning(f"Slack webhook not configured for app={app_name!r}. Skipping.")
         return True
 
     try:
@@ -74,7 +78,7 @@ async def send_approval_request(
                 )
 
         async with httpx.AsyncClient() as client:
-            response = await client.post(SLACK_WEBHOOK_URL, json={"blocks": blocks})
+            response = await client.post(webhook, json={"blocks": blocks})
             response.raise_for_status()
             logger.info("Successfully sent approval request to Slack.")
             return True

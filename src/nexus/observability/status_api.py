@@ -56,7 +56,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from nexus.observability.metrics import get_metrics
@@ -529,95 +529,128 @@ async def reject_action(action_id: str) -> dict[str, str]:
 
 
 # ── Slack interactivity callback ─────────────────────────────────────────────
-# Receives button clicks from chatops.send_approval_request / notifier
-# notify_approval_required messages. Parse Slack's interaction payload and
-# call the SAME approval/reject logic the CLI and HTTP endpoints use.
+# Receives Approve/Reject button clicks from the interactive messages sent by
+# Notifier.notify_approval_required / chatops.send_approval_request. Verifies
+# Slack's request signature, then routes the decision through the SAME
+# approval/reject logic the CLI and /approve /reject HTTP endpoints use.
+
+def _slack_replace(text: str) -> dict[str, Any]:
+    """Replace the original interactive message so the buttons disappear.
+
+    Leaving Approve/Reject active after a decision invites a second operator to
+    act on a resolved action. The queue's idempotency checks already prevent a
+    double-dispatch, but the UX should reflect the decision too.
+    """
+    return {"replace_original": True, "text": text}
+
 
 @app.post("/slack/interactive", tags=["governance"])
-async def slack_interactive(payload: str = None) -> dict[str, Any]:
-    """
-    Slack interactive callback handler.
+async def slack_interactive(request: Request) -> dict[str, Any]:
+    """Slack interactive callback handler (Approve / Reject button clicks).
 
-    Slack sends `application/x-www-form-urlencoded` with a `payload` field
-    containing JSON:
+    Slack POSTs ``application/x-www-form-urlencoded`` with a ``payload`` form
+    field holding JSON:
         {
-            "type": "block_actions",
-            "user": {"id": "U...", "username": ".."},
-            "actions": [
-                {"action_id": "nexus_approve" | "nexus_reject", "value": "APPROVAL123"}
-            ],
-            ...
+          "type": "block_actions",
+          "user": {"id": "U...", "username": ".."},
+          "actions": [
+            {"action_id": "nexus_approve"|"nexus_reject", "value": "APPROVAL123"}
+          ],
+          ...
         }
 
-    Returns 200 + empty JSON on success, or 200 + response_action "errors"
-    with an error message Slack will surface to the user.
+    The raw body is HMAC-verified against the Slack app's signing secret before
+    any parsing — this is the trust boundary, so a bad signature is a hard 401.
+    We then parse the form body with stdlib (no python-multipart needed) and
+    route to the same approve/reject path used everywhere else, recording the
+    Slack username as the auditor.
     """
     import json
+    from urllib.parse import parse_qs
 
+    from nexus.integration.notifier import verify_slack_request
 
-    # FastAPI doesn't auto-decode application/x-www-form-urlencoded into a
-    # body model; we accept the raw `payload` form field here.
-    if payload is None:
+    raw = await request.body()
+    if not verify_slack_request(raw, request.headers):
+        _log.warning("Slack interactivity: invalid request signature")
+        raise HTTPException(status_code=401, detail="invalid_signature")
+
+    payload = (parse_qs(raw.decode("utf-8")).get("payload") or [None])[0]
+    if not payload:
         _log.warning("Slack interactivity: missing payload field")
-        return {"response_action": "errors", "errors": "missing payload"}
+        raise HTTPException(status_code=400, detail="missing payload")
 
     try:
         data = json.loads(payload)
     except json.JSONDecodeError:
         _log.warning("Slack interactivity: invalid JSON in payload")
-        return {"response_action": "errors", "errors": "invalid payload"}
+        raise HTTPException(status_code=400, detail="invalid payload") from None
 
     actions = data.get("actions", [])
     if not actions:
         _log.warning("Slack interactivity: no actions in payload")
-        return {"response_action": "errors", "errors": "no actions"}
+        raise HTTPException(status_code=400, detail="no actions")
 
     action = actions[0]
     action_id = action.get("action_id")  # "nexus_approve" / "nexus_reject"
     approval_id = action.get("value")  # the approval UUID
-    user = data.get("user", {}).get("username") or data.get("user", {}).get("id", "unknown")
+    user = (
+        data.get("user", {}).get("username")
+        or data.get("user", {}).get("id", "unknown")
+    )
 
     if not approval_id or action_id not in ("nexus_approve", "nexus_reject"):
-        _log.warning(f"Slack interactivity: malformed action={action_id} value={approval_id}")
-        return {"response_action": "errors", "errors": "malformed action"}
+        _log.warning(
+            f"Slack interactivity: malformed action={action_id} value={approval_id}"
+        )
+        raise HTTPException(status_code=400, detail="malformed action")
 
     orc = _require(context.orchestrator, "NexusOrchestrator")
     try:
         queue = orc.executor.ladder.approval_queue
     except AttributeError:
         _log.warning("Slack interactivity: approval queue not accessible")
-        return {"response_action": "errors", "errors": "queue unavailable"}
+        raise HTTPException(status_code=503, detail="queue unavailable") from None
 
-    # Route to the same logic the CLI/HTTP endpoints use, but record the
-    # Slack username as the auditor.
+    # ── Approve: re-dispatch through the governance plane (same as /approve/{id})
     if action_id == "nexus_approve":
         if queue.is_approved(approval_id):
-            return {"text": f"✅ Action {approval_id} already approved."}
-        if not queue.approve(approval_id):
-            return {"text": f"❌ Action {approval_id} not found."}
-        if context.audit_trail:
-            await context.audit_trail.record_approval(approval_id, f"slack:{user}")
-        # Re-dispatch through governance plane (same as /approve/{id})
+            return _slack_replace(f"✅ Action `{approval_id}` was already approved.")
+        # Snapshot BEFORE approve(): once approved, pending_list() excludes the
+        # id (it filters out approved/rejected), so a post-approve lookup would
+        # lose the staged item and never re-dispatch. Mirrors /approve/{id}.
         pending_item = next(
             (p for p in queue.pending_list() if p.approval_id == approval_id), None
         )
-        if pending_item:
-            try:
-                outcome = await orc.executor.execute_approved(pending_item)
-                return {"text": f"✅ Approved {approval_id} → {outcome['status']} (audit {outcome['action_id']})"}
-            except Exception as exc:
-                _log.error(f"Slack approve dispatch failed: {exc}")
-                return {"text": f"✅ Approved {approval_id} but dispatch errored: {exc}"}
-        return {"text": f"✅ Approved {approval_id} (staged item lost, queued only)"}
+        if not queue.approve(approval_id):
+            return _slack_replace(f"❌ Action `{approval_id}` not found.")
+        if context.audit_trail:
+            await context.audit_trail.record_approval(approval_id, f"slack:{user}")
+        if pending_item is None:
+            return _slack_replace(
+                f"✅ Approved `{approval_id}` by @{user} "
+                f"(staged snapshot lost — queued only)."
+            )
+        try:
+            outcome = await orc.executor.execute_approved(pending_item)
+            return _slack_replace(
+                f"✅ Approved `{approval_id}` by @{user} → {outcome['status']} "
+                f"(audit {outcome['action_id']})"
+            )
+        except Exception as exc:
+            _log.error(f"Slack approve dispatch failed: {exc}")
+            return _slack_replace(
+                f"✅ Approved `{approval_id}` by @{user} but dispatch errored: {exc}"
+            )
 
-    # Reject path
+    # ── Reject: record and stop the workflow ──
     if queue.is_rejected(approval_id):
-        return {"text": f"❌ Action {approval_id} already rejected."}
+        return _slack_replace(f"❌ Action `{approval_id}` was already rejected.")
     if not queue.reject(approval_id):
-        return {"text": f"❌ Action {approval_id} not found."}
+        return _slack_replace(f"❌ Action `{approval_id}` not found.")
     if context.audit_trail:
         await context.audit_trail.record_rejection(approval_id, f"slack:{user}")
-    return {"text": f"❌ Rejected {approval_id}."}
+    return _slack_replace(f"❌ Rejected `{approval_id}` by @{user}.")
 
 
 @app.get("/approvals/pending", tags=["governance"])

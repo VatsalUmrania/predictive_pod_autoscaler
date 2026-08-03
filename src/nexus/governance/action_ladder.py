@@ -206,6 +206,7 @@ class HumanApprovalQueue:
                             "healing_level": healing_level,
                             "confidence": confidence,
                             "app": (context or {}).get("namespace", "unknown"),
+                            "context": context or {},
                         },
                     )
                 )

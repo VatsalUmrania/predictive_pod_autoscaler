@@ -25,9 +25,12 @@ NATS integration (background mode):
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import os
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -37,6 +40,76 @@ logger = logging.getLogger(__name__)
 # status API (see nexus.observability.status_api). The same URL is used by
 # chatops.send_approval_request for the LLM path. Defaults to "" (disabled).
 SLACK_INTERACTIVE_URL = os.environ.get("SLACK_INTERACTIVE_URL", "")
+
+# Slack app signing secret (Settings → Basic Information → App Credentials).
+# Required to authenticate interactive payloads POSTed to /slack/interactive —
+# without it the endpoint 401s every click (secure-by-default).
+SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
+# Reject interactive requests whose timestamp is older than this (replay guard).
+SLACK_REQUEST_TOLERANCE_S = 60 * 5
+
+def verify_slack_request(
+    raw_body: bytes,
+    headers,
+    *,
+    signing_secret: str | None = None,
+    tolerance_s: int | None = None,
+) -> bool:
+    """Validate a Slack request signature (HMAC-SHA256, ``v0`` scheme).
+
+    Trust-boundary gate for the /slack/interactive endpoint. ``False`` MUST
+    mean "reject the request": any missing header, unset secret, stale
+    timestamp, or signature mismatch returns False and never raises, so the
+    caller can treat the boolean as a hard auth gate.
+
+    Refs: https://api.slack.com/authentication/verifying-requests-from-slack
+    """
+    secret = signing_secret if signing_secret is not None else SLACK_SIGNING_SECRET
+    if not secret:
+        return False
+    ts = headers.get("X-Slack-Request-Timestamp")
+    sig = headers.get("X-Slack-Signature")
+    if not ts or not sig:
+        return False
+    try:
+        ts_int = int(ts)
+    except (TypeError, ValueError):
+        return False
+    tol = tolerance_s if tolerance_s is not None else SLACK_REQUEST_TOLERANCE_S
+    if abs(time.time() - ts_int) > tol:
+        return False
+    # Signing base: b"v0:<timestamp>:<raw body>". Concatenate raw_body bytes so
+    # no decode/reencode alters the exact wire bytes Slack signed.
+    base = b"v0:" + str(ts).encode() + b":" + raw_body
+    expected = "v0=" + hashlib.sha256(base).hexdigest()
+    # Constant-time compare guards the prefix; the digest length is fixed.
+    return hmac.compare_digest(expected, str(sig))
+
+def resolve_slack_webhook(app_name: str | None) -> str | None:
+    """Resolve the Slack webhook URL to use for ``app_name`` (single source).
+
+    A per-app ``selfheal.yaml`` override (``notifications.slack_webhook``) wins
+    when that app has a policy loaded — including an explicit ``null`` (that app
+    is deliberately disabled and stays silent over the global fallback). When
+    the app has NO policy loaded at all, fall back to the global ``SLACK_WEBHOOK``
+    env var, so notifications work out-of-the-box without mounting a
+    selfheal.yaml. Returns None (caller silently skips) when neither resolves.
+
+    Both the governed Notifier path and chatops.send_approval_request go through
+    this — one env var (``SLACK_WEBHOOK``), no SLACK_WEBHOOK_URL duplication.
+    """
+    if app_name:
+        try:
+            from nexus.integration.dashboard import _policy_cache
+
+            # App in cache → its policy is authoritative, even if webhook is null
+            # (a disabled app must not be resurrected by the global fallback).
+            if app_name in _policy_cache:
+                cfg = _policy_cache[app_name] or {}
+                return (cfg.get("notifications") or {}).get("slack_webhook") or None
+        except Exception:
+            pass
+    return os.environ.get("SLACK_WEBHOOK") or None
 
 def _approval_buttons_block(approval_id: str) -> dict:
     """Slack Block Kit action block with Approve/Reject buttons.
@@ -246,69 +319,114 @@ class Notifier:
         target: str,
         healing_level: int,
         confidence: float,
+        context: dict | None = None,
     ) -> None:
         """Send a notification when an L3 action requires human approval."""
         webhook = self._get_webhook(app_name)
         if not webhook:
             return
 
-        payload = {
-            "attachments": [
+        # Extract RCA info from context for better Slack message
+        rca = (context or {}).get("rca", {})
+        event = (context or {}).get("event", {})
+        action = (context or {}).get("action", {})
+        rca_source = (context or {}).get("rca_source", "unknown")
+
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*✋ NEXUS L{healing_level} Action Requires Approval*",
+                },
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Runbook:*\n`{runbook_id}`"},
+                    {"type": "mrkdwn", "text": f"*Target:*\n`{target}`"},
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Confidence:*\n`{confidence:.2f}`",
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Approval ID:*\n`{approval_id}`",
+                    },
+                ],
+            },
+        ]
+
+        # Add RCA diagnosis if available
+        if rca:
+            root_cause = rca.get("root_cause", "Unknown")
+            failure_class = rca.get("failure_class", "Unknown")
+            reasoning = rca.get("reasoning", "")
+            blocks.append(
                 {
-                    "color": "#ff9900",
-                    "fallback": f"NEXUS L{healing_level} Action Requires Approval: {runbook_id} for {target}",
-                    "blocks": [
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": f"*✋ NEXUS L{healing_level} Action Requires Approval*",
-                            },
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f"*RCA Diagnosis:*\n"
+                            f"*Class:* {failure_class}\n"
+                            f"*Root Cause:* {root_cause[:300]}{'...' if len(root_cause) > 300 else ''}"
+                        ),
+                    },
+                }
+            )
+            if reasoning:
+                blocks.append(
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*Reasoning:*\n{reasoning[:500]}{'...' if len(reasoning) > 500 else ''}",
                         },
-                        {
-                            "type": "section",
-                            "fields": [
-                                {
-                                    "type": "mrkdwn",
-                                    "text": f"*Runbook:*\n`{runbook_id}`",
-                                },
-                                {"type": "mrkdwn", "text": f"*Target:*\n`{target}`"},
-                                {
-                                    "type": "mrkdwn",
-                                    "text": f"*Confidence:*\n`{confidence:.2f}`",
-                                },
-                                {
-                                    "type": "mrkdwn",
-                                    "text": f"*Approval ID:*\n`{approval_id}`",
-                                },
-                            ],
-                        },
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": f"To approve this action, run:\n`nexus approve {approval_id}`",
-                            },
-                        },
-                        _approval_buttons_block(approval_id),
+                    }
+                )
+
+        # Add signal info from event
+        if event:
+            signal_type = event.get("signal_type", "unknown")
+            severity = event.get("severity", "unknown")
+            namespace = event.get("namespace", "unknown")
+            blocks.append(
+                {
+                    "type": "section",
+                    "fields": [
+                        {"type": "mrkdwn", "text": f"*Signal:*\n`{signal_type}`"},
+                        {"type": "mrkdwn", "text": f"*Severity:*\n`{severity}`"},
+                        {"type": "mrkdwn", "text": f"*Namespace:*\n`{namespace}`"},
+                        {"type": "mrkdwn", "text": f"*RCA Source:*\n`{rca_source}`"},
                     ],
                 }
-            ]
-        }
+            )
+
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"To approve this action, run:\n`nexus approve {approval_id}`",
+                },
+            }
+        )
+        blocks.append(_approval_buttons_block(approval_id))
+
+        payload = {"attachments": [{"color": "#ff9900", "fallback": f"NEXUS L{healing_level} Action Requires Approval: {runbook_id} for {target}", "blocks": blocks}]}
         await self._send(webhook, payload, app_name)
 
     # Policy helpers
-
     def _get_webhook(self, app_name: str) -> str | None:
-        """Return the Slack webhook URL for an app, or None if not configured."""
-        try:
-            from nexus.integration.dashboard import _policy_cache
+        """Return the Slack webhook URL for an app, or None if not configured.
 
-            cfg = _policy_cache.get(app_name, {})
-            notifications = cfg.get("notifications", {})
-            return notifications.get("slack_webhook") or None
-        except Exception:
-            return None
+        Delegates to ``resolve_slack_webhook`` so every notification path
+        (heal / prescale / escalation / approval) uses a single resolver with
+        the ``SLACK_WEBHOOK`` env fallback. Per-app ``selfheal.yaml`` overrides
+        still win.
+        """
+        return resolve_slack_webhook(app_name)
 
     def _get_page_threshold(self, app_name: str) -> int:
         """Return the page_sre_after threshold for an app (default 3)."""
@@ -321,7 +439,6 @@ class Notifier:
             return 3
 
     # HTTP send
-
     async def _send(
         self,
         webhook_url: str,
@@ -471,6 +588,7 @@ class Notifier:
                 target=data.get("target", ""),
                 healing_level=data.get("healing_level", 3),
                 confidence=data.get("confidence", 0.0),
+                context=data.get("context", {}),
             )
         except Exception as exc:
             logger.debug(f"[Notifier] approval message error: {exc}")

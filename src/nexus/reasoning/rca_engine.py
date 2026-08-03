@@ -241,19 +241,25 @@ _RULES: list[tuple[frozenset[str], bool, dict[str, Any]]] = [
             "Autonomous healing cannot increase cluster capacity — escalate.",
         },
     ),
-    # 10. Deployment degraded
+    # 10. Deployment degraded — OBSERVATION ONLY, no unsupported hypothesis.
+    # deployment_degraded is a fact (availableReplicas < desired), not a root cause.
+    # Causes span bad_deploy, node pressure, admission webhook, PVC bind, quota —
+    # none established by this signal alone. A pod restart presupposes bad code,
+    # which the observation cannot support. Stay L0: alert, let correlated signals
+    # (pod_crashloop+deploy_event → rule #4) or the LLM elevate to a hypothesis.
     (
         frozenset({"deployment_degraded"}),
         False,
         {
-            "root_cause": "Deployment has fewer available replicas than desired — "
-            "pods failing to start or being evicted.",
-            "failure_class": "bad_deploy",
-            "healing_level": 1,
-            "runbook_id": "runbook_pod_crashloop_v1",
-            "confidence": 0.68,
-            "reasoning": "Degraded deployment often results from pod startup failures. "
-            "Pod restart with logging is the first investigation step.",
+            "root_cause": "Deployment has fewer available replicas than desired. "
+            "Cause is ambiguous — needs correlated signals or LLM analysis "
+            "before any autonomous action.",
+            "failure_class": "unknown",
+            "healing_level": 0,
+            "runbook_id": None,
+            "confidence": 0.50,
+            "reasoning": "deployment_degraded is an observation, not a root cause. "
+            "Alerting only — a restart would infer bad_deploy without evidence.",
         },
     ),
     # 11. High error rate alone (no deploy correlated)

@@ -76,6 +76,31 @@ class LLMOrchestrator:
             logger.error(f"Failed to initialize Gemini client: {e}")
             return False
 
+    @staticmethod
+    def _app_from_alert(payload: dict[str, Any]) -> str | None:
+        """Best-effort app (deployment) name from an Alertmanager payload.
+
+        Used so ``chatops.send_approval_request`` resolves the per-app webhook
+        override via ``resolve_slack_webhook``; falls back to the global
+        ``SLACK_WEBHOOK`` env when no per-app policy matches. Derives the app
+        from the first alert's ``labels.pod`` (strip the replica ``-<rs>-<pod>``
+        suffix) → else ``labels.namespace`` → else None.
+        """
+        alerts = payload.get("alerts") or []
+        if alerts:
+            labels = alerts[0].get("labels") or {}
+            pod = labels.get("pod")
+            if pod:
+                # shop-demo-54f67c8b9d-abcde → shop-demo (drop last two -segments)
+                parts = pod.rsplit("-", 2)
+                if len(parts) == 3:
+                    return parts[0]
+                return pod
+            ns = labels.get("namespace")
+            if ns:
+                return ns
+        return None
+
     async def handle_alert(self, alert_payload: dict[str, Any]):
         """
         Entry point for handling an alert.
@@ -109,7 +134,8 @@ class LLMOrchestrator:
             logger.info("Diagnosis complete. Sending to ChatOps for approval.")
             await send_approval_request(
                 diagnosis=diagnosis,
-                context=alert_payload
+                context=alert_payload,
+                app_name=self._app_from_alert(alert_payload),
             )
 
         except Exception as e:

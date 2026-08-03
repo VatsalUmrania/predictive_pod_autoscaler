@@ -35,7 +35,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
 from nexus.bus.nats_client import NATSClient
@@ -44,9 +44,6 @@ from nexus.reasoning.confidence_scorer import ConfidenceScorer
 from nexus.reasoning.event_correlator import EventCorrelator
 from nexus.reasoning.incident_cluster import IncidentCluster
 from nexus.reasoning.rca_engine import RCAEngine, RCAResult
-
-if TYPE_CHECKING:
-    from nexus.reasoning.llm_orchestrator import LLMOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +57,6 @@ class NexusOrchestrator:
         rca_engine:         RCAEngine instance (Gemini + fallback).
         confidence_scorer:  ConfidenceScorer instance.
         executor:           RunbookExecutor (Phase 3, full governance).
-        llm_orchestrator:   LLMOrchestrator instance for LLM-driven remediation (optional).
         flush_interval_s:   How often to flush stale clusters (default 30s).
         max_concurrent:     Max concurrent cluster analyses (semaphore, default 5).
         dry_run:            If True, perform RCA but don't call executor.
@@ -73,7 +69,6 @@ class NexusOrchestrator:
         rca_engine: RCAEngine,
         confidence_scorer: ConfidenceScorer,
         executor: RunbookExecutor,
-        llm_orchestrator: LLMOrchestrator | None = None,
         flush_interval_s: float = 30.0,
         max_concurrent: int = 5,
         dry_run: bool = False,
@@ -83,7 +78,6 @@ class NexusOrchestrator:
         self.rca = rca_engine
         self.scorer = confidence_scorer
         self.executor = executor
-        self.llm_orchestrator = llm_orchestrator
         self._flush_interval = flush_interval_s
         self._dry_run = dry_run
         self._semaphore = asyncio.Semaphore(max_concurrent)
@@ -189,10 +183,12 @@ class NexusOrchestrator:
     async def _process_cluster(self, cluster: IncidentCluster) -> None:
         """
         Full Reason → Act cycle for one IncidentCluster:
-            1. RCA (Gemini → rule-based fallback)
+            1. RCA — the ONE LLM call (Gemini/OpenAI → rule-based fallback)
             2. Confidence calibration
             3. Publish ORCHESTRATOR_DECISION event to NATS
-            4. Route enriched event to RunbookExecutor (unless dry_run)
+            4. Remediation — LLM RCA staged for human approval; rule-based RCA
+               routed through the governed RunbookExecutor (unless dry_run).
+               No second LLM call: one incident → one LLM request.
         """
         self._clusters_processed += 1
 
@@ -240,27 +236,20 @@ class NexusOrchestrator:
             cluster, rca_result, confidence, effective_level
         )
 
-        # ── Step 4: Route to LLMOrchestrator for LLM-driven remediation ─────────────────
-        # Check if we have LLM orchestrator available and the RCA suggests LLM handling
-        if hasattr(self, 'llm_orchestrator') and self.llm_orchestrator and rca_result.source in ['gemini', 'openai']:
-            logger.info(
-                f"[Orchestrator] Routing {cluster.cluster_id} to LLMOrchestrator for LLM-driven remediation "
-                f"(source={rca_result.source})"
-            )
-            # Convert cluster to summary for LLM processing
-            cluster_summary = cluster.to_summary()
-            # Pass the SCORED confidence + scorer-gated level so the LLM
-            # proposal is staged at its real blast radius with an honest gate —
-            # not the hard-coded L2/0.8 that previously bypassed calibration.
-            await self.llm_orchestrator.handle_cluster(
-                cluster_summary,
-                self.executor.ladder.approval_queue,
-                confidence=confidence,
-                effective_level=effective_level,
+        # ── Step 4: Route to remediation (ONE LLM call per incident) ──────────────
+        # The RCA above was the only LLM call. An LLM-sourced RCA (gemini/openai)
+        # is staged for human approval deterministically — we do NOT re-ask the
+        # model to propose a tool (the old llm_orchestrator.handle_cluster second
+        # call that doubled LLM traffic per incident). A rule-based RCA flows
+        # through the governed RunbookExecutor with the ladder's own gates.
+        if rca_result.source in ("gemini", "openai"):
+            self._actions_dispatched += 1
+            self._stage_llm_remediation(
+                cluster, rca_result, confidence, effective_level
             )
             return
 
-        # Fallback to traditional RunbookExecutor path
+        # Rule-based RCA — governed RunbookExecutor path
         if not rca_result.runbook_id and effective_level == 0:
             logger.info(
                 f"[Orchestrator] L0 / no runbook for {cluster.cluster_id} "
@@ -324,6 +313,86 @@ class NexusOrchestrator:
             suggested_healing_level=rca.healing_level,
             confidence=confidence,
         )
+
+    def _stage_llm_remediation(
+        self,
+        cluster: IncidentCluster,
+        rca: RCAResult,
+        confidence: float,
+        effective_level: int,
+    ) -> None:
+        """Stage an LLM-sourced RCA's remediation for human approval — no LLM call.
+
+        ``RCAEngine.analyze`` already produced the root cause and a suggested
+        runbook; re-asking the model (the old ``handle_cluster`` second call) is
+        what doubled LLM traffic per incident. We resolve the suggested runbook
+        in the library and enqueue the same (action, event) snapshot
+        ``RunbookExecutor.execute_approved()`` re-dispatches on approval — so an
+        approved LLM remediation still crosses the full governance plane
+        (cooldown, circuit breaker, OPA, audit, rollback). No mapped runbook
+        surfaces as manual review carrying the RCA diagnosis.
+        """
+        queue = self.executor.ladder.approval_queue
+        runbook = (
+            self.executor.library.get(rca.runbook_id) if rca.runbook_id else None
+        )
+
+        if runbook is not None and runbook.actions:
+            action = runbook.actions[0]
+            event = self._build_enriched_event(cluster, rca, confidence)
+            target = (
+                f"{event.namespace or 'default'}/{event.resource_name or 'unknown'}"
+            )
+            queue.enqueue(
+                runbook_id=runbook.id,
+                action_type=action.type,
+                target=target,
+                incident_id=cluster.cluster_id,
+                healing_level=runbook.healing_level,
+                confidence=confidence,
+                context={
+                    "event_id": event.event_id,
+                    "signal_type": event.signal_type,
+                    "namespace": event.namespace,
+                    "resource": event.resource_name,
+                    "action": action.model_dump(),
+                    "event": event.model_dump(),
+                    "blast_radius": runbook.blast_radius,
+                    "rca_source": rca.source,
+                    "effective_level": effective_level,
+                    "rca": rca.to_dict(),
+                },
+            )
+            logger.info(
+                f"[Orchestrator] Staged LLM RCA remediation for approval: "
+                f"runbook={runbook.id} target={target} "
+                f"L{runbook.healing_level} confidence={confidence:.2f} "
+                f"(single LLM call)"
+            )
+        else:
+            target = (
+                f"{cluster.namespace or 'default'}/"
+                f"{cluster.primary_resource or 'unknown'}"
+            )
+            queue.enqueue(
+                runbook_id="llm_dynamic",
+                action_type="manual_review",
+                target=target,
+                incident_id=cluster.cluster_id,
+                healing_level=0,
+                confidence=confidence,
+                context={
+                    "cluster_summary": cluster.to_summary(),
+                    "llm_diagnosis": rca.root_cause,
+                    "rca_source": rca.source,
+                    "effective_level": effective_level,
+                },
+            )
+            logger.info(
+                f"[Orchestrator] No mapped runbook for LLM RCA {cluster.cluster_id} "
+                f"→ staged for manual review (class={rca.failure_class}, "
+                f"confidence={confidence:.2f})"
+            )
 
     async def _publish_decision_event(
         self,
@@ -392,7 +461,6 @@ def build_orchestrator(
     quorum_events: int = 3,
     flush_interval_s: float = 30.0,
     dry_run: bool = False,
-    llm_orchestrator: LLMOrchestrator | None = None,
 ) -> NexusOrchestrator:
     """
     Build a fully-configured NexusOrchestrator with default component settings.
@@ -405,7 +473,6 @@ def build_orchestrator(
         quorum_events:        Events needed to form a cluster (default 3).
         flush_interval_s:     Stale cluster flush interval (default 30s).
         dry_run:              Don't call executor — only log decisions.
-        llm_orchestrator:     LLMOrchestrator instance for LLM-driven remediation (optional).
     """
     correlator = EventCorrelator(
         correlation_window_s=correlation_window_s,
@@ -421,7 +488,6 @@ def build_orchestrator(
         rca_engine=rca_engine,
         confidence_scorer=scorer,
         executor=executor,
-        llm_orchestrator=llm_orchestrator,
         flush_interval_s=flush_interval_s,
         dry_run=dry_run,
     )

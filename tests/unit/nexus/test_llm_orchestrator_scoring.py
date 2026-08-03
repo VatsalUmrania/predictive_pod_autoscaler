@@ -17,6 +17,22 @@ from nexus.governance.policy_engine import LLM_TOOL_LEVEL
 from nexus.reasoning.llm_orchestrator import LLMOrchestrator
 
 
+@pytest.fixture(autouse=True)
+def _no_real_slack(monkeypatch):
+    """Stop handle_cluster's send_approval_request from hitting real Slack.
+
+    send_approval_request now resolves a webhook from SLACK_WEBHOOK (env fallback),
+    so a shell with that var set would POST test diagnoses to a live channel.
+    Mock it so these scoring tests stay deterministic and side-effect-free.
+    """
+    monkeypatch.delenv("SLACK_WEBHOOK", raising=False)
+    monkeypatch.setattr(
+        "nexus.reasoning.llm_orchestrator.send_approval_request",
+        AsyncMock(return_value=True),
+    )
+
+
+
 def _orchestrator_with_tool_call(tool_name: str, kwargs: dict):
     orc = LLMOrchestrator(model_name="m")
     orc._client = MagicMock()
