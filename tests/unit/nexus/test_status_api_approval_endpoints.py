@@ -347,3 +347,134 @@ async def test_execute_approved_rulebased_requires_staged_snapshot(tmp_path):
     # No 'action'/'event' keys in context → materialize should raise ValueError.
     with pytest.raises(ValueError, match="missing staged event/action snapshot"):
         await executor.execute_approved(pending)
+
+@pytest.mark.asyncio
+async def test_execute_approved_manual_review_does_not_dispatch(tmp_path):
+    """manual_review = the LLM staged a diagnosis for a human to read, not a
+    concrete remediation (both orchestrator.py and llm_orchestrator.py enqueue
+    it when no mapped runbook / no function call came back). There is no cluster
+    action to run, so approving it must NOT touch k8s or the ladder — it records
+    an audit row and resolves, rather than crashing on the unmapped tool name.
+    """
+    executor, audit, ladder = _real_executor(tmp_path, cb_open=False)
+    pending = PendingApproval(
+        approval_id="MR000001",
+        runbook_id="llm_dynamic",
+        action_type="manual_review",
+        target="monitoring/prometheus-0",
+        incident_id="CL-503",
+        healing_level=0,
+        confidence=0.56,
+        enqueued_at="2026-08-01T00:00:00+00:00",
+        context={"cluster_summary": {"cluster_id": "CL-503"}, "llm_diagnosis": "drain"},
+    )
+
+    outcome = await executor.execute_approved(pending)
+
+    assert outcome["status"] == "reviewed"
+    assert outcome["action_id"] == "audit-1"
+    assert outcome["result"]["action"] == "manual_review"
+    # Review is audited (one pending row + outcome) so the dashboard shows it...
+    audit.write_pending.assert_awaited_once()
+    assert audit.write_pending.await_args.kwargs["healing_level"] == 0
+    audit.update_outcome.assert_awaited_once()
+    # ...but the circuit breaker/cooldown are untouched — no action hit the cluster.
+    assert ladder.governance_cb.consecutive_failures == 0
+    # No k8s client was ever needed.
+    assert not hasattr(executor, "_k8s_apps") or getattr(executor, "_k8s_apps", None) is None
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_manual_review_via_slack_path(tmp_path, monkeypatch):
+    """The Slack /slack/interactive approve path routes the same manual_review
+    item through execute_approved and must surface the reviewed outcome, not
+    raise 'unknown LLM tool'.
+
+    Contract after the fast-ack change: the synchronous response is a ⏸
+    placeholder (so Slack's ~3s interactive window is never breached by the
+    dispatch); the real outcome is POSTed to Slack's response_url by a
+    background task. So: assert the sync placeholder, then assert the
+    response_url replace carries the reviewed outcome.
+    """
+    import hashlib
+    import hmac
+    import json as _json
+    import time as _time
+    from unittest.mock import AsyncMock as _AsyncMock
+    from urllib.parse import urlencode
+
+    import httpx
+    from fastapi import FastAPI
+    from httpx import ASGITransport
+
+    from nexus.integration import notifier as notifier_module
+
+    monkeypatch.setattr(notifier_module, "SLACK_SIGNING_SECRET", "test-signing-secret")
+    # Capture the response_url replace the background task POSTs (so we don't
+    # hit Slack or depend on a live URL) and assert it carries the outcome.
+    url_replacer = _AsyncMock()
+    monkeypatch.setattr(status_api_module, "_slack_replace_via_response_url", url_replacer)
+
+    executor, _, _ = _real_executor(tmp_path, cb_open=False)
+    pending = PendingApproval(
+        approval_id="BE57C491",
+        runbook_id="llm_dynamic",
+        action_type="manual_review",
+        target="monitoring/prometheus-0",
+        incident_id="CL-PROM",
+        healing_level=0,
+        confidence=0.56,
+        enqueued_at="2026-08-01T00:00:00+00:00",
+        context={"cluster_summary": {}, "llm_diagnosis": "resource_exhaustion"},
+    )
+    # Stage into the ladder's own queue (approval_queue is a read-only property).
+    executor.ladder.approval_queue._pending[pending.approval_id] = pending
+    orc = MagicMock()
+    orc.executor = executor
+
+    ctx = status_api_module.context
+    saved_orc = ctx.orchestrator
+    saved_audit = ctx.audit_trail
+    ctx.orchestrator = orc
+    # The HTTP handler awaits context.audit_trail.record_approval (the human's
+    # approve record); give it an async mock — separate from the executor's
+    # audit (audit write/update during dispatch), matching how the other
+    # endpoint tests wire fresh_context.audit_trail.
+    ctx.audit_trail = MagicMock()
+    ctx.audit_trail.record_approval = AsyncMock()
+    try:
+        app = FastAPI()
+        app.post("/slack/interactive")(status_api_module.slack_interactive)
+
+        body = urlencode({"payload": _json.dumps({
+            "type": "block_actions",
+            "user": {"id": "U9", "username": "vatsal"},
+            "actions": [{"action_id": "nexus_approve", "value": "BE57C491"}],
+            "response_url": "https://hooks.slack.test/T/B",
+        })}).encode()
+        ts = str(int(_time.time()))
+        sig = "v0=" + hmac.new(b"test-signing-secret",
+                               b"v0:" + ts.encode() + b":" + body, hashlib.sha256).hexdigest()
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            resp = await c.post("/slack/interactive", content=body, headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "X-Slack-Request-Timestamp": ts,
+                "X-Slack-Signature": sig,
+            })
+        # Synchronous response: the ⏸ placeholder, not the outcome — the card's
+        # buttons vanish immediately so Slack never keeps an un-acked click alive.
+        assert resp.status_code == 200
+        sync_body = resp.json()
+        assert sync_body["replace_original"] is True
+        assert sync_body["text"].startswith("⏸")
+        assert executor.ladder.approval_queue.is_approved("BE57C491")
+        # Background: the reviewed outcome was POSTed to the response_url, not to
+        # the synchronous body. ASGITransport drives background tasks to
+        # completion within the request, so the replacer has run by now.
+        url_replacer.assert_awaited_once()
+        final_url, final_text = url_replacer.await_args.args
+        assert final_url == "https://hooks.slack.test/T/B"
+        assert "BE57C491" in final_text and "reviewed" in final_text
+    finally:
+        ctx.orchestrator = saved_orc
+        ctx.audit_trail = saved_audit

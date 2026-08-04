@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import hmac
 import time
 from unittest.mock import AsyncMock, MagicMock
 
@@ -38,9 +39,15 @@ _SECRET = "test-signing-secret"
 
 
 def _sign(body: bytes, ts: str) -> str:
-    """Compute Slack's v0 HMAC-SHA256 signature for ``body`` with ``_SECRET``."""
+    """Compute Slack's v0 HMAC-SHA256 signature for ``body`` with ``_SECRET``.
+
+    Mirrors what Slack actually sends: HMAC keyed by the signing secret, NOT a
+    bare SHA-256 of the base string (which was the original bug — the verifier
+    and this helper both used the unkeyed hash, so they matched each other while
+    every genuine Slack click 401'd in production).
+    """
     base = b"v0:" + str(ts).encode() + b":" + body
-    return "v0=" + hashlib.sha256(base).hexdigest()
+    return "v0=" + hmac.new(_SECRET.encode(), base, hashlib.sha256).hexdigest()
 
 
 def _pending(approval_id="ABC12345"):
@@ -192,13 +199,19 @@ async def test_approve_routes_through_governance_and_records_slack_user(
 
     assert resp.status_code == 200
     body = resp.json()
+    # The synchronous response is the fast ⏸ placeholder — the card's buttons
+    # vanish immediately so Slack's ~3s interactive window is never breached by
+    # the governance dispatch, which runs in the background task below.
     assert body["replace_original"] is True
+    assert body["text"].startswith("⏸")
     assert "ABC12345" in body["text"]
     assert "vatsal" in body["text"]
     assert queue.is_approved("ABC12345")
-    executor.execute_approved.assert_awaited_once()
-    # Slack username is recorded prefixed with slack:, audit prepends human:.
+    # Synchronous: the human's approval is audited before the response is sent.
     audit.record_approval.assert_awaited_once_with("ABC12345", "slack:vatsal")
+    # Background: ASGITransport drives background tasks to completion within the
+    # same request, so the governance dispatch has run by the time we assert.
+    executor.execute_approved.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -322,7 +335,9 @@ def test_signature_scheme_matches_slack_doc():
     # check from the timestamp check (the stale-ts case is covered above).
     ts = str(int(time.time()))
     base = b"v0:" + str(ts).encode() + b":" + raw
-    sig = "v0=" + hashlib.sha256(base).hexdigest()
+    # Genuine HMAC-SHA256 keyed by the secret — the base-string format is what's
+    # pinned; the MAC must be keyed or the verifier (now correct) rejects it.
+    sig = "v0=" + hmac.new(_SECRET.encode(), base, hashlib.sha256).hexdigest()
     headers = MagicMock()
     headers.get = lambda k, default=None: (
         {"X-Slack-Request-Timestamp": ts, "X-Slack-Signature": sig}.get(k, default)

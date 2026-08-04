@@ -53,7 +53,6 @@ _IMMEDIATE_EMIT = frozenset(
     }
 )
 
-
 class EventCorrelator:
     """
     Clusters temporally related IncidentEvents into IncidentClusters.
@@ -78,14 +77,16 @@ class EventCorrelator:
         self._open: dict[str, IncidentCluster] = {}
 
         # De-duplication set (cluster_id → already emitted)
-        self._emitted: set = set()
+        from collections import deque
+        self._emitted: set[str] = set()
+        self._emitted_order: deque[str] = deque()
+        self._max_emitted = 500
 
         # Stats
         self._total_ingested = 0
         self._total_emitted = 0
 
-    # ── Public API ────────────────────────────────────────────────────────────
-
+    # Public API
     def ingest(self, event: IncidentEvent) -> IncidentCluster | None:
         """
         Ingest a single event synchronously.
@@ -105,7 +106,7 @@ class EventCorrelator:
         key = self._cluster_key(event)
         now = datetime.now(timezone.utc)
 
-        # ── Immediate-emit signals ─────────────────────────────────────────────
+        # Immediate-emit signals
         # Do NOT cluster these — emit a single-event cluster right away.
         if signal_type in _IMMEDIATE_EMIT:
             cluster = IncidentCluster.new(event)
@@ -119,7 +120,7 @@ class EventCorrelator:
 
             return self._emit(cluster)
 
-        # ── Normal correlation ────────────────────────────────────────────────
+        # Normal correlation
         cluster = self._open.get(key)
 
         if cluster is None:
@@ -203,15 +204,20 @@ class EventCorrelator:
             )
         return ready
 
-    # ── Internal helpers ──────────────────────────────────────────────────────
-
+    # Internal helpers
     @staticmethod
     def _cluster_key(event: IncidentEvent) -> str:
         """Correlation key — events in the same namespace are clustered together."""
-        return event.namespace or "global"
+        if event.namespace:
+            return event.namespace
+        return f"global:{event.agent}"
 
     def _emit(self, cluster: IncidentCluster) -> IncidentCluster:
         self._emitted.add(cluster.cluster_id)
+        self._emitted_order.append(cluster.cluster_id)
+        if len(self._emitted_order) > self._max_emitted:
+            oldest = self._emitted_order.popleft()
+            self._emitted.discard(oldest)
         self._total_emitted += 1
         logger.info(
             f"[EventCorrelator] ✦ Cluster ready: {cluster.cluster_id} "
@@ -222,8 +228,7 @@ class EventCorrelator:
         )
         return cluster
 
-    # ── Stats ─────────────────────────────────────────────────────────────────
-
+    # Stats
     @property
     def stats(self) -> dict:
         return {

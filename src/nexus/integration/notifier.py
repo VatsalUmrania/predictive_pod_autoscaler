@@ -81,7 +81,8 @@ def verify_slack_request(
     # Signing base: b"v0:<timestamp>:<raw body>". Concatenate raw_body bytes so
     # no decode/reencode alters the exact wire bytes Slack signed.
     base = b"v0:" + str(ts).encode() + b":" + raw_body
-    expected = "v0=" + hashlib.sha256(base).hexdigest()
+    # HMAC-SHA256 keyed by the signing secret — Slack signs with HMAC, not a bare hash.
+    expected = "v0=" + hmac.new(secret.encode("utf-8"), base, hashlib.sha256).hexdigest()
     # Constant-time compare guards the prefix; the digest length is fixed.
     return hmac.compare_digest(expected, str(sig))
 
@@ -155,7 +156,6 @@ class Notifier:
         self._running: bool = False
 
     #  Public notification API
-
     async def notify_heal(
         self,
         app_name: str,
@@ -170,7 +170,7 @@ class Notifier:
             return
 
         icon = "✅" if outcome == "success" else ("❌" if outcome == "failed" else "↩️")
-        color = "#36a64f" if outcome == "success" else "#e01e5a"
+        color = "#83ef48" if outcome == "success" else "#ff0000"
 
         payload = {
             "attachments": [
@@ -329,7 +329,6 @@ class Notifier:
         # Extract RCA info from context for better Slack message
         rca = (context or {}).get("rca", {})
         event = (context or {}).get("event", {})
-        action = (context or {}).get("action", {})
         rca_source = (context or {}).get("rca_source", "unknown")
 
         blocks = [
@@ -592,3 +591,28 @@ class Notifier:
             )
         except Exception as exc:
             logger.debug(f"[Notifier] approval message error: {exc}")
+
+if __name__ == "__main__":
+    # Self-check: Slack signs with HMAC-SHA256 over "v0:ts:body" keyed by the
+    # signing secret. The verifier must ACCEPT a genuine HMAC signature and
+    # REJECT a bare-sha256 forgery (which was the bug — signature never matched).
+    import hmac as _hmac
+
+    class _H:
+        def __init__(self, d):
+            self._d = d
+        def get(self, k, default=""):
+            return self._d.get(k, default)
+
+    secret = "test-secret-xyz"
+    ts = str(int(time.time()))  # current, so the 5-min replay guard passes
+    raw = b"payload=%7B%22type%22%3A%22block_actions%22%7D"
+    base = b"v0:" + ts.encode() + b":" + raw
+    good_sig = "v0=" + _hmac.new(secret.encode(), base, hashlib.sha256).hexdigest()
+    fake_sig = "v0=" + hashlib.sha256(base).hexdigest()  # unkeyed forgery
+
+    assert verify_slack_request(raw, _H({"X-Slack-Request-Timestamp": ts, "X-Slack-Signature": good_sig}), signing_secret=secret), "verifier rejected a genuine Slack HMAC signature"
+    assert not verify_slack_request(raw, _H({"X-Slack-Request-Timestamp": ts, "X-Slack-Signature": fake_sig}), signing_secret=secret), "verifier accepted a bare-sha256 forgery (HMAC key missing?)"
+    assert not verify_slack_request(raw, _H({}), signing_secret=secret), "verifier accepted a request with no signature header"
+    print("OK: verify_slack_request accepts genuine HMAC, rejects bare-sha256 and missing-header")
+

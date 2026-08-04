@@ -243,6 +243,21 @@ class NexusOrchestrator:
         # call that doubled LLM traffic per incident). A rule-based RCA flows
         # through the governed RunbookExecutor with the ladder's own gates.
         if rca_result.source in ("gemini", "openai"):
+            # Honour the confidence gate: if the scorer's calibrated effective_level
+            # is 0 (alert only), do NOT queue an approval for an LLM-proposed
+            # *action* — the LLM may diagnose a higher healing level but the
+            # signal strength doesn't support executing it. A manual_review (no
+            # mapped runbook) is an L0 read-only "human, read this diagnosis"
+            # item, not a cluster action, so the gate must NOT suppress it —
+            # surfacing the diagnosis IS the alert.
+            if effective_level == 0 and rca_result.runbook_id:
+                logger.info(
+                    f"[Orchestrator] LLM RCA for {cluster.cluster_id} "
+                    f"→ effective_level=0 after confidence gate "
+                    f"(raw_conf={rca_result.confidence:.2f}, "
+                    f"calibrated={confidence:.2f}) — alert only, no approval queued"
+                )
+                return
             self._actions_dispatched += 1
             self._stage_llm_remediation(
                 cluster, rca_result, confidence, effective_level

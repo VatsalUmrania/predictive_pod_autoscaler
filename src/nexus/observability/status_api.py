@@ -56,9 +56,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
+from nexus.integration.notifier import SLACK_SIGNING_SECRET
 from nexus.observability.metrics import get_metrics
 
 
@@ -121,7 +122,7 @@ async def _lifespan(app: FastAPI):
     # Globals written by both paths — declare at top to satisfy Python's scoping rules
     global _ppa_outcome_tracker, _nats_client
 
-    # ── Skip self-init: NexusServer already owns all components ─────────────────
+    # Skip self-init: NexusServer already owns all components
     if context.orchestrator is not None:
         _log.info("[StatusAPI] NexusContext pre-populated — skipping self-init")
         # Wire module-level tracker so /ppa/decisions and /ppa/stats work
@@ -130,7 +131,7 @@ async def _lifespan(app: FastAPI):
         yield
         return
 
-    # ── Self-init path (standalone status_api runs only) ─────────────────────
+    # Self-init path (standalone status_api runs only)
     try:
         from nexus.integration.token_store import get_token_store
 
@@ -139,7 +140,7 @@ async def _lifespan(app: FastAPI):
     except Exception as exc:
         _log.warning(f"[StatusAPI] TokenStore init skipped: {exc}")
 
-    # ── NATS (required for SDK events and PPA outcome tracking) ─────────────────
+    # NATS (required for SDK events and PPA outcome tracking)
     try:
         from nexus.bus.nats_client import NATSClient
 
@@ -153,7 +154,7 @@ async def _lifespan(app: FastAPI):
         )
         _nats_client = None
 
-    # ── PPA Outcome Tracker ────────────────────────────────────────────────────
+    # PPA Outcome Tracker
     _ppa_outcome_tracker = None
     if _nats_client:
         try:
@@ -169,7 +170,7 @@ async def _lifespan(app: FastAPI):
             )
             _log.info("[StatusAPI] ✅ PPA OutcomeTracker started")
 
-            # ── Prescaler (ppa.predictions → pre-scale decision engine) ─────────
+            # Prescaler (ppa.predictions → pre-scale decision engine)
             try:
                 from nexus.predictive.prescaler import Prescaler
 
@@ -186,7 +187,7 @@ async def _lifespan(app: FastAPI):
     _include_integration_routers(app)
     yield
 
-    # ── Cleanup ────────────────────────────────────────────────────────────────
+    # Cleanup
     if _ppa_outcome_tracker:
         try:
             await _ppa_outcome_tracker.stop()
@@ -201,7 +202,6 @@ async def _lifespan(app: FastAPI):
 
 # Module-level tracker — set by lifespan
 _ppa_outcome_tracker = None
-
 
 async def _on_ppa_prediction(data: dict, subject: str) -> None:
     """Handle incoming ppa.predictions.* events — delegate to OutcomeTracker.
@@ -233,7 +233,6 @@ async def _on_ppa_prediction(data: dict, subject: str) -> None:
 
 # Module-level NATS client — set by lifespan, read by sdk_ingest
 _nats_client = None
-
 
 app = FastAPI(
     title="NEXUS Self-Healing Infrastructure",
@@ -332,7 +331,6 @@ async def runbook_stats(days: int = 30) -> dict[str, Any]:
     all_stats = await store.get_all_runbook_stats(days=days)
     return {k: v.to_dict() for k, v in all_stats.items()}
 
-
 @app.get("/runbooks/list", tags=["governance"])
 def runbook_list() -> list[str]:
     """List all loaded runbook IDs from RunbookLibrary."""
@@ -361,7 +359,6 @@ def prescaler_status() -> dict[str, Any]:
     ]
     return {"stats": stats, "recent_decisions": decisions}
 
-
 @app.post("/prescaler/mode/{mode}", tags=["predictive"])
 def prescaler_set_mode(mode: str) -> dict[str, str]:
     """Change prescaler autonomy mode: shadow | advisory | autonomous."""
@@ -383,7 +380,6 @@ def learning_status() -> dict[str, Any]:
     fl = _require(context.feedback_loop, "FeedbackLoop")
     return fl.status
 
-
 @app.post("/learning/run", tags=["learning"])
 async def learning_run() -> dict[str, Any]:
     """Trigger an immediate learning feedback cycle (useful for testing)."""
@@ -391,14 +387,12 @@ async def learning_run() -> dict[str, Any]:
     result = await fl.run_now()
     return {"status": "ok", **result}
 
-
 @app.get("/knowledge", tags=["learning"])
 async def knowledge_records() -> list[dict[str, Any]]:
     """All KnowledgeBase confidence adjustment records."""
     kb = _require(context.knowledge_base, "KnowledgeBase")
     records = await kb.get_all_records()
     return [r.to_dict() for r in records]
-
 
 @app.get("/advisor", tags=["learning"])
 async def advisor_recommendations(days: int = 30) -> list[dict[str, Any]]:
@@ -527,13 +521,11 @@ async def reject_action(action_id: str) -> dict[str, str]:
             status_code=503, detail="HumanApprovalQueue not accessible"
         ) from None
 
-
 # ── Slack interactivity callback ─────────────────────────────────────────────
 # Receives Approve/Reject button clicks from the interactive messages sent by
 # Notifier.notify_approval_required / chatops.send_approval_request. Verifies
 # Slack's request signature, then routes the decision through the SAME
 # approval/reject logic the CLI and /approve /reject HTTP endpoints use.
-
 def _slack_replace(text: str) -> dict[str, Any]:
     """Replace the original interactive message so the buttons disappear.
 
@@ -543,9 +535,56 @@ def _slack_replace(text: str) -> dict[str, Any]:
     """
     return {"replace_original": True, "text": text}
 
+async def _slack_replace_via_response_url(
+    response_url: str | None, text: str
+) -> None:
+    """POST a ``replace_original`` payload to Slack's ``response_url``.
+
+    Slack only honors the *synchronous* response-body ``replace_original`` when
+    it lands within ~3s. The approve path does real governance + k8s work
+    (ActionLadder → execute → post-checks) that routinely exceeds that window,
+    so its sync replace was dropped and the Approve/Reject buttons stayed live
+    even though the backend approved. The ``response_url`` Slack embeds in every
+    interactive payload accepts the replacement up to 30 min later and is the
+    documented mechanism for slow handlers, so we ack the click fast (the ⏸
+    placeholder is returned inline) and push the real outcome here. Best-effort;
+    a POST failure is logged, never raised — the approval still landed in the
+    queue and audit trail regardless.
+    """
+    if not response_url:
+        return
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                response_url, json={"replace_original": True, "text": text}
+            )
+    except Exception as exc:
+        _log.warning(f"Slack response_url replace failed: {exc}")
+
+
+async def _slack_dispatch_approved(
+    orc, pending_item, approval_id: str, user: str, response_url: str | None
+) -> None:
+    """Background: run the approved action through the governance plane, then
+    update the Slack card with the outcome. Runs AFTER the fast ⏸ ack is sent,
+    so Slack's ~3s interactive-response limit is never breached by dispatch."""
+    try:
+        outcome = await orc.executor.execute_approved(pending_item)
+        text = (
+            f"✅ Approved `{approval_id}` by @{user} → {outcome['status']} "
+            f"(audit {outcome.get('action_id')})"
+        )
+    except Exception as exc:
+        _log.error(f"Slack approve dispatch failed: {exc}")
+        text = f"✅ Approved `{approval_id}` by @{user} but dispatch errored: {exc}"
+    await _slack_replace_via_response_url(response_url, text)
 
 @app.post("/slack/interactive", tags=["governance"])
-async def slack_interactive(request: Request) -> dict[str, Any]:
+async def slack_interactive(
+    request: Request, background_tasks: BackgroundTasks
+) -> dict[str, Any]:
     """Slack interactive callback handler (Approve / Reject button clicks).
 
     Slack POSTs ``application/x-www-form-urlencoded`` with a ``payload`` form
@@ -556,6 +595,7 @@ async def slack_interactive(request: Request) -> dict[str, Any]:
           "actions": [
             {"action_id": "nexus_approve"|"nexus_reject", "value": "APPROVAL123"}
           ],
+          "response_url": "https://hooks.slack.com/actions/T.../...",
           ...
         }
 
@@ -563,7 +603,12 @@ async def slack_interactive(request: Request) -> dict[str, Any]:
     any parsing — this is the trust boundary, so a bad signature is a hard 401.
     We then parse the form body with stdlib (no python-multipart needed) and
     route to the same approve/reject path used everywhere else, recording the
-    Slack username as the auditor.
+    Slack username as the auditor. The approve path acks immediately with a ⏸
+    placeholder (Slack caps interactive responses at ~3s — awaiting the
+    governance dispatch inline would breach that and the card stays stuck on
+    live buttons), then backgrounds execute_approved() and posts the real
+    outcome to Slack's response_url (accepts the replacement up to 30 min
+    later, no 3s limit).
     """
     import json
     from urllib.parse import parse_qs
@@ -571,11 +616,24 @@ async def slack_interactive(request: Request) -> dict[str, Any]:
     from nexus.integration.notifier import verify_slack_request
 
     raw = await request.body()
+    _log.info(f"Slack interactivity: received raw body length={len(raw)}")
+    _log.debug(f"Slack interactivity: raw body={raw[:500]}")
+    _log.debug(f"Slack interactivity: headers={dict(request.headers)}")
+
+    ts = request.headers.get("X-Slack-Request-Timestamp", "missing")
+    sig = request.headers.get("X-Slack-Signature", "missing")
+    _log.info(f"Slack interactivity: ts={ts}, sig_prefix={sig[:20] if sig != 'missing' else 'missing'}...")
+
     if not verify_slack_request(raw, request.headers):
-        _log.warning("Slack interactivity: invalid request signature")
+        _log.warning("Slack interactivity: INVALID SIGNATURE - rejecting (401)")
+        _log.warning(f"  Expected sig check: SLACK_SIGNING_SECRET={'set' if SLACK_SIGNING_SECRET else 'MISSING!'}")
+        _log.warning(f"  ts={ts}, body_len={len(raw)}")
         raise HTTPException(status_code=401, detail="invalid_signature")
 
+    _log.info("Slack interactivity: signature VERIFIED OK")
+
     payload = (parse_qs(raw.decode("utf-8")).get("payload") or [None])[0]
+    _log.info(f"Slack interactivity: payload field present={payload is not None}")
     if not payload:
         _log.warning("Slack interactivity: missing payload field")
         raise HTTPException(status_code=400, detail="missing payload")
@@ -598,6 +656,9 @@ async def slack_interactive(request: Request) -> dict[str, Any]:
         data.get("user", {}).get("username")
         or data.get("user", {}).get("id", "unknown")
     )
+    _log.info(f"Slack interactivity: action_id={action_id}, approval_id={approval_id}, user={user}")
+    response_url = data.get("response_url")
+    _log.info(f"Slack interactivity: response_url={'present' if response_url else 'absent'}")
 
     if not approval_id or action_id not in ("nexus_approve", "nexus_reject"):
         _log.warning(
@@ -612,7 +673,7 @@ async def slack_interactive(request: Request) -> dict[str, Any]:
         _log.warning("Slack interactivity: approval queue not accessible")
         raise HTTPException(status_code=503, detail="queue unavailable") from None
 
-    # ── Approve: re-dispatch through the governance plane (same as /approve/{id})
+    # Approve: re-dispatch through the governance plane (same as /approve/{id})
     if action_id == "nexus_approve":
         if queue.is_approved(approval_id):
             return _slack_replace(f"✅ Action `{approval_id}` was already approved.")
@@ -631,19 +692,23 @@ async def slack_interactive(request: Request) -> dict[str, Any]:
                 f"✅ Approved `{approval_id}` by @{user} "
                 f"(staged snapshot lost — queued only)."
             )
-        try:
-            outcome = await orc.executor.execute_approved(pending_item)
-            return _slack_replace(
-                f"✅ Approved `{approval_id}` by @{user} → {outcome['status']} "
-                f"(audit {outcome['action_id']})"
-            )
-        except Exception as exc:
-            _log.error(f"Slack approve dispatch failed: {exc}")
-            return _slack_replace(
-                f"✅ Approved `{approval_id}` by @{user} but dispatch errored: {exc}"
-            )
+        # Acknowledge the click fast: the ⏸ placeholder is the synchronous
+        # response, so it replaces the card within Slack's ~3s interactive
+        # window (buttons vanish — the click registered). The real governance
+        # dispatch (ActionLadder + k8s execute + post-checks) routinely takes
+        # longer than 3s; awaiting it inline made Slack drop the synchronous
+        # replace and the card stayed stuck on live buttons. So we run it in a
+        # background task and POST the real outcome to Slack's response_url,
+        # which accepts the replacement up to 30 min later.
+        background_tasks.add_task(
+            _slack_dispatch_approved,
+            orc, pending_item, approval_id, user, response_url,
+        )
+        return _slack_replace(
+            f"⏸ Approved `{approval_id}` by @{user} — executing…"
+        )
 
-    # ── Reject: record and stop the workflow ──
+    # Reject: record and stop the workflow
     if queue.is_rejected(approval_id):
         return _slack_replace(f"❌ Action `{approval_id}` was already rejected.")
     if not queue.reject(approval_id):
@@ -669,7 +734,6 @@ async def pending_approvals() -> list[dict[str, Any]]:
 # Backed by the PpaOutcomeTracker started in the lifespan.
 # These are available without a full Orchestrator / Prescaler — the
 # OutcomeTracker subscribes to ppa.predictions.* via NATS directly.
-
 @app.get("/ppa/decisions", tags=["predictive"])
 def ppa_decisions(n: int = 20) -> list[dict[str, Any]]:
     """

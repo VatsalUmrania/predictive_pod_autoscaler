@@ -63,7 +63,6 @@ from nexus.governance.runbook import Runbook, RunbookAction, RunbookLibrary, Run
 
 logger = logging.getLogger(__name__)
 
-
 def _adapt_tool_result(res: str) -> dict[str, str]:
     """Normalise a k8s_tools string return into the executor result-dict shape.
 
@@ -130,8 +129,7 @@ class RunbookExecutor:
         self._k8s_core: k8s_client.CoreV1Api | None = None
         self._k8s_ready = False
 
-    # ── K8s client init ───────────────────────────────────────────────────────
-
+    # K8s client init
     def _ensure_k8s(self) -> None:
         if self._k8s_ready:
             return
@@ -143,8 +141,7 @@ class RunbookExecutor:
         self._k8s_core = k8s_client.CoreV1Api()
         self._k8s_ready = True
 
-    # ── Pre / Post check execution ────────────────────────────────────────────
-
+    # Pre / Post check execution
     async def _prometheus_query(self, promql: str) -> float | None:
         """Execute a PromQL instant query. Returns scalar or None on failure."""
         try:
@@ -234,8 +231,7 @@ class RunbookExecutor:
 
         return True
 
-    # ── Action execution ──────────────────────────────────────────────────────
-
+    # Action execution
     async def _execute_action(
         self, action: RunbookAction, event: IncidentEvent
     ) -> dict[str, Any]:
@@ -258,7 +254,30 @@ class RunbookExecutor:
 
         try:
             if action_type == "restart_pod":
-                pod_name = params.get("pod_name") or event.context.get("pod_name", name)
+                pod_name = params.get("pod_name") or event.context.get("pod_name")
+                if not pod_name:
+                    dep_name = params.get("name") or event.resource_name or ""
+                    pods = self._k8s_core.list_namespaced_pod(
+                        namespace, label_selector=f"app={dep_name}"
+                    ).items
+                    if not pods:
+                        all_pods = self._k8s_core.list_namespaced_pod(namespace).items
+                        pods = [
+                            p for p in all_pods
+                            if any(
+                                ref.kind == "ReplicaSet" and dep_name in ref.name
+                                for ref in (p.metadata.owner_references or [])
+                            )
+                        ]
+                    if pods:
+                        target = next(
+                            (p for p in pods if (p.status.phase or "").lower() != "running"),
+                            pods[0],
+                        )
+                        pod_name = target.metadata.name
+                    else:
+                        result.update(status="skipped", message=f"No pods found for {namespace}/{dep_name}")
+                        return result
                 self._k8s_core.delete_namespaced_pod(pod_name, namespace)
                 result.update(
                     status="executed", message=f"Deleted pod {namespace}/{pod_name}"
@@ -271,15 +290,18 @@ class RunbookExecutor:
                 # `kubectl rollout undo --to-revision=<previous>`.
                 ns_api = self._k8s_apps
                 try:
+                    dep = ns_api.read_namespaced_deployment(name, namespace)
+                    selector = dep.spec.selector.match_labels or {}
+                    label_str = ",".join(f"{k}={v}" for k, v in selector.items())
                     rs_list = ns_api.list_namespaced_replica_set(
                         namespace,
-                        label_selector=f"app={name}",
+                        label_selector=label_str,
                     ).items
-                    # ReplicaSets are sorted by name; current one has matching
-                    # pod template hash annotation. Pick the second-newest.
+                    from datetime import datetime, timezone
+                    _epoch = datetime.fromtimestamp(0, tz=timezone.utc)
                     sorted_rs = sorted(
                         rs_list,
-                        key=lambda r: r.metadata.creation_timestamp or 0,
+                        key=lambda r: r.metadata.creation_timestamp or _epoch,
                         reverse=True,
                     )
                     if len(sorted_rs) < 2:
@@ -438,6 +460,42 @@ class RunbookExecutor:
         Returns a dict with ``status`` ∈ {success, failed, governance_blocked}
         plus ``action_id`` (the audit row) and ``result`` (the per-action dict).
         """
+        # manual_review = the LLM staged a diagnosis for human eyes, not a
+        # concrete remediation (orchestrator.py / llm_orchestrator.py both
+        # enqueue it with healing_level=0). There is nothing to execute on the
+        # cluster — the human's approval IS the outcome — so record an audit row
+        # and resolve without touching k8s, instead of crashing in
+        # _materialize_llm_pending on the unmapped "manual_review" tool.
+        if pending.runbook_id == "llm_dynamic" and pending.action_type == "manual_review":
+            action_id = await self.audit.write_pending(
+                triggered_by="human:api_user",
+                runbook_id="llm_dynamic",
+                healing_level=0,
+                target=pending.target,
+                pre_check_results={
+                    "passed": True,
+                    "human_approved": True,
+                    "manual_review": True,
+                },
+                incident_id=pending.incident_id,
+                action_id=None,
+            )
+            await self.audit.update_outcome(
+                action_id,
+                execution_outcome="success",
+                post_check_results={"manual_review": True, "note": "no cluster action"},
+                action_results=[{"action": "manual_review", "status": "reviewed"}],
+            )
+            logger.info(
+                f"[RunbookExecutor] manual_review approved {pending.approval_id} "
+                f"for {pending.target} — no cluster action (human reviewed diagnosis)"
+            )
+            return {
+                "status": "reviewed",
+                "action_id": action_id,
+                "result": {"action": "manual_review", "status": "no_cluster_action"},
+            }
+
         runbook, action, event = self._materialize_pending(pending)
         target = f"{event.namespace or 'default'}/{event.resource_name or action.type}"
         confidence = pending.confidence
@@ -597,6 +655,8 @@ class RunbookExecutor:
         # ── Per-action governance loop ─────────────────────────────────────────
         action_results: list[dict] = []
         execution_failed = False
+        action_id: str | None = None
+        pre_state = None
 
         for action in runbook.actions:
             # ── ActionLadder evaluation ──────────────────────────────────────
@@ -642,7 +702,7 @@ class RunbookExecutor:
 
             # ── Pre-state capture ────────────────────────────────────────────
             self._ensure_k8s()
-            await self.rollback_reg.capture(
+            pre_state = await self.rollback_reg.capture(
                 action_type=action.type,
                 namespace=event.namespace or "default",
                 name=event.resource_name or "",
@@ -705,19 +765,9 @@ class RunbookExecutor:
 
                 # Also use RollbackRegistry for the last executed action
                 # (this captures infra state restoral, not just runbook rollback_actions)
-                if len(runbook.actions) > 0:
-                    last_action = runbook.actions[0]  # Primary action
-                    pre_state_ns = event.namespace or "default"
-                    pre_state_nm = event.resource_name or ""
-                    pre_state_cap = await self.rollback_reg.capture(
-                        last_action.type,
-                        pre_state_ns,
-                        pre_state_nm,
-                        self._k8s_apps,
-                        self._k8s_core,
-                    )
+                if len(runbook.actions) > 0 and pre_state is not None:
                     rb_infra = await self.rollback_reg.rollback(
-                        pre_state_cap, self._k8s_apps, self._k8s_core
+                        pre_state, self._k8s_apps, self._k8s_core
                     )
                     action_results.append(rb_infra)
 
@@ -729,13 +779,14 @@ class RunbookExecutor:
         outcome = (
             "success" if post_ok else ("rolled_back" if rollback_done else "failed")
         )
-        await self.audit.update_outcome(
-            action_id,
-            execution_outcome=outcome,
-            post_check_results={"slo_restored": post_ok},
-            rollback_triggered=rollback_done,
-            action_results=action_results,
-        )
+        if action_id is not None:
+            await self.audit.update_outcome(
+                action_id,
+                execution_outcome=outcome,
+                post_check_results={"slo_restored": post_ok},
+                rollback_triggered=rollback_done,
+                action_results=action_results,
+            )
 
         # ── Set cooldown (only on non-failure outcomes) ───────────────────────
         if outcome in ("success", "rolled_back"):

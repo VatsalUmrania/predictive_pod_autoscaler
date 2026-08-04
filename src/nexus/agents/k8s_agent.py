@@ -43,7 +43,6 @@ from nexus.bus.nats_client import NATSClient
 
 logger = logging.getLogger(__name__)
 
-
 class K8sAgent(BaseAgent):
     """
     Kubernetes event watcher agent.
@@ -63,6 +62,7 @@ class K8sAgent(BaseAgent):
         namespaces: list[str] | None = None,
         crashloop_threshold: int = 3,
         pending_threshold_min: float = 2.0,
+        degraded_threshold_min: float = 1.0,
         hpa_maxed_threshold_min: float = 5.0,
         poll_interval_seconds: float = 30.0,
     ):
@@ -74,13 +74,16 @@ class K8sAgent(BaseAgent):
         self.namespaces = namespaces  # None = all
         self.crashloop_threshold = crashloop_threshold
         self.pending_threshold_s = pending_threshold_min * 60.0
+        self.degraded_threshold_s = degraded_threshold_min * 60.0
         self.hpa_maxed_threshold_s = hpa_maxed_threshold_min * 60.0
 
         # Track when each pod first entered Pending and when HPA first maxed
         self._pending_since: dict[str, float] = {}  # "ns/pod" → monotonic ts
         self._hpa_maxed_since: dict[str, float] = {}  # "ns/hpa" → monotonic ts
+        # Track when each deployment first became degraded (for grace-period debounce)
+        self._degraded_since: dict[str, float] = {}  # "ns/deployment" → monotonic ts
 
-        # Event de-duplication: track which pod keys we already emitted for this cycle
+        # Event de-duplication: track which resource keys we already emitted for this cycle
         self._emitted_this_cycle: set[str] = set()
 
         self._k8s_core: k8s_client.CoreV1Api | None = None
@@ -108,8 +111,7 @@ class K8sAgent(BaseAgent):
         self._k8s_apps = k8s_client.AppsV1Api()
         self._k8s_autoscaling = k8s_client.AutoscalingV2Api()
 
-    # ── Pod inspection ────────────────────────────────────────────────────────
-
+    # Pod inspection
     def _check_pod(self, pod) -> list[IncidentEvent]:
         """Inspect a single pod object for failure conditions."""
         events: list[IncidentEvent] = []
@@ -146,7 +148,7 @@ class K8sAgent(BaseAgent):
         else:
             self._pending_since.pop(key, None)
 
-        # ── Container statuses ────────────────────────────────────────────────
+        # Container statuses
         for cs in pod.status.container_statuses or []:
             restart_count = cs.restart_count or 0
 
@@ -217,7 +219,6 @@ class K8sAgent(BaseAgent):
                         confidence=0.95,
                     )
                 )
-
         return events
 
     @staticmethod
@@ -253,11 +254,22 @@ class K8sAgent(BaseAgent):
         return None
 
     # Deployment inspection
-
     def _check_deployment(self, dep) -> list[IncidentEvent]:
+        """
+        Inspect a single deployment for failure conditions.
+
+        DEPLOYMENT_DEGRADED uses a grace-period debounce (degraded_threshold_s,
+        default 60 s) to avoid false-positive alerts during normal pod startup:
+        available_replicas < desired is transiently true on every rolling restart
+        until readiness probes pass.  Only sustained degradation triggers an event.
+
+        Per-deployment de-duplication via _emitted_this_cycle prevents the same
+        deployment from emitting more than one signal per sense() cycle.
+        """
         events: list[IncidentEvent] = []
         name = dep.metadata.name
         ns = dep.metadata.namespace
+        key = f"{ns}/{name}"
         spec = dep.spec
         status = dep.status
 
@@ -265,32 +277,54 @@ class K8sAgent(BaseAgent):
         available = status.available_replicas or 0
         ready = status.ready_replicas or 0
 
-        # Degraded
+        # ── Degraded (with grace-period debounce) ──────────────────────────────
         if available < desired and desired > 0:
-            events.append(
-                IncidentEvent(
-                    agent=AgentType.K8S,
-                    signal_type=SignalType.DEPLOYMENT_DEGRADED,
-                    severity=Severity.CRITICAL if available == 0 else Severity.WARNING,
-                    namespace=ns,
-                    resource_name=name,
-                    resource_kind="Deployment",
-                    context={
-                        "deployment": name,
-                        "desired_replicas": desired,
-                        "available_replicas": available,
-                        "ready_replicas": ready,
-                    },
+            now = time.monotonic()
+            if key not in self._degraded_since:
+                # First poll cycle where the deployment looks degraded — start timer
+                self._degraded_since[key] = now
+                logger.debug(
+                    f"[K8sAgent] Deployment {key} degraded "
+                    f"(available={available}/{desired}) — starting grace timer"
                 )
-            )
+            elif (now - self._degraded_since[key]) > self.degraded_threshold_s:
+                # Sustained degradation past the grace period — emit once per cycle
+                if key not in self._emitted_this_cycle:
+                    self._emitted_this_cycle.add(key)
+                    degraded_for_s = now - self._degraded_since[key]
+                    events.append(
+                        IncidentEvent(
+                            agent=AgentType.K8S,
+                            signal_type=SignalType.DEPLOYMENT_DEGRADED,
+                            severity=(
+                                Severity.CRITICAL if available == 0 else Severity.WARNING
+                            ),
+                            namespace=ns,
+                            resource_name=name,
+                            resource_kind="Deployment",
+                            context={
+                                "deployment": name,
+                                "desired_replicas": desired,
+                                "available_replicas": available,
+                                "ready_replicas": ready,
+                                "degraded_for_seconds": round(degraded_for_s, 1),
+                            },
+                        )
+                    )
+        else:
+            # Deployment is healthy — clear the grace timer
+            self._degraded_since.pop(key, None)
 
         # Stuck rollout (Progressing condition = False)
+        # ProgressDeadlineExceeded is a hard K8s signal (not transient) — emit immediately.
         for cond in status.conditions or []:
             if (
                 cond.type == "Progressing"
                 and cond.status == "False"
                 and cond.reason == "ProgressDeadlineExceeded"
+                and key not in self._emitted_this_cycle
             ):
+                self._emitted_this_cycle.add(key)
                 events.append(
                     IncidentEvent(
                         agent=AgentType.K8S,
@@ -306,11 +340,9 @@ class K8sAgent(BaseAgent):
                         },
                     )
                 )
-
         return events
 
-    # ── HPA inspection ────────────────────────────────────────────────────────
-
+    #  HPA inspection
     def _check_hpa(self, hpa) -> list[IncidentEvent]:
         events: list[IncidentEvent] = []
         name = hpa.metadata.name
@@ -345,11 +377,9 @@ class K8sAgent(BaseAgent):
                 )
         else:
             self._hpa_maxed_since.pop(key, None)
-
         return events
 
-    # ── BaseAgent interface ───────────────────────────────────────────────────
-
+    # BaseAgent interface
     async def sense(self) -> list[IncidentEvent]:
         if not self._k8s_core:
             return []
@@ -358,8 +388,7 @@ class K8sAgent(BaseAgent):
         self._emitted_this_cycle.clear()
 
         loop = asyncio.get_running_loop()
-
-        # ── Pods ──────────────────────────────────────────────────────────────
+        #  Pods
         if self.namespaces:
             pod_lists = await asyncio.gather(
                 *[
@@ -382,8 +411,7 @@ class K8sAgent(BaseAgent):
 
         for pod in pods:
             events.extend(self._check_pod(pod))
-
-        # ── Deployments ───────────────────────────────────────────────────────
+        # Deployments
         if self.namespaces:
             dep_lists = await asyncio.gather(
                 *[
@@ -407,7 +435,7 @@ class K8sAgent(BaseAgent):
         for dep in deployments:
             events.extend(self._check_deployment(dep))
 
-        # ── HPAs ─────────────────────────────────────────────────────────────
+        # HPAs
         try:
             if self.namespaces:
                 hpa_lists = await asyncio.gather(

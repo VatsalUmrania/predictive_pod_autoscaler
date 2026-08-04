@@ -66,7 +66,6 @@ class PolicyDecision:
         return f"PolicyDecision({status}{reasons} source={self.source})"
 
 # Action type allowlists per healing level
-#
 # Two execution vocabularies share one ladder:
 #   - runbook executor actions (restart_pod, scale_deployment, kubectl_rollout_undo …)
 #   - LLM-proposed tools       (restart_deployment, scale_resource, cordon_node …)
@@ -104,7 +103,6 @@ LLM_TOOL_LEVEL: dict[str, tuple[int, str]] = {
     "cordon_node": (3, "cluster_wide"),
     "drain_node": (3, "cluster_wide"),
 }
-
 
 def _fallback_evaluate(
     action_type: str,
@@ -175,8 +173,6 @@ def _fallback_evaluate(
 
 
 # OPA HTTP Client
-
-
 class PolicyEngine:
     """
     Evaluates healing actions against OPA policies.
@@ -200,6 +196,8 @@ class PolicyEngine:
         self._http_timeout = http_timeout
         self._fallback = fallback_on_error
         self._opa_available = True  # Optimistic; flipped on first failure
+        self._opa_retry_after: float = 0.0
+        self._opa_retry_cooldown_s = 60.0
 
     async def is_healthy(self) -> bool:
         """Check if OPA is reachable."""
@@ -243,14 +241,19 @@ class PolicyEngine:
             }
         }
 
+        import time
+        if not self._opa_available and time.monotonic() >= self._opa_retry_after:
+            self._opa_available = True
+
         if self._opa_available:
             try:
                 decision = await self._query_opa(input_doc)
                 return decision
             except Exception as exc:
                 self._opa_available = False
+                self._opa_retry_after = time.monotonic() + self._opa_retry_cooldown_s
                 logger.warning(
-                    f"[PolicyEngine] OPA error ({exc}) — switching to fallback"
+                    f"[PolicyEngine] OPA error ({exc}) — switching to fallback, will retry in {self._opa_retry_cooldown_s}s"
                 )
 
         if not self._fallback:

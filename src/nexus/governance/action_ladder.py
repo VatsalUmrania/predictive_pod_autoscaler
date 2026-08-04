@@ -31,6 +31,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
 from nexus.bus.incident_event import IncidentEvent
 from nexus.governance.cooldown_store import CooldownStore
@@ -38,6 +39,18 @@ from nexus.governance.policy_engine import PolicyDecision, PolicyEngine
 from nexus.governance.runbook import Runbook, RunbookAction
 
 logger = logging.getLogger(__name__)
+
+def _json_safe(obj: Any) -> Any:
+    """Recursively convert datetime objects to ISO strings for JSON serialization."""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_json_safe(v) for v in obj)
+    return obj
 
 # Governance Circuit Breaker
 class GovernanceCircuitBreaker:
@@ -114,8 +127,6 @@ class GovernanceCircuitBreaker:
 
 
 # Human Approval Queue
-
-
 @dataclass
 class PendingApproval:
     approval_id: str
@@ -140,7 +151,6 @@ class PendingApproval:
             "enqueued_at": self.enqueued_at,
             "context": self.context,
         }
-
 
 class HumanApprovalQueue:
     """
@@ -197,7 +207,7 @@ class HumanApprovalQueue:
                 asyncio.get_running_loop().create_task(
                     self._nats.publish_raw(
                         "nexus.approvals.required",
-                        {
+                        _json_safe({
                             "approval_id": approval_id,
                             "runbook_id": runbook_id,
                             "action_type": action_type,
@@ -207,7 +217,7 @@ class HumanApprovalQueue:
                             "confidence": confidence,
                             "app": (context or {}).get("namespace", "unknown"),
                             "context": context or {},
-                        },
+                        }),
                     )
                 )
             except RuntimeError:
@@ -217,7 +227,10 @@ class HumanApprovalQueue:
 
     def approve(self, approval_id: str) -> bool:
         """Operator approves a pending action."""
-        if approval_id in self._pending:
+        if approval_id in self._approved or approval_id in self._rejected:
+            return False
+        pending = self._pending.pop(approval_id, None)
+        if pending is not None:
             self._approved.add(approval_id)
             logger.info(f"[HumanApprovalQueue] APPROVED: {approval_id}")
             return True
@@ -225,7 +238,10 @@ class HumanApprovalQueue:
 
     def reject(self, approval_id: str) -> bool:
         """Operator rejects a pending action."""
-        if approval_id in self._pending:
+        if approval_id in self._approved or approval_id in self._rejected:
+            return False
+        pending = self._pending.pop(approval_id, None)
+        if pending is not None:
             self._rejected.add(approval_id)
             logger.info(f"[HumanApprovalQueue] REJECTED: {approval_id}")
             return True
@@ -252,8 +268,6 @@ class HumanApprovalQueue:
 
 
 # Ladder Decision
-
-
 @dataclass
 class LadderDecision:
     can_proceed: bool
@@ -265,8 +279,6 @@ class LadderDecision:
 
 
 # Action Ladder
-
-
 class ActionLadder:
     """
     Governance router for all NEXUS healing actions.
@@ -321,13 +333,13 @@ class ActionLadder:
         action_type = action.type
         blast_radius = runbook.blast_radius
 
-        # ── L0 fast path ──────────────────────────────────────────────────────
+        # L0 fast path
         # L0 actions (emit_alert, patch_annotation) bypass CB + cooldown checks.
         # They are always allowed — blocking alerts would defeat the purpose.
         if level == 0:
             return LadderDecision(can_proceed=True)
 
-        # ── Governance circuit breaker ────────────────────────────────────────
+        # Governance circuit breaker
         if self._cb.is_open:
             logger.warning(
                 f"[ActionLadder] BLOCKED by governance CB: "
@@ -341,7 +353,7 @@ class ActionLadder:
                 ),
             )
 
-        # ── Cooldown check ────────────────────────────────────────────────────
+        # Cooldown check
         cooldown_key = CooldownStore.make_key(runbook.id, target)
         in_cooldown = await self._cooldown.is_in_cooldown(cooldown_key)
         remaining = (
@@ -359,7 +371,7 @@ class ActionLadder:
                 cooldown_remaining_s=remaining,
             )
 
-        # ── OPA policy check ──────────────────────────────────────────────────
+        # OPA policy check
         policy = await self._policy.evaluate(
             action_type=action_type,
             healing_level=level,
@@ -372,7 +384,7 @@ class ActionLadder:
             or getattr(event, "override_blast_radius", False),
         )
 
-        # ── L3 + confidence gate → human approval ────────────────────────────
+        # L3 + confidence gate → human approval
         if policy.requires_approval and not human_approved:
             approval_id = self._approval.enqueue(
                 runbook_id=runbook.id,
@@ -405,7 +417,7 @@ class ActionLadder:
                 denial_reason="requires_human_approval",
             )
 
-        # ── Policy denied ─────────────────────────────────────────────────────
+        # Policy denied
         if not policy.allowed:
             logger.info(
                 f"[ActionLadder] POLICY DENIED: {action_type} L{level} "
