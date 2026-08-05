@@ -369,7 +369,7 @@ class ScalerStateMachine:
             return 0.0
 
         # Recover rolling_max_rps: it was the normalization denominator during
-        # both training (export_training_data.py, floor=1.0) and inference
+        # both training (centralized model plane, floor=1.0) and inference
         # (features.py, floor=1.0).  Back-computed from raw_rps / normalized_rps.
         raw_rps: float = float(
             (raw_metrics or {}).get("requests_per_second", 0.0) or 0.0

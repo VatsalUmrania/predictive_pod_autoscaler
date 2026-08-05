@@ -40,19 +40,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# ──────────────────────────────────────────────────────────────────────────────
 # In-memory policy override store (runtime patches on top of selfheal.yaml)
-# ──────────────────────────────────────────────────────────────────────────────
 
 _policy_overrides: dict[str, dict[str, Any]] = {}
 _policy_cache: dict[str, dict[str, Any]] = {}  # app_name → resolved SelfhealConfig dict
-
 
 def cache_policy(app_name: str, policy_dict: dict[str, Any]) -> None:
     """Called by GitAgent when a new selfheal.yaml is processed."""
     _policy_cache[app_name] = policy_dict
     logger.info(f"[Dashboard] Policy cached for app='{app_name}'")
-
 
 def refresh_policy_cache() -> int:
     """Eagerly scan filesystem for selfheal.yaml files and populate _policy_cache.
@@ -117,7 +113,6 @@ _CREATE_SQL = """
         timestamp   TEXT
     )
 """
-
 
 def _write_incident(row: dict[str, Any]) -> None:
     """Write one incident to SQLite. Creates the table on first write."""
@@ -184,11 +179,7 @@ def _read_incidents(n: int, app: str | None) -> list[dict[str, Any]]:
         logger.warning(f"[Dashboard] incident read failed: {_e}")
         return []
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Plain-English incident description builder
-# ──────────────────────────────────────────────────────────────────────────────
-
 _RUNBOOK_DESCRIPTIONS = {
     "runbook_pod_crashloop_v1": "Restarted {target} which was crash-looping",
     "runbook_high_error_rate_post_deploy_v1": "Rolled back deployment {target} — error rate spiked after a code push",
@@ -220,23 +211,13 @@ def _make_plain_english(row: dict[str, Any]) -> str:
 
     return f"At {ts} UTC — {action}. {suffix}".strip()
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Context proxy (avoids circular import with status_api)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def _context():
     from nexus.observability.status_api import context
 
     return context
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Incidents
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @router.get("/developer/incidents", tags=["developer"])
 async def developer_incidents(
     n: int = 20,
@@ -300,12 +281,7 @@ async def developer_post_incident(payload: dict[str, Any]) -> dict[str, str]:
     )
     return {"status": "ok", "incident_id": payload["incident_id"]}
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Predictions
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @router.get("/developer/predictions", tags=["developer"])
 def developer_predictions(app: str | None = None) -> list[dict[str, Any]]:
     """
@@ -370,12 +346,7 @@ def _make_prediction_sentence(d: Any) -> str:
     except Exception:
         return "Traffic spike predicted."
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Policy
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @router.get("/developer/policy/{app}", tags=["developer"])
 def developer_get_policy(app: str) -> dict[str, Any]:
     """

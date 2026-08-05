@@ -70,7 +70,6 @@ DATA_DIR = PROJECT_DIR / "data"
 MODEL_DIR = DATA_DIR / "models"
 TRAINING_DATA_DIR = DATA_DIR / "training-data"
 CHAMPION_DIR = DATA_DIR / "champions"
-ARTIFACTS_DIR = DATA_DIR / "artifacts"
 SCRIPTS_DIR = PROJECT_DIR / "scripts"
 TESTS_DIR = PROJECT_DIR / "tests"
 
@@ -121,13 +120,7 @@ MINIKUBE_DRIVER = get_minikube_driver()
 DEFAULT_APP_NAME = os.getenv("PPA_DEFAULT_APP_NAME", "test-app")
 DEFAULT_NAMESPACE = os.getenv("PPA_NAMESPACE", os.getenv("NAMESPACE", "default"))
 DEFAULT_HORIZON = os.getenv("PPA_DEFAULT_HORIZON", "normalized_rps_t10m")
-DEFAULT_CSV = os.getenv(
-    "PPA_DEFAULT_CSV", str(TRAINING_DATA_DIR / "training_data_v3.csv")
-)
-DEFAULT_LOOKBACK = int(os.getenv("PPA_LOOKBACK_STEPS", "60"))
-DEFAULT_EPOCHS = int(os.getenv("PPA_EPOCHS", "50"))
 NAMESPACE = "default"
-CONTAINER_NAME = "test-app"
 
 # Operator defaults (flat constants for backward compat)
 TIMER_INTERVAL = 30
@@ -241,25 +234,6 @@ class ScalingConfig:
 
 
 @dataclass
-class DataflowConfig:
-    """Data collection and training pipeline configuration."""
-
-    target_app: str = "test-app"
-    namespace: str = "default"
-    container_name: str = "test-app"
-    training_data_dir: str = "data/training-data"
-
-    @classmethod
-    def from_env(cls) -> DataflowConfig:
-        return cls(
-            target_app=os.getenv("TARGET_APP", "test-app"),
-            namespace=os.getenv("NAMESPACE", "default"),
-            container_name=os.getenv("CONTAINER_NAME", "test-app"),
-            training_data_dir=os.getenv("TRAINING_DATA_DIR", "data/training-data"),
-        )
-
-
-@dataclass
 class CLIConfig:
     """CLI and local development configuration."""
 
@@ -298,7 +272,6 @@ class PathsConfig:
     data_dir: Path = field(init=False)
     training_data_dir: Path = field(init=False)
     champion_dir: Path = field(init=False)
-    artifacts_dir: Path = field(init=False)
     scripts_dir: Path = field(init=False)
     tests_dir: Path = field(init=False)
 
@@ -308,7 +281,6 @@ class PathsConfig:
         self.model_dir = self.data_dir / "models"
         self.training_data_dir = self.data_dir / "training-data"
         self.champion_dir = self.data_dir / "champions"
-        self.artifacts_dir = self.data_dir / "artifacts"
         self.scripts_dir = self.project_dir / "scripts"
         self.tests_dir = self.project_dir / "tests"
 
@@ -331,7 +303,6 @@ class Config:
     operator: OperatorConfig = field(default_factory=OperatorConfig.from_env)
     model: ModelConfig = field(default_factory=ModelConfig.from_env)
     scaling: ScalingConfig = field(default_factory=ScalingConfig.from_env)
-    dataflow: DataflowConfig = field(default_factory=DataflowConfig.from_env)
     cli: CLIConfig = field(default_factory=CLIConfig.from_env)
     paths: PathsConfig = field(default_factory=PathsConfig.from_env)
 
@@ -341,7 +312,6 @@ class Config:
             "operator": self.operator.__dict__,
             "model": self.model.__dict__,
             "scaling": self.scaling.__dict__,
-            "dataflow": self.dataflow.__dict__,
             "cli": self.cli.__dict__,
             "paths": {
                 "project_dir": str(self.paths.project_dir),
@@ -350,7 +320,6 @@ class Config:
                 "data_dir": str(self.paths.data_dir),
                 "training_data_dir": str(self.paths.training_data_dir),
                 "champion_dir": str(self.paths.champion_dir),
-                "artifacts_dir": str(self.paths.artifacts_dir),
                 "scripts_dir": str(self.paths.scripts_dir),
                 "tests_dir": str(self.paths.tests_dir),
             },
@@ -363,7 +332,6 @@ class Config:
             operator=OperatorConfig.from_env(),
             model=ModelConfig.from_env(),
             scaling=ScalingConfig.from_env(),
-            dataflow=DataflowConfig.from_env(),
             cli=CLIConfig.from_env(),
             paths=PathsConfig.from_env(),
         )
@@ -414,34 +382,6 @@ def get_banner() -> str:
     return f"[bold cyan]PPA[/] [bold blue]v{__version__}[/] [dim]• Predictive Pod Autoscaler[/]"
 
 
-# Dataflow query helpers
-# Build Prometheus queries for dataflow/training data collection
-# NOTE: These are moved from dataflow/config.py (Phase 1 consolidation)
-
-
-def _build_dataflow_queries() -> dict:
-    """Build Prometheus queries for dataflow using centralized config values."""
-    from ppa.common.promql import build_queries as build_ppa_queries
-
-    target_app = os.getenv("TARGET_APP", "test-app")
-    namespace = os.getenv("NAMESPACE", "default")
-    container_name = os.getenv("CONTAINER_NAME", "test-app")
-
-    return build_ppa_queries(target_app, namespace, container_name)
-
-
-# Build queries once at import time (matches dataflow/config.py behavior)
-QUERIES = _build_dataflow_queries()
-
-# Only features that MUST be present (non-null) in every row for training to proceed.
-# Derived columns (normalized_rps, accelerations) and optional metrics are
-# intentionally excluded — they are filled or skipped gracefully.
-REQUIRED_QUERY_FEATURES = ["latency_normalized", "current_replicas"]
-
-# Dataflow-specific constants for backward compatibility
-TARGET_APP = os.getenv("TARGET_APP", "test-app")
-
-
 __all__ = [
     # Singleton functions
     "get_config",
@@ -455,7 +395,6 @@ __all__ = [
     "OperatorConfig",
     "ModelConfig",
     "ScalingConfig",
-    "DataflowConfig",
     "CLIConfig",
     "PathsConfig",
     # Exceptions
@@ -463,10 +402,6 @@ __all__ = [
     # Theme
     "PPA_THEME",
     "get_banner",
-    # Dataflow queries and constants (Phase 1 consolidation)
-    "QUERIES",
-    "REQUIRED_QUERY_FEATURES",
-    "TARGET_APP",
     # Module-level constants
     "PROMETHEUS_PORT",
     "PROMETHEUS_URL",
@@ -481,9 +416,6 @@ __all__ = [
     "DEFAULT_APP_NAME",
     "DEFAULT_NAMESPACE",
     "DEFAULT_HORIZON",
-    "DEFAULT_CSV",
-    "DEFAULT_LOOKBACK",
-    "DEFAULT_EPOCHS",
     # Paths
     "PROJECT_DIR",
     "SESSION_FILE",
@@ -492,12 +424,10 @@ __all__ = [
     "DATA_DIR",
     "TRAINING_DATA_DIR",
     "CHAMPION_DIR",
-    "ARTIFACTS_DIR",
     "SCRIPTS_DIR",
     "TESTS_DIR",
     # Operator defaults
     "NAMESPACE",
-    "CONTAINER_NAME",
     "TIMER_INTERVAL",
     "INITIAL_DELAY",
     "STABILIZATION_STEPS",

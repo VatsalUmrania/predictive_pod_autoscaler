@@ -10,6 +10,10 @@ The FeedbackLoop is a background task that runs every N minutes and:
     4. Pushes updated adjustment map into the ConfidenceScorer (in-memory)
     5. Runs the RunbookAdvisor → logs and publishes recommendations to NATS
     6. Records signal-type patterns + outcomes in KnowledgeBase for RCA enrichment
+    7. (P3b) Tracks per-incident resolution: whether an action's cluster_id stops
+       emitting signals within a verification window after the action — this
+       provides a direct "did THIS incident actually resolve?" signal that
+       supplements the hourly aggregate boost.
 
 Integration with ConfidenceScorer (Phase 4 update):
     The FeedbackLoop calls ConfidenceScorer.set_historical_boosts(boosts)
@@ -24,6 +28,8 @@ Publication:
 Configuration:
     NEXUS_FEEDBACK_INTERVAL_S   Poll interval in seconds (default: 300 = 5 min)
     NEXUS_FEEDBACK_WINDOW_DAYS  Lookback window for stats (default: 30 days)
+    NEXUS_INCIDENT_VERIFY_WINDOW_S  Time to wait after an action to confirm
+                                    the incident is resolved (default: 60s)
 """
 
 from __future__ import annotations
@@ -45,6 +51,37 @@ from nexus.reasoning.confidence_scorer import ConfidenceScorer
 logger = logging.getLogger(__name__)
 
 
+class PendingIncidentVerification:
+    """
+    Tracks an action's incident_id awaiting resolution verification.
+    If the incident doesn't re-appear within the verify window, it's marked resolved.
+    """
+
+    __slots__ = ("incident_id", "runbook_id", "action_type", "outcome", "action_time")
+
+    def __init__(
+        self,
+        incident_id: str,
+        runbook_id: str,
+        action_type: str,
+        outcome: str,
+    ) -> None:
+        self.incident_id = incident_id
+        self.runbook_id = runbook_id
+        self.action_type = action_type
+        self.outcome = outcome
+        self.action_time = time.monotonic()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "incident_id": self.incident_id,
+            "runbook_id": self.runbook_id,
+            "action_type": self.action_type,
+            "outcome": self.outcome,
+            "action_time": self.action_time,
+        }
+
+
 class FeedbackLoop:
     """
     Background learning coordinator for the NEXUS system.
@@ -56,6 +93,8 @@ class FeedbackLoop:
         nats_client:        NATSClient for publishing learning events.
         interval_s:         Polling interval in seconds (default: 300).
         window_days:        Lookback window for stats (default: 30).
+        verify_window_s:    Seconds to wait after an action before checking
+                            if the incident is resolved (default: 60).
     """
 
     def __init__(
@@ -67,6 +106,7 @@ class FeedbackLoop:
         ppa_outcome_tracker: PpaOutcomeTracker | None = None,
         interval_s: float = 300.0,
         window_days: int = 30,
+        verify_window_s: float = 60.0,
     ):
         import os
 
@@ -79,7 +119,15 @@ class FeedbackLoop:
         self._window_days = int(
             os.getenv("NEXUS_FEEDBACK_WINDOW_DAYS", str(window_days))
         )
+        self._verify_window_s = float(
+            os.getenv("NEXUS_INCIDENT_VERIFY_WINDOW_S", str(verify_window_s))
+        )
         self._advisor = RunbookAdvisor(outcome_store=outcome_store)
+
+        # Tracking incident verification (P3b)
+        self._pending_verifications: dict[str, PendingIncidentVerification] = {}
+        # incident_ids that have recently fired — used to detect re-appearance
+        self._recent_incidents: dict[str, float] = {}
 
         # Background task handle
         self._task: asyncio.Task | None = None
@@ -91,50 +139,114 @@ class FeedbackLoop:
         self._last_recs: list[dict[str, Any]] = []
         self._start_time: float | None = None
 
-    # ── Lifecycle ─────────────────────────────────────────────────────────────
+    # Lifecycle
 
     async def start(self) -> None:
         """Start the background polling loop (non-blocking)."""
         self._start_time = time.monotonic()
         self._task = asyncio.create_task(self._run(), name="nexus-feedback-loop")
         # Subscribe to action events to record real signal_type → runbook patterns
-        # (the audit trail only stores runbook_id, so the previous reverse-infer
-        # mapping only knew 5 runbooks and dropped every other pattern on the floor.)
         if self._nats is not None:
             try:
                 await self._nats.subscribe_raw(
-                    subject_pattern="nexus.actions.*",
+                    subject_pattern="nexus.actions.>",
                     handler=self._on_action_event,
                 )
                 logger.info(
-                    "[FeedbackLoop] Subscribed to nexus.actions.* for pattern recording"
+                    "[FeedbackLoop] Subscribed to nexus.actions.> for pattern recording"
                 )
             except Exception as exc:
                 logger.warning(
                     f"[FeedbackLoop] Pattern subscription failed (non-fatal): {exc}"
                 )
+
+            # P3b: also subscribe to incident stream to track re-appearance
+            try:
+                await self._nats.subscribe_raw(
+                    subject_pattern="nexus.incidents.>",
+                    handler=self._on_incident_event,
+                )
+                logger.info(
+                    "[FeedbackLoop] Subscribed to nexus.incidents.> for resolution tracking"
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"[FeedbackLoop] Incident subscription failed (non-fatal): {exc}"
+                )
+
         logger.info(
             f"[FeedbackLoop] Started — "
             f"interval={self._interval}s "
-            f"window={self._window_days}d"
+            f"window={self._window_days}d "
+            f"verify_window={self._verify_window_s}s"
         )
 
     async def _on_action_event(self, data: dict, subject: str) -> None:
-        """Record a real signal_type → runbook_id pattern from a healing action."""
+        """Record a real signal_type → runbook_id pattern from a healing action.
+
+        P3b: also register the incident_id for resolution verification.
+        """
         try:
             signal_type = data.get("signal_type")
             runbook_id = data.get("runbook_id")
             outcome = data.get("outcome", "")
+            incident_id = data.get("incident_id")
+            action_type = data.get("action_type", "unknown")
+
             if not signal_type or not runbook_id:
                 return
+
             success = outcome in ("success", "rolled_back")
             await self._kb.record_pattern(
                 signal_types={signal_type},
                 runbook_id=runbook_id,
                 success=success,
             )
+
+            # P3b: if action completed (not stuck in approval), schedule verification
+            if incident_id and outcome in ("success", "rolled_back"):
+                # Only verify actions that actually touched the cluster
+                # (governance_blocked / pending_approval don't execute)
+                self._pending_verifications[incident_id] = PendingIncidentVerification(
+                    incident_id=incident_id,
+                    runbook_id=runbook_id,
+                    action_type=action_type,
+                    outcome=outcome,
+                )
+                logger.debug(
+                    f"[FeedbackLoop] Scheduled verification for incident {incident_id} "
+                    f"(runbook={runbook_id}, outcome={outcome})"
+                )
+
         except Exception as exc:
             logger.debug(f"[FeedbackLoop] action pattern error: {exc}")
+
+    async def _on_incident_event(self, data: dict, subject: str) -> None:
+        """Track incoming incidents to detect re-appearance of healed clusters."""
+        try:
+            # Extract incident_id from NATS subject: nexus.incidents.<agent>.<signal>
+            # The event payload includes correlation_id which IS the cluster_id
+            incident_id = data.get("correlation_id") or data.get("incident_id")
+            if incident_id:
+                self._recent_incidents[incident_id] = time.monotonic()
+
+                # If this was pending verification, it's a re-fire → mark failed
+                if incident_id in self._pending_verifications:
+                    pv = self._pending_verifications.pop(incident_id)
+                    await self._kb.record_incident_outcome(
+                        incident_id=incident_id,
+                        runbook_id=pv.runbook_id,
+                        action_type=pv.action_type,
+                        resolved=False,  # re-fired → action didn't resolve
+                        reason="re-fired",
+                    )
+                    logger.debug(
+                        f"[FeedbackLoop] Incident {incident_id} re-fired — "
+                        f"verification FAILED (runbook={pv.runbook_id})"
+                    )
+
+        except Exception as exc:
+            logger.debug(f"[FeedbackLoop] incident tracking error: {exc}")
 
     async def stop(self) -> None:
         """Graceful shutdown."""
@@ -224,6 +336,9 @@ class FeedbackLoop:
         # ── 5. Update signal-pattern records ─────────────────────────────────
         await self._update_signal_patterns()
 
+        # ── 5b. Verify incident resolutions (P3b) ─────────────────────────────
+        await self._verify_pending_incidents()
+
         # ── 4b. Record PPA prediction accuracy ────────────────────────────────
         await self._update_ppa_outcomes()
 
@@ -288,6 +403,43 @@ class FeedbackLoop:
         except Exception as exc:
             logger.debug(f"[FeedbackLoop] NATS publish failed: {exc}")
 
+    # ── Per-incident verification (P3b) ────────────────────────────────────────
+
+    async def _verify_pending_incidents(self) -> None:
+        """
+        Check pending incident verifications. If an incident hasn't re-fired
+        within the verify_window_s after its action, mark it as RESOLVED.
+        If it re-fired, it was already handled in _on_incident_event.
+        """
+        now = time.monotonic()
+        expired: list[str] = []
+
+        for incident_id, pv in self._pending_verifications.items():
+            elapsed = now - pv.action_time
+            if elapsed >= self._verify_window_s:
+                # Incident didn't re-fire within the window → verified resolved
+                expired.append(incident_id)
+                await self._kb.record_incident_outcome(
+                    incident_id=incident_id,
+                    runbook_id=pv.runbook_id,
+                    action_type=pv.action_type,
+                    resolved=True,
+                    reason="verified",
+                )
+                logger.debug(
+                    f"[FeedbackLoop] Incident {incident_id} verified RESOLVED "
+                    f"after {self._verify_window_s}s (runbook={pv.runbook_id})"
+                )
+
+        for iid in expired:
+            self._pending_verifications.pop(iid, None)
+
+        if expired:
+            logger.info(
+                f"[FeedbackLoop] Verification check: {len(expired)} incident(s) resolved, "
+                f"{len(self._pending_verifications)} still pending"
+            )
+
     # ── Manual trigger ────────────────────────────────────────────────────────
 
     async def run_now(self) -> dict[str, Any]:
@@ -316,12 +468,7 @@ class FeedbackLoop:
             "last_recommendations": len(self._last_recs),
         }
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Factory
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 async def build_feedback_loop(
     confidence_scorer: ConfidenceScorer,
     nats_client: NATSClient | None = None,
@@ -371,4 +518,5 @@ async def build_feedback_loop(
         nats_client=nats_client,
         ppa_outcome_tracker=ppa_outcome_tracker,
         interval_s=interval_s,
+        verify_window_s=60.0,
     )

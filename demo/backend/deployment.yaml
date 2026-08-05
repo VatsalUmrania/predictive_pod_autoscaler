@@ -1,5 +1,4 @@
 # demo/backend/deployment.yaml
-# ─────────────────────────────────────────────────────────────────────────────
 # Kubernetes manifests for running the ShopDemo backend inside Minikube
 # as the PPA target workload.
 #
@@ -14,7 +13,6 @@
 #
 # Or via PPA CLI after `ppa init`:
 #   ppa add --app-name shop-demo --target shop-demo --rps-capacity 50
-# ─────────────────────────────────────────────────────────────────────────────
 ---
 apiVersion: apps/v1
 kind: Deployment

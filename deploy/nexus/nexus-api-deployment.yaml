@@ -41,6 +41,13 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "nodes", "events", "services", "endpoints", "namespaces"]
     verbs: ["get", "list", "watch"]
+  # L1 restart_pod heal: delete the pod so its ReplicaSet recreates it.
+  # Cluster-wide because NEXUS heals pods across namespaces (shop-demo in
+  # default, its own pods in nexus, ...). Trust level is consistent with the
+  # cluster-wide deployments/scale update/patch already granted below.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
   # K8sAgent: read deployments/replicasets for scaling context
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
@@ -114,12 +121,18 @@ spec:
             # Prometheus — kube-prometheus-stack service in monitoring namespace
             - name: PROMETHEUS_URL
               value: "http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090"
-            # Optional: mount via Secret named "nexus-secrets" with key "gemini-api-key"
-            - name: NEXUS_GEMINI_API_KEY
+            # LLM Provider configuration (Gemini / OpenAI / Anthropic / none)
+            - name: NEXUS_LLM_PROVIDER
+              value: "gemini"
+            # Model override for the selected provider
+            - name: NEXUS_LLM_MODEL
+              value: "gemini-3.1-flash-lite"
+            # API Key (mounted from secret)
+            - name: NEXUS_LLM_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: nexus-secrets
-                  key: gemini-api-key
+                  key: NEXUS_LLM_API_KEY
                   optional: true
           volumeMounts:
             - name: nexus-data

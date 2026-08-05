@@ -46,11 +46,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Policy Decision
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @dataclass
 class PolicyDecision:
     allowed: bool
@@ -69,21 +65,44 @@ class PolicyDecision:
         reasons = f" [{', '.join(self.deny_reasons)}]" if self.deny_reasons else ""
         return f"PolicyDecision({status}{reasons} source={self.source})"
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Fallback policy (pure Python — mirrors nexus_policies.rego)
-# ──────────────────────────────────────────────────────────────────────────────
-
 # Action type allowlists per healing level
+# Two execution vocabularies share one ladder:
+#   - runbook executor actions (restart_pod, scale_deployment, kubectl_rollout_undo …)
+#   - LLM-proposed tools       (restart_deployment, scale_resource, cordon_node …)
+# A human-approved L3 must still pass the allowlist (and cooldown / circuit
+# breaker), so every LLM tool is mapped onto the level it requires. Without
+# this, a routed-L0 governance check would deny every LLM proposal at the
+# allowlist gate — see _LLM_TOOL_LEVEL in llm_orchestrator.py for the mapping.
 _L0_ALLOWED = {"emit_alert", "patch_annotation"}
-_L1_ALLOWED = _L0_ALLOWED | {"restart_pod", "flush_coredns_cache"}
-_L2_ALLOWED = _L1_ALLOWED | {"scale_deployment"}
-_L3_ALLOWED = _L2_ALLOWED | {"kubectl_rollout_undo", "http_webhook"}
+_L1_ALLOWED = _L0_ALLOWED | {"restart_pod", "flush_coredns_cache", "restart_deployment"}
+_L2_ALLOWED = _L1_ALLOWED | {"scale_deployment", "scale_resource"}
+_L3_ALLOWED = _L2_ALLOWED | {
+    "kubectl_rollout_undo",
+    "http_webhook",
+    "rollback_deployment",
+    "patch_configmap",
+    "cordon_node",
+    "drain_node",
+}
 
 _LEVEL_LISTS = {0: _L0_ALLOWED, 1: _L1_ALLOWED, 2: _L2_ALLOWED, 3: _L3_ALLOWED}
 
 _CLUSTER_WIDE_BLAST_RADIUS = {"cluster_wide"}
 
+# LLM-proposed tool → (healing_level, blast_radius). The level is the tool's
+# NOMINAL blast — a cordon is L3 regardless of confidence; confidence only
+# decides auto-run vs human-approval, not the action's level. The level column
+# mirrors the allowlists above (a tool appears at the level that allows it) —
+# keep them in sync. Used by LLMOrchestrator (staging) and RunbookExecutor
+# (synthesis), so both score an LLM proposal at its real blast.
+LLM_TOOL_LEVEL: dict[str, tuple[int, str]] = {
+    "restart_deployment": (1, "single_deployment"),
+    "scale_resource": (2, "single_deployment"),
+    "rollback_deployment": (3, "single_deployment"),
+    "patch_configmap": (3, "single_deployment"),
+    "cordon_node": (3, "cluster_wide"),
+    "drain_node": (3, "cluster_wide"),
+}
 
 def _fallback_evaluate(
     action_type: str,
@@ -153,11 +172,7 @@ def _fallback_evaluate(
     return PolicyDecision(allowed=True, source="fallback")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # OPA HTTP Client
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class PolicyEngine:
     """
     Evaluates healing actions against OPA policies.
@@ -181,6 +196,8 @@ class PolicyEngine:
         self._http_timeout = http_timeout
         self._fallback = fallback_on_error
         self._opa_available = True  # Optimistic; flipped on first failure
+        self._opa_retry_after: float = 0.0
+        self._opa_retry_cooldown_s = 60.0
 
     async def is_healthy(self) -> bool:
         """Check if OPA is reachable."""
@@ -224,14 +241,19 @@ class PolicyEngine:
             }
         }
 
+        import time
+        if not self._opa_available and time.monotonic() >= self._opa_retry_after:
+            self._opa_available = True
+
         if self._opa_available:
             try:
                 decision = await self._query_opa(input_doc)
                 return decision
             except Exception as exc:
                 self._opa_available = False
+                self._opa_retry_after = time.monotonic() + self._opa_retry_cooldown_s
                 logger.warning(
-                    f"[PolicyEngine] OPA error ({exc}) — switching to fallback"
+                    f"[PolicyEngine] OPA error ({exc}) — switching to fallback, will retry in {self._opa_retry_cooldown_s}s"
                 )
 
         if not self._fallback:

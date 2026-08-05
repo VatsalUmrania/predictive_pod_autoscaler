@@ -38,12 +38,7 @@ from nexus.bus.nats_client import NATSClient
 
 logger = logging.getLogger(__name__)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Helpers
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def _checksum(data: dict) -> str:
     """Stable SHA-256 of a dict (sorted keys for determinism)."""
     canonical = json.dumps(data, sort_keys=True, default=str)
@@ -69,12 +64,7 @@ def _normalise_deployment(dep_dict: dict) -> dict:
         "resources": [c.get("resources") for c in template.get("containers", [])],
     }
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Config Agent
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class ConfigAgent(BaseAgent):
     """
     Detects Kubernetes configuration drift and missing runtime env vars.
@@ -124,7 +114,7 @@ class ConfigAgent(BaseAgent):
     async def on_start(self) -> None:
         import asyncio
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._init_k8s)
 
     async def on_stop(self) -> None:
@@ -323,7 +313,7 @@ class ConfigAgent(BaseAgent):
     async def sense(self) -> list[IncidentEvent]:
         import asyncio
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         events: list[IncidentEvent] = []
 
         # IaC drift (file I/O + K8s API — run in thread)

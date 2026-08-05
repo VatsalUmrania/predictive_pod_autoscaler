@@ -26,8 +26,8 @@ RCAResult fields:
     source:        "gemini" | "rule_based"
 
 Configuration:
-    NEXUS_GEMINI_API_KEY   — required for Gemini; fallback used if absent
-    NEXUS_GEMINI_MODEL     — model name (default: gemini-2.5-flash)
+    NEXUS_LLM_API_KEY     — required for Gemini; fallback used if absent
+    NEXUS_GEMINI_MODEL     — model name (default: gemini-3.1-flash-lite)
     NEXUS_RCA_TIMEOUT_S    — Gemini request timeout in seconds (default: 10)
 """
 
@@ -44,10 +44,7 @@ from nexus.reasoning.incident_cluster import IncidentCluster
 
 logger = logging.getLogger(__name__)
 
-# ──────────────────────────────────────────────────────────────────────────────
 # RCA Result
-# ──────────────────────────────────────────────────────────────────────────────
-
 VALID_FAILURE_CLASSES = frozenset(
     {
         "bad_deploy",
@@ -60,7 +57,6 @@ VALID_FAILURE_CLASSES = frozenset(
 )
 
 VALID_HEALING_LEVELS = (0, 1, 2, 3)
-
 
 @dataclass
 class RCAResult:
@@ -101,11 +97,7 @@ class RCAResult:
             f"src={self.source})"
         )
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Rule-based fallback
-# ──────────────────────────────────────────────────────────────────────────────
-
 # Rules are (required_signals, partial_ok, result_template)
 # required_signals ⊆ cluster.signal_types for the rule to match.
 # partial_ok=True means ANY signal in the set triggers the rule (OR match).
@@ -113,7 +105,7 @@ class RCAResult:
 # Rules are evaluated top-to-bottom; first match wins.
 
 _RULES: list[tuple[frozenset[str], bool, dict[str, Any]]] = [
-    # ── Highest confidence first ───────────────────────────────────────────────
+    # Highest confidence first
     # 1. ENV contract violation — deterministic, always L0 block
     (
         frozenset({"env_contract_violation"}),
@@ -249,19 +241,25 @@ _RULES: list[tuple[frozenset[str], bool, dict[str, Any]]] = [
             "Autonomous healing cannot increase cluster capacity — escalate.",
         },
     ),
-    # 10. Deployment degraded
+    # 10. Deployment degraded — OBSERVATION ONLY, no unsupported hypothesis.
+    # deployment_degraded is a fact (availableReplicas < desired), not a root cause.
+    # Causes span bad_deploy, node pressure, admission webhook, PVC bind, quota —
+    # none established by this signal alone. A pod restart presupposes bad code,
+    # which the observation cannot support. Stay L0: alert, let correlated signals
+    # (pod_crashloop+deploy_event → rule #4) or the LLM elevate to a hypothesis.
     (
         frozenset({"deployment_degraded"}),
         False,
         {
-            "root_cause": "Deployment has fewer available replicas than desired — "
-            "pods failing to start or being evicted.",
-            "failure_class": "bad_deploy",
-            "healing_level": 1,
-            "runbook_id": "runbook_pod_crashloop_v1",
-            "confidence": 0.68,
-            "reasoning": "Degraded deployment often results from pod startup failures. "
-            "Pod restart with logging is the first investigation step.",
+            "root_cause": "Deployment has fewer available replicas than desired. "
+            "Cause is ambiguous — needs correlated signals or LLM analysis "
+            "before any autonomous action.",
+            "failure_class": "unknown",
+            "healing_level": 0,
+            "runbook_id": None,
+            "confidence": 0.50,
+            "reasoning": "deployment_degraded is an observation, not a root cause. "
+            "Alerting only — a restart would infer bad_deploy without evidence.",
         },
     ),
     # 11. High error rate alone (no deploy correlated)
@@ -294,197 +292,192 @@ _RULES: list[tuple[frozenset[str], bool, dict[str, Any]]] = [
             "Manual rollback evaluation is recommended at L3.",
         },
     ),
-
     # ── AWS Lambda ─────────────────────────────────────────────────────────────
-
     # 13. Lambda error spike + deploy event — most specific AWS compound rule
     (
-        frozenset({"lambda_error_rate_high", "deploy_event"}), True,
+        frozenset({"lambda_error_rate_high", "deploy_event"}),
+        True,
         {
-            "root_cause":    "Lambda error rate spiked after a recent deployment — "
-                             "the new function code or configuration is likely causing failures.",
+            "root_cause": "Lambda error rate spiked after a recent deployment — "
+            "the new function code or configuration is likely causing failures.",
             "failure_class": "bad_deploy",
             "healing_level": 3,
-            "runbook_id":    "runbook_lambda_error_spike_v1",
-            "confidence":    0.88,
-            "reasoning":     "Lambda error rate correlated with deploy event is the canonical "
-                             "'bad deploy' pattern for serverless. Alias rollback is the "
-                             "first safe remediation.",
+            "runbook_id": "runbook_lambda_error_spike_v1",
+            "confidence": 0.88,
+            "reasoning": "Lambda error rate correlated with deploy event is the canonical "
+            "'bad deploy' pattern for serverless. Alias rollback is the "
+            "first safe remediation.",
         },
     ),
-
     # 14. Lambda error spike alone (no deploy correlated)
     (
-        frozenset({"lambda_error_rate_high"}), False,
+        frozenset({"lambda_error_rate_high"}),
+        False,
         {
-            "root_cause":    "Lambda function error rate elevated with no correlated deployment — "
-                             "possible upstream dependency failure, config change, or transient AWS issue.",
+            "root_cause": "Lambda function error rate elevated with no correlated deployment — "
+            "possible upstream dependency failure, config change, or transient AWS issue.",
             "failure_class": "unknown",
             "healing_level": 0,
-            "runbook_id":    "runbook_lambda_error_spike_v1",
-            "confidence":    0.55,
-            "reasoning":     "Error rate elevated but no deploy detected. Alert only — "
-                             "more signals needed before autonomous action.",
+            "runbook_id": "runbook_lambda_error_spike_v1",
+            "confidence": 0.55,
+            "reasoning": "Error rate elevated but no deploy detected. Alert only — "
+            "more signals needed before autonomous action.",
         },
     ),
-
     # 15. Lambda throttle spike
     (
-        frozenset({"lambda_throttle_spike"}), False,
+        frozenset({"lambda_throttle_spike"}),
+        False,
         {
-            "root_cause":    "Lambda function is being throttled — reserved or account-level "
-                             "concurrency limit has been reached.",
+            "root_cause": "Lambda function is being throttled — reserved or account-level "
+            "concurrency limit has been reached.",
             "failure_class": "resource_exhaustion",
             "healing_level": 2,
-            "runbook_id":    "runbook_lambda_throttle_v1",
-            "confidence":    0.82,
-            "reasoning":     "Lambda throttles indicate concurrency saturation. "
-                             "Increasing reserved concurrency is a safe, bounded L2 action.",
+            "runbook_id": "runbook_lambda_throttle_v1",
+            "confidence": 0.82,
+            "reasoning": "Lambda throttles indicate concurrency saturation. "
+            "Increasing reserved concurrency is a safe, bounded L2 action.",
         },
     ),
-
     # 16. Lambda timeout
     (
-        frozenset({"lambda_timeout"}), False,
+        frozenset({"lambda_timeout"}),
+        False,
         {
-            "root_cause":    "Lambda function duration approaching configured timeout — "
-                             "processing is slower than expected, possibly due to a slow "
-                             "downstream service or increased payload size.",
+            "root_cause": "Lambda function duration approaching configured timeout — "
+            "processing is slower than expected, possibly due to a slow "
+            "downstream service or increased payload size.",
             "failure_class": "resource_exhaustion",
             "healing_level": 2,
-            "runbook_id":    "runbook_lambda_timeout_v1",
-            "confidence":    0.75,
-            "reasoning":     "Duration > 80% of timeout is a clear precursor to timeout errors. "
-                             "Increasing timeout is bounded and safe.",
+            "runbook_id": "runbook_lambda_timeout_v1",
+            "confidence": 0.75,
+            "reasoning": "Duration > 80% of timeout is a clear precursor to timeout errors. "
+            "Increasing timeout is bounded and safe.",
         },
     ),
-
     # 17. Lambda OOM
     (
-        frozenset({"lambda_oom"}), False,
+        frozenset({"lambda_oom"}),
+        False,
         {
-            "root_cause":    "Lambda function terminated by the runtime due to memory exhaustion. "
-                             "Memory limit must be increased or a memory leak must be fixed.",
+            "root_cause": "Lambda function terminated by the runtime due to memory exhaustion. "
+            "Memory limit must be increased or a memory leak must be fixed.",
             "failure_class": "resource_exhaustion",
             "healing_level": 2,
-            "runbook_id":    "runbook_lambda_oom_v1",
-            "confidence":    0.88,
-            "reasoning":     "OOM is a deterministic signal — runtime exited with memory error. "
-                             "Increasing memory 50% is the standard first response.",
+            "runbook_id": "runbook_lambda_oom_v1",
+            "confidence": 0.88,
+            "reasoning": "OOM is a deterministic signal — runtime exited with memory error. "
+            "Increasing memory 50% is the standard first response.",
         },
     ),
-
-    # ── AWS SQS ────────────────────────────────────────────────────────────────
-
+    # AWS SQS
     # 18. SQS DLQ depth high
     (
-        frozenset({"sqs_dlq_depth_high"}), False,
+        frozenset({"sqs_dlq_depth_high"}),
+        False,
         {
-            "root_cause":    "Messages accumulating in the dead-letter queue — the consumer Lambda "
-                             "is failing to process messages (errors or timeouts).",
+            "root_cause": "Messages accumulating in the dead-letter queue — the consumer Lambda "
+            "is failing to process messages (errors or timeouts).",
             "failure_class": "dependency_failure",
             "healing_level": 2,
-            "runbook_id":    "runbook_sqs_dlq_v1",
-            "confidence":    0.78,
-            "reasoning":     "DLQ depth growth indicates consumer failures. Alert + conditional "
-                             "replay is the standard SQS incident response.",
+            "runbook_id": "runbook_sqs_dlq_v1",
+            "confidence": 0.78,
+            "reasoning": "DLQ depth growth indicates consumer failures. Alert + conditional "
+            "replay is the standard SQS incident response.",
         },
     ),
-
     # 19. SQS queue depth high
     (
-        frozenset({"sqs_queue_depth_high"}), False,
+        frozenset({"sqs_queue_depth_high"}),
+        False,
         {
-            "root_cause":    "SQS source queue depth growing without consumption — "
-                             "consumer Lambda may be scaled down, throttled, or failing.",
+            "root_cause": "SQS source queue depth growing without consumption — "
+            "consumer Lambda may be scaled down, throttled, or failing.",
             "failure_class": "resource_exhaustion",
             "healing_level": 0,
-            "runbook_id":    None,
-            "confidence":    0.60,
-            "reasoning":     "High queue depth alone is ambiguous — consumer could be paused "
-                             "or scaling behind. Alert to investigate.",
+            "runbook_id": None,
+            "confidence": 0.60,
+            "reasoning": "High queue depth alone is ambiguous — consumer could be paused "
+            "or scaling behind. Alert to investigate.",
         },
     ),
-
-    # ── AWS DynamoDB ───────────────────────────────────────────────────────────
-
+    # AWS DynamoDB
     # 20. DynamoDB read throttle
     (
-        frozenset({"dynamo_throttle_read"}), False,
+        frozenset({"dynamo_throttle_read"}),
+        False,
         {
-            "root_cause":    "DynamoDB read capacity exhausted — table is receiving more "
-                             "read requests than provisioned RCU can handle.",
+            "root_cause": "DynamoDB read capacity exhausted — table is receiving more "
+            "read requests than provisioned RCU can handle.",
             "failure_class": "resource_exhaustion",
             "healing_level": 0,
-            "runbook_id":    "runbook_dynamo_throttle_v1",
-            "confidence":    0.80,
-            "reasoning":     "DynamoDB throttles require capacity planning — autonomous "
-                             "capacity increases risk cost overruns. Alert only.",
+            "runbook_id": "runbook_dynamo_throttle_v1",
+            "confidence": 0.80,
+            "reasoning": "DynamoDB throttles require capacity planning — autonomous "
+            "capacity increases risk cost overruns. Alert only.",
         },
     ),
-
     # 21. DynamoDB write throttle
     (
-        frozenset({"dynamo_throttle_write"}), False,
+        frozenset({"dynamo_throttle_write"}),
+        False,
         {
-            "root_cause":    "DynamoDB write capacity exhausted — table is receiving more "
-                             "write requests than provisioned WCU can handle.",
+            "root_cause": "DynamoDB write capacity exhausted — table is receiving more "
+            "write requests than provisioned WCU can handle.",
             "failure_class": "resource_exhaustion",
             "healing_level": 0,
-            "runbook_id":    "runbook_dynamo_throttle_v1",
-            "confidence":    0.80,
-            "reasoning":     "DynamoDB write throttles require capacity planning. Alert only.",
+            "runbook_id": "runbook_dynamo_throttle_v1",
+            "confidence": 0.80,
+            "reasoning": "DynamoDB write throttles require capacity planning. Alert only.",
         },
     ),
-
     # 22. DynamoDB system error
     (
-        frozenset({"dynamo_system_error"}), False,
+        frozenset({"dynamo_system_error"}),
+        False,
         {
-            "root_cause":    "DynamoDB system errors detected — possible AWS infrastructure issue "
-                             "or table is in an error state.",
+            "root_cause": "DynamoDB system errors detected — possible AWS infrastructure issue "
+            "or table is in an error state.",
             "failure_class": "dependency_failure",
             "healing_level": 0,
-            "runbook_id":    "runbook_dynamo_throttle_v1",
-            "confidence":    0.85,
-            "reasoning":     "DynamoDB SystemErrors are AWS-side issues. Alert for manual "
-                             "investigation and potential AWS Support case.",
+            "runbook_id": "runbook_dynamo_throttle_v1",
+            "confidence": 0.85,
+            "reasoning": "DynamoDB SystemErrors are AWS-side issues. Alert for manual "
+            "investigation and potential AWS Support case.",
         },
     ),
-
-    # ── AWS API Gateway ────────────────────────────────────────────────────────
-
+    # AWS API Gateway
     # 23. API GW 5XX spike + Lambda error rate
     (
-        frozenset({"apigw_5xx_spike", "lambda_error_rate_high"}), True,
+        frozenset({"apigw_5xx_spike", "lambda_error_rate_high"}),
+        True,
         {
-            "root_cause":    "API Gateway 5XX errors correlated with Lambda backend failures — "
-                             "the backend function is returning errors causing the gateway to surface 500s.",
+            "root_cause": "API Gateway 5XX errors correlated with Lambda backend failures — "
+            "the backend function is returning errors causing the gateway to surface 500s.",
             "failure_class": "bad_deploy",
             "healing_level": 3,
-            "runbook_id":    "runbook_lambda_error_spike_v1",
-            "confidence":    0.87,
-            "reasoning":     "5XX at gateway + Lambda errors is a clear cascading signal. "
-                             "Fixing the Lambda (rollback or memory increase) resolves both.",
+            "runbook_id": "runbook_lambda_error_spike_v1",
+            "confidence": 0.87,
+            "reasoning": "5XX at gateway + Lambda errors is a clear cascading signal. "
+            "Fixing the Lambda (rollback or memory increase) resolves both.",
         },
     ),
-
     # 24. API GW 5XX spike alone
     (
-        frozenset({"apigw_5xx_spike"}), False,
+        frozenset({"apigw_5xx_spike"}),
+        False,
         {
-            "root_cause":    "API Gateway returning 5XX errors — backend Lambda or integration "
-                             "is unhealthy or unavailable.",
+            "root_cause": "API Gateway returning 5XX errors — backend Lambda or integration "
+            "is unhealthy or unavailable.",
             "failure_class": "unknown",
             "healing_level": 0,
-            "runbook_id":    None,
-            "confidence":    0.60,
-            "reasoning":     "5XX without correlated Lambda signal could be integration timeout "
-                             "or misconfiguration. Alert and investigate.",
+            "runbook_id": None,
+            "confidence": 0.60,
+            "reasoning": "5XX without correlated Lambda signal could be integration timeout "
+            "or misconfiguration. Alert and investigate.",
         },
     ),
 ]
-
 
 def _rule_based_rca(cluster: IncidentCluster) -> RCAResult:
     """
@@ -522,64 +515,16 @@ def _rule_based_rca(cluster: IncidentCluster) -> RCAResult:
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Gemini prompt builder
-# ──────────────────────────────────────────────────────────────────────────────
+def _build_gemini_prompt(
+    cluster: IncidentCluster, historical_runbook: str | None = None
+) -> str:
+    base = cluster.to_llm_context()
+    if historical_runbook:
+        base += f"\n\nHistorical Note: In the past, the runbook '{historical_runbook}' was successfully used for this exact combination of incident signals. Strongly consider it if it fits the current context."
+    return base
 
-_SYSTEM_INSTRUCTION = """\
-You are NEXUS, an autonomous cloud infrastructure Root Cause Analysis (RCA) system.
-You receive correlated incident signals from multiple domain agents monitoring a production application.
-You support both Kubernetes workloads and AWS serverless applications (Lambda, API Gateway, SQS, DynamoDB).
-
-Your task: analyze the signals and determine the most likely root cause.
-
-Rules:
-- Be specific and technical — not generic filler text
-- Prefer the simplest hypothesis that explains all signals (Occam's razor)
-- Use the available runbook list to constrain your action recommendation
-- healing_level 0 = alert only, 1 = no-regret (restart), 2 = bounded mitigation (scale/canary halt/memory increase), 3 = significant change (rollout undo/Lambda alias rollback)
-- confidence 0.0-1.0 — be conservative; prefer 0.5-0.8 range unless signals are deterministic
-- If multiple explanations are equally plausible, choose the more conservative (lower healing_level)
-
-Available Kubernetes runbooks:
-- runbook_pod_crashloop_v1 (L1): Restart pod + VPA hint
-- runbook_high_error_rate_post_deploy_v1 (L2): Halt canary + alert
-- runbook_missing_env_key_v1 (L0): Block deploy + alert
-- runbook_dns_resolution_failure_v1 (L1): Flush CoreDNS cache + escalate
-- runbook_db_connection_exhaustion_v1 (L2): Alert + annotate deployment
-
-Available AWS Serverless runbooks:
-- runbook_lambda_error_spike_v1 (L3): Alert + rollback Lambda alias to previous version
-- runbook_lambda_throttle_v1 (L2): Alert + increase Lambda reserved concurrency
-- runbook_lambda_timeout_v1 (L2): Alert + increase Lambda timeout
-- runbook_lambda_oom_v1 (L2): Alert + increase Lambda memory
-- runbook_sqs_dlq_v1 (L2): Alert + replay DLQ messages to source queue
-- runbook_dynamo_throttle_v1 (L0): Alert only — capacity change requires human review
-
-Respond ONLY with valid JSON. No markdown fences, no prose outside the JSON structure.
-
-Required schema:
-{
-  "root_cause": "string — 1-2 sentences, specific technical cause",
-  "failure_class": "one of: bad_deploy | resource_exhaustion | dependency_failure | config_error | cascading_failure | unknown",
-  "healing_level": 0,
-  "runbook_id": "exact runbook ID from the list above, or null",
-  "confidence": 0.0,
-  "reasoning": "string — 2-3 sentences of chain-of-thought",
-  "actions_to_avoid": ["list of action types that would make this worse"]
-}\
-"""
-
-
-def _build_gemini_prompt(cluster: IncidentCluster) -> str:
-    return cluster.to_llm_context()
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 # RCA Engine
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class RCAEngine:
     """
     Root Cause Analysis engine.
@@ -598,13 +543,14 @@ class RCAEngine:
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = "gemini",
+        model: str = "gemini-3.1-flash-lite",
         timeout_s: float = 10.0,
         use_fallback: bool = True,
+        knowledge_base: Any = None,
     ):
-        # Legacy compat: NEXUS_GEMINI_API_KEY still works for Gemini provider
         self._timeout_s = float(os.getenv("NEXUS_RCA_TIMEOUT_S", str(timeout_s)))
         self._use_fallback = use_fallback
+        self._knowledge_base = knowledge_base
         self._llm_calls = 0
         self._llm_errors = 0
 
@@ -620,9 +566,19 @@ class RCAEngine:
         Tries the configured LLM first; falls back to rule-based on any failure.
         Never raises — always returns a valid RCAResult.
         """
+        historical_runbook = None
+        if self._knowledge_base:
+            historical_runbook = (
+                await self._knowledge_base.get_best_runbook_for_pattern(
+                    cluster.signal_types
+                )
+            )
+
         if self._provider.is_available():
             try:
-                prompt = _build_gemini_prompt(cluster)  # prompt works for all LLMs
+                prompt = _build_gemini_prompt(
+                    cluster, historical_runbook=historical_runbook
+                )
                 raw_text = await asyncio.wait_for(
                     self._provider.complete(prompt),
                     timeout=self._timeout_s,
@@ -638,16 +594,45 @@ class RCAEngine:
                         f"conf={result.confidence:.2f} runbook={result.runbook_id}"
                     )
                     return result
-            except asyncio.TimeoutError:
+            except (asyncio.TimeoutError, Exception) as exc:
                 self._llm_errors += 1
                 logger.warning(
-                    f"[RCAEngine] {self._provider.name} timeout ({self._timeout_s}s) — using fallback"
+                    f"[RCAEngine] {self._provider.name} error: {exc} — trying fallback"
                 )
-            except Exception as exc:
-                self._llm_errors += 1
-                logger.warning(
-                    f"[RCAEngine] {self._provider.name} error: {exc} — using fallback"
-                )
+
+                # OpenAI Fallback
+                if self._provider.name == "gemini" and os.getenv(
+                    "NEXUS_OPENAI_API_KEY"
+                ):
+                    try:
+                        logger.info("[RCAEngine] Falling back to OpenAI provider")
+                        from nexus.reasoning.llm_provider import OpenAIProvider
+
+                        openai_provider = OpenAIProvider(
+                            api_key=os.getenv("NEXUS_OPENAI_API_KEY")
+                        )
+                        prompt = _build_gemini_prompt(
+                            cluster, historical_runbook=historical_runbook
+                        )
+                        raw_text = await asyncio.wait_for(
+                            openai_provider.complete(prompt),
+                            timeout=self._timeout_s,
+                        )
+                        self._llm_calls += 1
+                        result = self._parse_response(raw_text)
+                        if result:
+                            result.source = "openai"
+                            logger.info(
+                                f"[RCAEngine] OPENAI RCA: "
+                                f"class={result.failure_class} L{result.healing_level} "
+                                f"conf={result.confidence:.2f} runbook={result.runbook_id}"
+                            )
+                            return result
+                    except Exception as fallback_exc:
+                        self._llm_errors += 1
+                        logger.warning(
+                            f"[RCAEngine] OpenAI fallback error: {fallback_exc} — using rule-based fallback"
+                        )
 
         # Rule-based fallback
         result = _rule_based_rca(cluster)
@@ -661,14 +646,23 @@ class RCAEngine:
     def _parse_response(self, raw: str) -> RCAResult | None:
         """Parse LLM JSON response into an RCAResult."""
         import re as _re
-
         clean = _re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
 
         try:
             data = json.loads(clean)
         except json.JSONDecodeError as exc:
-            logger.warning(f"[RCAEngine] JSON parse failed: {exc}\nRaw: {raw[:200]}")
-            return None
+            first = clean.find("{")
+            last = clean.rfind("}")
+            if first >= 0 and last > first:
+                snippet = clean[first:last + 1]
+                try:
+                    data = json.loads(snippet)
+                except json.JSONDecodeError:
+                    logger.warning(f"[RCAEngine] JSON parse failed: {exc}\nRaw: {raw[:200]}")
+                    return None
+            else:
+                logger.warning(f"[RCAEngine] JSON parse failed: {exc}\nRaw: {raw[:200]}")
+                return None
 
         try:
             return RCAResult(

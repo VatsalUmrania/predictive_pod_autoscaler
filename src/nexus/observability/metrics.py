@@ -43,12 +43,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # No-op stub (when prometheus_client not installed)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class _Noop:
     """Silent no-op replacement for any Prometheus metric."""
 
@@ -73,12 +68,7 @@ class _Noop:
 
         return _cm()
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # NexusMetrics singleton
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class NexusMetrics:
     """
     Central Prometheus metric store for NEXUS.
@@ -333,11 +323,7 @@ class NexusMetrics:
     def is_available(self) -> bool:
         return self._available
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Module-level singleton — import this
-# ──────────────────────────────────────────────────────────────────────────────
-
 _instance: NexusMetrics | None = None
 _singleton_lock = threading.Lock()
 
@@ -351,11 +337,8 @@ def get_metrics() -> NexusMetrics:
                 _instance = NexusMetrics()
     return _instance
 
-
 # Convenience alias — `from nexus.observability.metrics import metrics`
 metrics: NexusMetrics = None  # type: ignore[assignment]
-
-
 def __getattr__(name: str):  # Module-level __getattr__ (PEP 562)
     global metrics
     if name == "metrics":

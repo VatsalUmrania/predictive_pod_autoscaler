@@ -199,8 +199,9 @@ def _normalize_metrics(
     if math.isnan(rps):
         rps = 0.0
     rps_series.append(rps)
-    # Floor at 1.0 req/s to match training-time normalization in export_training_data.py
-    # which applies `np.maximum(rolling_max_rps, 1.0)`.  Using a smaller floor (e.g.
+    # Floor at 1.0 req/s to match the training-time normalization
+    # (`np.maximum(rolling_max_rps, 1.0)`) applied in the centralized model
+    # plane.  Using a smaller floor (e.g.
     # 1e-6) causes normalized_rps = rps / rps = 1.0 at sub-1 RPS traffic, which the
     # target_scaler inverse-transforms back to the training-time peak (~345 req/s),
     # producing phantom high-load predictions and spurious scale-out events.

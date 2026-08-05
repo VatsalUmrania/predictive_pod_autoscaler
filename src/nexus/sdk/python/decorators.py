@@ -31,12 +31,7 @@ logger = logging.getLogger(__name__)
 _CRITICAL_ROUTES: dict[str, dict] = {}
 _QUERY_LABELS: dict[str, dict] = {}
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # @critical decorator
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def critical(
     never_shed: bool = False,
     fallback: str | None = None,
@@ -65,17 +60,17 @@ def critical(
         }
 
         # Register with NEXUS (fire-and-forget)
-        (
-            asyncio.get_event_loop().call_soon_threadsafe(
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon_threadsafe(
                 lambda: asyncio.create_task(
                     _register_critical(
                         route_name, _CRITICAL_ROUTES[route_name], token, nexus_url
                     )
                 )
             )
-            if asyncio.get_event_loop().is_running()
-            else None
-        )
+        except RuntimeError:
+            pass
 
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
@@ -110,7 +105,6 @@ def critical(
 
     return decorator
 
-
 async def _register_critical(name: str, meta: dict, token: str, url: str) -> None:
     try:
         import httpx
@@ -123,7 +117,6 @@ async def _register_critical(name: str, meta: dict, token: str, url: str) -> Non
             )
     except Exception:
         pass
-
 
 async def _emit_critical_failure(name: str, error: str, token: str, url: str) -> None:
     try:
@@ -143,7 +136,6 @@ async def _emit_critical_failure(name: str, error: str, token: str, url: str) ->
             )
     except Exception:
         pass
-
 
 def _emit_sync(name: str, error: str, token: str, url: str) -> None:
     try:
@@ -168,12 +160,7 @@ def _emit_sync(name: str, error: str, token: str, url: str) -> None:
     except Exception:
         pass
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # @query decorator
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def query(
     label: str = "",
     spike_indicator: bool = False,
@@ -260,7 +247,6 @@ def query(
 
     return decorator
 
-
 def _emit_query_sync(label, duration_ms, spike_indicator, token, url) -> None:
     try:
         import requests
@@ -278,7 +264,6 @@ def _emit_query_sync(label, duration_ms, spike_indicator, token, url) -> None:
         )
     except Exception:
         pass
-
 
 async def _emit_query_async(label, duration_ms, spike_indicator, token, url) -> None:
     try:

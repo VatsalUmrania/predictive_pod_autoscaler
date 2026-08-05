@@ -61,12 +61,7 @@ logger = logging.getLogger(__name__)
 # EWMA smoothing factor α ∈ (0, 1] — higher = more reactive
 _ALPHA_EWMA = 0.3
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Table → Endpoint Mapper
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class TableEndpointMapper:
     """
     Maps DB table names to HTTP endpoints using a YAML config file.
@@ -111,12 +106,7 @@ class TableEndpointMapper:
         """Runtime override — useful for tests."""
         self._mapping[table] = endpoint
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Per-table rate tracker (EWMA-based spike detection)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @dataclass
 class TableRateState:
     """EWMA state for one DB table's query rate."""
@@ -186,12 +176,7 @@ class TableRateState:
         raw = 1.0 - (1.0 / (1.0 + (spike_ratio - 1.0) * 0.25))
         return min(raw * 0.95, 0.90)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Spike prediction
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @dataclass
 class SpikePrediction:
     """Result of spike detection for one table/endpoint."""
@@ -205,12 +190,7 @@ class SpikePrediction:
     horizon_minutes: int
     predicted_rps: float  # Extrapolated endpoint RPS
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # DB Traffic Correlator
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class DBTrafficCorrelator:
     """
     Correlates DB query rate spikes to HTTP endpoint traffic predictions.
@@ -254,8 +234,7 @@ class DBTrafficCorrelator:
         self._snapshots_ingested = 0
         self._spikes_predicted = 0
 
-    # ── Ingestion ─────────────────────────────────────────────────────────────
-
+    # Ingestion
     async def ingest_db_event(self, event: IncidentEvent) -> None:
         """
         Process a DB_QUERY_SPIKE event from DBAgent.
@@ -314,8 +293,7 @@ class DBTrafficCorrelator:
             await self._publish_prediction(pred, event)
             self._spikes_predicted += 1
 
-    # ── Publishing ────────────────────────────────────────────────────────────
-
+    # Publishing
     async def _publish_prediction(
         self, pred: SpikePrediction, source_event: IncidentEvent
     ) -> None:
@@ -348,8 +326,7 @@ class DBTrafficCorrelator:
             f"horizon={pred.horizon_minutes}min"
         )
 
-    # ── Stats ─────────────────────────────────────────────────────────────────
-
+    # Stats
     @property
     def stats(self) -> dict[str, Any]:
         return {

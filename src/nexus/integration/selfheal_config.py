@@ -72,12 +72,7 @@ def _resolve_env(value: str) -> str:
 
     return _ENV_VAR_RE.sub(_sub, value)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Sub-models
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class HealingPolicy(BaseModel):
     """Governance constraints declared by the developer."""
 
@@ -156,12 +151,7 @@ class NotificationsConfig(BaseModel):
     def resolve_slack_webhook(cls, v: str) -> str:
         return _resolve_env(str(v)) if v else ""
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Root schema
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class SelfhealConfig(BaseModel):
     """
     Root schema for selfheal.yaml.
@@ -205,12 +195,7 @@ class SelfhealConfig(BaseModel):
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump()
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Loader
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def load_selfheal_config(repo_path: str | Path) -> SelfhealConfig | None:
     """
     Load and validate selfheal.yaml from the given repo root.

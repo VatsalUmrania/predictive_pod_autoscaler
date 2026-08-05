@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nexus-operator
+  namespace: nexus
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nexus-operator-role
+rules:
+  # Read-only tools access (audit, observability, K8sAgent)
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events", "configmaps", "nodes", "services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "replicasets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+
+  # Write-enabled tools access (Scoped Auto-Remediation)
+  # Namespace-scoped scale + configmap via RoleBinding in target namespaces.
+  # The nexus-operator ClusterRole ONLY grants cross-namespace READ.
+  # NODE PATCH removed — cordon/drain is L3 + human approval + circuit breaker,
+  # and runs under the nexus-server SA with its own RoleBinding.
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale", "statefulsets/scale", "replicasets/scale"]
+    verbs: ["get", "list", "watch"]  # read scale status cross-ns
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nexus-operator-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nexus-operator-role
+subjects:
+  - kind: ServiceAccount
+    name: nexus-operator
+    namespace: nexus

@@ -3,7 +3,6 @@
 from ppa.config import (
     CLIConfig,
     Config,
-    DataflowConfig,
     ModelConfig,
     OperatorConfig,
     PrometheusConfig,
@@ -70,7 +69,6 @@ class TestConfig:
         assert isinstance(config.operator, OperatorConfig)
         assert isinstance(config.model, ModelConfig)
         assert isinstance(config.scaling, ScalingConfig)
-        assert isinstance(config.dataflow, DataflowConfig)
         assert isinstance(config.cli, CLIConfig)
 
     def test_get_config_returns_same_instance(self):

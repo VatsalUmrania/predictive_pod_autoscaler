@@ -25,12 +25,122 @@ NATS integration (background mode):
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
+import os
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Slack interactivity URL — when set, `notify_approval_required` emits
+# functional Approve/Reject buttons that POST to /slack/interactive on the
+# status API (see nexus.observability.status_api). The same URL is used by
+# chatops.send_approval_request for the LLM path. Defaults to "" (disabled).
+SLACK_INTERACTIVE_URL = os.environ.get("SLACK_INTERACTIVE_URL", "")
+
+# Slack app signing secret (Settings → Basic Information → App Credentials).
+# Required to authenticate interactive payloads POSTed to /slack/interactive —
+# without it the endpoint 401s every click (secure-by-default).
+SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
+# Reject interactive requests whose timestamp is older than this (replay guard).
+SLACK_REQUEST_TOLERANCE_S = 60 * 5
+
+def verify_slack_request(
+    raw_body: bytes,
+    headers,
+    *,
+    signing_secret: str | None = None,
+    tolerance_s: int | None = None,
+) -> bool:
+    """Validate a Slack request signature (HMAC-SHA256, ``v0`` scheme).
+
+    Trust-boundary gate for the /slack/interactive endpoint. ``False`` MUST
+    mean "reject the request": any missing header, unset secret, stale
+    timestamp, or signature mismatch returns False and never raises, so the
+    caller can treat the boolean as a hard auth gate.
+
+    Refs: https://api.slack.com/authentication/verifying-requests-from-slack
+    """
+    secret = signing_secret if signing_secret is not None else SLACK_SIGNING_SECRET
+    if not secret:
+        return False
+    ts = headers.get("X-Slack-Request-Timestamp")
+    sig = headers.get("X-Slack-Signature")
+    if not ts or not sig:
+        return False
+    try:
+        ts_int = int(ts)
+    except (TypeError, ValueError):
+        return False
+    tol = tolerance_s if tolerance_s is not None else SLACK_REQUEST_TOLERANCE_S
+    if abs(time.time() - ts_int) > tol:
+        return False
+    # Signing base: b"v0:<timestamp>:<raw body>". Concatenate raw_body bytes so
+    # no decode/reencode alters the exact wire bytes Slack signed.
+    base = b"v0:" + str(ts).encode() + b":" + raw_body
+    # HMAC-SHA256 keyed by the signing secret — Slack signs with HMAC, not a bare hash.
+    expected = "v0=" + hmac.new(secret.encode("utf-8"), base, hashlib.sha256).hexdigest()
+    # Constant-time compare guards the prefix; the digest length is fixed.
+    return hmac.compare_digest(expected, str(sig))
+
+def resolve_slack_webhook(app_name: str | None) -> str | None:
+    """Resolve the Slack webhook URL to use for ``app_name`` (single source).
+
+    A per-app ``selfheal.yaml`` override (``notifications.slack_webhook``) wins
+    when that app has a policy loaded — including an explicit ``null`` (that app
+    is deliberately disabled and stays silent over the global fallback). When
+    the app has NO policy loaded at all, fall back to the global ``SLACK_WEBHOOK``
+    env var, so notifications work out-of-the-box without mounting a
+    selfheal.yaml. Returns None (caller silently skips) when neither resolves.
+
+    Both the governed Notifier path and chatops.send_approval_request go through
+    this — one env var (``SLACK_WEBHOOK``), no SLACK_WEBHOOK_URL duplication.
+    """
+    if app_name:
+        try:
+            from nexus.integration.dashboard import _policy_cache
+
+            # App in cache → its policy is authoritative, even if webhook is null
+            # (a disabled app must not be resurrected by the global fallback).
+            if app_name in _policy_cache:
+                cfg = _policy_cache[app_name] or {}
+                return (cfg.get("notifications") or {}).get("slack_webhook") or None
+        except Exception:
+            pass
+    return os.environ.get("SLACK_WEBHOOK") or None
+
+def _approval_buttons_block(approval_id: str) -> dict:
+    """Slack Block Kit action block with Approve/Reject buttons.
+
+    The buttons POST to SLACK_INTERACTIVE_URL with a payload the
+    /slack/interactive endpoint parses. If SLACK_INTERACTIVE_URL is empty,
+    returns an empty block (caller must filter) — this keeps the notifier's
+    Slack message renderable even without the interactive endpoint configured.
+    """
+    if not SLACK_INTERACTIVE_URL:
+        return {"type": "context", "elements": [{"type": "mrkdwn", "text": ""}]}
+    return {
+        "type": "actions",
+        "elements": [
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "Approve ✅"},
+                "style": "primary",
+                "action_id": "nexus_approve",
+                "value": approval_id,
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "Reject ❌"},
+                "style": "danger",
+                "action_id": "nexus_reject",
+                "value": approval_id,
+            },
+        ],
+    }
 
 class Notifier:
     """
@@ -45,8 +155,7 @@ class Notifier:
         self._nats_task: asyncio.Task | None = None
         self._running: bool = False
 
-    # ── Public notification API ───────────────────────────────────────────────
-
+    #  Public notification API
     async def notify_heal(
         self,
         app_name: str,
@@ -61,7 +170,7 @@ class Notifier:
             return
 
         icon = "✅" if outcome == "success" else ("❌" if outcome == "failed" else "↩️")
-        color = "#36a64f" if outcome == "success" else "#e01e5a"
+        color = "#83ef48" if outcome == "success" else "#ff0000"
 
         payload = {
             "attachments": [
@@ -202,18 +311,121 @@ class Notifier:
             f"[Notifier] SRE escalation sent for app='{app_name}' failures={failed_attempts}"
         )
 
-    # ── Policy helpers ────────────────────────────────────────────────────────
+    async def notify_approval_required(
+        self,
+        app_name: str,
+        approval_id: str,
+        runbook_id: str,
+        target: str,
+        healing_level: int,
+        confidence: float,
+        context: dict | None = None,
+    ) -> None:
+        """Send a notification when an L3 action requires human approval."""
+        webhook = self._get_webhook(app_name)
+        if not webhook:
+            return
 
+        # Extract RCA info from context for better Slack message
+        rca = (context or {}).get("rca", {})
+        event = (context or {}).get("event", {})
+        rca_source = (context or {}).get("rca_source", "unknown")
+
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*✋ NEXUS L{healing_level} Action Requires Approval*",
+                },
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Runbook:*\n`{runbook_id}`"},
+                    {"type": "mrkdwn", "text": f"*Target:*\n`{target}`"},
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Confidence:*\n`{confidence:.2f}`",
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Approval ID:*\n`{approval_id}`",
+                    },
+                ],
+            },
+        ]
+
+        # Add RCA diagnosis if available
+        if rca:
+            root_cause = rca.get("root_cause", "Unknown")
+            failure_class = rca.get("failure_class", "Unknown")
+            reasoning = rca.get("reasoning", "")
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f"*RCA Diagnosis:*\n"
+                            f"*Class:* {failure_class}\n"
+                            f"*Root Cause:* {root_cause[:300]}{'...' if len(root_cause) > 300 else ''}"
+                        ),
+                    },
+                }
+            )
+            if reasoning:
+                blocks.append(
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*Reasoning:*\n{reasoning[:500]}{'...' if len(reasoning) > 500 else ''}",
+                        },
+                    }
+                )
+
+        # Add signal info from event
+        if event:
+            signal_type = event.get("signal_type", "unknown")
+            severity = event.get("severity", "unknown")
+            namespace = event.get("namespace", "unknown")
+            blocks.append(
+                {
+                    "type": "section",
+                    "fields": [
+                        {"type": "mrkdwn", "text": f"*Signal:*\n`{signal_type}`"},
+                        {"type": "mrkdwn", "text": f"*Severity:*\n`{severity}`"},
+                        {"type": "mrkdwn", "text": f"*Namespace:*\n`{namespace}`"},
+                        {"type": "mrkdwn", "text": f"*RCA Source:*\n`{rca_source}`"},
+                    ],
+                }
+            )
+
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"To approve this action, run:\n`nexus approve {approval_id}`",
+                },
+            }
+        )
+        blocks.append(_approval_buttons_block(approval_id))
+
+        payload = {"attachments": [{"color": "#ff9900", "fallback": f"NEXUS L{healing_level} Action Requires Approval: {runbook_id} for {target}", "blocks": blocks}]}
+        await self._send(webhook, payload, app_name)
+
+    # Policy helpers
     def _get_webhook(self, app_name: str) -> str | None:
-        """Return the Slack webhook URL for an app, or None if not configured."""
-        try:
-            from nexus.integration.dashboard import _policy_cache
+        """Return the Slack webhook URL for an app, or None if not configured.
 
-            cfg = _policy_cache.get(app_name, {})
-            notifications = cfg.get("notifications", {})
-            return notifications.get("slack_webhook") or None
-        except Exception:
-            return None
+        Delegates to ``resolve_slack_webhook`` so every notification path
+        (heal / prescale / escalation / approval) uses a single resolver with
+        the ``SLACK_WEBHOOK`` env fallback. Per-app ``selfheal.yaml`` overrides
+        still win.
+        """
+        return resolve_slack_webhook(app_name)
 
     def _get_page_threshold(self, app_name: str) -> int:
         """Return the page_sre_after threshold for an app (default 3)."""
@@ -225,8 +437,7 @@ class Notifier:
         except Exception:
             return 3
 
-    # ── HTTP send ─────────────────────────────────────────────────────────────
-
+    # HTTP send
     async def _send(
         self,
         webhook_url: str,
@@ -251,8 +462,7 @@ class Notifier:
         except Exception as exc:
             logger.debug(f"[Notifier] Slack send failed for '{app_name}': {exc}")
 
-    # ── NATS background listener ──────────────────────────────────────────────
-
+    # NATS background listener
     def start_background(self, nats_client: Any) -> None:
         """Subscribe to NATS healing action subjects and auto-notify."""
         self._running = True
@@ -293,33 +503,46 @@ class Notifier:
         async def _prescale_wrapper(data: dict, subject: str) -> None:
             await self._on_prescale_message(data)
 
+        async def _approval_wrapper(data: dict, subject: str) -> None:
+            await self._on_approval_message(data)
+
         # Retry both subscriptions until both succeed, with capped backoff
         action_ok = False
         prescale_ok = False
+        approval_ok = False
         backoff = 1.0
-        while self._running and not (action_ok and prescale_ok):
+        while self._running and not (action_ok and prescale_ok and approval_ok):
             if not action_ok:
                 try:
-                    await nc.subscribe_raw("nexus.actions.*", handler=_action_wrapper)
+                    await nc.subscribe_raw("nexus.actions.>", handler=_action_wrapper)
                     action_ok = True
                 except Exception as exc:
-                    logger.warning(f"[Notifier] nexus.actions.* subscribe retry: {exc}")
+                    logger.warning(f"[Notifier] nexus.actions.> subscribe retry: {exc}")
             if not prescale_ok:
                 try:
-                    await nc.subscribe_raw(
-                        "nexus.prescale.*", handler=_prescale_wrapper
-                    )
+                    await nc.subscribe_raw("nexus.prescale.>", handler=_prescale_wrapper)
                     prescale_ok = True
                 except Exception as exc:
                     logger.warning(
-                        f"[Notifier] nexus.prescale.* subscribe retry: {exc}"
+                        f"[Notifier] nexus.prescale.> subscribe retry: {exc}"
                     )
-            if not (action_ok and prescale_ok):
+            if not approval_ok:
+                try:
+                    await nc.subscribe_raw(
+                        "nexus.approvals.>", handler=_approval_wrapper
+                    )
+                    approval_ok = True
+                except Exception as exc:
+                    logger.warning(
+                        f"[Notifier] nexus.approvals.> subscribe retry: {exc}"
+                    )
+
+            if not (action_ok and prescale_ok and approval_ok):
                 await asyncio.sleep(min(backoff, 30.0))
                 backoff *= 2
             else:
                 logger.info(
-                    "[Notifier] Subscribed to NATS nexus.actions.* + nexus.prescale.*"
+                    "[Notifier] Subscribed to NATS nexus.actions.> + nexus.prescale.> + nexus.approvals.>"
                 )
 
         # Park until stopped. If the NATS connection is severed the
@@ -354,3 +577,42 @@ class Notifier:
             )
         except Exception as exc:
             logger.debug(f"[Notifier] prescale message error: {exc}")
+
+    async def _on_approval_message(self, data: dict) -> None:
+        try:
+            await self.notify_approval_required(
+                app_name=data.get("app", "unknown"),
+                approval_id=data.get("approval_id", ""),
+                runbook_id=data.get("runbook_id", ""),
+                target=data.get("target", ""),
+                healing_level=data.get("healing_level", 3),
+                confidence=data.get("confidence", 0.0),
+                context=data.get("context", {}),
+            )
+        except Exception as exc:
+            logger.debug(f"[Notifier] approval message error: {exc}")
+
+if __name__ == "__main__":
+    # Self-check: Slack signs with HMAC-SHA256 over "v0:ts:body" keyed by the
+    # signing secret. The verifier must ACCEPT a genuine HMAC signature and
+    # REJECT a bare-sha256 forgery (which was the bug — signature never matched).
+    import hmac as _hmac
+
+    class _H:
+        def __init__(self, d):
+            self._d = d
+        def get(self, k, default=""):
+            return self._d.get(k, default)
+
+    secret = "test-secret-xyz"
+    ts = str(int(time.time()))  # current, so the 5-min replay guard passes
+    raw = b"payload=%7B%22type%22%3A%22block_actions%22%7D"
+    base = b"v0:" + ts.encode() + b":" + raw
+    good_sig = "v0=" + _hmac.new(secret.encode(), base, hashlib.sha256).hexdigest()
+    fake_sig = "v0=" + hashlib.sha256(base).hexdigest()  # unkeyed forgery
+
+    assert verify_slack_request(raw, _H({"X-Slack-Request-Timestamp": ts, "X-Slack-Signature": good_sig}), signing_secret=secret), "verifier rejected a genuine Slack HMAC signature"
+    assert not verify_slack_request(raw, _H({"X-Slack-Request-Timestamp": ts, "X-Slack-Signature": fake_sig}), signing_secret=secret), "verifier accepted a bare-sha256 forgery (HMAC key missing?)"
+    assert not verify_slack_request(raw, _H({}), signing_secret=secret), "verifier accepted a request with no signature header"
+    print("OK: verify_slack_request accepts genuine HMAC, rejects bare-sha256 and missing-header")
+

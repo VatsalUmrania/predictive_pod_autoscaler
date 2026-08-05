@@ -43,7 +43,6 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_DB = os.getenv("NEXUS_KNOWLEDGE_DB_PATH", "data/nexus_knowledge.db")
 
-
 class TokenStore:
     """Async SQLite-backed token registry for SDK app authentication."""
 
@@ -52,7 +51,7 @@ class TokenStore:
         self._cache: dict[str, str] = {}  # token → app_name (in-memory fast-path)
         self._ready = False
 
-    # ── Lifecycle ─────────────────────────────────────────────────────────────
+    #  Lifecycle
 
     async def init(self) -> None:
         """Create the app_tokens table if it doesn't exist."""
@@ -77,7 +76,7 @@ class TokenStore:
         self._ready = True
         logger.info(f"[TokenStore] Initialized — {len(self._cache)} app(s) registered")
 
-    # ── Registration ──────────────────────────────────────────────────────────
+    # Registration
 
     async def register_app(
         self,
@@ -118,7 +117,7 @@ class TokenStore:
         )
         return token
 
-    # ── Validation ────────────────────────────────────────────────────────────
+    # Validation
 
     async def validate_token(self, token: str) -> str | None:
         """
@@ -169,7 +168,7 @@ class TokenStore:
         except Exception as exc:
             logger.debug(f"[TokenStore] touch failed: {exc}")
 
-    # ── Lookup ────────────────────────────────────────────────────────────────
+    #  Lookup
 
     async def get_token(self, app_name: str) -> str | None:
         """Return the current token for an app (for display / ops use)."""
@@ -227,23 +226,13 @@ class TokenStore:
         logger.info(f"[TokenStore] Rotated token for '{app_name}'")
         return new_token
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Token generation
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def _generate_token() -> str:
     """Generate a cryptographically secure SELFHEAL_TOKEN."""
     return "sh_" + secrets.token_urlsafe(32)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Module-level singleton
-# ──────────────────────────────────────────────────────────────────────────────
-
 _token_store: TokenStore | None = None
-
 
 def get_token_store() -> TokenStore:
     """Return the global TokenStore singleton (must call await .init() first)."""

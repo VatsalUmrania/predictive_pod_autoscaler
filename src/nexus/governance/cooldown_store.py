@@ -28,7 +28,9 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import time
 
 logger = logging.getLogger(__name__)
@@ -53,6 +55,11 @@ class CooldownStore:
         self._prefix = key_prefix
         self._redis = None
 
+        # ConfigMap fallback
+        self._cm_name = "nexus-cooldown-state"
+        self._cm_namespace = os.getenv("POD_NAMESPACE", "default")
+        self._k8s_available = False
+
         # In-memory fallback: key → expiry monotonic timestamp
         self._memory: dict[str, float] = {}
 
@@ -65,8 +72,9 @@ class CooldownStore:
         """
         if not self._redis_url:
             logger.info(
-                "[CooldownStore] No Redis URL configured — using in-memory cooldowns"
+                "[CooldownStore] No Redis URL configured — attempting to use K8s ConfigMap fallback"
             )
+            await self._init_k8s_fallback()
             return
 
         try:
@@ -82,9 +90,81 @@ class CooldownStore:
             logger.info(f"[CooldownStore] Redis connected: {self._redis_url}")
         except Exception as exc:
             logger.warning(
-                f"[CooldownStore] Redis unavailable ({exc}) — falling back to in-memory"
+                f"[CooldownStore] Redis unavailable ({exc}) — falling back to K8s/in-memory"
             )
             self._redis = None
+            await self._init_k8s_fallback()
+
+    async def _init_k8s_fallback(self) -> None:
+        try:
+            from kubernetes import config
+
+            try:
+                config.load_incluster_config()
+            except config.ConfigException:
+                config.load_kube_config()
+            self._k8s_available = True
+            await asyncio.to_thread(self._load_from_k8s)
+            logger.info(
+                f"[CooldownStore] K8s ConfigMap fallback initialized ({len(self._memory)} active cooldowns)"
+            )
+        except Exception as exc:
+            self._k8s_available = False
+            logger.warning(
+                f"[CooldownStore] K8s ConfigMap fallback unavailable ({exc}) — using purely in-memory"
+            )
+
+    def _load_from_k8s(self) -> None:
+        import json
+
+        from kubernetes import client
+        from kubernetes.client.rest import ApiException
+
+        v1 = client.CoreV1Api()
+        try:
+            cm = v1.read_namespaced_config_map(self._cm_name, self._cm_namespace)
+            if cm.data and "state.json" in cm.data:
+                state = json.loads(cm.data["state.json"])
+                now_unix = time.time()
+                now_mono = time.monotonic()
+                for k, v in state.items():
+                    if v > now_unix:
+                        self._memory[k] = now_mono + (v - now_unix)
+        except ApiException as e:
+            if e.status == 404:
+                cm = client.V1ConfigMap(
+                    metadata=client.V1ObjectMeta(name=self._cm_name),
+                    data={"state.json": "{}"},
+                )
+                v1.create_namespaced_config_map(self._cm_namespace, cm)
+            else:
+                raise
+
+    def _sync_to_k8s(self) -> None:
+        if not self._k8s_available:
+            return
+        import json
+
+        from kubernetes import client
+
+        state = {}
+        now_unix = time.time()
+        now_mono = time.monotonic()
+        for k, v in list(self._memory.items()):
+            if v > now_mono:
+                state[k] = now_unix + (v - now_mono)
+            else:
+                self._memory.pop(k, None)
+
+        v1 = client.CoreV1Api()
+        cm = client.V1ConfigMap(
+            metadata=client.V1ObjectMeta(name=self._cm_name),
+            data={"state.json": json.dumps(state)},
+        )
+        try:
+            v1.patch_namespaced_config_map(self._cm_name, self._cm_namespace, cm)
+        except Exception as e:
+            logger.error(f"[CooldownStore] Failed to sync state to ConfigMap: {e}")
 
     async def close(self) -> None:
         if self._redis:
@@ -139,6 +219,13 @@ class CooldownStore:
 
         # In-memory fallback
         self._memory[key] = time.monotonic() + seconds
+        if self._k8s_available:
+            try:
+                asyncio.get_running_loop().create_task(
+                    asyncio.to_thread(self._sync_to_k8s)
+                )
+            except RuntimeError:
+                pass
 
     async def clear_cooldown(self, key: str) -> None:
         """Manually clear a cooldown (for testing or admin override)."""
@@ -148,6 +235,13 @@ class CooldownStore:
             except Exception:
                 pass
         self._memory.pop(key, None)
+        if self._k8s_available:
+            try:
+                asyncio.get_running_loop().create_task(
+                    asyncio.to_thread(self._sync_to_k8s)
+                )
+            except RuntimeError:
+                pass
 
     async def remaining_seconds(self, key: str) -> float:
         """Return the number of seconds remaining in the cooldown (0 if not in cooldown)."""

@@ -43,12 +43,7 @@ logger = logging.getLogger(__name__)
 # Outcomes that count as "completed" for success-rate calculation
 _COMPLETED = ("success", "failed", "rolled_back", "skipped")
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Data structures
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @dataclass
 class OutcomeRecord:
     """Normalized view of one AuditTrail row."""
@@ -178,12 +173,7 @@ class SystemKPIs:
             "window_days": self.window_days,
         }
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Outcome Store
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class OutcomeStore:
     """
     Read-only analytics queries over the AuditTrail SQLite database.

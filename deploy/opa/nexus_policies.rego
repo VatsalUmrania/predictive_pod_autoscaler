@@ -36,6 +36,12 @@ default requires_human_approval = false
 
 # ── Action type allowlists per healing level ──────────────────────────────────
 
+# Two execution vocabularies share one ladder:
+#   - runbook executor actions (restart_pod, scale_deployment, kubectl_rollout_undo …)
+#   - LLM-proposed tools       (restart_deployment, scale_resource, cordon_node …)
+# Every LLM tool is mapped onto the level it requires so a routed-through-governance
+# LLM proposal isn't denied at the allowlist gate. Mirrors _L{n}_ALLOWED in
+# policy_engine.py — keep these in sync.
 l0_actions = {
     "emit_alert",
     "patch_annotation"
@@ -43,16 +49,22 @@ l0_actions = {
 
 l1_actions = l0_actions | {
     "restart_pod",
-    "flush_coredns_cache"
+    "flush_coredns_cache",
+    "restart_deployment"
 }
 
 l2_actions = l1_actions | {
-    "scale_deployment"
+    "scale_deployment",
+    "scale_resource"
 }
 
 l3_actions = l2_actions | {
     "kubectl_rollout_undo",
-    "http_webhook"
+    "http_webhook",
+    "rollback_deployment",
+    "patch_configmap",
+    "cordon_node",
+    "drain_node"
 }
 
 # ── Helper rules ──────────────────────────────────────────────────────────────

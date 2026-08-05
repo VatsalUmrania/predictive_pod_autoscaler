@@ -7,7 +7,7 @@ Runs as a standalone asyncio process alongside the demo backend.
 What this demonstrates:
   1. SENSE   — Subscribes to NATS, receives IncidentEvents from SDK + agents
   2. REASON  — Rule-based RCA (maps signal type → failure class → runbook)
-               Optionally uses Gemini 1.5 Flash if NEXUS_GEMINI_API_KEY is set
+               Optionally uses Gemini 1.5 Flash if NEXUS_LLM_API_KEY is set
   3. ACT     — Calls /inject/heal-all on demo backend to reset failure state
                Writes healing record to AuditTrail SQLite
   4. VERIFY  — Polls /health on demo backend to confirm recovery
@@ -47,20 +47,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger("nexus.demo_orchestrator")
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# Config
 NATS_URL      = os.getenv("NATS_URL",        "nats://localhost:4222")
 NEXUS_API_URL = os.getenv("NEXUS_API_URL",   "http://localhost:8080")
 DEMO_API_URL  = os.getenv("DEMO_API_URL",    "http://localhost:8001")
 AUDIT_DB_PATH = os.getenv("NEXUS_AUDIT_DB_PATH", "data/nexus_audit.db")
-GEMINI_KEY    = os.getenv("NEXUS_GEMINI_API_KEY", "")
+GEMINI_KEY    = os.getenv("NEXUS_LLM_API_KEY", "")
 
 # How many events to accumulate before triggering analysis
 CORRELATION_WINDOW_S = 15   # seconds
 MIN_EVENTS_TO_TRIGGER = 2   # at least 2 events before acting
 
-
-# ── RCA rule table ────────────────────────────────────────────────────────────
-
+# RCA rule table
 _RCA_RULES = [
     {
         "signals":    ["route_error", "error_rate_injected"],
@@ -145,16 +143,16 @@ def _match_rule(event_types: List[str]) -> Optional[Dict]:
     return None
 
 
-# ── Gemini RCA (optional enhancement) ────────────────────────────────────────
+# Gemini RCA (optional enhancement)
 
 async def _gemini_rca(events: List[Dict]) -> Optional[Dict]:
     """Call Gemini 1.5 Flash for enhanced RCA (only if API key is set)."""
     if not GEMINI_KEY:
         return None
     try:
-        import google.generativeai as genai
+        import google as genai
         genai.configure(api_key=GEMINI_KEY)
-        model  = genai.GenerativeModel("gemini-1.5-flash")
+        model  = genai.GenerativeModel("gemini-3.1-flash-lite")
         prompt = (
             "You are a Kubernetes SRE analyzing infrastructure incidents.\n"
             f"Events observed (last 15 seconds): {json.dumps(events[:5], indent=2)}\n\n"
@@ -172,9 +170,7 @@ async def _gemini_rca(events: List[Dict]) -> Optional[Dict]:
         logger.debug(f"Gemini RCA skipped: {exc}")
     return None
 
-
-# ── AuditTrail write ──────────────────────────────────────────────────────────
-
+# AuditTrail write
 async def _write_audit(
     incident_id:   str,
     runbook_id:    str,
@@ -213,9 +209,7 @@ async def _write_audit(
     except Exception as exc:
         logger.debug(f"AuditTrail write skipped: {exc}")
 
-
-# ── Healing executor ──────────────────────────────────────────────────────────
-
+# Healing executor
 async def _execute_healing(rule: Dict, incident_id: str, gemini_result: Optional[Dict]) -> str:
     """
     Demo-mode healing execution:
@@ -298,9 +292,7 @@ async def _execute_healing(rule: Dict, incident_id: str, gemini_result: Optional
 
     return outcome
 
-
-# ── Main correlation loop ─────────────────────────────────────────────────────
-
+# Main correlation loop
 class DemoOrchestrator:
     def __init__(self) -> None:
         self._event_buffer: List[Dict]     = []
@@ -386,9 +378,7 @@ class DemoOrchestrator:
         logger.info(f"{'='*50}\n")
         self._healing = False
 
-
-# ── Entry point ───────────────────────────────────────────────────────────────
-
+# Entry point
 async def main() -> None:
     orch = DemoOrchestrator()
     try:

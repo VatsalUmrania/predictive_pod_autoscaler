@@ -50,10 +50,7 @@ from nexus.bus.nats_client import NATSClient
 
 logger = logging.getLogger(__name__)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Feature bounds — clamp before passing to any model or rule
-# ──────────────────────────────────────────────────────────────────────────────
 
 _BOUNDS: dict[str, tuple[float, float]] = {
     "cpu_utilization_pct": (0.0, 200.0),
@@ -63,12 +60,7 @@ _BOUNDS: dict[str, tuple[float, float]] = {
     "latency_p95_ms": (0.0, 30_000.0),
 }
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Prometheus Circuit Breaker
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class _PrometheusCircuitBreaker:
     """
     Tri-state circuit breaker for Prometheus queries.
@@ -123,12 +115,7 @@ class _PrometheusCircuitBreaker:
     def __repr__(self) -> str:
         return f"CircuitBreaker(state={self.state}, failures={self._failures})"
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Metrics Agent
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class MetricsAgent(BaseAgent):
     """
     Observes Prometheus metrics and emits threshold-breach IncidentEvents.

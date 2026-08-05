@@ -41,12 +41,7 @@ logger = logging.getLogger(__name__)
 
 _ALPHA = 0.25  # EWMA smoothing factor for RPS series
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Prediction result
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @dataclass
 class TrafficPrediction:
     """A point-in-time prediction for one endpoint."""
@@ -76,12 +71,7 @@ class TrafficPrediction:
             return 1
         return max(1, math.ceil(self.predicted_rps / target_rps_per_replica))
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # SMAPE accuracy tracker
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class SMAPETracker:
     """
     Tracks Symmetric Mean Absolute Percentage Error for model accuracy.
@@ -115,12 +105,7 @@ class SMAPETracker:
     def sample_count(self) -> int:
         return len(self._errors)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Per-endpoint EWMA state
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @dataclass
 class EndpointState:
     """EWMA state for one endpoint's RPS."""
@@ -178,12 +163,7 @@ class EndpointState:
         raw = base - noise_penalty + smape_bonus
         return max(0.40, min(0.82, raw))
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # EWMA Traffic Model (always available)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class EWMATrafficModel:
     """
     EWMA-based endpoint traffic forecaster.

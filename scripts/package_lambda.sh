@@ -15,7 +15,11 @@ echo "=== NEXUS AI Agent — Lambda Packaging ==="
 echo "Root: $ROOT"
 
 # 1. Clean previous package
-rm -rf "$PACKAGE_DIR" "$ZIP_FILE"
+if [ -d "$PACKAGE_DIR" ]; then
+    mv "$PACKAGE_DIR" "${PACKAGE_DIR}.trash_$$"
+    rm -rf "${PACKAGE_DIR}.trash_$$" &
+fi
+rm -f "$ZIP_FILE"
 mkdir -p "$PACKAGE_DIR"
 
 # 2. Install Python dependencies

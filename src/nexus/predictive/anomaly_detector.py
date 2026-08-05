@@ -66,12 +66,7 @@ _NORM_MAX: dict[str, float] = {
     "error_rate": 1.0,
 }
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Anomaly score result
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @dataclass
 class AnomalyScore:
     """Output of the anomaly detector for one feature vector."""
@@ -90,12 +85,7 @@ class AnomalyScore:
             return "warning"
         return "normal"
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Base class
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class AnomalyDetector(ABC):
     """Abstract anomaly detector interface."""
 
@@ -114,12 +104,7 @@ class AnomalyDetector(ABC):
         """Returns True when the detector is ready to produce scores."""
         ...
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Z-Score detector (always available, stateless)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class ZScoreDetector(AnomalyDetector):
     """
     Rolling window z-score anomaly detector.
@@ -198,12 +183,7 @@ class ZScoreDetector(AnomalyDetector):
             q.clear()
         self._samples = 0
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # GRU Autoencoder (requires torch)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class GRUAutoencoder(AnomalyDetector):
     """
     GRU-based sequence autoencoder for metrics anomaly detection.
@@ -478,12 +458,7 @@ class GRUAutoencoder(AnomalyDetector):
         )
         return {"final_loss": losses[-1], "error_threshold": self._error_thresh}
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Auto-detector (picks best available)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class AutoAnomalyDetector:
     """
     Selects the best available detector at runtime.

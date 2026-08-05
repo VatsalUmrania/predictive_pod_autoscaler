@@ -78,12 +78,7 @@ async def _get_nats():
                 _sdk_nats_nc = None
         return _sdk_nats_nc
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Auth dependency
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 async def _get_app_name(
     authorization: str | None = Header(None),
 ) -> str:
@@ -99,12 +94,7 @@ async def _get_app_name(
         raise HTTPException(status_code=401, detail="Invalid or unknown SELFHEAL_TOKEN")
     return app_name
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # App registration
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class RegisterRequest(BaseModel):
     app_name: str = Field(..., min_length=1)
     tier: str = Field("production")
@@ -155,12 +145,7 @@ async def rotate_token(app_name: str) -> dict[str, str]:
         "message": "Old token invalidated. Update SELFHEAL_TOKEN in your environment.",
     }
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Beacon.js CDN endpoint
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @router.get("/sdk/beacon.js", include_in_schema=False)
 def serve_beacon() -> Response:
     """Serve the NEXUS browser beacon SDK as a JavaScript file."""
@@ -174,9 +159,7 @@ def serve_beacon() -> Response:
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # SDK payloads
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 class GenericEventPayload(BaseModel):
@@ -224,12 +207,7 @@ class FrontendPayload(BaseModel):
     status: int | None = None  # HTTP status for failed requests
     ts: float | None = None
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Ingest endpoints
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def _ts_to_iso(ts: float | None) -> str:
     if ts is None:
         return datetime.now(timezone.utc).isoformat()
