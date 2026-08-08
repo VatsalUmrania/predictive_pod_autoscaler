@@ -35,7 +35,7 @@ from nexus.governance.action_ladder import (
     PendingApproval,
 )
 from nexus.governance.cooldown_store import CooldownStore
-from nexus.governance.policy_engine import PolicyEngine
+from nexus.governance.policy_engine import PolicyDecision, PolicyEngine
 from nexus.governance.rollback_registry import RollbackRegistry
 from nexus.governance.runbook_executor import RunbookExecutor
 from nexus.observability import status_api as status_api_module
@@ -273,17 +273,22 @@ def _llm_pending(action_id="LLM12345"):
 
 
 def _real_executor(tmp_path, cb_open=False):
-    """Real ladder + policy fallback + cooldown + dry-run executor (no k8s).
+    """Real ladder + policy + cooldown + dry-run executor (no k8s).
 
     The whole point: an approved LLM action reaches the REAL ActionLadder, not
     a mock, so its gates actually fire. dry_run keeps _execute_action off the
-    kube API; _ensure_k8s is stubbed so no cluster is needed.
+    kube API; _ensure_k8s is stubbed so no cluster is needed. OPA is stubbed to
+    an allow decision (no cluster, no live OPA in unit tests).
     """
     cb = GovernanceCircuitBreaker(failure_threshold=3)
     if cb_open:
         cb._state = GovernanceCircuitBreaker.OPEN  # force tripped
+    policy = PolicyEngine(opa_url="http://localhost:1")
+    policy.evaluate = AsyncMock(
+        return_value=PolicyDecision(allowed=True, source="opa")
+    )
     ladder = ActionLadder(
-        PolicyEngine(opa_url="http://localhost:1"),  # unreachable → fallback
+        policy,
         CooldownStore(),
         HumanApprovalQueue(),
         cb,

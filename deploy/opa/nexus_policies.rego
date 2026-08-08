@@ -2,10 +2,6 @@
 # ================================
 # Rego policy that governs all autonomous healing actions in NEXUS.
 #
-# This file is the authoritative policy source. The Python fallback in
-# policy_engine.py mirrors these rules exactly and is used when OPA
-# is unreachable.
-#
 # Deploy:
 #   docker run -d --name nexus-opa -p 8181:8181 \
 #     -v $(pwd)/deploy/opa:/policies openpolicyagent/opa:latest \

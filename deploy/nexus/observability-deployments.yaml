@@ -1,0 +1,493 @@
+---
+# OpenTelemetry Collector — routes NEXUS telemetry to Prometheus (remote write),
+# Tempo (traces) and Loki (logs). Config source: otel-collector-config.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: telemetry
+data:
+  config.yaml: |-
+    # OpenTelemetry Collector Configuration for NEXUS
+    # ================================================
+    # Routes all telemetry signals from domain agents to their storage backends.
+    #
+    # Receivers:
+    #   otlp          — All NEXUS agents push metrics/logs/traces here
+    #   prometheus    — Scrape existing PPA operator metrics + test-app
+    #
+    # Processors:
+    #   memory_limiter — Prevent OOM if agents burst
+    #   batch          — Buffer before sending to storage (reduces write pressure)
+    #   resource       — Inject service.namespace=nexus on all signals
+    #
+    # Exporters:
+    #   prometheusremotewrite  — Push metrics to Prometheus
+    #   loki                   — Push logs to Loki
+    #   otlp/tempo             — Push traces to Tempo
+    #   logging                — Stdout (debug, disable in prod)
+
+    receivers:
+      # Accept OTLP from all NEXUS agents (Python SDK default ports)
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+            cors:
+              allowed_origins: ["*"]
+
+      # Scrape existing PPA operator + test-app + NATS self-metrics
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: "ppa-operator"
+              scrape_interval: 15s
+              static_configs:
+                - targets: ["ppa-operator-metrics.default.svc.cluster.local:9100"]
+                  labels:
+                    component: "ppa-operator"
+
+            # Target the actual shop-demo/test app Service in-cluster (e.g.
+            # shop-demo.default.svc.cluster.local:<metrics-port>).
+            - job_name: "test-app"
+              scrape_interval: 15s
+              static_configs:
+                - targets: ["shop-demo.default.svc.cluster.local:8080"]
+                  labels:
+                    component: "test-app"
+
+            - job_name: "nats"
+              scrape_interval: 15s
+              static_configs:
+                - targets: ["nats.nexus.svc.cluster.local:8222"]
+                  labels:
+                    component: "nats"
+
+            - job_name: "otel-collector"
+              scrape_interval: 30s
+              static_configs:
+                - targets: ["localhost:8888"]
+                  labels:
+                    component: "otel-collector"
+
+    processors:
+      # Prevent OOM if agent signals burst unexpectedly
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 512
+        spike_limit_mib: 128
+
+      # Batch signals before writing to reduce I/O pressure
+      batch:
+        timeout: 5s
+        send_batch_size: 1024
+        send_batch_max_size: 2048
+
+      # Inject consistent resource attributes on all signals
+      resource:
+        attributes:
+          - action: upsert
+            key: service.namespace
+            value: nexus
+          - action: upsert
+            key: deployment.environment
+            value: development
+
+    exporters:
+      # Metrics → Prometheus (via remote write receiver)
+      prometheusremotewrite:
+        endpoint: "http://prometheus:9090/api/v1/write"
+        tls:
+          insecure: true
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_elapsed_time: 60s
+
+      # Logs → Loki (native OTLP endpoint — Loki 3.0+ supports OTLP natively)
+      # The legacy `loki` exporter was removed in otelcol-contrib ≥0.81; use otlphttp instead.
+      otlphttp/loki:
+        endpoint: "http://loki:3100/otlp"
+        tls:
+          insecure: true
+
+      # Traces → Tempo
+      otlp/tempo:
+        endpoint: "tempo:4317"
+        tls:
+          insecure: true
+
+      # Debug stdout (remove in production)
+      debug:
+        verbosity: basic
+        sampling_initial: 5
+        sampling_thereafter: 200
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+      pprof:
+        endpoint: 0.0.0.0:1777
+
+    service:
+      extensions: [health_check, pprof]
+
+      pipelines:
+        # ── Metrics pipeline ────────────────────────────────────────────────────
+        metrics:
+          receivers:  [otlp, prometheus]
+          processors: [memory_limiter, batch, resource]
+          exporters:  [prometheusremotewrite, debug]
+
+        # ── Logs pipeline ────────────────────────────────────────────────────────
+        logs:
+          receivers:  [otlp]
+          processors: [memory_limiter, batch, resource]
+          exporters:  [otlphttp/loki, debug]
+
+        # ── Traces pipeline ──────────────────────────────────────────────────────
+        traces:
+          receivers:  [otlp]
+          processors: [memory_limiter, batch, resource]
+          exporters:  [otlp/tempo, debug]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: nexus
+  labels:
+    app: otel-collector
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: telemetry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.113.0
+          imagePullPolicy: IfNotPresent
+          args: ["--config=/etc/otelcol/config.yaml"]
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+              protocol: TCP
+            - name: otlp-http
+              containerPort: 4318
+              protocol: TCP
+            - name: self-metrics
+              containerPort: 8888
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 13133
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 13133
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: nexus
+  labels:
+    app: otel-collector
+spec:
+  selector:
+    app: otel-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc
+      protocol: TCP
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
+      protocol: TCP
+    - name: self-metrics
+      port: 8888
+      targetPort: self-metrics
+      protocol: TCP
+  type: ClusterIP
+---
+# Tempo — trace backend. Config source: tempo.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tempo-config
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: tempo
+    app.kubernetes.io/component: telemetry
+data:
+  config.yaml: |-
+    # Tempo configuration for NEXUS dev stack
+    # Minimal single-binary mode — stores traces in local filesystem.
+    # In production, use distributed Tempo with object storage (S3/GCS).
+
+    stream_over_http_enabled: true
+
+    server:
+      http_listen_port: 3200
+      log_level: warn
+
+    distributor:
+      receivers:
+        otlp:
+          protocols:
+            grpc:           # Receives traces from OTel Collector
+            http:
+
+    ingester:
+      trace_idle_period: 10s
+      max_block_bytes: 1_000_000
+      max_block_duration: 5m
+
+    compactor:
+      compaction:
+        block_retention: 24h   # Keep 24h of traces in dev
+
+    storage:
+      trace:
+        backend: local
+        local:
+          path: /var/tempo/traces
+        wal:
+          path: /var/tempo/wal
+
+    querier:
+      frontend_worker:
+        frontend_address: 127.0.0.1:9095
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tempo
+  namespace: nexus
+  labels:
+    app: tempo
+    app.kubernetes.io/name: tempo
+    app.kubernetes.io/component: telemetry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tempo
+  template:
+    metadata:
+      labels:
+        app: tempo
+    spec:
+      containers:
+        - name: tempo
+          image: grafana/tempo:2.6.1
+          imagePullPolicy: IfNotPresent
+          args: ["-config.file=/etc/tempo/config.yaml"]
+          ports:
+            - name: http
+              containerPort: 3200
+              protocol: TCP
+            - name: otlp-grpc
+              containerPort: 4317
+              protocol: TCP
+            - name: otlp-http
+              containerPort: 4318
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/tempo
+              readOnly: true
+            - name: data
+              mountPath: /var/tempo
+      volumes:
+        - name: config
+          configMap:
+            name: tempo-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tempo
+  namespace: nexus
+  labels:
+    app: tempo
+spec:
+  selector:
+    app: tempo
+  ports:
+    - name: http
+      port: 3200
+      targetPort: http
+      protocol: TCP
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc
+      protocol: TCP
+  type: ClusterIP
+---
+# Loki — log backend (single-binary, filesystem storage). Receives OTLP logs
+# from the collector at :3100/otlp (Loki 3.x native OTLP ingestion).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-config
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/component: telemetry
+data:
+  config.yaml: |-
+    auth_enabled: false
+
+    server:
+      http_listen_port: 3100
+
+    common:
+      path_prefix: /loki
+      storage:
+        filesystem:
+          chunks_directory: /loki/chunks
+          rules_directory: /loki/rules
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+
+    schema_config:
+      configs:
+        - from: 2024-01-01
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+
+    limits_config:
+      allow_structured_metadata: true
+      retention_period: 24h
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loki
+  namespace: nexus
+  labels:
+    app: loki
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/component: telemetry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loki
+  template:
+    metadata:
+      labels:
+        app: loki
+    spec:
+      containers:
+        - name: loki
+          image: grafana/loki:3.3.2
+          imagePullPolicy: IfNotPresent
+          args: ["-config.file=/etc/loki/config.yaml"]
+          ports:
+            - name: http
+              containerPort: 3100
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/loki
+              readOnly: true
+            - name: data
+              mountPath: /loki
+      volumes:
+        - name: config
+          configMap:
+            name: loki-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: nexus
+  labels:
+    app: loki
+spec:
+  selector:
+    app: loki
+  ports:
+    - name: http
+      port: 3100
+      targetPort: http
+      protocol: TCP
+  type: ClusterIP

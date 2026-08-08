@@ -35,21 +35,23 @@ receivers:
         - job_name: "ppa-operator"
           scrape_interval: 15s
           static_configs:
-            - targets: ["host.docker.internal:8080"]  # PPA operator metrics
+            - targets: ["ppa-operator-metrics.default.svc.cluster.local:9100"]
               labels:
                 component: "ppa-operator"
 
+        # Target the actual shop-demo/test app Service in-cluster (e.g.
+        # shop-demo.default.svc.cluster.local:<metrics-port>).
         - job_name: "test-app"
           scrape_interval: 15s
           static_configs:
-            - targets: ["host.docker.internal:9091"]  # test-app /metrics
+            - targets: ["shop-demo.default.svc.cluster.local:8080"]
               labels:
                 component: "test-app"
 
         - job_name: "nats"
           scrape_interval: 15s
           static_configs:
-            - targets: ["nats:8222"]
+            - targets: ["nats.nexus.svc.cluster.local:8222"]
               labels:
                 component: "nats"
 

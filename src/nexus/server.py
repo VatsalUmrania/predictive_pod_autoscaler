@@ -40,7 +40,6 @@ from nexus.reasoning.rca_engine import RCAEngine
 
 logger = logging.getLogger(__name__)
 
-
 class NexusServer:
     """Owns all NEXUS components and manages their asyncio task lifecycle.
 
@@ -101,7 +100,7 @@ class NexusServer:
         nats = NATSClient(nats_url=nats_url)
         await nats.connect()
 
-        # ── TokenStore — must be initialised before any /apps or /sdk request ────
+        # TokenStore — must be initialised before any /apps or /sdk request
         # When NexusServer owns the lifecycle, status_api's lifespan skips its
         # own self-init block (to avoid a second NATS connection), so the table
         # would never be created unless we do it here.
@@ -115,7 +114,7 @@ class NexusServer:
                 f"[NexusServer] TokenStore init failed (non-fatal): {_ts_exc}"
             )
 
-        # ── Reasoning components ──────────────────────────────────────────────
+        # Reasoning components
         if runbook_dir is None:
             import pathlib
 
@@ -142,11 +141,12 @@ class NexusServer:
         runbook_library = RunbookLibrary(runbook_dir)
 
         opa_url = _os.getenv("NEXUS_OPA_URL", "http://localhost:8181")
-        redis_url = _os.getenv("NEXUS_REDIS_URL")
+        cooldown_store = CooldownStore(db_path=audit_db_path)
+        await cooldown_store.connect()
 
         ladder = ActionLadder(
             policy_engine=PolicyEngine(opa_url=opa_url),
-            cooldown_store=CooldownStore(redis_url=redis_url),
+            cooldown_store=cooldown_store,
             approval_queue=HumanApprovalQueue(nats_client=nats),
             governance_cb=GovernanceCircuitBreaker(
                 failure_threshold=3,
@@ -158,7 +158,7 @@ class NexusServer:
         prescaler = Prescaler(nats_client=nats, action_ladder=ladder)
         await prescaler.subscribe_to_ppa_predictions()
 
-        # ── Outcome tracker — subscribe to ppa.predictions.* to close the loop
+        # Outcome tracker — subscribe to ppa.predictions.* to close the loop
         outcome_tracker = PpaOutcomeTracker(
             nats_client=nats, prometheus_url=prometheus_url
         )
@@ -213,7 +213,7 @@ class NexusServer:
             prometheus_url=prometheus_url,
         )
 
-        # ── Learning plane stores (must be initialized before reasoning/feedback) ──
+        # Learning plane stores (must be initialized before reasoning/feedback)
         outcome_store = OutcomeStore(db_path=audit_db_path)
         await outcome_store.connect()
         knowledge_base = KnowledgeBase(db_path=knowledge_db_path)
@@ -231,7 +231,7 @@ class NexusServer:
             executor=executor,
         )
 
-        # ── Notifier (sync — manages its own background task internally) ────────
+        # Notifier (sync — manages its own background task internally)
         # Hydrate policy cache so Notifier._get_webhook() can resolve Slack URLs.
         # Without this refresh, _policy_cache is empty until an HTTP request hits the
         # dashboard, so Slack notifications stay silent.
@@ -261,10 +261,10 @@ class NexusServer:
             knowledge_base=knowledge_base,
         )
 
-        # ── Agent manager ────────────────────────────────────────────────────
+        # Agent manager
         agent_manager = AgentManager(nats_client=nats, prometheus_url=prometheus_url)
 
-        # ── Pre-populate NexusContext so status_api lifespan skips self-init ───
+        # Pre-populate NexusContext so status_api lifespan skips self-init
         context.orchestrator = orchestrator
         context.prescaler = prescaler
         context.ppa_outcome_tracker = outcome_tracker
@@ -285,7 +285,7 @@ class NexusServer:
             status_api=status_api,
         )
 
-    # ── Lifecycle ─────────────────────────────────────────────────────────
+    # Lifecycle
 
     async def start(self) -> None:
         """

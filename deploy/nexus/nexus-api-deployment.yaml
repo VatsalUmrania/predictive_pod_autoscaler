@@ -121,6 +121,12 @@ spec:
             # Prometheus — kube-prometheus-stack service in monitoring namespace
             - name: PROMETHEUS_URL
               value: "http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090"
+            # OPA policy engine — deploy/nexus/opa-deployment.yaml
+            - name: NEXUS_OPA_URL
+              value: "http://opa.nexus.svc.cluster.local:8181"
+            # Runbooks — baked into the image at /runbooks (Dockerfile API)
+            - name: NEXUS_RUNBOOK_DIR
+              value: "/runbooks"
             # LLM Provider configuration (Gemini / OpenAI / Anthropic / none)
             - name: NEXUS_LLM_PROVIDER
               value: "gemini"

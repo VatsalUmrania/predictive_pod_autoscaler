@@ -290,8 +290,8 @@ class ActionLadder:
         4. Human approval queue (L3 with confidence < 0.85)
 
     Args:
-        policy_engine:        PolicyEngine (OPA + fallback).
-        cooldown_store:       CooldownStore (Redis + memory fallback).
+        policy_engine:        PolicyEngine (OPA — hard dependency).
+        cooldown_store:       CooldownStore (SQLite + memory fallback).
         approval_queue:       HumanApprovalQueue for L3 staging.
         governance_cb:        GovernanceCircuitBreaker.
         l3_confidence_gate:   Minimum confidence to auto-approve L3 (default 0.85).

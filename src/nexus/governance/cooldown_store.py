@@ -1,18 +1,18 @@
 """
 NEXUS Cooldown Store
-=====================
+====================
 Prevents rapid re-execution of the same healing action on the same target.
 
 Backend options:
-    Redis  — recommended for production (survives process restarts, shared
-             across multiple executor replicas e.g. active-active failover)
-    Memory — fallback when Redis is unavailable; resets on process restart
+    SQLite — primary backend. Persists cooldowns to the same ``nexus_audit.db``
+             SQLite file as AuditTrail / OutcomeStore, so cooldowns survive
+             process restarts (the DB lives on a PersistentVolume in-cluster).
+    Memory — fallback when SQLite is unavailable; resets on process restart.
 
 Key format:  nexus:cooldown:{runbook_id}::{target}
-TTL format:  set to cooldown_seconds at time of action execution
 
 Usage:
-    store = CooldownStore(redis_url="redis://localhost:6379")
+    store = CooldownStore(db_path="/data/nexus_audit.db")
     await store.connect()
 
     key = store.make_key("runbook_pod_crashloop_v1", "default/my-pod")
@@ -28,178 +28,124 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import time
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-
 class CooldownStore:
     """
-    Redis-backed action cooldown tracker with in-memory fallback.
+    SQLite-backed action cooldown tracker with in-memory fallback.
 
     Args:
-        redis_url: Redis connection URL (e.g. "redis://localhost:6379").
-                   If None or Redis is unavailable, falls back to in-memory.
-        key_prefix: Prefix for all Redis keys (default "nexus:cooldown").
+        db_path: Path to the SQLite database file. Defaults to the same file as
+                 the audit trail (``NEXUS_AUDIT_DB_PATH`` env).
+        key_prefix: Prefix for all stored keys (default "nexus:cooldown").
     """
+
+    _TABLE = "cooldowns"
 
     def __init__(
         self,
-        redis_url: str | None = None,
+        db_path: str | None = None,
         key_prefix: str = "nexus:cooldown",
-    ):
-        self._redis_url = redis_url
+    ) -> None:
+        if db_path is None:
+            db_path = os.getenv("NEXUS_AUDIT_DB_PATH", "/tmp/nexus_audit.db")
+        self._db_path = db_path
         self._prefix = key_prefix
-        self._redis = None
-
-        # ConfigMap fallback
-        self._cm_name = "nexus-cooldown-state"
-        self._cm_namespace = os.getenv("POD_NAMESPACE", "default")
-        self._k8s_available = False
-
-        # In-memory fallback: key → expiry monotonic timestamp
+        self._db = None
+        # In-memory cache (hydrated from SQLite) — used if SQLite fails at runtime.
         self._memory: dict[str, float] = {}
 
-    # ── Connection ────────────────────────────────────────────────────────────
-
+    # Connection
     async def connect(self) -> None:
         """
-        Attempt to connect to Redis.
-        Falls back to in-memory silently if Redis is unavailable.
+        Open the SQLite database and create the cooldowns table.
+        Falls back to purely in-memory if SQLite is unavailable.
         """
-        if not self._redis_url:
-            logger.info(
-                "[CooldownStore] No Redis URL configured — attempting to use K8s ConfigMap fallback"
-            )
-            await self._init_k8s_fallback()
-            return
+        import aiosqlite
 
         try:
-            import redis.asyncio as aioredis
-
-            self._redis = aioredis.from_url(
-                self._redis_url,
-                socket_connect_timeout=3.0,
-                socket_timeout=3.0,
-                decode_responses=True,
+            path = Path(self._db_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._db = await aiosqlite.connect(self._db_path)
+            self._db.row_factory = aiosqlite.Row
+            await self._db.execute(
+                f"CREATE TABLE IF NOT EXISTS {self._TABLE} ("
+                "key TEXT PRIMARY KEY, "
+                "expires_at REAL NOT NULL"
+                ")"
             )
-            await self._redis.ping()
-            logger.info(f"[CooldownStore] Redis connected: {self._redis_url}")
+            await self._db.commit()
+            await self._hydrate_memory()
+            logger.info(f"[CooldownStore] SQLite connected: {self._db_path}")
         except Exception as exc:
+            self._db = None
             logger.warning(
-                f"[CooldownStore] Redis unavailable ({exc}) — falling back to K8s/in-memory"
-            )
-            self._redis = None
-            await self._init_k8s_fallback()
-
-    async def _init_k8s_fallback(self) -> None:
-        try:
-            from kubernetes import config
-
-            try:
-                config.load_incluster_config()
-            except config.ConfigException:
-                config.load_kube_config()
-            self._k8s_available = True
-            await asyncio.to_thread(self._load_from_k8s)
-            logger.info(
-                f"[CooldownStore] K8s ConfigMap fallback initialized ({len(self._memory)} active cooldowns)"
-            )
-        except Exception as exc:
-            self._k8s_available = False
-            logger.warning(
-                f"[CooldownStore] K8s ConfigMap fallback unavailable ({exc}) — using purely in-memory"
+                f"[CooldownStore] SQLite unavailable ({exc}) — using in-memory fallback"
             )
 
-    def _load_from_k8s(self) -> None:
-        import json
-
-        from kubernetes import client
-        from kubernetes.client.rest import ApiException
-
-        v1 = client.CoreV1Api()
-        try:
-            cm = v1.read_namespaced_config_map(self._cm_name, self._cm_namespace)
-            if cm.data and "state.json" in cm.data:
-                state = json.loads(cm.data["state.json"])
-                now_unix = time.time()
-                now_mono = time.monotonic()
-                for k, v in state.items():
-                    if v > now_unix:
-                        self._memory[k] = now_mono + (v - now_unix)
-        except ApiException as e:
-            if e.status == 404:
-                cm = client.V1ConfigMap(
-                    metadata=client.V1ObjectMeta(name=self._cm_name),
-                    data={"state.json": "{}"},
-                )
-                v1.create_namespaced_config_map(self._cm_namespace, cm)
-            else:
-                raise
-
-    def _sync_to_k8s(self) -> None:
-        if not self._k8s_available:
+    async def _hydrate_memory(self) -> None:
+        """Preload unexpired cooldowns into the in-memory cache."""
+        if self._db is None:
             return
-        import json
-
-        from kubernetes import client
-
-        state = {}
-        now_unix = time.time()
-        now_mono = time.monotonic()
-        for k, v in list(self._memory.items()):
-            if v > now_mono:
-                state[k] = now_unix + (v - now_mono)
-            else:
-                self._memory.pop(k, None)
-
-        v1 = client.CoreV1Api()
-        cm = client.V1ConfigMap(
-            metadata=client.V1ObjectMeta(name=self._cm_name),
-            data={"state.json": json.dumps(state)},
-        )
         try:
-            v1.patch_namespaced_config_map(self._cm_name, self._cm_namespace, cm)
-        except Exception as e:
-            logger.error(f"[CooldownStore] Failed to sync state to ConfigMap: {e}")
+            async with self._db.execute(
+                f"SELECT key, expires_at FROM {self._TABLE} WHERE expires_at > ?",
+                (time.time(),),
+            ) as cur:
+                rows = await cur.fetchall()
+            self._memory = {row["key"]: row["expires_at"] for row in rows}
+        except Exception as exc:
+            logger.warning(f"[CooldownStore] Failed to hydrate cache: {exc}")
 
     async def close(self) -> None:
-        if self._redis:
-            await self._redis.aclose()
+        if self._db is not None:
+            await self._db.close()
+            self._db = None
 
-    # ── Key construction ──────────────────────────────────────────────────────
-
+    # Key construction
     @staticmethod
     def make_key(runbook_id: str, target: str) -> str:
         """Construct a canonical cooldown key for a runbook + target pair."""
-        # Sanitise target — replace chars that could cause Redis key issues
+        # Sanitise target — replace chars that could cause key issues.
         safe_target = target.replace(" ", "_").replace("/", "::")
         return f"{runbook_id}::{safe_target}"
 
     def _full_key(self, key: str) -> str:
         return f"{self._prefix}:{key}"
 
-    # ── Core operations ───────────────────────────────────────────────────────
-
+    # Core operations
     async def is_in_cooldown(self, key: str) -> bool:
         """Return True if this key is currently in cooldown."""
-        if self._redis:
+        full = self._full_key(key)
+        if self._db is not None:
             try:
-                return await self._redis.exists(self._full_key(key)) > 0
+                async with self._db.execute(
+                    f"SELECT expires_at FROM {self._TABLE} WHERE key = ?",
+                    (full,),
+                ) as cur:
+                    row = await cur.fetchone()
+                if row is None:
+                    return False
+                if row["expires_at"] <= time.time():
+                    await self._delete_row(full)
+                    return False
+                return True
             except Exception as exc:
                 logger.warning(
-                    f"[CooldownStore] Redis read error: {exc} — using memory"
+                    f"[CooldownStore] SQLite read error: {exc} — using memory"
                 )
 
         # In-memory fallback
-        expiry = self._memory.get(key)
+        expiry = self._memory.get(full)
         if expiry is None:
             return False
-        if time.monotonic() >= expiry:
-            self._memory.pop(key, None)
+        if time.time() >= expiry:
+            self._memory.pop(full, None)
             return False
         return True
 
@@ -208,57 +154,63 @@ class CooldownStore:
         if seconds <= 0:
             return
 
-        if self._redis:
+        full = self._full_key(key)
+        expires_at = time.time() + seconds
+        self._memory[full] = expires_at
+
+        if self._db is not None:
             try:
-                await self._redis.setex(self._full_key(key), seconds, "1")
-                return
+                await self._db.execute(
+                    f"INSERT INTO {self._TABLE} (key, expires_at) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET expires_at = excluded.expires_at",
+                    (full, expires_at),
+                )
+                await self._db.commit()
             except Exception as exc:
                 logger.warning(
-                    f"[CooldownStore] Redis write error: {exc} — using memory"
+                    f"[CooldownStore] SQLite write error: {exc} — using memory"
                 )
-
-        # In-memory fallback
-        self._memory[key] = time.monotonic() + seconds
-        if self._k8s_available:
-            try:
-                asyncio.get_running_loop().create_task(
-                    asyncio.to_thread(self._sync_to_k8s)
-                )
-            except RuntimeError:
-                pass
 
     async def clear_cooldown(self, key: str) -> None:
         """Manually clear a cooldown (for testing or admin override)."""
-        if self._redis:
-            try:
-                await self._redis.delete(self._full_key(key))
-            except Exception:
-                pass
-        self._memory.pop(key, None)
-        if self._k8s_available:
-            try:
-                asyncio.get_running_loop().create_task(
-                    asyncio.to_thread(self._sync_to_k8s)
-                )
-            except RuntimeError:
-                pass
+        full = self._full_key(key)
+        self._memory.pop(full, None)
+        if self._db is not None:
+            await self._delete_row(full)
+
+    async def _delete_row(self, full_key: str) -> None:
+        try:
+            await self._db.execute(
+                f"DELETE FROM {self._TABLE} WHERE key = ?", (full_key,)
+            )
+            await self._db.commit()
+        except Exception as exc:
+            logger.warning(f"[CooldownStore] SQLite delete error: {exc}")
 
     async def remaining_seconds(self, key: str) -> float:
         """Return the number of seconds remaining in the cooldown (0 if not in cooldown)."""
-        if self._redis:
+        full = self._full_key(key)
+        if self._db is not None:
             try:
-                ttl = await self._redis.ttl(self._full_key(key))
-                return max(0.0, float(ttl))
-            except Exception:
-                pass
+                async with self._db.execute(
+                    f"SELECT expires_at FROM {self._TABLE} WHERE key = ?",
+                    (full,),
+                ) as cur:
+                    row = await cur.fetchone()
+                if row is None:
+                    return 0.0
+                return max(0.0, row["expires_at"] - time.time())
+            except Exception as exc:
+                logger.warning(
+                    f"[CooldownStore] SQLite read error: {exc} — using memory"
+                )
 
-        expiry = self._memory.get(key)
+        expiry = self._memory.get(full)
         if expiry is None:
             return 0.0
-        return max(0.0, expiry - time.monotonic())
+        return max(0.0, expiry - time.time())
 
-    # ── Context manager ───────────────────────────────────────────────────────
-
+    # Context manager
     async def __aenter__(self) -> CooldownStore:
         await self.connect()
         return self
@@ -267,5 +219,5 @@ class CooldownStore:
         await self.close()
 
     def __repr__(self) -> str:
-        backend = "redis" if self._redis else "memory"
-        return f"CooldownStore(backend={backend}, entries={len(self._memory)})"
+        backend = "sqlite" if self._db is not None else "memory"
+        return f"CooldownStore(backend={backend}, path={self._db_path})"

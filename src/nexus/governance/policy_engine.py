@@ -1,11 +1,13 @@
 """
 NEXUS Policy Engine
 ====================
-Evaluates healing actions against an OPA (Open Policy Agent) policy —
-or a built-in Python fallback if OPA is unavailable.
+Evaluates healing actions against OPA (Open Policy Agent).
 
-OPA is the authoritative policy source. The fallback exists so the system
-degrades gracefully in dev / test environments without OPA running.
+OPA is the single, authoritative policy source and a hard dependency — there
+is no built-in Python fallback. If OPA is unreachable, the action is DENIED
+(fail-closed) and the source is reported as "error" so the gap is visible in
+the audit trail. Only the ``LLM_TOOL_LEVEL`` mapping lives in Python (it is
+input-shaping data, not policy).
 
 OPA REST API:
     POST /v1/data/nexus/allow_action
@@ -33,7 +35,7 @@ Output:
         allowed              = True,
         requires_approval    = False,
         deny_reasons         = [],
-        source               = "opa" | "fallback"
+        source               = "opa" | "error"
     )
 """
 
@@ -52,7 +54,7 @@ class PolicyDecision:
     allowed: bool
     requires_approval: bool = False
     deny_reasons: list[str] = field(default_factory=list)
-    source: str = "unknown"  # "opa" | "fallback"
+    source: str = "unknown"  # "opa" | "error"
 
     @property
     def denied(self) -> bool:
@@ -65,36 +67,13 @@ class PolicyDecision:
         reasons = f" [{', '.join(self.deny_reasons)}]" if self.deny_reasons else ""
         return f"PolicyDecision({status}{reasons} source={self.source})"
 
-# Action type allowlists per healing level
-# Two execution vocabularies share one ladder:
-#   - runbook executor actions (restart_pod, scale_deployment, kubectl_rollout_undo …)
-#   - LLM-proposed tools       (restart_deployment, scale_resource, cordon_node …)
-# A human-approved L3 must still pass the allowlist (and cooldown / circuit
-# breaker), so every LLM tool is mapped onto the level it requires. Without
-# this, a routed-L0 governance check would deny every LLM proposal at the
-# allowlist gate — see _LLM_TOOL_LEVEL in llm_orchestrator.py for the mapping.
-_L0_ALLOWED = {"emit_alert", "patch_annotation"}
-_L1_ALLOWED = _L0_ALLOWED | {"restart_pod", "flush_coredns_cache", "restart_deployment"}
-_L2_ALLOWED = _L1_ALLOWED | {"scale_deployment", "scale_resource"}
-_L3_ALLOWED = _L2_ALLOWED | {
-    "kubectl_rollout_undo",
-    "http_webhook",
-    "rollback_deployment",
-    "patch_configmap",
-    "cordon_node",
-    "drain_node",
-}
-
-_LEVEL_LISTS = {0: _L0_ALLOWED, 1: _L1_ALLOWED, 2: _L2_ALLOWED, 3: _L3_ALLOWED}
-
-_CLUSTER_WIDE_BLAST_RADIUS = {"cluster_wide"}
 
 # LLM-proposed tool → (healing_level, blast_radius). The level is the tool's
 # NOMINAL blast — a cordon is L3 regardless of confidence; confidence only
-# decides auto-run vs human-approval, not the action's level. The level column
-# mirrors the allowlists above (a tool appears at the level that allows it) —
-# keep them in sync. Used by LLMOrchestrator (staging) and RunbookExecutor
-# (synthesis), so both score an LLM proposal at its real blast.
+# decides auto-run vs human-approval, not the action's level. Used by
+# LLMOrchestrator (staging) and RunbookExecutor (synthesis) to score an LLM
+# proposal at its real blast. This is INPUT SHAPING, not policy — the actual
+# allow/deny decision is made by OPA in nexus_policies.rego.
 LLM_TOOL_LEVEL: dict[str, tuple[int, str]] = {
     "restart_deployment": (1, "single_deployment"),
     "scale_resource": (2, "single_deployment"),
@@ -104,98 +83,29 @@ LLM_TOOL_LEVEL: dict[str, tuple[int, str]] = {
     "drain_node": (3, "cluster_wide"),
 }
 
-def _fallback_evaluate(
-    action_type: str,
-    healing_level: int,
-    blast_radius: str,
-    in_cooldown: bool,
-    governance_cb_open: bool,
-    confidence: float,
-    human_approved: bool,
-    override_blast_radius: bool,
-) -> PolicyDecision:
-    """
-    Pure Python policy evaluation — equivalent to nexus_policies.rego.
-    Called when OPA is unreachable.
-    """
-    deny_reasons: list[str] = []
-
-    # Governance circuit breaker
-    if governance_cb_open:
-        deny_reasons.append("governance_circuit_breaker_open_stop_autonomous_healing")
-
-    # Cooldown
-    if in_cooldown:
-        deny_reasons.append("action_in_cooldown")
-
-    # Action type allowlist
-    allowed_types = _LEVEL_LISTS.get(healing_level, set())
-    if action_type not in allowed_types:
-        deny_reasons.append(f"action_type_not_in_allowlist_for_level_{healing_level}")
-
-    # Blast radius (L2+ only)
-    if (
-        healing_level >= 2
-        and blast_radius in _CLUSTER_WIDE_BLAST_RADIUS
-        and not override_blast_radius
-    ):
-        deny_reasons.append("blast_radius_cluster_wide_not_allowed_without_override")
-
-    # L3 confidence gate
-    requires_approval = False
-    if healing_level == 3 and confidence < 0.85 and not human_approved:
-        deny_reasons.append("l3_action_requires_confidence_0.85_or_human_approval")
-        requires_approval = True
-
-    if deny_reasons and not (requires_approval and len(deny_reasons) == 1):
-        # Blocked unless the only denial is pending human approval
-        if not (human_approved and requires_approval):
-            return PolicyDecision(
-                allowed=False,
-                requires_approval=requires_approval,
-                deny_reasons=deny_reasons,
-                source="fallback",
-            )
-
-    # L3 + human_approved bypasses confidence gate
-    if healing_level == 3 and requires_approval and human_approved:
-        return PolicyDecision(allowed=True, source="fallback")
-
-    if deny_reasons:
-        return PolicyDecision(
-            allowed=False,
-            requires_approval=requires_approval,
-            deny_reasons=deny_reasons,
-            source="fallback",
-        )
-
-    return PolicyDecision(allowed=True, source="fallback")
-
 
 # OPA HTTP Client
 class PolicyEngine:
     """
-    Evaluates healing actions against OPA policies.
+    Evaluates healing actions against OPA.
 
-    Automatically falls back to the built-in Python policy engine if OPA
-    is unreachable (timeouts, connection refused, etc.).
+    OPA is a hard dependency: if it is unreachable, evaluate() returns a
+    deny-closed PolicyDecision (source="error"). There is no Python fallback —
+    keep policy solely in nexus_policies.rego.
 
     Args:
         opa_url:       OPA HTTP API URL (default http://localhost:8181).
         http_timeout:  Request timeout in seconds (default 2.0 — must be fast).
-        fallback_on_error: If True (default), use Python fallback on OPA errors.
     """
 
     def __init__(
         self,
         opa_url: str = "http://localhost:8181",
         http_timeout: float = 2.0,
-        fallback_on_error: bool = True,
     ):
         self._opa_url = opa_url.rstrip("/")
         self._http_timeout = http_timeout
-        self._fallback = fallback_on_error
-        self._opa_available = True  # Optimistic; flipped on first failure
+        self._opa_available = True  # Optimistic; flipped off on first failure.
         self._opa_retry_after: float = 0.0
         self._opa_retry_cooldown_s = 60.0
 
@@ -224,7 +134,7 @@ class PolicyEngine:
         """
         Evaluate whether a healing action is permitted.
 
-        First queries OPA; falls back to Python policy if OPA errors.
+        Queries OPA; returns a DENY-closed decision if OPA is unavailable.
         """
         input_doc = {
             "input": {
@@ -247,32 +157,20 @@ class PolicyEngine:
 
         if self._opa_available:
             try:
-                decision = await self._query_opa(input_doc)
-                return decision
+                return await self._query_opa(input_doc)
             except Exception as exc:
                 self._opa_available = False
                 self._opa_retry_after = time.monotonic() + self._opa_retry_cooldown_s
                 logger.warning(
-                    f"[PolicyEngine] OPA error ({exc}) — switching to fallback, will retry in {self._opa_retry_cooldown_s}s"
+                    f"[PolicyEngine] OPA error ({exc}) — denying (fail-closed), "
+                    f"will retry in {self._opa_retry_cooldown_s}s"
                 )
 
-        if not self._fallback:
-            # Hard fail if fallback disabled (production strict mode)
-            return PolicyDecision(
-                allowed=False,
-                deny_reasons=["opa_unavailable_and_fallback_disabled"],
-                source="error",
-            )
-
-        return _fallback_evaluate(
-            action_type=action_type,
-            healing_level=healing_level,
-            blast_radius=blast_radius,
-            in_cooldown=in_cooldown,
-            governance_cb_open=governance_cb_open,
-            confidence=confidence,
-            human_approved=human_approved,
-            override_blast_radius=override_blast_radius,
+        # Fail-closed when OPA is unavailable — no Python fallback.
+        return PolicyDecision(
+            allowed=False,
+            deny_reasons=["opa_unavailable_deny_closed"],
+            source="error",
         )
 
     async def _query_opa(self, input_doc: dict) -> PolicyDecision:
