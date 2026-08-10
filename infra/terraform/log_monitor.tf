@@ -99,9 +99,14 @@ resource "aws_lambda_function" "log_monitor" {
       AWS_BEARER_TOKEN_BEDROCK = var.aws_bearer_token_bedrock
       AGENT_BEDROCK_MODEL      = var.agent_bedrock_model
       SLACK_WEBHOOK_URL        = var.slack_webhook_url
+      SLACK_SIGNING_SECRET     = var.slack_signing_secret
+      # agent_api_url Lambda Function URL — used both as the approval API base
+      # (API_BASE_URL → curl fallback text) and as the Slack interactive callback
+      # URL (SLACK_INTERACTIVE_URL → Block Kit button target).
+      API_BASE_URL             = aws_lambda_function_url.agent_api.function_url
+      SLACK_INTERACTIVE_URL    = aws_lambda_function_url.agent_api.function_url
       DEFAULT_REGION           = var.aws_region
       APPROVALS_TABLE_NAME     = aws_dynamodb_table.approvals.name
-      API_BASE_URL             = aws_lambda_function_url.agent_api.function_url
     }
   }
 }

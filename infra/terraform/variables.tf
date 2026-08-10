@@ -17,6 +17,13 @@ variable "slack_webhook_url" {
   default     = ""
 }
 
+variable "slack_signing_secret" {
+  description = "Slack app Signing Secret (Basic Information → App Credentials) — used to verify interactive button callbacks"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "agent_bedrock_model" {
   description = "Bedrock model ID"
   type        = string
