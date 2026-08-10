@@ -79,6 +79,7 @@ resource "aws_lambda_function" "agent_api" {
   environment {
     variables = {
       SLACK_WEBHOOK_URL        = var.slack_webhook_url
+      SLACK_SIGNING_SECRET     = var.slack_signing_secret
       DEFAULT_REGION           = var.aws_region
       AWS_BEARER_TOKEN_BEDROCK = var.aws_bearer_token_bedrock
       AGENT_BEDROCK_MODEL      = var.agent_bedrock_model
@@ -116,4 +117,54 @@ resource "aws_lambda_permission" "agent_api_public" {
 resource "aws_cloudwatch_log_group" "agent_api_logs" {
   name              = "/aws/lambda/${aws_lambda_function.agent_api.function_name}"
   retention_in_days = 7
+}
+
+########################################################################
+# Inject SLACK_INTERACTIVE_URL after both Lambda + Function URL exist.
+# This breaks the circular dependency: Lambda needs its own URL, but the
+# URL resource needs the Lambda — so we set the env var post-creation.
+#
+# All other env vars are re-stated here explicitly so the update-function-
+# configuration call is idempotent and doesn't wipe existing variables.
+########################################################################
+resource "null_resource" "agent_api_set_interactive_url" {
+  # Re-run whenever the function URL changes (or any other env var changes).
+  triggers = {
+    function_url             = aws_lambda_function_url.agent_api.function_url
+    slack_webhook_url        = var.slack_webhook_url
+    slack_signing_secret     = var.slack_signing_secret
+    aws_bearer_token_bedrock = var.aws_bearer_token_bedrock
+    agent_bedrock_model      = var.agent_bedrock_model
+    agent_dry_run            = tostring(var.agent_dry_run)
+    incident_table_name      = aws_dynamodb_table.incidents.name
+    approvals_table_name     = aws_dynamodb_table.approvals.name
+  }
+
+  provisioner "local-exec" {
+    # Build the env string in AWS CLI format: {KEY=VALUE,KEY=VALUE,...}
+    # ConvertTo-Json produces KEY:VALUE (JSON), which the CLI rejects.
+    interpreter = ["PowerShell", "-Command"]
+    command     = <<-EOT
+      $env = 'Variables={' +
+        'SLACK_WEBHOOK_URL=${var.slack_webhook_url},' +
+        'SLACK_SIGNING_SECRET=${var.slack_signing_secret},' +
+        'SLACK_INTERACTIVE_URL=${aws_lambda_function_url.agent_api.function_url},' +
+        'DEFAULT_REGION=${var.aws_region},' +
+        'AWS_BEARER_TOKEN_BEDROCK=${var.aws_bearer_token_bedrock},' +
+        'AGENT_BEDROCK_MODEL=${var.agent_bedrock_model},' +
+        'AGENT_DRY_RUN=${tostring(var.agent_dry_run)},' +
+        'INCIDENT_TABLE_NAME=${aws_dynamodb_table.incidents.name},' +
+        'APPROVALS_TABLE_NAME=${aws_dynamodb_table.approvals.name}' +
+        '}'
+      aws lambda update-function-configuration `
+        --function-name ${aws_lambda_function.agent_api.function_name} `
+        --region ${var.aws_region} `
+        --environment $env
+    EOT
+  }
+
+  depends_on = [
+    aws_lambda_function.agent_api,
+    aws_lambda_function_url.agent_api,
+  ]
 }

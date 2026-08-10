@@ -18,6 +18,11 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
+# Public base URL of the agent API (Lambda Function URL from Terraform output
+# `agent_api_url`). When set, Slack interactive-component buttons POST back to
+# <SLACK_INTERACTIVE_URL>/slack/interactive.  Mirrors SLACK_INTERACTIVE_URL in
+# nexus/integration/notifier.py — one env var, two notification paths.
+_SLACK_INTERACTIVE_URL = os.getenv("SLACK_INTERACTIVE_URL", "")
 
 
 def send_alert(
@@ -140,6 +145,37 @@ def send_approval_request(
     }
 
     return _post_to_slack(url, payload)
+
+
+def _approval_buttons_block(approval_id: str) -> dict:
+    """Return a Slack Block Kit ``actions`` block with Approve ✅ / Reject ❌ buttons.
+
+    The buttons POST to ``<SLACK_INTERACTIVE_URL>/slack/interactive`` which is
+    handled by the ``POST /slack/interactive`` endpoint in server.py.
+    When ``SLACK_INTERACTIVE_URL`` is not set the block degrades silently to an
+    empty context block so the rest of the message still renders.
+    """
+    if not _SLACK_INTERACTIVE_URL:
+        return {"type": "context", "elements": [{"type": "mrkdwn", "text": ""}]}
+    return {
+        "type": "actions",
+        "elements": [
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "Approve ✅", "emoji": True},
+                "style": "primary",
+                "action_id": "nexus_approve",
+                "value": approval_id,
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "Reject ❌", "emoji": True},
+                "style": "danger",
+                "action_id": "nexus_reject",
+                "value": approval_id,
+            },
+        ],
+    }
 
 
 def send_log_error_alert(
@@ -286,29 +322,62 @@ def send_log_error_alert(
             risk = cmd.get("risk", "medium")
             cmd_lines.append(f"{i}. *{desc}* — `{svc}.{method}` _(risk: {risk})_")
 
+        # Plain-text fallback (older clients / when buttons are disabled)
+        base = api_base_url or _SLACK_INTERACTIVE_URL.rstrip("/")
         approve_cmd = (
-            f"`curl -X POST {api_base_url}/approve/{approval_id}`"
-            if api_base_url
+            f"`curl -X POST {base}/approve/{approval_id}`"
+            if base
             else f"Call `POST /approve/{approval_id}` on your API Gateway URL"
         )
         reject_cmd = (
-            f"`curl -X POST {api_base_url}/reject/{approval_id}`"
-            if api_base_url
+            f"`curl -X POST {base}/reject/{approval_id}`"
+            if base
             else f"Call `POST /reject/{approval_id}` to discard"
         )
+        fallback_text = (
+            f"NEXUS approval required for {len(suggested_commands)} command(s) on `{function_name}`. "
+            f"Approve: {approve_cmd}  Reject: {reject_cmd}"
+        )
+
+        # Build the Block Kit blocks for the interactive message
+        blocks: list[dict] = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": f"🔵 Approval Required — {len(suggested_commands)} command(s)",
+                    "emoji": True,
+                },
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"*Function:* `{function_name}`\n"
+                        "*LLM-suggested fixes (not yet executed):*\n"
+                        + "\n".join(cmd_lines)
+                    ),
+                },
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"Approval ID: `{approval_id}` · Expires in 24 h",
+                    }
+                ],
+            },
+            {"type": "divider"},
+            _approval_buttons_block(approval_id),
+        ]
 
         attachments.append(
             {
-                "color": "#0099CC",
-                "title": f"🔵 Approval Required — {len(suggested_commands)} command(s) to fix `{function_name}`",
-                "text": (
-                    "*LLM-suggested fixes (not yet executed):*\n"
-                    + "\n".join(cmd_lines)
-                    + f"\n\n✅ *Approve:* {approve_cmd}"
-                    + f"\n❌ *Reject:* {reject_cmd}"
-                    + f"\n\n_Approval ID: `{approval_id}` · Expires in 24h_"
-                ),
-                "mrkdwn_in": ["text"],
+                "color":    "#0099CC",
+                "fallback": fallback_text,
+                "blocks":   blocks,
             }
         )
 

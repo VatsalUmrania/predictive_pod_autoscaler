@@ -26,6 +26,15 @@ from aws.graph.workflow import run_graph
 
 logger = logging.getLogger(__name__)
 
+# Slack app credentials — set in Lambda environment variables (api.tf).
+# SLACK_SIGNING_SECRET: Slack app → Basic Information → App Credentials
+# SLACK_INTERACTIVE_URL: the agent_api_url Terraform output (Lambda Function URL)
+#   used by slack.py when building button payloads; consumed here for docs only.
+_SLACK_SIGNING_SECRET  = os.getenv("SLACK_SIGNING_SECRET", "")
+_SLACK_INTERACTIVE_URL = os.getenv("SLACK_INTERACTIVE_URL", "")
+# Reject interactive payloads whose timestamp is older than this (replay guard).
+_SLACK_TOLERANCE_S = 60 * 5
+
 app = FastAPI(
     title="NEXUS AI DevOps Agent",
     description="Autonomous AI DevOps engineer for AWS serverless infrastructure",
@@ -218,12 +227,167 @@ async def reject_commands(approval_id: str):
     return {"approval_id": approval_id, "status": "rejected"}
 
 
+@app.post("/slack/interactive")
+async def slack_interactive(request: Request):
+    """
+    Handle Slack interactive button clicks (Approve ✅ / Reject ❌).
+
+    Slack POSTs ``application/x-www-form-urlencoded`` with a ``payload`` field
+    containing JSON whenever a user clicks an action button in a Block Kit message.
+
+    Flow:
+      1. Verify the Slack HMAC-SHA256 request signature (``v0`` scheme).
+      2. Parse the ``payload`` JSON to extract ``action_id`` and ``value`` (approval_id).
+      3. Route to the existing approve / reject logic.
+      4. Return ``{"replace_original": true, "text": …}`` so Slack replaces the
+         buttons with the decision — preventing a second operator from acting on
+         an already-resolved approval.
+
+    Requires env vars:
+      SLACK_SIGNING_SECRET  — Slack app → Basic Information → App Credentials
+      SLACK_INTERACTIVE_URL — this Lambda Function URL (agent_api_url Terraform output)
+    """
+    import urllib.parse
+
+    from aws.config import AgentConfig
+    from aws.memory.approvals import get_approval, update_status
+    from aws.tools.slack import send_approval_result
+
+    # ── 1. Signature verification —————————————————————————─
+    raw = await request.body()
+    if not _verify_slack_request(raw, request.headers):
+        raise HTTPException(status_code=401, detail="invalid_signature")
+
+    # ── 2. Parse payload ———————————————————————————─
+    try:
+        qs = urllib.parse.parse_qs(raw.decode("utf-8"))
+        payload_str = (qs.get("payload") or [None])[0]
+        data = json.loads(payload_str)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Malformed interactive payload")
+
+    try:
+        action    = data["actions"][0]
+        action_id = action["action_id"]   # "nexus_approve" | "nexus_reject"
+        approval_id = action["value"]     # UUID stored in the button's value field
+        user = (
+            data.get("user", {}).get("username")
+            or data.get("user", {}).get("id")
+            or "unknown"
+        )
+    except (KeyError, IndexError, TypeError):
+        raise HTTPException(status_code=400, detail="Missing action fields in payload")
+
+    # ── 3. Lookup approval ————————————————————————─
+    cfg = AgentConfig.load()
+    approval = get_approval(approval_id, region=cfg.aws_region)
+    if not approval:
+        return {
+            "replace_original": True,
+            "text": f"⚠️ Approval `{approval_id}` not found or has expired.",
+        }
+
+    if approval.get("status") != "pending":
+        status = approval.get("status", "unknown")
+        icon = "✅" if status == "executed" else ("❌" if status == "rejected" else "⏳")
+        return {
+            "replace_original": True,
+            "text": f"{icon} This approval has already been *{status}* — no further action taken.",
+        }
+
+    function_name = approval.get("function_name", "unknown")
+    root_cause    = approval.get("root_cause", "")
+
+    # ── 4a. Reject path —————————————————————————─
+    if action_id == "nexus_reject":
+        update_status(approval_id, "rejected", region=cfg.aws_region)
+        logger.info(f"[Slack] ❌ Rejected by @{user}: approval_id={approval_id}")
+        return {
+            "replace_original": True,
+            "text": f"❌ Rejected `{approval_id}` by @{user} — no commands will run.",
+        }
+
+    # ── 4b. Approve path ———————————————————————─
+    if action_id == "nexus_approve":
+        from aws.tools.aws_executor import execute_commands
+
+        commands = approval.get("commands", [])
+        logger.info(f"[Slack] ✅ Approved by @{user}: approval_id={approval_id}, commands={len(commands)}")
+
+        update_status(approval_id, "approved", region=cfg.aws_region)
+        results   = execute_commands(commands, region=cfg.aws_region, dry_run=cfg.dry_run)
+        all_ok    = all(r.get("success") for r in results)
+        final_status = "executed" if all_ok else "failed"
+        update_status(approval_id, final_status, results=results, region=cfg.aws_region)
+
+        send_approval_result(
+            function_name=function_name,
+            approval_id=approval_id,
+            root_cause=root_cause,
+            results=results,
+            all_ok=all_ok,
+            dry_run=cfg.dry_run,
+        )
+
+        icon = "✅" if all_ok else "❌"
+        outcome = "succeeded" if all_ok else "partially failed"
+        return {
+            "replace_original": True,
+            "text": (
+                f"{icon} Approved `{approval_id}` by @{user} — "
+                f"{len(results)} command(s) {outcome}. Check the next Slack message for details."
+            ),
+        }
+
+    # Unknown action_id — safe fallback
+    raise HTTPException(status_code=400, detail=f"Unknown action_id: {action_id}")
+
+
 # ── Lambda handler via Mangum ─────────────────────────────────────────────────
 # Used when deploying as a Lambda function with API Gateway / Function URL
 handler = Mangum(app, lifespan="off")
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
+
+def _verify_slack_request(raw_body: bytes, headers) -> bool:
+    """Validate a Slack request using the ``v0`` HMAC-SHA256 signature scheme.
+
+    Returns False for ANY failure (missing secret, missing headers, stale
+    timestamp, or signature mismatch) so callers can treat it as a hard auth
+    gate without catching exceptions.
+
+    Ref: https://api.slack.com/authentication/verifying-requests-from-slack
+    """
+    import hashlib
+    import hmac as _hmac
+
+    if not _SLACK_SIGNING_SECRET:
+        logger.warning("[Slack] SLACK_SIGNING_SECRET not set — rejecting all interactive requests")
+        return False
+
+    ts  = headers.get("X-Slack-Request-Timestamp")
+    sig = headers.get("X-Slack-Signature")
+    if not ts or not sig:
+        return False
+
+    try:
+        ts_int = int(ts)
+    except (TypeError, ValueError):
+        return False
+
+    # Replay guard: reject requests older than 5 minutes
+    from datetime import datetime, timezone
+    now = int(datetime.now(timezone.utc).timestamp())
+    if abs(now - ts_int) > _SLACK_TOLERANCE_S:
+        return False
+
+    base     = b"v0:" + str(ts).encode() + b":" + raw_body
+    expected = "v0=" + _hmac.new(
+        _SLACK_SIGNING_SECRET.encode("utf-8"), base, hashlib.sha256
+    ).hexdigest()
+    return _hmac.compare_digest(expected, str(sig))
+
 
 def _parse_eventbridge(event: dict[str, Any]) -> dict[str, Any]:
     """Parse EventBridge CloudWatch Alarm event into incident dict."""
