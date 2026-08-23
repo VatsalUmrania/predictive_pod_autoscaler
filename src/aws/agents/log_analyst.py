@@ -61,6 +61,7 @@ Your job:
 4. Generate specific boto3 API calls to fix the issue (when possible)
 
 Be SPECIFIC:
+- Write in plain technical prose: NO emojis, NO exclamation marks, no conversational filler
 - "AccessDeniedException" → name the exact IAM action and resource ARN
 - "QueueDoesNotExist" → SQS_QUEUE_URL env var missing, wrong, or points to wrong region
 - "Task timed out" → Lambda timeout setting is too low

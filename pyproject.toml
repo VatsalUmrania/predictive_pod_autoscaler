@@ -65,6 +65,9 @@ nexus = [
     "click>=8.1.0",
     "rich>=13.7.0",
     "prometheus-api-client>=0.5.5",
+    # AWS action executor (imported at boot via container → action/__init__)
+    "boto3>=1.34.0",
+    "botocore>=1.34.0",
     # Already in base: pydantic, kubernetes, requests, python-json-logger
 ]
 # ── LLM provider extras (install the one you use) ─────────────────────────────

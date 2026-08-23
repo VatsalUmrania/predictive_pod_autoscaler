@@ -195,7 +195,7 @@ class IncidentCluster:
                     "raw_features",
                 ]
                 relevant = {
-                    k: event.context[k] for k in _key_order[:3] if k in event.context
+                    k: event.context[k] for k in _key_order if k in event.context
                 }
                 if relevant:
                     parts = []

@@ -15,7 +15,6 @@ The ``aiosqlite`` connector is patched to force the fallback path where noted.
 from __future__ import annotations
 
 import asyncio
-import time
 from pathlib import Path
 from unittest.mock import patch
 

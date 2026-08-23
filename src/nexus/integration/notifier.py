@@ -6,9 +6,9 @@ and SRE escalations. Reads webhook URL + paging threshold from each app's
 selfheal.yaml (via the policy cache in dashboard.py).
 
 Notification types:
-    🔧 Healing action taken  — after every RunbookExecutor outcome
-    📈 Pre-scale initiated   — when Prescaler makes a decision (advisory/autonomous)
-    🚨 SRE escalation        — when healing fails ≥ page_sre_after times for an app
+    Healing action taken     — after every RunbookExecutor outcome
+    Pre-scale initiated      — when Prescaler makes a decision (advisory/autonomous)
+    SRE escalation           — when healing fails ≥ page_sre_after times for an app
 
 Usage (from Orchestrator or FeedbackLoop):
     from nexus.integration.notifier import Notifier
@@ -127,14 +127,14 @@ def _approval_buttons_block(approval_id: str) -> dict:
         "elements": [
             {
                 "type": "button",
-                "text": {"type": "plain_text", "text": "Approve ✅"},
+                "text": {"type": "plain_text", "text": "Approve"},
                 "style": "primary",
                 "action_id": "nexus_approve",
                 "value": approval_id,
             },
             {
                 "type": "button",
-                "text": {"type": "plain_text", "text": "Reject ❌"},
+                "text": {"type": "plain_text", "text": "Reject"},
                 "style": "danger",
                 "action_id": "nexus_reject",
                 "value": approval_id,
@@ -169,7 +169,6 @@ class Notifier:
         if not webhook:
             return
 
-        icon = "✅" if outcome == "success" else ("❌" if outcome == "failed" else "↩️")
         color = "#83ef48" if outcome == "success" else "#ff0000"
 
         payload = {
@@ -182,7 +181,7 @@ class Notifier:
                             "type": "section",
                             "text": {
                                 "type": "mrkdwn",
-                                "text": f"*{icon} NEXUS Healing Action — `{app_name}`*",
+                                "text": f"*NEXUS Healing Action — `{app_name}`*",
                             },
                         },
                         {
@@ -250,7 +249,7 @@ class Notifier:
                             "type": "section",
                             "text": {
                                 "type": "mrkdwn",
-                                "text": f"*📈 NEXUS Pre-Scale — `{deployment}`*",
+                                "text": f"*NEXUS Pre-Scale — `{deployment}`*",
                             },
                         },
                         {
@@ -293,7 +292,7 @@ class Notifier:
                             "text": {
                                 "type": "mrkdwn",
                                 "text": (
-                                    f"*🚨 SRE Escalation — `{app_name}` requires human review*\n\n"
+                                    f"*SRE Escalation — `{app_name}` requires human review*\n\n"
                                     f"NEXUS has made *{failed_attempts}* failed healing attempts "
                                     f"and has stopped autonomous action.\n"
                                     f"Run `nexus audit --n 10` to see the full incident history.\n"
@@ -336,7 +335,7 @@ class Notifier:
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*✋ NEXUS L{healing_level} Action Requires Approval*",
+                    "text": f"*NEXUS L{healing_level} Action Requires Approval*",
                 },
             },
             {
@@ -367,7 +366,7 @@ class Notifier:
                     "text": {
                         "type": "mrkdwn",
                         "text": (
-                            f"*RCA Diagnosis:*\n"
+                            f"*Root Cause Analysis*\n"
                             f"*Class:* {failure_class}\n"
                             f"*Root Cause:* {root_cause[:300]}{'...' if len(root_cause) > 300 else ''}"
                         ),
