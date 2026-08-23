@@ -36,8 +36,8 @@ default requires_human_approval = false
 #   - runbook executor actions (restart_pod, scale_deployment, kubectl_rollout_undo …)
 #   - LLM-proposed tools       (restart_deployment, scale_resource, cordon_node …)
 # Every LLM tool is mapped onto the level it requires so a routed-through-governance
-# LLM proposal isn't denied at the allowlist gate. Mirrors _L{n}_ALLOWED in
-# policy_engine.py — keep these in sync.
+# LLM proposal isn't denied at the allowlist gate. (The level mapping itself
+# lives in policy_engine.py LLM_TOOL_LEVEL — input shaping, not policy.)
 l0_actions = {
     "emit_alert",
     "patch_annotation"
