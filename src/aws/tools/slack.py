@@ -78,7 +78,6 @@ def send_incident_alert(
     Send a structured incident notification to Slack.
     Used after remediation to report the outcome.
     """
-    icon = "✅" if resolved else "🔴"
     color = "#36a64f" if resolved else "#FF0000"
     status = "RESOLVED" if resolved else "UNRESOLVED — Manual action required"
 
@@ -92,7 +91,7 @@ def send_incident_alert(
     ]
 
     return send_alert(
-        message=f"{icon} *{status}*",
+        message=f"*{status}*",
         title="NEXUS Incident Report",
         color=color,
         fields=fields,
@@ -132,7 +131,7 @@ def send_approval_request(
         "attachments": [
             {
                 "color": "#FFA500",     # Orange for approval requests
-                "title": "⚠️ NEXUS: Human Approval Required",
+                "title": "NEXUS: Human Approval Required",
                 "text": (
                     "NEXUS has diagnosed an incident but confidence is below the auto-execute threshold.\n"
                     "*Please review and take manual action if appropriate.*"
@@ -193,18 +192,13 @@ def send_log_error_alert(
     Send a Slack alert with raw error log lines + LLM analysis + remediation outcome.
     This is the primary notification function for the log monitor pipeline.
 
-    Format:
-      🔴 ERROR DETECTED in <function_name>
-      ─────────────────────────────────
-      Severity: High
-      Root Cause: IAM permission missing — dynamodb:PutItem not allowed
-      What it means: Writes to DynamoDB are failing silently
-      How to fix:
-        1. Add dynamodb:PutItem to the Lambda execution role
-        2. Re-apply Terraform: terraform apply
-      ─────────────────────────────────
-      Raw log lines (last 5):
-        [ERROR] AccessDeniedException: ...
+    Format (same skeleton as nexus.integration.notifier):
+      ERROR DETECTED in <function_name>
+      <fact grid: Function / Log Group / Severity / Error Count>
+      Root Cause Analysis — Class + Root Cause
+      Impact — user/system effect
+      Recommended Fix — steps
+      Raw log lines (last 5)
     """
     url = webhook_url or _SLACK_WEBHOOK_URL
     if not url:
@@ -213,6 +207,7 @@ def send_log_error_alert(
 
     severity       = analysis.get("severity", "Unknown")
     root_cause     = analysis.get("root_cause", "Unable to determine")
+    failure_class  = analysis.get("failure_class", "unknown")
     what_it_means  = analysis.get("what_it_means", "")
     how_to_fix     = analysis.get("how_to_fix", "Review the logs manually.")
     is_infra_issue = analysis.get("is_infra_issue", False)
@@ -230,37 +225,38 @@ def send_log_error_alert(
     }
     color = color_map.get(severity, "#808080")
 
-    severity_emoji = {
-        "Critical": "💀", "High": "🔴", "Medium": "🟡", "Low": "🟢", "Unknown": "⚪",
-    }.get(severity, "⚪")
-
-    infra_tag = " 🏗️ *Infrastructure Issue*" if is_infra_issue else ""
+    infra_tag = " · Infrastructure Issue" if is_infra_issue else ""
 
     # Trim log lines for the Slack message
     shown_lines = error_lines[-5:]
     log_block = "\n".join(f"  {line[:200]}" for line in shown_lines)
 
+    # Fact grid — short fields only; RCA lives in its own section below,
+    # mirroring notify_approval_required() on the K8s side.
     fields = [
         {"title": "Function",   "value": f"`{function_name}`",   "short": True},
         {"title": "Log Group",  "value": f"`{log_group}`",       "short": True},
-        {"title": "Severity",   "value": f"{severity_emoji} {severity}{infra_tag}", "short": True},
+        {"title": "Severity",   "value": f"{severity}{infra_tag}", "short": True},
         {"title": "Error Count", "value": str(len(error_lines)), "short": True},
-        {"title": "Root Cause", "value": root_cause,             "short": False},
-        {"title": "What It Means", "value": what_it_means,       "short": False},
-        {"title": "How To Fix",    "value": how_to_fix,          "short": False},
     ]
 
-    # Add error types if available
+    rca_text = f"*Class:* {failure_class}\n*Root Cause:* {root_cause}"
     if error_types:
-        fields.append({"title": "Error Types", "value": ", ".join(f"`{e}`" for e in error_types), "short": False})
+        rca_text += "\n*Error Types:* " + ", ".join(f"`{e}`" for e in error_types)
+
+    sections = [{"type": "section", "text": {"type": "mrkdwn", "text": f"*Root Cause Analysis*\n{rca_text}"}}]
+    if what_it_means:
+        sections.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*Impact*\n{what_it_means}"}})
+    sections.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*Recommended Fix*\n{how_to_fix}"}})
 
     # Build the Slack attachments
     attachments = [
         {
             "color":   color,
-            "title":   f"{severity_emoji} ERROR DETECTED in `{function_name}`",
+            "title":   f"ERROR DETECTED in `{function_name}`",
             "pretext": "NEXUS AI DevOps Agent detected errors in CloudWatch Logs",
             "fields":  fields,
+            "blocks":  sections,
             "footer":  "NEXUS Log Monitor | CloudWatch Logs Subscription",
             "ts":      _now_ts(),
         },
@@ -281,15 +277,15 @@ def send_log_error_alert(
 
         if not approved:
             rem_color  = "#FFA500"   # orange — blocked
-            rem_title  = f"⛔ Remediation BLOCKED"
+            rem_title  = f"Remediation BLOCKED"
             rem_text   = f"*Action:* `{action}` | *Reason:* {remediation_result.get('reason', '')}"
         elif dry_run:
             rem_color  = "#0099CC"   # blue — dry-run
-            rem_title  = f"🔵 Remediation DRY-RUN (no changes made)"
+            rem_title  = f"Remediation DRY-RUN (no changes made)"
             rem_text   = f"*Action:* `{action}` | *Confidence:* {confidence:.0%}"
         elif success:
             rem_color  = "#36a64f"   # green — executed
-            rem_title  = f"✅ Remediation EXECUTED"
+            rem_title  = f"Remediation EXECUTED"
             pre  = result.get("pre", {})
             post = result.get("post", {})
             rem_text   = (
@@ -298,7 +294,7 @@ def send_log_error_alert(
             )
         else:
             rem_color  = "#FF0000"   # red — failed
-            rem_title  = f"❌ Remediation FAILED"
+            rem_title  = f"Remediation FAILED"
             rem_text   = (
                 f"*Action:* `{action}` | *Error:* {result.get('error', 'unknown')}"
             )
@@ -375,9 +371,16 @@ def send_log_error_alert(
 
         attachments.append(
             {
-                "color":    "#0099CC",
-                "fallback": fallback_text,
-                "blocks":   blocks,
+                "color": "#0099CC",
+                "title": f"Approval Required — {len(suggested_commands)} command(s) to fix `{function_name}`",
+                "text": (
+                    "*LLM-suggested fixes (not yet executed):*\n"
+                    + "\n".join(cmd_lines)
+                    + f"\n\n*Approve:* {approve_cmd}"
+                    + f"\n*Reject:* {reject_cmd}"
+                    + f"\n\n_Approval ID: `{approval_id}` · Expires in 24h_"
+                ),
+                "mrkdwn_in": ["text"],
             }
         )
 
@@ -401,20 +404,19 @@ def send_approval_result(
     if not url:
         return False
 
-    icon = "✅" if all_ok else "❌"
     color = "#36a64f" if all_ok else "#FF0000"
     title = (
-        f"{icon} Commands {'DRY-RUN' if dry_run else 'Executed'} for `{function_name}`"
+        f"Commands {'DRY-RUN' if dry_run else 'Executed'} for `{function_name}`"
     )
 
     lines = [f"*Approval ID:* `{approval_id}`", f"*Root Cause:* {root_cause}", ""]
     for i, r in enumerate(results, 1):
-        status = "✅" if r.get("success") else "❌"
+        status = "OK" if r.get("success") else "FAILED"
         desc = r.get("description", f"Command {i}")
         svc = r.get("service", "")
         method = r.get("method", "")
         err = r.get("error", "")
-        lines.append(f"{status} *{i}. {desc}*")
+        lines.append(f"[{status}] *{i}. {desc}*")
         lines.append(f"   `{svc}.{method}`")
         if err:
             lines.append(f"   Error: {err}")

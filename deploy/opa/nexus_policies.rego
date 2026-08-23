@@ -2,10 +2,6 @@
 # ================================
 # Rego policy that governs all autonomous healing actions in NEXUS.
 #
-# This file is the authoritative policy source. The Python fallback in
-# policy_engine.py mirrors these rules exactly and is used when OPA
-# is unreachable.
-#
 # Deploy:
 #   docker run -d --name nexus-opa -p 8181:8181 \
 #     -v $(pwd)/deploy/opa:/policies openpolicyagent/opa:latest \
@@ -40,8 +36,8 @@ default requires_human_approval = false
 #   - runbook executor actions (restart_pod, scale_deployment, kubectl_rollout_undo …)
 #   - LLM-proposed tools       (restart_deployment, scale_resource, cordon_node …)
 # Every LLM tool is mapped onto the level it requires so a routed-through-governance
-# LLM proposal isn't denied at the allowlist gate. Mirrors _L{n}_ALLOWED in
-# policy_engine.py — keep these in sync.
+# LLM proposal isn't denied at the allowlist gate. (The level mapping itself
+# lives in policy_engine.py LLM_TOOL_LEVEL — input shaping, not policy.)
 l0_actions = {
     "emit_alert",
     "patch_annotation"

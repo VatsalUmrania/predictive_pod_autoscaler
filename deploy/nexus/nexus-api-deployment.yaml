@@ -121,6 +121,12 @@ spec:
             # Prometheus — kube-prometheus-stack service in monitoring namespace
             - name: PROMETHEUS_URL
               value: "http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090"
+            # OPA policy engine — deploy/nexus/opa-deployment.yaml
+            - name: NEXUS_OPA_URL
+              value: "http://opa.nexus.svc.cluster.local:8181"
+            # Runbooks — baked into the image at /runbooks (Dockerfile API)
+            - name: NEXUS_RUNBOOK_DIR
+              value: "/runbooks"
             # LLM Provider configuration (Gemini / OpenAI / Anthropic / none)
             - name: NEXUS_LLM_PROVIDER
               value: "gemini"
@@ -137,6 +143,10 @@ spec:
           volumeMounts:
             - name: nexus-data
               mountPath: /data
+            - name: shop-demo-policy
+              mountPath: /app/selfheal.yaml
+              subPath: selfheal.yaml
+              readOnly: true
           resources:
             requests:
               cpu: 100m
@@ -162,6 +172,50 @@ spec:
         - name: nexus-data
           persistentVolumeClaim:
             claimName: nexus-api-data
+        - name: shop-demo-policy
+          configMap:
+            name: selfheal-shop-demo
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: selfheal-shop-demo
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: nexus-api
+    app.kubernetes.io/component: self-healing
+data:
+  selfheal.yaml: |
+    app: shop-demo
+    tier: production
+
+    critical_routes:
+      - /orders
+      - /products
+      - /checkout
+
+    healing_policy:
+      auto_rollback: true
+      max_auto_actions_per_hour: 20
+      require_approval_for:
+        - database_migrations
+        - environment_variable_changes
+        - scaling_above: 5x
+      never_shed_routes:
+        - /orders
+
+    predictive:
+      traffic_spike_tables:
+        - orders
+        - products
+        - users
+      pre_scale_threshold: 2.0
+
+    notifications:
+      slack_webhook: ${SLACK_WEBHOOK}
+      page_sre_after: 2
+      notify_on_heal: true
+      notify_on_prescale: true
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

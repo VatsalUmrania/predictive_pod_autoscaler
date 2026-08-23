@@ -72,7 +72,6 @@ def _adapt_tool_result(res: str) -> dict[str, str]:
         return {"status": "failed", "message": res}
     return {"status": "executed", "message": res}
 
-
 # Runbook Executor
 class RunbookExecutor:
     """
@@ -381,7 +380,7 @@ class RunbookExecutor:
                 await self.nats.publish(alert_event)
                 result.update(status="executed", message="Alert published to NATS")
 
-            # ── LLM-proposed tools (dispatch to k8s_tools) ──────────────────
+            # LLM-proposed tools (dispatch to k8s_tools)
             # These reuse the governed _execute_action switch so LLM proposals
             # and runbook actions share ONE execution path.
             elif action_type == "restart_deployment":
@@ -443,8 +442,7 @@ class RunbookExecutor:
         logger.info(f"[RunbookExecutor] {action_type} → {result['status']}")
         return result
 
-    # ── Governed re-dispatch of a human-approved action ──────────────────────
-
+    # Governed re-dispatch of a human-approved action
     async def execute_approved(self, pending: PendingApproval) -> dict[str, Any]:
         """Run a single human-approved action through the full governance plane.
 
@@ -634,8 +632,7 @@ class RunbookExecutor:
         )
         return runbook, action, event
 
-    # ── Runbook execution (full governance) ───────────────────────────────────
-
+    # Runbook execution (full governance)
     async def _execute_runbook(self, runbook: Runbook, event: IncidentEvent) -> None:
         """
         Execute a single runbook against an event, traversing the full
@@ -644,7 +641,7 @@ class RunbookExecutor:
         target = f"{event.namespace or 'default'}/{event.resource_name or 'unknown'}"
         runbook_id = runbook.id
 
-        # ── Pre-checks ────────────────────────────────────────────────────────
+        # Pre-checks
         pre_ok = await self._run_pre_checks(runbook, event)
         if not pre_ok:
             logger.info(
@@ -652,14 +649,14 @@ class RunbookExecutor:
             )
             return
 
-        # ── Per-action governance loop ─────────────────────────────────────────
+        # Per-action governance loop
         action_results: list[dict] = []
         execution_failed = False
         action_id: str | None = None
         pre_state = None
 
         for action in runbook.actions:
-            # ── ActionLadder evaluation ──────────────────────────────────────
+            # ActionLadder evaluation
             decision = await self.ladder.evaluate(
                 runbook=runbook,
                 action=action,
@@ -700,7 +697,7 @@ class RunbookExecutor:
                     break
                 continue
 
-            # ── Pre-state capture ────────────────────────────────────────────
+            # Pre-state capture
             self._ensure_k8s()
             pre_state = await self.rollback_reg.capture(
                 action_type=action.type,
@@ -710,7 +707,7 @@ class RunbookExecutor:
                 k8s_core=self._k8s_core,
             )
 
-            # ── Write pending audit record (crash-safe) ──────────────────────
+            # Write pending audit record (crash-safe)
             action_id = await self.audit.write_pending(
                 triggered_by="runbook_executor_v3",
                 runbook_id=runbook_id,
@@ -721,7 +718,7 @@ class RunbookExecutor:
                 action_id=None,  # generate new UUID
             )
 
-            # ── Execute action ───────────────────────────────────────────────
+            # Execute action
             result = await self._execute_action(action, event)
             action_results.append(result)
 
@@ -747,7 +744,7 @@ class RunbookExecutor:
             )
             return
 
-        # ── Post-checks ───────────────────────────────────────────────────────
+        # Post-checks
         post_ok = await self._run_post_checks(runbook)
         rollback_done = False
 
@@ -775,7 +772,7 @@ class RunbookExecutor:
         else:
             self.ladder.record_post_check_success()
 
-        # ── Finalise audit record ─────────────────────────────────────────────
+        # Finalise audit record
         outcome = (
             "success" if post_ok else ("rolled_back" if rollback_done else "failed")
         )
@@ -788,7 +785,7 @@ class RunbookExecutor:
                 action_results=action_results,
             )
 
-        # ── Set cooldown (only on non-failure outcomes) ───────────────────────
+        # Set cooldown (only on non-failure outcomes)
         if outcome in ("success", "rolled_back"):
             await self.ladder.set_cooldown(runbook, target)
 
@@ -853,8 +850,7 @@ class RunbookExecutor:
             # Notifications are best-effort — never break healing on publish failure
             logger.debug(f"[RunbookExecutor] action publish failed: {exc}")
 
-    # ── Main event handler ────────────────────────────────────────────────────
-
+    # Main event handler
     async def handle_event(self, event: IncidentEvent) -> None:
         """
         Process an IncidentEvent: find matching runbooks and execute them.
@@ -887,7 +883,7 @@ def build_executor(
     audit_trail: AuditTrail,
     prometheus_url: str = "http://prometheus:9090",
     opa_url: str = "http://localhost:8181",
-    redis_url: str | None = None,
+    db_path: str | None = None,
     dry_run: bool = False,
     confidence: float = 0.85,
 ) -> RunbookExecutor:
@@ -905,7 +901,7 @@ def build_executor(
     from nexus.governance.cooldown_store import CooldownStore
     from nexus.governance.rollback_registry import RollbackRegistry
 
-    cooldown = CooldownStore(redis_url=redis_url)
+    cooldown = CooldownStore(db_path=db_path)
     approval = HumanApprovalQueue(nats_client=nats_client)
     cb = GovernanceCircuitBreaker(failure_threshold=3)
     policy = PolicyEngine(opa_url=opa_url)
