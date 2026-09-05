@@ -95,6 +95,7 @@ class NexusContext:
     knowledge_base: Any = None  # KnowledgeBase
     audit_trail: Any = None  # AuditTrail
     runbook_library: Any = None  # RunbookLibrary
+    db_client: Any = None  # PostgresClient / SQLiteFallbackClient
     started_at: float = field(default_factory=time.monotonic)
 
     def uptime_seconds(self) -> float:
@@ -877,3 +878,62 @@ async def alertmanager_webhook(payload: dict[str, Any]) -> dict[str, str]:
         import logging
         logging.getLogger(__name__).error(f"Failed to process alert webhook: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error processing webhook") from e
+
+
+# ── Unified Incident & Trace API (v2) ─────────────────────────────────────────
+
+@app.get("/api/v2/incidents", tags=["incidents_v2"])
+async def list_incidents_v2(
+    limit: int = 50, state: str | None = None
+) -> list[dict[str, Any]]:
+    """List incidents from the unified persistence layer."""
+    from nexus.db.postgres import get_database_client
+    db = await get_database_client()
+    return await db.list_incidents(limit=limit, state=state)
+
+
+@app.get("/api/v2/incidents/{incident_id}", tags=["incidents_v2"])
+async def get_incident_v2(incident_id: str) -> dict[str, Any]:
+    """Get single incident details."""
+    from nexus.db.postgres import get_database_client
+    db = await get_database_client()
+    inc = await db.get_incident(incident_id)
+    if not inc:
+        raise HTTPException(status_code=404, detail=f"Incident {incident_id} not found")
+    return inc
+
+
+@app.get("/api/v2/incidents/{incident_id}/traces", tags=["incidents_v2"])
+async def get_incident_traces_v2(incident_id: str) -> dict[str, Any]:
+    """Get full structured trace of an incident (state transitions, agent messages, tool calls, remediations)."""
+    from nexus.db.postgres import get_database_client
+    db = await get_database_client()
+    trace = await db.get_incident_trace(incident_id)
+    if not trace:
+        raise HTTPException(status_code=404, detail=f"Incident {incident_id} not found")
+    return trace
+
+
+@app.post("/api/v2/incidents", tags=["incidents_v2"])
+async def ingest_incident_v2(payload: dict[str, Any]) -> dict[str, Any]:
+    """Ingest a new incident event (Kubernetes or AWS CloudWatch/EventBridge)."""
+    import uuid as _uuid
+
+    from nexus.db.postgres import get_database_client
+    db = await get_database_client()
+    fingerprint = payload.get("fingerprint") or f"fp-{_uuid.uuid4().hex[:8]}"
+    env = payload.get("environment", "kubernetes")
+    target = payload.get("target_resource", "unknown")
+    sev = payload.get("severity", "error")
+    source = payload.get("trigger_source", "api_ingest")
+
+    inc_id = await db.create_incident(
+        fingerprint=fingerprint,
+        environment=env,
+        target_resource=target,
+        severity=sev,
+        trigger_source=source,
+        trigger_payload=payload.get("trigger_payload", payload),
+    )
+    return {"incident_id": inc_id, "status": "detected"}
+

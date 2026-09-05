@@ -181,6 +181,20 @@ class HumanApprovalQueue:
         Stage an action for human approval.
         Returns an approval_id the operator passes to approve() or reject().
         """
+        # Deduplication: check if an approval is already pending for this target or incident
+        for existing_id, existing in list(self._pending.items()):
+            if existing_id in self._approved or existing_id in self._rejected:
+                continue
+            if existing.target == target or (incident_id and existing.incident_id == incident_id):
+                existing.confidence = max(existing.confidence, confidence)
+                if context:
+                    existing.context.update(context)
+                logger.info(
+                    f"[HumanApprovalQueue] Target '{target}' (incident={incident_id}) already has pending approval "
+                    f"id={existing_id} (runbook={existing.runbook_id}) — suppressing duplicate"
+                )
+                return existing_id
+
         approval_id = str(uuid.uuid4())[:8].upper()
         self._pending[approval_id] = PendingApproval(
             approval_id=approval_id,
@@ -224,6 +238,13 @@ class HumanApprovalQueue:
                 pass
 
         return approval_id
+
+    def get_pending_by_target(self, target: str) -> PendingApproval | None:
+        """Find an active pending approval for a given target resource."""
+        for p in self.pending_list():
+            if p.target == target:
+                return p
+        return None
 
     def approve(self, approval_id: str) -> bool:
         """Operator approves a pending action."""

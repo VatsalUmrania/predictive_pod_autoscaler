@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 from abc import ABC, abstractmethod
 
 logger = logging.getLogger(__name__)
@@ -73,7 +74,11 @@ Required schema:
   "runbook_id": "exact runbook ID from the list above, or null",
   "confidence": 0.0,
   "reasoning": "string — 2-3 sentences of chain-of-thought",
-  "actions_to_avoid": ["list of action types that would make this worse"]
+  "actions_to_avoid": ["list of action types that would make this worse"],
+  "domain": "kubernetes | aws | hybrid",
+  "suggested_action": "specific action tool to execute, e.g. k8s_restart_deployment or aws_update_lambda_memory, or null",
+  "action_params": {},
+  "rollback_plan": {}
 }\
 """
 
@@ -110,8 +115,9 @@ class GeminiProvider(LLMProvider):
 
     def __init__(self, api_key: str | None = None, model: str | None = None):
         self._api_key = api_key or os.getenv("NEXUS_LLM_API_KEY", "")
-        self._model_name = self.DEFAULT_MODEL
+        self._model_name = model or os.getenv("NEXUS_LLM_MODEL", self.DEFAULT_MODEL)
         self._client = None
+        self._lock = threading.Lock()
 
     @property
     def name(self) -> str:
@@ -129,34 +135,38 @@ class GeminiProvider(LLMProvider):
             return True
         if not self._api_key:
             return False
-        try:
-            from google import genai
+        with self._lock:
+            if self._client is not None:
+                return True
+            try:
+                from google import genai
 
-            self._client = genai.Client(api_key=self._api_key)
-        except ImportError:
-            logger.warning("[LLM] google-genai not installed: pip install google-genai")
-            return False
-        except Exception as exc:
-            logger.warning(f"[LLM] Gemini init failed: {exc}")
-            return False
-
-        logger.info("[LLM] Gemini client ready — model=%s", self._model_name)
-        return True
+                self._client = genai.Client(api_key=self._api_key)
+                logger.info("[LLM] Gemini client ready — model=%s", self._model_name)
+                return True
+            except ImportError:
+                logger.warning("[LLM] google-genai not installed: pip install google-genai")
+                return False
+            except Exception as exc:
+                logger.warning(f"[LLM] Gemini init failed: {exc}")
+                return False
 
     def _sync_complete(self, prompt: str) -> str:
         if not self._ensure_client():
             raise RuntimeError("Gemini client not available")
         from google.genai import types
 
+        config = types.GenerateContentConfig(
+            system_instruction=SYSTEM_INSTRUCTION,
+            temperature=0.2,
+            max_output_tokens=512,
+            response_mime_type="application/json",
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        )
         response = self._client.models.generate_content(
             model=self._model_name,
             contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION,
-                temperature=0.2,
-                max_output_tokens=512,
-                response_mime_type="application/json",
-            ),
+            config=config,
         )
         return response.text.strip()
 
@@ -175,6 +185,7 @@ class OpenAIProvider(LLMProvider):
         )
         self._model_name = model or os.getenv("NEXUS_LLM_MODEL", self.DEFAULT_MODEL)
         self._client = None
+        self._lock = threading.Lock()
 
     @property
     def name(self) -> str:
@@ -192,17 +203,20 @@ class OpenAIProvider(LLMProvider):
             return True
         if not self._api_key:
             return False
-        try:
-            from openai import OpenAI
+        with self._lock:
+            if self._client is not None:
+                return True
+            try:
+                from openai import OpenAI
 
-            self._client = OpenAI(api_key=self._api_key)
-            logger.info(f"[LLM] OpenAI client ready — model={self._model_name}")
-            return True
-        except ImportError:
-            logger.warning("[LLM] openai not installed: pip install openai")
-        except Exception as exc:
-            logger.warning(f"[LLM] OpenAI init failed: {exc}")
-        return False
+                self._client = OpenAI(api_key=self._api_key)
+                logger.info(f"[LLM] OpenAI client ready — model={self._model_name}")
+                return True
+            except ImportError:
+                logger.warning("[LLM] openai not installed: pip install openai")
+            except Exception as exc:
+                logger.warning(f"[LLM] OpenAI init failed: {exc}")
+            return False
 
     def _sync_complete(self, prompt: str) -> str:
         if not self._ensure_client():
@@ -236,6 +250,7 @@ class AnthropicProvider(LLMProvider):
         )
         self._model_name = model or os.getenv("NEXUS_LLM_MODEL", self.DEFAULT_MODEL)
         self._client = None
+        self._lock = threading.Lock()
 
     @property
     def name(self) -> str:
@@ -253,17 +268,20 @@ class AnthropicProvider(LLMProvider):
             return True
         if not self._api_key:
             return False
-        try:
-            import anthropic
+        with self._lock:
+            if self._client is not None:
+                return True
+            try:
+                import anthropic
 
-            self._client = anthropic.Anthropic(api_key=self._api_key)
-            logger.info(f"[LLM] Anthropic client ready — model={self._model_name}")
-            return True
-        except ImportError:
-            logger.warning("[LLM] anthropic not installed: pip install anthropic")
-        except Exception as exc:
-            logger.warning(f"[LLM] Anthropic init failed: {exc}")
-        return False
+                self._client = anthropic.Anthropic(api_key=self._api_key)
+                logger.info(f"[LLM] Anthropic client ready — model={self._model_name}")
+                return True
+            except ImportError:
+                logger.warning("[LLM] anthropic not installed: pip install anthropic")
+            except Exception as exc:
+                logger.warning(f"[LLM] Anthropic init failed: {exc}")
+            return False
 
     def _sync_complete(self, prompt: str) -> str:
         if not self._ensure_client():
@@ -325,12 +343,20 @@ def get_llm_provider(
         4. NullProvider (rule-based fallback only)
     """
     global _cached_provider
-    if _cached_provider is not None and provider is None and api_key is None:
-        return _cached_provider
-
+    
     provider_name = (
         provider or os.getenv("NEXUS_LLM_PROVIDER", "") or _autodetect_provider()
     ).lower()
+    
+    expected_model = model or os.getenv("NEXUS_LLM_MODEL")
+
+    if _cached_provider is not None and provider is None and api_key is None and model is None:
+        # Check if the environment config has changed, making the cache stale
+        env_provider_match = (provider_name == "") or (_cached_provider.name == provider_name)
+        env_model_match = (expected_model is None) or (_cached_provider.model == expected_model)
+        
+        if env_provider_match and env_model_match:
+            return _cached_provider
 
     cls = _PROVIDERS.get(provider_name, NullProvider)
     instance: LLMProvider

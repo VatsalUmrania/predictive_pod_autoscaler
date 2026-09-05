@@ -204,6 +204,14 @@ class NexusServer:
         )
         # NOTE: do NOT call outcome_tracker.start() here; see docstring above.
 
+        # Database client (PostgreSQL with seamless SQLite fallback)
+        db_client = None
+        try:
+            from nexus.db.postgres import get_database_client
+            db_client = await get_database_client()
+        except Exception as _db_exc:
+            logger.warning(f"[NexusServer] Failed to initialize database client (non-fatal): {_db_exc}")
+
         executor = RunbookExecutor(
             nats_client=nats,
             audit_trail=audit_trail,
@@ -211,6 +219,7 @@ class NexusServer:
             rollback_registry=rollback_reg,
             library=runbook_library,
             prometheus_url=prometheus_url,
+            db_client=db_client,
         )
 
         # Learning plane stores (must be initialized before reasoning/feedback)
@@ -229,6 +238,7 @@ class NexusServer:
             rca_engine=rca_engine,
             confidence_scorer=confidence_scorer,
             executor=executor,
+            db_client=db_client,
         )
 
         # Notifier (sync — manages its own background task internally)
@@ -273,6 +283,7 @@ class NexusServer:
         context.outcome_store = outcome_store
         context.knowledge_base = knowledge_base
         context.runbook_library = runbook_library
+        context.db_client = db_client
 
         return cls(
             nats_client=nats,

@@ -56,6 +56,7 @@ from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalT
 from nexus.bus.nats_client import NATSClient
 from nexus.governance.action_ladder import ActionLadder, PendingApproval
 from nexus.governance.audit_trail import AuditTrail
+from nexus.governance.live_state_validator import LiveStateReport, check_live_state
 from nexus.governance.policy_engine import LLM_TOOL_LEVEL as _LLM_TOOL_LEVEL
 from nexus.governance.policy_engine import PolicyEngine
 from nexus.governance.rollback_registry import RollbackRegistry
@@ -71,6 +72,39 @@ def _adapt_tool_result(res: str) -> dict[str, str]:
     if isinstance(res, str) and res.startswith("Error"):
         return {"status": "failed", "message": res}
     return {"status": "executed", "message": res}
+
+
+def _resolve_dotted_path(obj: Any, path: str) -> Any:
+    """
+    Walk a nested dict/list using a dotted path with optional array indexing.
+
+    Examples:
+        _resolve_dotted_path(d, "status.available_replicas")
+        _resolve_dotted_path(d, "status.container_statuses[0].state.waiting.reason")
+
+    Returns None if any segment is missing or the object is not subscriptable.
+    """
+    import re
+
+    _INDEX_RE = re.compile(r"^(.+)\[(\d+)\]$")
+
+    current: Any = obj
+    for segment in path.split("."):
+        if current is None:
+            return None
+        m = _INDEX_RE.match(segment)
+        if m:
+            key, idx = m.group(1), int(m.group(2))
+            current = current.get(key) if isinstance(current, dict) else None
+            if isinstance(current, list) and idx < len(current):
+                current = current[idx]
+            else:
+                return None
+        elif isinstance(current, dict):
+            current = current.get(segment)
+        else:
+            return None
+    return current
 
 # Runbook Executor
 class RunbookExecutor:
@@ -100,6 +134,7 @@ class RunbookExecutor:
         prometheus_url: str = "http://prometheus:9090",
         dry_run: bool = False,
         confidence: float = 0.85,
+        db_client: Any = None,
     ):
         self.nats = nats_client
         self.audit = audit_trail
@@ -108,6 +143,9 @@ class RunbookExecutor:
         self.prom_url = prometheus_url
         self.dry_run = dry_run
         self.confidence = confidence
+        self.db_client = db_client
+        self.on_incident_resolved: Any = None
+        self.on_incident_unsolved: Any = None
 
         # RunbookLibrary — optional explicit instance; otherwise construct from runbook_dir
         if library is not None:
@@ -196,7 +234,79 @@ class RunbookExecutor:
                     )
                     return False
 
+            elif check.type == "k8s_resource" and check.field:
+                # Live Kubernetes resource field assertion.
+                # check.field uses dotted-path notation, e.g.:
+                #   "pod.status.container_statuses[0].state.waiting.reason"
+                # The resource is the deployment/pod named by event.resource_name
+                # in event.namespace.
+                self._ensure_k8s()
+                ns = event.namespace or "default"
+                name = event.resource_name or ""
+                live_val = await self._read_k8s_field(check.field, ns, name)
+                cmp_val = check.value if check.value is not None else check.threshold
+                if not self._compare(live_val, check.operator, cmp_val):
+                    logger.info(
+                        f"[RunbookExecutor] Pre-check FAIL (k8s_resource): "
+                        f"{check.field}={live_val!r} {check.operator} {cmp_val!r}"
+                    )
+                    return False
+
         return True
+
+    async def _read_k8s_field(
+        self, dotted_path: str, namespace: str, name: str
+    ) -> Any:
+        """
+        Resolve a dotted-path field from a live K8s object.
+
+        Path format: "<kind>.<field>.<subfield>[<index>].<leaf>"
+        Supported kinds: pod, deployment.
+        Returns None if the path cannot be resolved or the API call fails.
+        """
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        parts = dotted_path.split(".", 1)
+        kind = parts[0].lower()
+        field_path = parts[1] if len(parts) > 1 else ""
+
+        try:
+            if kind == "pod":
+                # Find the first pod belonging to the named deployment
+                pod_list = await loop.run_in_executor(
+                    None,
+                    lambda: self._k8s_core.list_namespaced_pod(namespace),
+                )
+                obj = next(
+                    (
+                        p for p in pod_list.items
+                        if p.metadata.name.startswith(name)
+                    ),
+                    None,
+                )
+                if obj is None:
+                    return None
+            elif kind == "deployment":
+                obj = await loop.run_in_executor(
+                    None,
+                    lambda: self._k8s_apps.read_namespaced_deployment(name, namespace),
+                )
+            else:
+                logger.debug(
+                    f"[RunbookExecutor] k8s_resource pre-check: "
+                    f"unsupported kind {kind!r}"
+                )
+                return None
+
+            return _resolve_dotted_path(obj.to_dict(), field_path)
+
+        except Exception as exc:
+            logger.warning(
+                f"[RunbookExecutor] k8s_resource pre-check read failed "
+                f"({kind}/{namespace}/{name}.{field_path}): {exc}"
+            )
+            return None
 
     async def _run_post_checks(self, runbook: Runbook) -> bool:
         if not runbook.post_checks:
@@ -430,6 +540,14 @@ class RunbookExecutor:
                 node = params.get("node_name") or name
                 result.update(**_adapt_tool_result(k8s_tools.drain_node(node_name=node)))
 
+            elif action_type.startswith("aws_") or action_type.startswith("k8s_"):
+                from nexus.tools.registry import default_registry
+                tool_res = await default_registry.execute_tool(action_type, params)
+                if tool_res.success:
+                    result.update(status="executed", message=str(tool_res.data or f"Action {action_type} executed"))
+                else:
+                    result.update(status="failed", error=tool_res.error or f"Action {action_type} failed")
+
             else:
                 result.update(
                     status="skipped", message=f"Unknown action type: {action_type}"
@@ -498,6 +616,36 @@ class RunbookExecutor:
         target = f"{event.namespace or 'default'}/{event.resource_name or action.type}"
         confidence = pending.confidence
 
+        # ── Live state re-validation ──────────────────────────────────────────
+        # Re-query Kubernetes right now to confirm the failure condition that
+        # triggered this RCA is still present.  If it self-healed between signal
+        # time and execution time, cancel and close as "self_healed".
+        self._ensure_k8s()
+        live_report = await check_live_state(
+            action_type=action.type,
+            namespace=event.namespace or "default",
+            resource_name=event.resource_name or "",
+            k8s_core=self._k8s_core,
+            k8s_apps=self._k8s_apps,
+        )
+        if live_report.verdict == "self_healed":
+            logger.info(
+                f"[RunbookExecutor] Live state check — condition already resolved for "
+                f"{target} (action={action.type}). Closing as self_healed. "
+                f"Evidence: {live_report.evidence}"
+            )
+            audit_id = await self._record_self_healed(pending, live_report)
+            if self.on_incident_resolved:
+                try:
+                    self.on_incident_resolved(target, pending.incident_id or "")
+                except Exception:
+                    pass
+            return {
+                "status": "self_healed",
+                "action_id": audit_id,
+                "evidence": live_report.evidence,
+            }
+
         decision = await self.ladder.evaluate(
             runbook=runbook,
             action=action,
@@ -526,16 +674,37 @@ class RunbookExecutor:
             k8s_apps=self._k8s_apps,
             k8s_core=self._k8s_core,
         )
+        incident_id = pending.incident_id or event.correlation_id or event.event_id
+        fsm = None
+        try:
+            from nexus.engine.fsm import IncidentFSM, IncidentState
+            fsm = IncidentFSM(
+                incident_id=incident_id,
+                current_state=IncidentState.APPROVAL_PENDING,
+                db_client=self.db_client,
+                nats_client=self.nats,
+            )
+            if fsm.can_transition_to(IncidentState.EXECUTING):
+                await fsm.transition_to(IncidentState.EXECUTING, reason=f"Executing approved {action.type} on {target}")
+        except Exception as fsm_err:
+            logger.debug(f"[RunbookExecutor] FSM transition to EXECUTING failed: {fsm_err}")
+
         action_id = await self.audit.write_pending(
             triggered_by="human:api_user",
             runbook_id=runbook.id,
             healing_level=runbook.healing_level,
             target=target,
             pre_check_results={"passed": True, "human_approved": True},
-            incident_id=pending.incident_id,
+            incident_id=incident_id,
             action_id=None,
         )
         result = await self._execute_action(action, event)
+
+        if fsm and fsm.can_transition_to(IncidentState.VERIFYING):
+            try:
+                await fsm.transition_to(IncidentState.VERIFYING, reason="Executing post-action SLO checks")
+            except Exception:
+                pass
 
         # Post-checks: LLM-synthesized runbooks have none (→ pass); rule-based
         # runbooks re-run their SLO assertions, same as the autonomous path.
@@ -548,9 +717,37 @@ class RunbookExecutor:
             self.ladder.record_post_check_success()
             outcome = "success"
             await self.ladder.set_cooldown(runbook, target)
+            if fsm and fsm.can_transition_to(IncidentState.RESOLVED):
+                try:
+                    await fsm.transition_to(IncidentState.RESOLVED, reason=f"Post-checks passed: issue resolved on {target}")
+                except Exception:
+                    pass
+            if self.on_incident_resolved:
+                try:
+                    self.on_incident_resolved(target, incident_id)
+                except Exception:
+                    pass
         else:
             self.ladder.record_post_check_failure()
             outcome = "failed"
+            if fsm and fsm.can_transition_to(IncidentState.RETRYING):
+                try:
+                    await fsm.transition_to(IncidentState.RETRYING, reason=f"Post-checks failed on {target} — issue unsolved")
+                except Exception:
+                    pass
+            # Set retry backoff cooldown (30s) on target to prevent immediate tight loop
+            try:
+                from nexus.governance.cooldown_store import CooldownStore
+                retry_key = CooldownStore.make_key(runbook.id, target)
+                await self.ladder._cooldown.set_cooldown(retry_key, 30.0)
+            except Exception:
+                pass
+            if self.on_incident_unsolved:
+                try:
+                    self.on_incident_unsolved(target, incident_id)
+                except Exception:
+                    pass
+
         await self.audit.update_outcome(
             action_id,
             execution_outcome=outcome,
@@ -632,6 +829,45 @@ class RunbookExecutor:
         )
         return runbook, action, event
 
+    async def _record_self_healed(
+        self,
+        pending: PendingApproval,
+        live_report: LiveStateReport,
+    ) -> str:
+        """
+        Write a closed audit trail entry for an action cancelled because the
+        failure condition self-healed before execution.  Returns the audit_id.
+        """
+        action_id = await self.audit.write_pending(
+            triggered_by="live_state_validator",
+            runbook_id=pending.runbook_id,
+            healing_level=pending.healing_level,
+            target=pending.target,
+            pre_check_results={
+                "passed": False,
+                "reason": "live_state_check_self_healed",
+                "evidence": live_report.evidence,
+            },
+            incident_id=pending.incident_id,
+            action_id=None,
+        )
+        await self.audit.update_outcome(
+            action_id,
+            execution_outcome="self_healed",
+            post_check_results={
+                "slo_restored": True,
+                "live_state_verdict": live_report.verdict,
+            },
+            action_results=[
+                {
+                    "type": pending.action_type,
+                    "status": "cancelled_self_healed",
+                    "evidence": live_report.evidence,
+                }
+            ],
+        )
+        return action_id
+
     # Runbook execution (full governance)
     async def _execute_runbook(self, runbook: Runbook, event: IncidentEvent) -> None:
         """
@@ -640,6 +876,35 @@ class RunbookExecutor:
         """
         target = f"{event.namespace or 'default'}/{event.resource_name or 'unknown'}"
         runbook_id = runbook.id
+
+        # ── Live state check (L1+ only; L0 alert actions always proceed) ──────
+        if runbook.healing_level >= 1:
+            self._ensure_k8s()
+            first_action_type = runbook.actions[0].type if runbook.actions else ""
+            if first_action_type:
+                live_report = await check_live_state(
+                    action_type=first_action_type,
+                    namespace=event.namespace or "default",
+                    resource_name=event.resource_name or "",
+                    k8s_core=self._k8s_core,
+                    k8s_apps=self._k8s_apps,
+                )
+                if live_report.verdict == "self_healed":
+                    logger.info(
+                        f"[RunbookExecutor] Live state check — condition already "
+                        f"resolved for {target} (runbook={runbook_id}, "
+                        f"action={first_action_type}). Skipping runbook execution. "
+                        f"Evidence: {live_report.evidence}"
+                    )
+                    self.ladder.record_post_check_success()
+                    if self.on_incident_resolved:
+                        try:
+                            self.on_incident_resolved(
+                                target, event.correlation_id or event.event_id
+                            )
+                        except Exception:
+                            pass
+                    return
 
         # Pre-checks
         pre_ok = await self._run_pre_checks(runbook, event)
@@ -788,6 +1053,23 @@ class RunbookExecutor:
         # Set cooldown (only on non-failure outcomes)
         if outcome in ("success", "rolled_back"):
             await self.ladder.set_cooldown(runbook, target)
+            if self.on_incident_resolved:
+                try:
+                    self.on_incident_resolved(target, event.correlation_id or event.event_id)
+                except Exception:
+                    pass
+        else:
+            try:
+                from nexus.governance.cooldown_store import CooldownStore
+                retry_key = CooldownStore.make_key(runbook.id, target)
+                await self.ladder._cooldown.set_cooldown(retry_key, 30.0)
+            except Exception:
+                pass
+            if self.on_incident_unsolved:
+                try:
+                    self.on_incident_unsolved(target, event.correlation_id or event.event_id)
+                except Exception:
+                    pass
 
         logger.info(
             f"[RunbookExecutor] Runbook {runbook_id} COMPLETE — "
@@ -886,6 +1168,7 @@ def build_executor(
     db_path: str | None = None,
     dry_run: bool = False,
     confidence: float = 0.85,
+    db_client: Any = None,
 ) -> RunbookExecutor:
     """
     Build a fully-configured RunbookExecutor with the complete Governance Plane.
@@ -917,4 +1200,5 @@ def build_executor(
         prometheus_url=prometheus_url,
         dry_run=dry_run,
         confidence=confidence,
+        db_client=db_client,
     )

@@ -34,16 +34,20 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
 from nexus.bus.nats_client import NATSClient
+from nexus.engine.fsm import IncidentFSM, IncidentState
+from nexus.governance.cooldown_store import CooldownStore
 from nexus.governance.runbook_executor import RunbookExecutor
 from nexus.reasoning.confidence_scorer import ConfidenceScorer
 from nexus.reasoning.event_correlator import EventCorrelator
 from nexus.reasoning.incident_cluster import IncidentCluster
 from nexus.reasoning.rca_engine import RCAEngine, RCAResult
+from nexus.reasoning.rca_validator import RCAValidator, ValidationVerdict, downgrade_rca
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +64,7 @@ class NexusOrchestrator:
         flush_interval_s:   How often to flush stale clusters (default 30s).
         max_concurrent:     Max concurrent cluster analyses (semaphore, default 5).
         dry_run:            If True, perform RCA but don't call executor.
+        db_client:          Database client for FSM and incident persistence.
     """
 
     def __init__(
@@ -72,6 +77,8 @@ class NexusOrchestrator:
         flush_interval_s: float = 30.0,
         max_concurrent: int = 5,
         dry_run: bool = False,
+        db_client: Any = None,
+        rca_validator: RCAValidator | None = None,
     ):
         self.nats = nats_client
         self.correlator = correlator
@@ -81,6 +88,15 @@ class NexusOrchestrator:
         self._flush_interval = flush_interval_s
         self._dry_run = dry_run
         self._semaphore = asyncio.Semaphore(max_concurrent)
+        self.db_client = db_client
+        self._rca_validator: RCAValidator = rca_validator or RCAValidator()
+
+        # Active incident tracking per target resource (K8s and AWS)
+        self._active_incidents: dict[str, dict[str, Any]] = {}
+
+        # Wire executor callbacks for lifecycle sync
+        self.executor.on_incident_resolved = self.notify_incident_resolved
+        self.executor.on_incident_unsolved = self.notify_incident_unsolved
 
         # Observability
         self._clusters_processed = 0
@@ -92,6 +108,40 @@ class NexusOrchestrator:
 
         # Background task handles
         self._flush_task: asyncio.Task | None = None
+
+    def notify_incident_resolved(self, target: str, incident_id: str) -> None:
+        """Called when RunbookExecutor verifies SLO post-checks passed."""
+        active = self._active_incidents.get(target)
+        if active and (active.get("incident_id") == incident_id or incident_id in (active.get("incident_id"), active.get("last_cluster_id"))):
+            logger.info(
+                f"[Orchestrator] Incident {incident_id} on target '{target}' RESOLVED — clearing active state"
+            )
+            self._active_incidents.pop(target, None)
+
+    def notify_incident_unsolved(self, target: str, incident_id: str) -> None:
+        """Called when RunbookExecutor post-checks fail — marks incident for retry."""
+        active = self._active_incidents.get(target)
+        if active and (active.get("incident_id") == incident_id or incident_id in (active.get("incident_id"), active.get("last_cluster_id"))):
+            logger.warning(
+                f"[Orchestrator] Incident {incident_id} on target '{target}' UNSOLVED — marked for retry"
+            )
+            active["fsm"]._current_state = IncidentState.RETRYING
+
+    async def _is_target_in_cooldown(self, runbook_id: str, target: str) -> bool:
+        """Safely check cooldown across real CooldownStore, AsyncMock, or MagicMock."""
+        ladder = getattr(self.executor, "ladder", None)
+        cooldown_store = getattr(ladder, "_cooldown", None)
+        if cooldown_store is not None and hasattr(cooldown_store, "is_in_cooldown"):
+            try:
+                key = CooldownStore.make_key(runbook_id, target)
+                res = cooldown_store.is_in_cooldown(key)
+                if asyncio.iscoroutine(res):
+                    return bool(await res)
+                if isinstance(res, bool):
+                    return res
+            except Exception:
+                pass
+        return False
 
     # Lifecycle
     async def start(self) -> None:
@@ -183,33 +233,179 @@ class NexusOrchestrator:
     async def _process_cluster(self, cluster: IncidentCluster) -> None:
         """
         Full Reason → Act cycle for one IncidentCluster:
-            1. RCA — the ONE LLM call (Gemini/OpenAI → rule-based fallback)
-            2. Confidence calibration
-            3. Publish ORCHESTRATOR_DECISION event to NATS
-            4. Remediation — LLM RCA staged for human approval; rule-based RCA
+            1. Target Resolution & Incident Correlation / Deduplication
+            2. RCA — the ONE LLM call (Gemini/OpenAI → rule-based fallback)
+            3. Confidence calibration & FSM transitions
+            4. Publish ORCHESTRATOR_DECISION event to NATS
+            5. Remediation — LLM RCA staged for human approval; rule-based RCA
                routed through the governed RunbookExecutor (unless dry_run).
-               No second LLM call: one incident → one LLM request.
         """
         self._clusters_processed += 1
 
+        # Determine target resource and environment (supports both K8s and AWS)
+        primary = cluster.primary_resource or (cluster.events[0].resource_name if cluster.events else "unknown")
+        ns = cluster.namespace or (cluster.events[0].namespace if cluster.events else "default")
+        target = f"{ns}/{primary}"
+
+        # Detect environment: K8s or AWS
+        is_aws = any(
+            str(getattr(e, "agent", "")).lower() in ("lambda", "apigw", "sqs", "dynamodb", "cloudwatch")
+            or "aws" in str(getattr(e, "namespace", "")).lower()
+            or str(getattr(e, "resource_name", "")).startswith("arn:aws:")
+            for e in cluster.events
+        )
+        environment = "aws" if is_aws else "kubernetes"
+
+        # Check active incident deduplication and retry state
+        active = self._active_incidents.get(target)
+        incident_id: str
+        fsm: IncidentFSM
+
+        if active is not None and not active["fsm"].is_terminal():
+            fsm = active["fsm"]
+            current_state = fsm.current_state
+
+            # If an action/approval is already in flight for this target, consolidate signals without re-diagnosing
+            if current_state in (
+                IncidentState.DETECTED,
+                IncidentState.CORRELATED,
+                IncidentState.DIAGNOSING,
+                IncidentState.PLANNING,
+                IncidentState.POLICY_CHECK,
+                IncidentState.APPROVAL_PENDING,
+                IncidentState.EXECUTING,
+                IncidentState.VERIFYING,
+            ):
+                logger.info(
+                    f"[Orchestrator] Target '{target}' already has active incident {active['incident_id']} "
+                    f"in state={current_state.value} — consolidating signals, suppressing duplicate analysis"
+                )
+                return
+
+            # If incident is in RETRYING state, increment retry count and evaluate limits
+            if current_state == IncidentState.RETRYING:
+                active["retry_count"] += 1
+                incident_id = active["incident_id"]
+                logger.info(
+                    f"[Orchestrator] Incident {incident_id} retrying for '{target}' "
+                    f"(attempt {active['retry_count']}/{active['max_retries']})"
+                )
+                if active["retry_count"] > active["max_retries"]:
+                    logger.warning(
+                        f"[Orchestrator] Max retries ({active['max_retries']}) exceeded for '{target}' "
+                        f"— escalating incident {incident_id} to human operator"
+                    )
+                    await fsm.transition_to(
+                        IncidentState.ESCALATED,
+                        reason=f"Max retries ({active['max_retries']}) exceeded without resolution",
+                    )
+                    if self.nats:
+                        try:
+                            await self.nats.publish_raw(
+                                "nexus.alerts.escalated",
+                                {
+                                    "incident_id": incident_id,
+                                    "target": target,
+                                    "environment": environment,
+                                    "retries": active["retry_count"],
+                                    "reason": f"Autonomous remediation failed to restore health after {active['max_retries']} attempts",
+                                },
+                            )
+                        except Exception:
+                            pass
+                    return
+
+                # Retry limit not reached: transition RETRYING -> PLANNING under SAME incident ID
+                await fsm.transition_to(
+                    IncidentState.PLANNING,
+                    reason=f"Retrying remediation attempt {active['retry_count']}/{active['max_retries']}",
+                )
+            else:
+                incident_id = active["incident_id"]
+        else:
+            # Create fresh incident for target and register synchronously BEFORE any await point
+            incident_id = str(uuid.uuid4())
+            fsm = IncidentFSM(
+                incident_id=incident_id,
+                current_state=IncidentState.DETECTED,
+                db_client=self.db_client,
+                nats_client=self.nats,
+            )
+            self._active_incidents[target] = {
+                "incident_id": incident_id,
+                "fsm": fsm,
+                "target": target,
+                "environment": environment,
+                "retry_count": 0,
+                "max_retries": 3,
+                "created_at": datetime.now(timezone.utc),
+                "last_cluster_id": cluster.cluster_id,
+            }
+
+            if self.db_client:
+                try:
+                    fingerprint = (
+                        getattr(cluster, "fingerprint", None)
+                        or f"{cluster.namespace or 'default'}:{cluster.primary_resource or cluster.cluster_id}"
+                    )
+                    await self.db_client.create_incident(
+                        fingerprint=fingerprint,
+                        environment=environment,
+                        target_resource=target,
+                        severity=cluster.highest_severity or "error",
+                        trigger_source=str(cluster.events[0].agent) if cluster.events else "orchestrator",
+                        trigger_payload={"cluster_id": cluster.cluster_id, "summary": cluster.to_summary()},
+                        incident_id=incident_id,
+                    )
+                except Exception as db_err:
+                    logger.warning(f"[Orchestrator] Failed to persist new incident to DB: {db_err}")
+
+            await fsm.transition_to(
+                IncidentState.CORRELATED,
+                reason=f"Correlated {len(cluster.events)} signals into cluster {cluster.cluster_id}",
+            )
+
         logger.info(
-            f"[Orchestrator] Processing {cluster.cluster_id} — "
-            f"{len(cluster.events)} events, "
-            f"ns={cluster.namespace}, "
+            f"[Orchestrator] Processing {cluster.cluster_id} (incident={incident_id}) — "
+            f"{len(cluster.events)} events, target={target}, env={environment}, "
             f"severity={cluster.highest_severity}"
         )
 
         # ── Step 1: RCA ───────────────────────────────────────────────────────
+        if fsm.can_transition_to(IncidentState.DIAGNOSING):
+            await fsm.transition_to(IncidentState.DIAGNOSING, reason="Starting RCA analysis")
         rca_result = await self.rca.analyze(cluster)
 
+        # ── Step 1b: Validate RCA — consistency + evidence gates ─────────────
+        # Only LLM-sourced RCA is validated; rule-based is trusted as-is.
+        validation_verdict: ValidationVerdict = self._rca_validator.validate(
+            cluster, rca_result
+        )
+        if validation_verdict.block_reason:
+            # LLM made an inference leap with no evidentiary support — demote to L0.
+            logger.warning(
+                f"[Orchestrator] RCA validation BLOCKED for {cluster.cluster_id} "
+                f"(incident={incident_id}): {validation_verdict.block_reason} "
+                f"— downgrading to unknown/L0"
+            )
+            rca_result = downgrade_rca(rca_result, validation_verdict.block_reason)
+
         # ── Step 2: Confidence calibration ───────────────────────────────────
-        confidence = self.scorer.score(cluster, rca_result)
+        confidence = self.scorer.score(
+            cluster,
+            rca_result,
+            external_penalty=abs(validation_verdict.confidence_delta),
+        )
         max_level = self.scorer.gate(confidence)
-        # Don't allow higher healing level than RCA suggested
         effective_level = min(rca_result.healing_level, max_level)
 
+        if fsm.can_transition_to(IncidentState.PLANNING):
+            await fsm.transition_to(IncidentState.PLANNING, reason=f"RCA diagnosed {rca_result.failure_class}")
+        if fsm.can_transition_to(IncidentState.POLICY_CHECK):
+            await fsm.transition_to(IncidentState.POLICY_CHECK, reason="Evaluating governance policies")
+
         logger.info(
-            f"[Orchestrator] RCA complete for {cluster.cluster_id}: "
+            f"[Orchestrator] RCA complete for {cluster.cluster_id} (incident={incident_id}): "
             f"class={rca_result.failure_class} "
             f"suggested_L{rca_result.healing_level} "
             f"→ effective_L{effective_level} "
@@ -221,11 +417,13 @@ class NexusOrchestrator:
         # ── Step 3: Record + publish decision ────────────────────────────────
         rca_record = {
             "cluster_id": cluster.cluster_id,
+            "incident_id": incident_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "rca": rca_result.to_dict(),
             "confidence": round(confidence, 3),
             "effective_level": effective_level,
             "cluster_summary": cluster.to_summary(),
+            "validation": validation_verdict.to_dict(),
         }
         self._rca_results.append(rca_record)
         if len(self._rca_results) > 100:
@@ -237,19 +435,15 @@ class NexusOrchestrator:
         )
 
         # ── Step 4: Route to remediation (ONE LLM call per incident) ──────────────
-        # The RCA above was the only LLM call. An LLM-sourced RCA (gemini/openai)
-        # is staged for human approval deterministically — we do NOT re-ask the
-        # model to propose a tool (the old llm_orchestrator.handle_cluster second
-        # call that doubled LLM traffic per incident). A rule-based RCA flows
-        # through the governed RunbookExecutor with the ladder's own gates.
+        # Check cooldown first
+        if rca_result.runbook_id:
+            if await self._is_target_in_cooldown(rca_result.runbook_id, target):
+                logger.info(
+                    f"[Orchestrator] Target '{target}' is in cooldown for {rca_result.runbook_id} — suppressing remediation"
+                )
+                return
+
         if rca_result.source in ("gemini", "openai"):
-            # Honour the confidence gate: if the scorer's calibrated effective_level
-            # is 0 (alert only), do NOT queue an approval for an LLM-proposed
-            # *action* — the LLM may diagnose a higher healing level but the
-            # signal strength doesn't support executing it. A manual_review (no
-            # mapped runbook) is an L0 read-only "human, read this diagnosis"
-            # item, not a cluster action, so the gate must NOT suppress it —
-            # surfacing the diagnosis IS the alert.
             if effective_level == 0 and rca_result.runbook_id:
                 logger.info(
                     f"[Orchestrator] LLM RCA for {cluster.cluster_id} "
@@ -259,8 +453,9 @@ class NexusOrchestrator:
                 )
                 return
             self._actions_dispatched += 1
-            self._stage_llm_remediation(
-                cluster, rca_result, confidence, effective_level
+            await self._stage_llm_remediation(
+                cluster, rca_result, confidence, effective_level,
+                incident_id=incident_id, target=target, fsm=fsm,
             )
             return
 
@@ -280,10 +475,14 @@ class NexusOrchestrator:
             return
 
         # Build an enriched event from the most critical signal in the cluster
-        primary_event = self._build_enriched_event(cluster, rca_result, confidence)
-        self.executor.confidence = (
-            confidence  # Update executor's confidence for this decision
-        )
+        primary_event = self._build_enriched_event(cluster, rca_result, confidence, incident_id=incident_id)
+        self.executor.confidence = confidence
+
+        if fsm.can_transition_to(IncidentState.EXECUTING):
+            await fsm.transition_to(
+                IncidentState.EXECUTING,
+                reason=f"Dispatching autonomous runbook {rca_result.runbook_id}",
+            )
 
         self._actions_dispatched += 1
         await self.executor.handle_event(primary_event)
@@ -294,6 +493,7 @@ class NexusOrchestrator:
         cluster: IncidentCluster,
         rca: RCAResult,
         confidence: float,
+        incident_id: str | None = None,
     ) -> IncidentEvent:
         """
         Build a primary IncidentEvent enriched with RCA metadata.
@@ -311,6 +511,7 @@ class NexusOrchestrator:
                 "reasoning": rca.reasoning,
                 "source": rca.source,
                 "cluster_id": cluster.cluster_id,
+                "incident_id": incident_id or cluster.cluster_id,
             },
         }
 
@@ -322,19 +523,22 @@ class NexusOrchestrator:
             resource_name=cluster.primary_resource or primary.resource_name,
             resource_kind=primary.resource_kind,
             deploy_sha=primary.deploy_sha,
-            correlation_id=cluster.cluster_id,
+            correlation_id=incident_id or cluster.cluster_id,
             context=enriched_context,
             suggested_runbook=rca.runbook_id,
             suggested_healing_level=rca.healing_level,
             confidence=confidence,
         )
 
-    def _stage_llm_remediation(
+    async def _stage_llm_remediation(
         self,
         cluster: IncidentCluster,
         rca: RCAResult,
         confidence: float,
         effective_level: int,
+        incident_id: str | None = None,
+        target: str | None = None,
+        fsm: IncidentFSM | None = None,
     ) -> None:
         """Stage an LLM-sourced RCA's remediation for human approval — no LLM call.
 
@@ -351,18 +555,27 @@ class NexusOrchestrator:
         runbook = (
             self.executor.library.get(rca.runbook_id) if rca.runbook_id else None
         )
+        resolved_incident_id = incident_id or cluster.cluster_id
 
         if runbook is not None and runbook.actions:
             action = runbook.actions[0]
-            event = self._build_enriched_event(cluster, rca, confidence)
-            target = (
-                f"{event.namespace or 'default'}/{event.resource_name or 'unknown'}"
+            event = self._build_enriched_event(cluster, rca, confidence, incident_id=resolved_incident_id)
+            resolved_target = (
+                target
+                or f"{event.namespace or 'default'}/{event.resource_name or 'unknown'}"
             )
-            queue.enqueue(
+            # Check cooldown before staging
+            if await self._is_target_in_cooldown(runbook.id, resolved_target):
+                logger.info(
+                    f"[Orchestrator] Target '{resolved_target}' is in cooldown for {runbook.id} — skipping approval staging"
+                )
+                return
+
+            approval_id = queue.enqueue(
                 runbook_id=runbook.id,
                 action_type=action.type,
-                target=target,
-                incident_id=cluster.cluster_id,
+                target=resolved_target,
+                incident_id=resolved_incident_id,
                 healing_level=runbook.healing_level,
                 confidence=confidence,
                 context={
@@ -378,22 +591,27 @@ class NexusOrchestrator:
                     "rca": rca.to_dict(),
                 },
             )
+            if fsm and fsm.can_transition_to(IncidentState.APPROVAL_PENDING):
+                await fsm.transition_to(
+                    IncidentState.APPROVAL_PENDING,
+                    reason=f"Staged {runbook.id} (approval_id={approval_id}) for human sign-off",
+                )
             logger.info(
                 f"[Orchestrator] Staged LLM RCA remediation for approval: "
-                f"runbook={runbook.id} target={target} "
+                f"approval_id={approval_id} runbook={runbook.id} target={resolved_target} "
                 f"L{runbook.healing_level} confidence={confidence:.2f} "
                 f"(single LLM call)"
             )
         else:
-            target = (
-                f"{cluster.namespace or 'default'}/"
-                f"{cluster.primary_resource or 'unknown'}"
+            resolved_target = (
+                target
+                or f"{cluster.namespace or 'default'}/{cluster.primary_resource or 'unknown'}"
             )
-            queue.enqueue(
+            approval_id = queue.enqueue(
                 runbook_id="llm_dynamic",
                 action_type="manual_review",
-                target=target,
-                incident_id=cluster.cluster_id,
+                target=resolved_target,
+                incident_id=resolved_incident_id,
                 healing_level=0,
                 confidence=confidence,
                 context={
@@ -403,6 +621,11 @@ class NexusOrchestrator:
                     "effective_level": effective_level,
                 },
             )
+            if fsm and fsm.can_transition_to(IncidentState.APPROVAL_PENDING):
+                await fsm.transition_to(
+                    IncidentState.APPROVAL_PENDING,
+                    reason="Staged manual review for human sign-off",
+                )
             logger.info(
                 f"[Orchestrator] No mapped runbook for LLM RCA {cluster.cluster_id} "
                 f"→ staged for manual review (class={rca.failure_class}, "

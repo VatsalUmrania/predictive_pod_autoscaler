@@ -112,6 +112,8 @@ spec:
           env:
             - name: NATS_URL
               value: "nats://nats.nexus.svc.cluster.local:4222"
+            - name: NEXUS_POSTGRES_DSN
+              value: "postgresql://nexus:nexus@postgres.nexus.svc.cluster.local:5432/nexus"
             - name: NEXUS_AUDIT_DB_PATH
               value: /data/nexus_audit.db
             - name: NEXUS_KNOWLEDGE_DB_PATH

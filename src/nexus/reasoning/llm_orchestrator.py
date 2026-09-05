@@ -34,8 +34,9 @@ Do not execute write tools directly. Instead, output your diagnosis and the exac
 """
 
 class LLMOrchestrator:
-    def __init__(self, model_name: str = "gemini-3.1-flash-lite"):
+    def __init__(self, model_name: str = "gemini-3.1-flash-lite", api_key: str | None = None):
         self.model_name = model_name
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("NEXUS_LLM_API_KEY")
 
         # Define the tools available to the LLM
         self.read_tools = [
@@ -58,9 +59,9 @@ class LLMOrchestrator:
         ]
 
         self._client = None
-        if api_key:
+        if self.api_key:
             try:
-                self._client = genai.Client(api_key=api_key)
+                self._client = genai.Client(api_key=self.api_key)
             except Exception as e:
                 logger.error(f"Failed to initialize Gemini client: {e}")
                 self._client = None
@@ -68,10 +69,10 @@ class LLMOrchestrator:
     def _ensure_client(self):
         if self._client is not None:
             return True
-        if not api_key:
+        if not self.api_key:
             return False
         try:
-            self._client = genai.Client(api_key=api_key)
+            self._client = genai.Client(api_key=self.api_key)
             return True
         except Exception as e:
             logger.error(f"Failed to initialize Gemini client: {e}")

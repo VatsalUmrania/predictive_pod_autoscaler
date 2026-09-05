@@ -46,13 +46,24 @@ class BlastRadius(str, Enum):
 
 # Sub-models
 class PreCheck(BaseModel):
-    """Assertion that must pass before executing the runbook's actions."""
+    """Assertion that must pass before executing the runbook's actions.
+
+    Supported types:
+        prometheus_query — PromQL instant query; result compared to threshold.
+        event_field      — Assert a field in the triggering event's context dict.
+        k8s_resource     — Live Kubernetes field assertion (re-queries K8s API).
+                           field uses dotted-path notation with optional array
+                           indexing, prefixed by resource kind:
+                               "pod.status.container_statuses[0].state.waiting.reason"
+                               "deployment.status.available_replicas"
+                           The resource is the deployment named by the triggering event.
+    """
 
     type: str = (
         "prometheus_query"  # "prometheus_query" | "event_field" | "k8s_resource"
     )
     query: str | None = None  # PromQL query (type=prometheus_query)
-    field: str | None = None  # Event context field (type=event_field)
+    field: str | None = None  # Event context field (type=event_field) or dotted K8s path (type=k8s_resource)
     operator: str = "gt"  # gt | gte | lt | lte | eq | ne
     threshold: float | None = None  # Numeric comparison value
     value: Any | None = None  # Non-numeric comparison value

@@ -81,6 +81,13 @@ class IncidentCluster:
         return (datetime.now(timezone.utc) - self.created_at).total_seconds()
 
     @property
+    def fingerprint(self) -> str:
+        """Deterministic fingerprint representing the incident cluster target."""
+        ns = self.namespace or "default"
+        res = self.primary_resource or self.cluster_id
+        return f"{ns}:{res}"
+
+    @property
     def has_deploy_event(self) -> bool:
         return any("deploy" in st.lower() for st in self.signal_types)
 

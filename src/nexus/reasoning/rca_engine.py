@@ -70,6 +70,10 @@ class RCAResult:
     reasoning: str
     source: str  # "gemini" | "rule_based"
     actions_to_avoid: list[str] = field(default_factory=list)
+    domain: str = "kubernetes"  # "kubernetes" | "aws" | "hybrid"
+    suggested_action: str | None = None
+    action_params: dict[str, Any] = field(default_factory=dict)
+    rollback_plan: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         # Clamp and validate
@@ -88,6 +92,10 @@ class RCAResult:
             "reasoning": self.reasoning,
             "source": self.source,
             "actions_to_avoid": self.actions_to_avoid,
+            "domain": self.domain,
+            "suggested_action": self.suggested_action,
+            "action_params": self.action_params,
+            "rollback_plan": self.rollback_plan,
         }
 
     def __str__(self) -> str:
@@ -515,6 +523,12 @@ def _rule_based_rca(cluster: IncidentCluster) -> RCAResult:
     )
 
 
+# Public alias — used by RCAValidator to cross-check LLM output without
+# importing a private symbol.  The underlying implementation is the same
+# deterministic rule table; this name is stable across refactors.
+rule_based_rca = _rule_based_rca
+
+
 # Gemini prompt builder
 def _build_gemini_prompt(
     cluster: IncidentCluster, historical_runbook: str | None = None
@@ -674,6 +688,10 @@ class RCAEngine:
                 reasoning=str(data.get("reasoning", "")),
                 source="llm",
                 actions_to_avoid=list(data.get("actions_to_avoid", [])),
+                domain=str(data.get("domain", "kubernetes")),
+                suggested_action=data.get("suggested_action") or None,
+                action_params=dict(data.get("action_params", {})),
+                rollback_plan=data.get("rollback_plan") or None,
             )
         except (TypeError, ValueError) as exc:
             logger.warning(f"[RCAEngine] Response schema invalid: {exc}")
