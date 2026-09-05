@@ -127,6 +127,20 @@ class NexusOrchestrator:
             )
             active["fsm"]._current_state = IncidentState.RETRYING
 
+    async def notify_incident_rejected(self, target: str, incident_id: str, reason: str = "") -> None:
+        """Called when an operator rejects a pending approval action."""
+        active = self._active_incidents.pop(target, None)
+        if active:
+            fsm = active.get("fsm")
+            if fsm and fsm.can_transition_to(IncidentState.REJECTED):
+                await fsm.transition_to(
+                    IncidentState.REJECTED,
+                    reason=reason or "Human operator rejected proposed remediation action",
+                )
+            logger.info(
+                f"[Orchestrator] Incident {incident_id} on target '{target}' REJECTED — cleared active state"
+            )
+
     async def _is_target_in_cooldown(self, runbook_id: str, target: str) -> bool:
         """Safely check cooldown across real CooldownStore, AsyncMock, or MagicMock."""
         ladder = getattr(self.executor, "ladder", None)
@@ -192,6 +206,16 @@ class NexusOrchestrator:
         # Anti-loop: ignore events emitted by NEXUS itself
         if str(event.agent).lower() == "orchestrator":
             return
+
+        # Staleness filter: drop events older than 120s (e.g. replayed from NATS or delayed consumer lag)
+        if event.timestamp:
+            event_age_s = (datetime.now(timezone.utc) - event.timestamp).total_seconds()
+            if event_age_s > 120.0:
+                logger.debug(
+                    f"[Orchestrator] Dropping stale event {event.event_id} "
+                    f"({event.signal_type} on {event.resource_name}, age={event_age_s:.1f}s)"
+                )
+                return
 
         cluster = self.correlator.ingest(event)
         if cluster:
@@ -444,6 +468,14 @@ class NexusOrchestrator:
                 return
 
         if rca_result.source in ("gemini", "openai"):
+            # Blocked diagnoses (unsupported inference leaps / hallucinations) must never queue approvals
+            if validation_verdict.block_reason:
+                logger.info(
+                    f"[Orchestrator] LLM RCA for {cluster.cluster_id} BLOCKED by validator: "
+                    f"{validation_verdict.block_reason} — alert only, no approval queued"
+                )
+                return
+
             if effective_level == 0 and rca_result.runbook_id:
                 logger.info(
                     f"[Orchestrator] LLM RCA for {cluster.cluster_id} "

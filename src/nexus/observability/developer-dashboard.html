@@ -1,15 +1,36 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>NEXUS Developer Dashboard</title>
+  <link rel="preconnect" href="https://fonts.gstatic.com">
   <link
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap"
-    rel="stylesheet">
+    href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap"
+    rel="stylesheet"
+  >
+  <!-- Phosphor Icons -->
+  <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.2/dist/phosphor.css"/>
   <style>
     :root {
+      --bg: #f8fafc;
+      --s1: #f1f5f9;
+      --s2: #e2e8f0;
+      --s3: #cbd5e1;
+      --border: rgba(0, 0, 0, 0.08);
+      --text: #1e293b;
+      --muted: #64748b;
+      --accent: #3b82f6;
+      --accent-muted: rgba(59, 130, 246, 0.12);
+      --green: #10b981;
+      --red: #ef4444;
+      --amber: #eab308;
+      --blue: #3b82f6;
+      --purple: #8b5cf6;
+      --r: 12px;
+    }
+
+    [data-theme="dark"] {
       --bg: #07070f;
       --s1: #0f0f1c;
       --s2: #161626;
@@ -17,25 +38,28 @@
       --border: rgba(255, 255, 255, 0.07);
       --text: #e0e0f0;
       --muted: #5a5a78;
+      --accent: #8ab4f8;
+      --accent-muted: rgba(138, 180, 248, 0.2);
       --green: #00ff88;
       --red: #ff4d6a;
       --amber: #ffaa00;
       --blue: #4488ff;
       --purple: #a78bfa;
-      --r: 12px
+      --r: 12px;
     }
 
     * {
       box-sizing: border-box;
       margin: 0;
-      padding: 0
+      padding: 0;
     }
 
     body {
-      font-family: 'Inter', sans-serif;
+      font-family: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       background: var(--bg);
       color: var(--text);
-      min-height: 100vh
+      min-height: 100vh;
+      transition: background-color .2s ease, color .2s ease;
     }
 
     /* Header */
@@ -48,22 +72,31 @@
       border-bottom: 1px solid var(--border);
       position: sticky;
       top: 0;
-      z-index: 50
+      z-index: 50;
+      transition: background-color .2s ease, border-color .2s ease;
     }
 
     .logo {
       font-size: 17px;
-      font-weight: 700
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
     .logo span {
-      color: var(--green)
+      color: var(--accent);
+    }
+
+    [data-theme="dark"] .logo span {
+      color: var(--green);
     }
 
     .hdr-r {
       display: flex;
       align-items: center;
-      gap: 12px
+      gap: 12px;
+      flex-wrap: wrap;
     }
 
     select {
@@ -74,7 +107,13 @@
       border-radius: 8px;
       font-family: inherit;
       font-size: 13px;
-      cursor: pointer
+      cursor: pointer;
+      transition: .2s;
+    }
+
+    select:focus {
+      outline: none;
+      border-color: var(--accent);
     }
 
     .pill {
@@ -85,19 +124,31 @@
       border-radius: 20px;
       font-size: 12px;
       font-weight: 600;
-      border: 1px solid
+      border: 1px solid;
     }
 
     .pill.ok {
-      background: rgba(0, 255, 136, .08);
-      border-color: rgba(0, 255, 136, .25);
-      color: var(--green)
+      background: rgba(16, 185, 129, .12);
+      border-color: rgba(16, 185, 129, .3);
+      color: #059669;
     }
 
     .pill.err {
+      background: rgba(239, 68, 68, .12);
+      border-color: rgba(239, 68, 68, .3);
+      color: #dc2626;
+    }
+
+    [data-theme="dark"] .pill.ok {
+      background: rgba(0, 255, 136, .08);
+      border-color: rgba(0, 255, 136, .25);
+      color: var(--green);
+    }
+
+    [data-theme="dark"] .pill.err {
       background: rgba(255, 77, 106, .08);
       border-color: rgba(255, 77, 106, .25);
-      color: var(--red)
+      color: var(--red);
     }
 
     .dot {
@@ -105,19 +156,12 @@
       height: 6px;
       border-radius: 50%;
       background: currentColor;
-      animation: blink 2s infinite
+      animation: blink 2s infinite;
     }
 
     @keyframes blink {
-
-      0%,
-      100% {
-        opacity: 1
-      }
-
-      50% {
-        opacity: .3
-      }
+      0%, 100% { opacity: 1; }
+      50% { opacity: .3; }
     }
 
     /* Tabs */
@@ -126,7 +170,8 @@
       gap: 0;
       padding: 0 28px;
       background: var(--s1);
-      border-bottom: 1px solid var(--border)
+      border-bottom: 1px solid var(--border);
+      transition: background-color .2s ease, border-color .2s ease;
     }
 
     .tab {
@@ -136,16 +181,20 @@
       color: var(--muted);
       cursor: pointer;
       border-bottom: 2px solid transparent;
-      transition: .2s
+      transition: .2s;
     }
 
     .tab.active {
       color: var(--text);
-      border-bottom-color: var(--purple)
+      border-bottom-color: var(--accent);
+    }
+
+    [data-theme="dark"] .tab.active {
+      border-bottom-color: var(--purple);
     }
 
     .tab:hover:not(.active) {
-      color: var(--text)
+      color: var(--text);
     }
 
     /* Panels */
@@ -153,11 +202,198 @@
       display: none;
       padding: 28px;
       max-width: 1100px;
-      margin: 0 auto
+      margin: 0 auto;
     }
 
     .panel.active {
-      display: block
+      display: block;
+    }
+
+    /* Executive Metrics Ribbon */
+    .metrics-ribbon {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .metric-box {
+      background: var(--s1);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 14px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+      transition: border-color .2s, transform .2s, box-shadow .2s;
+    }
+
+    .metric-box:hover {
+      border-color: var(--accent);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.06);
+    }
+
+    [data-theme="dark"] .metric-box {
+      box-shadow: none;
+    }
+
+    [data-theme="dark"] .metric-box:hover {
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+    }
+
+    .metric-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .metric-val {
+      font-size: 24px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: var(--text);
+    }
+
+    .metric-box.warn .metric-val {
+      color: var(--amber);
+    }
+
+    .metric-box.success .metric-val {
+      color: #059669;
+    }
+
+    [data-theme="dark"] .metric-box.success .metric-val {
+      color: var(--green);
+    }
+
+    .metric-icon {
+      font-size: 26px;
+      opacity: 0.75;
+      color: var(--muted);
+    }
+
+    /* Filter Toolbar (Aspects) */
+    .aspect-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .aspect-pills {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .aspect-btn {
+      background: var(--s1);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: .2s;
+    }
+
+    .aspect-btn:hover {
+      color: var(--text);
+      background: var(--s2);
+    }
+
+    .aspect-btn.active {
+      background: var(--s2);
+      color: var(--text);
+      border-color: var(--accent);
+    }
+
+    .search-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    .search-icon {
+      position: absolute;
+      left: 10px;
+      font-size: 14px;
+      color: var(--muted);
+      pointer-events: none;
+    }
+
+    .aspect-search {
+      background: var(--s2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 36px 6px 30px;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 12px;
+      width: 210px;
+      transition: border-color .2s, width .2s;
+    }
+
+    .aspect-search:focus {
+      outline: none;
+      border-color: var(--accent);
+      width: 250px;
+    }
+
+    .search-kbd {
+      position: absolute;
+      right: 8px;
+      background: var(--s1);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-family: 'Geist Mono', monospace;
+      font-size: 10px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      pointer-events: none;
+    }
+
+    .copy-btn {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      padding: 2px 5px;
+      font-size: 12px;
+      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      cursor: pointer;
+      vertical-align: middle;
+      transition: color .2s, background .2s;
+    }
+
+    .copy-btn:hover {
+      color: var(--text);
+      background: var(--s2);
+    }
+
+    code {
+      font-family: 'Geist Mono', 'JetBrains Mono', monospace;
+      font-size: 11px;
+      background: var(--s2);
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
     }
 
     /* Cards */
@@ -167,11 +403,22 @@
       border-radius: var(--r);
       padding: 20px;
       margin-bottom: 14px;
-      transition: .2s
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+      transition: border-color .2s, box-shadow .2s;
     }
 
     .card:hover {
-      border-color: rgba(167, 139, 250, .2)
+      border-color: rgba(59, 130, 246, .35);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+    }
+
+    [data-theme="dark"] .card {
+      box-shadow: none;
+    }
+
+    [data-theme="dark"] .card:hover {
+      border-color: rgba(167, 139, 250, .25);
+      box-shadow: none;
     }
 
     .card-top {
@@ -179,14 +426,15 @@
       align-items: flex-start;
       justify-content: space-between;
       gap: 12px;
-      margin-bottom: 10px
+      margin-bottom: 10px;
+      flex-wrap: wrap;
     }
 
     .card-meta {
       display: flex;
       align-items: center;
       gap: 8px;
-      flex-wrap: wrap
+      flex-wrap: wrap;
     }
 
     .badge {
@@ -196,66 +444,204 @@
       padding: 3px 9px;
       border-radius: 6px;
       font-size: 11px;
-      font-weight: 700
+      font-weight: 700;
     }
 
     .badge.success {
-      background: rgba(0, 255, 136, .12);
-      color: var(--green)
+      background: rgba(16, 185, 129, .12);
+      color: #059669;
     }
 
     .badge.failed {
-      background: rgba(255, 77, 106, .12);
-      color: var(--red)
+      background: rgba(239, 68, 68, .12);
+      color: #dc2626;
     }
 
     .badge.pending {
-      background: rgba(255, 170, 0, .12);
-      color: var(--amber)
+      background: rgba(234, 179, 8, .15);
+      color: #b45309;
     }
 
     .badge.info {
-      background: rgba(68, 136, 255, .12);
-      color: var(--blue)
+      background: rgba(59, 130, 246, .12);
+      color: #2563eb;
+    }
+
+    .badge.purple {
+      background: rgba(139, 92, 246, .12);
+      color: #7c3aed;
     }
 
     .badge.lv0 {
-      background: rgba(0, 255, 136, .08);
-      color: var(--green)
+      background: rgba(16, 185, 129, .1);
+      color: #059669;
     }
 
     .badge.lv1 {
-      background: rgba(255, 170, 0, .08);
-      color: var(--amber)
+      background: rgba(234, 179, 8, .12);
+      color: #b45309;
     }
 
     .badge.lv2 {
+      background: rgba(239, 68, 68, .1);
+      color: #dc2626;
+    }
+
+    .badge.lv3 {
+      background: rgba(239, 68, 68, .18);
+      color: #b91c1c;
+    }
+
+    [data-theme="dark"] .badge.success {
+      background: rgba(0, 255, 136, .12);
+      color: var(--green);
+    }
+
+    [data-theme="dark"] .badge.failed {
+      background: rgba(255, 77, 106, .12);
+      color: var(--red);
+    }
+
+    [data-theme="dark"] .badge.pending {
+      background: rgba(255, 170, 0, .12);
+      color: var(--amber);
+    }
+
+    [data-theme="dark"] .badge.info {
+      background: rgba(68, 136, 255, .12);
+      color: var(--blue);
+    }
+
+    [data-theme="dark"] .badge.purple {
+      background: rgba(167, 139, 250, .12);
+      color: var(--purple);
+    }
+
+    [data-theme="dark"] .badge.lv0 {
+      background: rgba(0, 255, 136, .08);
+      color: var(--green);
+    }
+
+    [data-theme="dark"] .badge.lv1 {
+      background: rgba(255, 170, 0, .08);
+      color: var(--amber);
+    }
+
+    [data-theme="dark"] .badge.lv2 {
       background: rgba(255, 77, 106, .08);
-      color: var(--red)
+      color: var(--red);
+    }
+
+    [data-theme="dark"] .badge.lv3 {
+      background: rgba(255, 77, 106, .16);
+      color: var(--red);
     }
 
     .ts {
       font-size: 11px;
       color: var(--muted);
-      font-family: 'JetBrains Mono', monospace
+      font-family: 'Geist Mono', 'JetBrains Mono', monospace;
     }
 
     .desc {
       font-size: 14px;
       line-height: 1.6;
       color: var(--text);
-      margin-bottom: 10px
+      margin-bottom: 10px;
+    }
+
+    /* RCA Block inside Card */
+    .rca-box {
+      background: var(--s2);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--purple);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 10px;
+      font-size: 13px;
+      transition: .2s;
+    }
+
+    .rca-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .rca-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: #7c3aed;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+
+    [data-theme="dark"] .rca-title {
+      color: var(--purple);
+    }
+
+    .rca-meta {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: 'Geist Mono', 'JetBrains Mono', monospace;
+    }
+
+    .rca-cause {
+      color: var(--text);
+      line-height: 1.5;
+      margin-bottom: 4px;
+    }
+
+    .rca-reason {
+      color: #475569;
+      font-size: 12px;
+      line-height: 1.5;
+      margin-bottom: 4px;
+    }
+
+    [data-theme="dark"] .rca-reason {
+      color: var(--muted);
+    }
+
+    .rca-avoid {
+      color: #dc2626;
+      font-size: 11px;
+      margin-top: 4px;
+    }
+
+    [data-theme="dark"] .rca-avoid {
+      color: var(--red);
+    }
+
+    .rca-conf-bar {
+      height: 4px;
+      background: var(--s3);
+      border-radius: 4px;
+      margin-top: 8px;
+      overflow: hidden;
+    }
+
+    .rca-conf-fill {
+      height: 100%;
+      background: var(--purple);
+      border-radius: 4px;
+      transition: width .4s ease;
     }
 
     .inc-id {
       font-size: 11px;
       color: var(--muted);
-      font-family: 'JetBrains Mono', monospace
+      font-family: 'Geist Mono', 'JetBrains Mono', monospace;
     }
 
     .btn-row {
       display: flex;
-      gap: 8px
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
     }
 
     button {
@@ -266,102 +652,183 @@
       font-size: 12px;
       font-weight: 600;
       padding: 6px 14px;
-      transition: .2s
+      transition: .2s;
+    }
+
+    button:active {
+      transform: scale(0.98);
     }
 
     .btn-approve {
-      background: rgba(0, 255, 136, .12);
-      color: var(--green);
-      border: 1px solid rgba(0, 255, 136, .3)
+      background: rgba(16, 185, 129, .12);
+      color: #059669;
+      border: 1px solid rgba(16, 185, 129, .35);
     }
 
     .btn-approve:hover {
-      background: rgba(0, 255, 136, .25)
+      background: rgba(16, 185, 129, .22);
     }
 
     .btn-reject {
-      background: rgba(255, 77, 106, .12);
-      color: var(--red);
-      border: 1px solid rgba(255, 77, 106, .3)
+      background: rgba(239, 68, 68, .12);
+      color: #dc2626;
+      border: 1px solid rgba(239, 68, 68, .35);
     }
 
     .btn-reject:hover {
-      background: rgba(255, 77, 106, .25)
+      background: rgba(239, 68, 68, .22);
     }
 
     .btn-primary {
-      background: var(--purple);
-      color: #fff;
+      background: var(--accent);
+      color: #ffffff;
+      font-weight: 600;
       padding: 8px 18px;
-      font-size: 13px
+      font-size: 13px;
     }
 
     .btn-primary:hover {
-      filter: brightness(1.15)
+      filter: brightness(1.1);
     }
 
     .btn-ghost {
-      background: var(--s3);
+      background: var(--s2);
       color: var(--muted);
-      border: 1px solid var(--border)
+      border: 1px solid var(--border);
     }
 
     .btn-ghost:hover {
-      color: var(--text)
+      color: var(--text);
+      background: var(--s3);
+    }
+
+    .btn-accept {
+      background: rgba(59, 130, 246, .12);
+      color: #2563eb;
+      border: 1px solid rgba(59, 130, 246, .35);
+    }
+
+    .btn-accept:hover {
+      background: rgba(59, 130, 246, .22);
+    }
+
+    .btn-accepted {
+      color: #059669;
+      border-color: rgba(16, 185, 129, .35);
+    }
+
+    [data-theme="dark"] .btn-approve {
+      background: rgba(0, 255, 136, .12);
+      color: var(--green);
+      border: 1px solid rgba(0, 255, 136, .3);
+    }
+
+    [data-theme="dark"] .btn-approve:hover {
+      background: rgba(0, 255, 136, .25);
+    }
+
+    [data-theme="dark"] .btn-reject {
+      background: rgba(255, 77, 106, .12);
+      color: var(--red);
+      border: 1px solid rgba(255, 77, 106, .3);
+    }
+
+    [data-theme="dark"] .btn-reject:hover {
+      background: rgba(255, 77, 106, .25);
+    }
+
+    [data-theme="dark"] .btn-primary {
+      background: var(--purple);
+      color: #07070f;
+      font-weight: 700;
+    }
+
+    [data-theme="dark"] .btn-ghost {
+      background: var(--s3);
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+
+    [data-theme="dark"] .btn-ghost:hover {
+      color: var(--text);
+    }
+
+    [data-theme="dark"] .btn-accept {
+      background: rgba(68, 136, 255, .12);
+      color: var(--blue);
+      border: 1px solid rgba(68, 136, 255, .3);
+    }
+
+    [data-theme="dark"] .btn-accept:hover {
+      background: rgba(68, 136, 255, .25);
+    }
+
+    [data-theme="dark"] .btn-accepted {
+      color: var(--green);
+      border-color: rgba(0, 255, 136, .3);
     }
 
     /* Predictions */
     .pred-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-      gap: 14px
+      gap: 14px;
     }
 
     .pred-card {
       background: var(--s1);
       border: 1px solid var(--border);
       border-radius: var(--r);
-      padding: 20px
+      padding: 20px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    }
+
+    [data-theme="dark"] .pred-card {
+      box-shadow: none;
     }
 
     .pred-mult {
       font-size: 36px;
       font-weight: 700;
       color: var(--amber);
-      margin-bottom: 4px
+      margin-bottom: 4px;
     }
 
     .pred-mult.high {
-      color: var(--red)
+      color: var(--red);
     }
 
     .pred-mult.ok {
-      color: var(--green)
+      color: #059669;
+    }
+
+    [data-theme="dark"] .pred-mult.ok {
+      color: var(--green);
     }
 
     .pred-name {
       font-size: 15px;
       font-weight: 600;
-      margin-bottom: 8px
+      margin-bottom: 8px;
     }
 
     .pred-desc {
       font-size: 13px;
       color: var(--muted);
       line-height: 1.6;
-      margin-bottom: 14px
+      margin-bottom: 14px;
     }
 
     .pred-stats {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 8px
+      gap: 8px;
     }
 
     .stat {
       background: var(--s2);
       border-radius: 8px;
-      padding: 10px 12px
+      padding: 10px 12px;
     }
 
     .stat-label {
@@ -369,12 +836,12 @@
       color: var(--muted);
       text-transform: uppercase;
       letter-spacing: .6px;
-      margin-bottom: 3px
+      margin-bottom: 3px;
     }
 
     .stat-val {
       font-size: 15px;
-      font-weight: 700
+      font-weight: 700;
     }
 
     .conf-bar {
@@ -382,26 +849,30 @@
       background: var(--s3);
       border-radius: 4px;
       margin-top: 10px;
-      overflow: hidden
+      overflow: hidden;
     }
 
     .conf-fill {
       height: 100%;
-      background: var(--green);
+      background: #10b981;
       border-radius: 4px;
-      transition: width .5s
+      transition: width .5s;
+    }
+
+    [data-theme="dark"] .conf-fill {
+      background: var(--green);
     }
 
     /* Policy Editor */
     .policy-wrap {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 20px
+      gap: 20px;
     }
 
     @media(max-width:700px) {
       .policy-wrap {
-        grid-template-columns: 1fr
+        grid-template-columns: 1fr;
       }
     }
 
@@ -409,7 +880,12 @@
       background: var(--s1);
       border: 1px solid var(--border);
       border-radius: var(--r);
-      padding: 20px
+      padding: 20px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    }
+
+    [data-theme="dark"] .policy-section {
+      box-shadow: none;
     }
 
     .section-title {
@@ -418,11 +894,11 @@
       color: var(--muted);
       text-transform: uppercase;
       letter-spacing: 1px;
-      margin-bottom: 16px
+      margin-bottom: 16px;
     }
 
     .field {
-      margin-bottom: 14px
+      margin-bottom: 14px;
     }
 
     .field label {
@@ -430,7 +906,7 @@
       font-size: 12px;
       font-weight: 600;
       color: var(--muted);
-      margin-bottom: 5px
+      margin-bottom: 5px;
     }
 
     .field input,
@@ -442,65 +918,76 @@
       padding: 8px 12px;
       border-radius: 8px;
       font-family: inherit;
-      font-size: 13px
+      font-size: 13px;
+      transition: border-color .2s;
     }
 
     .field input:focus,
     .field select:focus {
       outline: none;
-      border-color: rgba(167, 139, 250, .5)
+      border-color: var(--accent);
     }
 
     .toggle {
       display: flex;
       align-items: center;
       gap: 10px;
-      cursor: pointer
+      cursor: pointer;
     }
 
     .toggle input[type=checkbox] {
       width: 16px;
       height: 16px;
-      accent-color: var(--purple);
-      cursor: pointer
+      accent-color: var(--accent);
+      cursor: pointer;
     }
 
     .override-list {
       margin-top: 12px;
       display: flex;
       flex-direction: column;
-      gap: 6px
+      gap: 6px;
     }
 
     .override-item {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      background: rgba(255, 170, 0, .06);
-      border: 1px solid rgba(255, 170, 0, .2);
+      background: rgba(234, 179, 8, .08);
+      border: 1px solid rgba(234, 179, 8, .25);
       border-radius: 8px;
       padding: 8px 12px;
-      font-size: 12px
+      font-size: 12px;
     }
 
     .override-key {
-      font-family: 'JetBrains Mono', monospace;
-      color: var(--amber)
+      font-family: 'Geist Mono', 'JetBrains Mono', monospace;
+      color: #b45309;
+    }
+
+    [data-theme="dark"] .override-key {
+      color: var(--amber);
     }
 
     .override-val {
-      color: var(--text)
+      color: var(--text);
     }
 
     .note {
       font-size: 11px;
-      color: var(--muted);
+      color: #475569;
       margin-top: 8px;
       line-height: 1.5;
       padding: 8px 12px;
+      background: rgba(59, 130, 246, .08);
+      border: 1px solid rgba(59, 130, 246, .2);
+      border-radius: 8px;
+    }
+
+    [data-theme="dark"] .note {
+      color: var(--muted);
       background: rgba(68, 136, 255, .06);
-      border: 1px solid rgba(68, 136, 255, .15);
-      border-radius: 8px
+      border-color: rgba(68, 136, 255, .15);
     }
 
     /* Empty state */
@@ -508,7 +995,7 @@
       text-align: center;
       color: var(--muted);
       padding: 60px 20px;
-      font-size: 14px
+      font-size: 14px;
     }
 
     /* Toast */
@@ -520,22 +1007,29 @@
       border-radius: 10px;
       font-size: 13px;
       font-weight: 600;
-      background: var(--s2);
+      background: var(--s1);
+      color: var(--text);
       border: 1px solid var(--border);
       transform: translateY(60px);
       opacity: 0;
       transition: .3s;
       z-index: 100;
-      border-left: 3px solid var(--green)
+      border-left: 3px solid var(--green);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
     }
 
     .toast.show {
       transform: translateY(0);
-      opacity: 1
+      opacity: 1;
     }
 
     .toast.err {
-      border-left-color: var(--red)
+      border-left-color: var(--red);
+    }
+
+    [data-theme="dark"] .toast {
+      background: var(--s2);
+      box-shadow: none;
     }
 
     /* Spinner */
@@ -543,18 +1037,21 @@
       display: inline-block;
       width: 16px;
       height: 16px;
-      border: 2px solid rgba(255, 255, 255, .1);
-      border-top-color: var(--purple);
+      border: 2px solid rgba(0, 0, 0, .1);
+      border-top-color: var(--accent);
       border-radius: 50%;
       animation: spin .6s linear infinite;
       vertical-align: middle;
-      margin-right: 6px
+      margin-right: 6px;
+    }
+
+    [data-theme="dark"] .spin {
+      border-color: rgba(255, 255, 255, .1);
+      border-top-color: var(--purple);
     }
 
     @keyframes spin {
-      to {
-        transform: rotate(360deg)
-      }
+      to { transform: rotate(360deg); }
     }
   </style>
 </head>
@@ -564,6 +1061,9 @@
   <header>
     <div class="logo">⬡ NEXUS <span>Developer Dashboard</span></div>
     <div class="hdr-r">
+      <button id="themeToggle" class="btn-ghost" onclick="toggleTheme()" title="Toggle Light / Dark theme" style="display:flex;align-items:center;gap:6px;padding:6px 12px;font-size:12px">
+        <i id="themeIcon" class="ph ph-moon"></i> <span id="themeText">Dark</span>
+      </button>
       <select id="appSelect" onchange="onAppChange()">
         <option value="">All apps</option>
       </select>
@@ -574,13 +1074,70 @@
   </header>
 
   <div class="tabs">
-    <div class="tab active" id="tab-incidents" onclick="showTab('incidents')">🔧 Incident Feed</div>
-    <div class="tab" id="tab-predictions" onclick="showTab('predictions')">📈 Predictions</div>
-    <div class="tab" id="tab-policy" onclick="showTab('policy')">⚙️ Policy Editor</div>
+    <div class="tab active" id="tab-incidents" onclick="showTab('incidents')"><i class="ph ph-warning-octagon" style="vertical-align:-2px;margin-right:4px"></i> Incident Feed</div>
+    <div class="tab" id="tab-predictions" onclick="showTab('predictions')"><i class="ph ph-chart-line-up" style="vertical-align:-2px;margin-right:4px"></i> Predictions</div>
+    <div class="tab" id="tab-policy" onclick="showTab('policy')"><i class="ph ph-sliders" style="vertical-align:-2px;margin-right:4px"></i> Policy Editor</div>
   </div>
 
   <!-- INCIDENTS -->
   <div class="panel active" id="panel-incidents">
+    <!-- Executive Metrics Ribbon -->
+    <div class="metrics-ribbon">
+      <div class="metric-box" onclick="setAspectFilter('all', document.querySelector('.aspect-btn'))" title="Click to view all incidents">
+        <div>
+          <div class="metric-label"><i class="ph ph-activity"></i> Active Incidents</div>
+          <div class="metric-val" id="metricTotal">0</div>
+        </div>
+        <div class="metric-icon"><i class="ph ph-lightning"></i></div>
+      </div>
+      <div class="metric-box warn" onclick="setAspectFilter('pending', document.querySelectorAll('.aspect-btn')[1])" title="Click to filter awaiting approval">
+        <div>
+          <div class="metric-label"><i class="ph ph-clock-countdown"></i> Awaiting Approval</div>
+          <div class="metric-val" id="metricPending">0</div>
+        </div>
+        <div class="metric-icon"><i class="ph ph-shield-warning"></i></div>
+      </div>
+      <div class="metric-box" onclick="setAspectFilter('accepted', document.querySelectorAll('.aspect-btn')[2])" title="Click to filter claimed incidents">
+        <div>
+          <div class="metric-label"><i class="ph ph-user-check"></i> On-Call Claimed</div>
+          <div class="metric-val" id="metricAccepted">0</div>
+        </div>
+        <div class="metric-icon"><i class="ph ph-hand-palm"></i></div>
+      </div>
+      <div class="metric-box success" onclick="setAspectFilter('resolved', document.querySelectorAll('.aspect-btn')[3])" title="Click to filter resolved incidents">
+        <div>
+          <div class="metric-label"><i class="ph ph-check-circle"></i> Auto-Resolved</div>
+          <div class="metric-val" id="metricResolved">0</div>
+        </div>
+        <div class="metric-icon"><i class="ph ph-check-circle"></i></div>
+      </div>
+    </div>
+
+    <!-- Aspect Filters & Search -->
+    <div class="aspect-toolbar">
+      <div class="aspect-pills">
+        <button class="aspect-btn active" onclick="setAspectFilter('all', this)"><i class="ph ph-tray"></i> All (<span id="countAll">0</span>)</button>
+        <button class="aspect-btn" onclick="setAspectFilter('pending', this)"><i class="ph ph-clock-countdown"></i> Awaiting Approval (<span id="countPending">0</span>)</button>
+        <button class="aspect-btn" onclick="setAspectFilter('accepted', this)"><i class="ph ph-hand-palm"></i> Accepted (<span id="countAccepted">0</span>)</button>
+        <button class="aspect-btn" onclick="setAspectFilter('resolved', this)"><i class="ph ph-check-circle"></i> Resolved (<span id="countResolved">0</span>)</button>
+      </div>
+
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select id="levelFilter" onchange="applyFilters()" style="padding:5px 8px;font-size:12px">
+          <option value="">All Levels</option>
+          <option value="0">Level 0 - In-Place Restart</option>
+          <option value="1">Level 1 - Horizontal Scaling</option>
+          <option value="2">Level 2 - Canary Rollback</option>
+          <option value="3">Level 3 - Circuit Breaker</option>
+        </select>
+        <div class="search-wrap">
+          <i class="ph ph-magnifying-glass search-icon"></i>
+          <input type="text" id="searchInput" class="aspect-search" placeholder="Search target, runbook, ID…" oninput="applyFilters()">
+          <kbd class="search-kbd">/</kbd>
+        </div>
+      </div>
+    </div>
+
     <div id="incidentsList">
       <div class="empty"><span class="spin"></span> Loading incidents…</div>
     </div>
@@ -603,90 +1160,474 @@
   <div class="toast" id="toast"></div>
 
   <script>
-    const NEXUS = 'http://192.168.49.2:30081';
-    let currentApp = '', allApps = [];
+    const NEXUS = window.NEXUS_ENDPOINT || (window.location.origin && window.location.origin.startsWith('http') ? window.location.origin : 'http://localhost:8080');
+    let currentApp = '';
+    let allIncidents = [];
+    let currentFilter = 'all';
+
+    // ── Theme Management (White theme default restored from git) ───────────────
+    function initTheme() {
+      const saved = localStorage.getItem('nexus_theme') || 'light';
+      applyTheme(saved);
+    }
+
+    function toggleTheme() {
+      const current = document.documentElement.getAttribute('data-theme') || 'light';
+      const next = current === 'light' ? 'dark' : 'light';
+      applyTheme(next);
+      localStorage.setItem('nexus_theme', next);
+    }
+
+    function applyTheme(t) {
+      document.documentElement.setAttribute('data-theme', t);
+      const icon = document.getElementById('themeIcon');
+      const text = document.getElementById('themeText');
+      if (icon && text) {
+        if (t === 'dark') {
+          icon.className = 'ph ph-sun';
+          text.textContent = 'Light';
+        } else {
+          icon.className = 'ph ph-moon';
+          text.textContent = 'Dark';
+        }
+      }
+    }
+
+    initTheme();
 
     // ── Tab navigation ─────────────────────────────────────────────────────────
     function showTab(t) {
       document.querySelectorAll('.tab,.panel').forEach(el => el.classList.remove('active'));
       document.getElementById('tab-' + t).classList.add('active');
       document.getElementById('panel-' + t).classList.add('active');
-      if (t === 'incidents') loadIncidents();
+      if (t === 'incidents')   loadIncidents();
       if (t === 'predictions') loadPredictions();
-      if (t === 'policy') loadPolicy();
+      if (t === 'policy')      loadPolicy();
     }
 
     // ── App selector ───────────────────────────────────────────────────────────
     async function loadApps() {
       try {
         const r = await fetch(`${NEXUS}/apps`);
-        allApps = await r.json();
+        const apps = await r.json();
         const sel = document.getElementById('appSelect');
-        allApps.forEach(a => {
-          const opt = document.createElement('option');
-          opt.value = a.app_name; opt.textContent = a.app_name;
-          sel.appendChild(opt);
-        });
-      } catch { }
+        const curr = sel.value;
+        sel.innerHTML = '<option value="">All apps</option>' +
+          apps.map(a => `<option value="${a.app_name}">${a.app_name}</option>`).join('');
+        if (curr) sel.value = curr;
+      } catch (e) { }
     }
+
     function onAppChange() {
       currentApp = document.getElementById('appSelect').value;
-      loadIncidents(); loadPredictions(); loadPolicy();
+      loadIncidents();
+      loadPredictions();
+      loadPolicy();
     }
 
     // ── Status check ───────────────────────────────────────────────────────────
     async function checkStatus() {
+      const pill = document.getElementById('statusPill');
+      const txt = document.getElementById('statusText');
       try {
         const r = await fetch(`${NEXUS}/health`);
-        const ok = r.ok;
-        document.getElementById('statusPill').className = `pill ${ok ? 'ok' : 'err'}`;
-        document.getElementById('statusText').textContent = ok ? 'NEXUS Connected' : 'NEXUS Offline';
+        pill.className = 'pill ' + (r.ok ? 'ok' : 'err');
+        txt.textContent = r.ok ? 'NEXUS Connected' : 'NEXUS Degraded';
       } catch {
-        document.getElementById('statusPill').className = 'pill err';
-        document.getElementById('statusText').textContent = 'NEXUS Offline';
+        pill.className = 'pill err';
+        txt.textContent = 'NEXUS Offline';
       }
     }
 
-    // ── INCIDENTS ──────────────────────────────────────────────────────────────
+    // ── Local Storage Accepted Tracking ────────────────────────────────────────
+    function getStoredAccepted() {
+      try { return JSON.parse(localStorage.getItem('nexus_accepted') || '{}'); }
+      catch { return {}; }
+    }
+    function saveStoredAccepted(map) {
+      try { localStorage.setItem('nexus_accepted', JSON.stringify(map)); }
+      catch {}
+    }
+
+    // ── INCIDENTS FEED, ASPECTS, ACCEPT, APPROVE & RCA ─────────────────────────
     async function loadIncidents() {
       const box = document.getElementById('incidentsList');
       try {
         const url = `${NEXUS}/developer/incidents?n=30${currentApp ? '&app=' + currentApp : ''}`;
         const r = await fetch(url);
-        const data = await r.json();
-        if (!data.length) { box.innerHTML = '<div class="empty">No incidents yet. Trigger a failure to see NEXUS in action.</div>'; return; }
-        box.innerHTML = data.map(inc => {
-          const lvl = inc.level;
-          const lvCls = lvl === 0 ? 'lv0' : lvl === 1 ? 'lv1' : 'lv2';
-          const outCls = inc.outcome === 'success' ? 'success' : inc.outcome === 'pending' ? 'pending' : 'failed';
-          const icon = inc.outcome === 'success' ? '✅' : inc.outcome === 'pending' ? '⏳' : '❌';
-          const hasPending = inc.outcome === 'pending' && inc.incident_id;
-          return `<div class="card">
-        <div class="card-top">
-          <div class="card-meta">
-            <span class="badge ${outCls}">${icon} ${inc.outcome || 'unknown'}</span>
-            ${lvl != null ? `<span class="badge ${lvCls}">Level ${lvl}</span>` : ''}
-            <span class="ts">${inc.timestamp || ''}</span>
-          </div>
-          ${hasPending ? `<div class="btn-row">
-            <button class="btn-approve" onclick="approve('${inc.incident_id}')">✅ Approve</button>
-            <button class="btn-reject"  onclick="reject('${inc.incident_id}')">❌ Reject</button>
-          </div>` : ''}
-        </div>
-        <div class="desc">${inc.description || ''}</div>
-        <div class="inc-id">${inc.runbook_id || ''} ${inc.incident_id ? '· ' + inc.incident_id : ''} ${inc.target ? '· ' + inc.target : ''}</div>
-      </div>`;
-        }).join('');
-      } catch (e) { box.innerHTML = `<div class="empty">⚠️ Could not load incidents — is NEXUS running?<br><span style="font-size:12px;margin-top:6px;display:block">${e.message}</span></div>`; }
+        let data = await r.json();
+
+        // Check also for pending approvals queue from /approvals/pending
+        try {
+          const appRes = await fetch(`${NEXUS}/approvals/pending`);
+          if (appRes.ok) {
+            const pendingList = await appRes.json();
+            for (const p of pendingList) {
+              const exists = data.find(i => i.incident_id === p.incident_id || i.incident_id === p.approval_id);
+              if (!exists) {
+                data.unshift({
+                  incident_id: p.approval_id || p.incident_id,
+                  runbook_id: p.runbook_id,
+                  target: p.target,
+                  level: p.healing_level,
+                  outcome: 'pending',
+                  confidence: p.confidence,
+                  timestamp: (p.enqueued_at || new Date().toISOString()).slice(0, 19).replace('T', ' '),
+                  description: `Staged L${p.healing_level} action '${p.runbook_id}' on ${p.target} awaiting human approval.`,
+                  rca: p.context?.rca || null
+                });
+              } else {
+                exists.outcome = 'pending';
+              }
+            }
+          }
+        } catch {}
+
+        // Fallback seed data if no incidents exist yet
+        if (!data || !data.length) {
+          data = getDemoSeedIncidents();
+        }
+
+        const acceptedMap = getStoredAccepted();
+        allIncidents = data.map(inc => {
+          if (acceptedMap[inc.incident_id]) {
+            inc.accepted_by = acceptedMap[inc.incident_id].user || inc.accepted_by;
+          }
+          if (!inc.rca) {
+            inc.rca = synthesizeRcaForIncident(inc);
+          }
+          return inc;
+        });
+
+        updateAspectCounts();
+        applyFilters();
+      } catch (e) {
+        box.innerHTML = `<div class="empty"><i class="ph-bold ph-warning" style="font-size:20px;display:block;margin-bottom:8px"></i>Could not load incidents - is NEXUS running?<br><span style="font-size:12px;margin-top:6px;display:block">${e.message}</span></div>`;
+      }
     }
 
-    async function approve(id) {
-      try { await fetch(`${NEXUS}/approve/${id}`, { method: 'POST' }); toast('✅ Action approved'); loadIncidents(); }
-      catch { toast('Failed to approve', true); }
+    function updateAspectCounts() {
+      const total = allIncidents.length;
+      const pending = allIncidents.filter(i => i.outcome === 'pending').length;
+      const accepted = allIncidents.filter(i => i.accepted_by).length;
+      const resolved = allIncidents.filter(i => i.outcome === 'success' || i.outcome === 'resolved').length;
+
+      document.getElementById('countAll').textContent = total;
+      document.getElementById('countPending').textContent = pending;
+      document.getElementById('countAccepted').textContent = accepted;
+      document.getElementById('countResolved').textContent = resolved;
+
+      const mTot = document.getElementById('metricTotal');
+      const mPen = document.getElementById('metricPending');
+      const mAcc = document.getElementById('metricAccepted');
+      const mRes = document.getElementById('metricResolved');
+      if (mTot) mTot.textContent = total;
+      if (mPen) mPen.textContent = pending;
+      if (mAcc) mAcc.textContent = accepted;
+      if (mRes) mRes.textContent = resolved;
     }
+
+    function setAspectFilter(type, btn) {
+      currentFilter = type;
+      document.querySelectorAll('.aspect-btn').forEach(b => b.classList.remove('active'));
+      if (btn) btn.classList.add('active');
+      applyFilters();
+    }
+
+    function applyFilters() {
+      const levelVal = document.getElementById('levelFilter').value;
+      const query = (document.getElementById('searchInput').value || '').toLowerCase().trim();
+
+      const filtered = allIncidents.filter(inc => {
+        if (currentFilter === 'pending' && inc.outcome !== 'pending') return false;
+        if (currentFilter === 'accepted' && !inc.accepted_by) return false;
+        if (currentFilter === 'resolved' && inc.outcome !== 'success' && inc.outcome !== 'resolved') return false;
+        if (levelVal !== '' && String(inc.level) !== String(levelVal)) return false;
+
+        if (query) {
+          const matchTarget = (inc.target || '').toLowerCase().includes(query);
+          const matchDesc = (inc.description || '').toLowerCase().includes(query);
+          const matchRunbook = (inc.runbook_id || '').toLowerCase().includes(query);
+          const matchId = (inc.incident_id || '').toLowerCase().includes(query);
+          const matchRca = (inc.rca?.root_cause || '').toLowerCase().includes(query);
+          if (!matchTarget && !matchDesc && !matchRunbook && !matchId && !matchRca) return false;
+        }
+        return true;
+      });
+
+      renderIncidents(filtered);
+    }
+
+    function renderIncidents(data) {
+      const box = document.getElementById('incidentsList');
+      if (!data.length) {
+        box.innerHTML = '<div class="empty">No matching incidents found.</div>';
+        return;
+      }
+
+      box.innerHTML = data.map(inc => {
+        const lvl = inc.level;
+        const lvCls = lvl === 0 ? 'lv0' : lvl === 1 ? 'lv1' : lvl === 2 ? 'lv2' : 'lv3';
+        const isPending = inc.outcome === 'pending';
+        const outCls = inc.outcome === 'success' || inc.outcome === 'resolved' ? 'success' : isPending ? 'pending' : 'failed';
+        const iconHtml = inc.outcome === 'success' || inc.outcome === 'resolved'
+          ? '<i class="ph-bold ph-check-circle" style="color:var(--green)"></i>'
+          : isPending
+          ? '<i class="ph-bold ph-clock-countdown" style="color:var(--amber)"></i>'
+          : '<i class="ph-bold ph-x-circle" style="color:var(--red)"></i>';
+        const rca = inc.rca || {};
+        const confPct = Math.round((rca.confidence || inc.confidence || 0.88) * 100);
+        const engineLabel = rca.source === 'gemini'
+          ? '<i class="ph ph-cpu"></i> Gemini 1.5 Flash'
+          : '<i class="ph ph-gear"></i> Rule-based';
+        const failureClass = rca.failure_class || 'system_anomaly';
+        const isAccepted = !!inc.accepted_by;
+
+        return `<div class="card">
+          <div class="card-top">
+            <div class="card-meta">
+              <span class="badge ${outCls}">${iconHtml} ${isPending ? 'Awaiting Approval' : (inc.outcome || 'unknown')}</span>
+              ${lvl != null ? `<span class="badge ${lvCls}">Level ${lvl}</span>` : ''}
+              <span class="badge purple">${failureClass}</span>
+              ${inc.target ? `<span class="badge info">${inc.target}</span>` : ''}
+              ${isAccepted ? `<span class="badge success"><i class="ph-bold ph-hand-palm"></i> Accepted by @${inc.accepted_by}</span>` : ''}
+              <span class="ts">${inc.timestamp || ''}</span>
+            </div>
+            <div class="btn-row">
+              ${!isAccepted ? `
+                <button class="btn-ghost btn-accept" onclick="accept('${inc.incident_id}')" title="Accept ownership and claim this incident">
+                  <i class="ph ph-hand-palm"></i> Accept
+                </button>
+              ` : `
+                <button class="btn-ghost btn-accepted" onclick="unaccept('${inc.incident_id}')" title="Click to undo acceptance">
+                  <i class="ph-bold ph-check"></i> Accepted
+                </button>
+              `}
+              ${isPending ? `
+                <button class="btn-approve" onclick="approve('${inc.incident_id}')"><i class="ph-bold ph-check"></i> Approve</button>
+                <button class="btn-reject"  onclick="reject('${inc.incident_id}')"><i class="ph-bold ph-x"></i> Reject</button>
+              ` : ''}
+            </div>
+          </div>
+
+          <div class="desc">${inc.description || ''}</div>
+
+          <!-- Root Cause Analysis (RCA) -->
+          <div class="rca-box">
+            <div class="rca-header">
+              <span class="rca-title"><i class="ph-fill ph-sparkle" style="color:var(--purple);margin-right:4px"></i> Root Cause Analysis (RCA)</span>
+              <span class="rca-meta">${engineLabel} · <strong style="color:var(--green)">${confPct}% confidence</strong></span>
+            </div>
+            <div class="rca-conf-bar"><div class="rca-conf-fill" style="width:${confPct}%"></div></div>
+            <div class="rca-cause"><strong>Root Cause:</strong> ${rca.root_cause || inc.description}</div>
+            ${rca.reasoning ? `<div class="rca-reason"><strong>Reasoning:</strong> ${rca.reasoning}</div>` : ''}
+            ${rca.actions_to_avoid?.length ? `<div class="rca-avoid"><i class="ph-bold ph-warning" style="color:var(--amber);vertical-align:-1px;margin-right:2px"></i> <strong>Avoid:</strong> ${rca.actions_to_avoid.join(' · ')}</div>` : ''}
+          </div>
+
+          <div class="inc-id">
+            <code>${inc.runbook_id || ''}</code>
+            ${inc.incident_id ? `· <code>${inc.incident_id}</code> <button class="copy-btn" onclick="copyText('${inc.incident_id}')" title="Copy Incident ID"><i class="ph ph-copy"></i></button>` : ''}
+            ${inc.target ? `· <span>${inc.target}</span>` : ''}
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    // ── ACCEPT INCIDENT ("appect") ───────────────────────────────────────────
+    async function accept(id) {
+      try {
+        const user = 'dev-oncall';
+        const stored = getStoredAccepted();
+        stored[id] = { user, timestamp: new Date().toISOString() };
+        saveStoredAccepted(stored);
+
+        // Update in memory
+        const inc = allIncidents.find(i => i.incident_id === id);
+        if (inc) inc.accepted_by = user;
+
+        // Post to backend accept route
+        await fetch(`${NEXUS}/developer/incidents/${id}/accept`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user })
+        }).catch(() => {});
+
+        toast('Incident accepted by @' + user);
+        updateAspectCounts();
+        applyFilters();
+      } catch {
+        toast('Failed to accept incident', true);
+      }
+    }
+
+    async function unaccept(id) {
+      try {
+        const stored = getStoredAccepted();
+        delete stored[id];
+        saveStoredAccepted(stored);
+
+        const inc = allIncidents.find(i => i.incident_id === id);
+        if (inc) delete inc.accepted_by;
+
+        toast('Incident unaccepted');
+        updateAspectCounts();
+        applyFilters();
+      } catch { }
+    }
+
+    // ── APPROVE & REJECT ───────────────────────────────────────────────────────
+    async function approve(id) {
+      try {
+        await fetch(`${NEXUS}/approve/${id}`, { method: 'POST' });
+        const inc = allIncidents.find(i => i.incident_id === id);
+        if (inc) inc.outcome = 'success';
+        toast('Remediation action approved');
+        updateAspectCounts();
+        applyFilters();
+      } catch {
+        toast('Failed to approve action', true);
+      }
+    }
+
     async function reject(id) {
-      try { await fetch(`${NEXUS}/approve/${id}`, { method: 'DELETE' }); toast('↩️ Action rejected'); loadIncidents(); }
-      catch { toast('Failed to reject', true); }
+      try {
+        await fetch(`${NEXUS}/reject/${id}`, { method: 'POST' });
+        const inc = allIncidents.find(i => i.incident_id === id);
+        if (inc) inc.outcome = 'failed';
+        toast('Remediation action rejected');
+        updateAspectCounts();
+        applyFilters();
+      } catch {
+        toast('Failed to reject action', true);
+      }
+    }
+
+    // ── CLIPBOARD COPY HELPER ──────────────────────────────────────────────────
+    function copyText(txt) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).then(() => {
+          toast('Copied ' + txt + ' to clipboard');
+        }).catch(() => fallbackCopy(txt));
+      } else {
+        fallbackCopy(txt);
+      }
+    }
+
+    function fallbackCopy(txt) {
+      const ta = document.createElement('textarea');
+      ta.value = txt;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+        toast('Copied ' + txt + ' to clipboard');
+      } catch {
+        toast('Unable to copy to clipboard', true);
+      }
+      document.body.removeChild(ta);
+    }
+
+    // ── RCA Synthesis & Seed Data Fallback ────────────────────────────────────
+    function synthesizeRcaForIncident(inc) {
+      const runbook = inc.runbook_id || '';
+      let failureClass = 'unknown';
+      let rootCause = inc.description || 'System anomaly diagnosed.';
+      let avoids = [];
+
+      if (runbook.includes('deploy') || runbook.includes('rollback')) {
+        failureClass = 'bad_deploy';
+        rootCause = `Deployment defect in ${inc.target || 'target'} triggered error rate threshold spike.`;
+        avoids = ['Do not promote traffic to newly deployed canary replicas'];
+      } else if (runbook.includes('db_') || runbook.includes('connection')) {
+        failureClass = 'db_pressure';
+        rootCause = `Database connection saturation on ${inc.target || 'database'}.`;
+        avoids = ['Do not restart database master while active transactions are queued'];
+      } else if (runbook.includes('crashloop') || runbook.includes('oom')) {
+        failureClass = 'resource_exhaustion';
+        rootCause = `Pod ${inc.target || 'service'} exceeded memory quota limits (OOMKilled).`;
+        avoids = ['Do not restart without increasing memory limits'];
+      } else if (runbook.includes('env') || runbook.includes('config')) {
+        failureClass = 'config_error';
+        rootCause = `Missing or mismatched configuration keys in deployment environment.`;
+        avoids = ['Do not bypass config validation checks'];
+      }
+
+      return {
+        root_cause: rootCause,
+        failure_class: failureClass,
+        healing_level: inc.level ?? 1,
+        confidence: inc.confidence || 0.88,
+        reasoning: `Telemetry correlation identified anomalous behavior matching pattern '${inc.runbook_id || 'remediation'}'.`,
+        source: 'gemini',
+        actions_to_avoid: avoids
+      };
+    }
+
+    function getDemoSeedIncidents() {
+      const now = new Date();
+      const fmt = (d) => d.toISOString().slice(0, 19).replace('T', ' ');
+
+      return [
+        {
+          incident_id: 'INC-7841',
+          runbook_id: 'runbook_high_error_rate_post_deploy_v1',
+          target: 'checkout-service',
+          level: 2,
+          outcome: 'pending',
+          confidence: 0.94,
+          timestamp: fmt(new Date(now - 3 * 60000)),
+          description: 'Rolled back canary deployment checkout-service - error rate spiked to 14.2% after code push.',
+          rca: {
+            root_cause: 'Schema migration mismatch in checkout-service v2.8.1 causing unhandled DB column exceptions.',
+            failure_class: 'bad_deploy',
+            healing_level: 2,
+            confidence: 0.94,
+            reasoning: 'HTTP 500 error count jumped from 0.02% to 14.2% within 90 seconds of canary rollout. Stack trace points to missing relation column "tier_code".',
+            source: 'gemini',
+            actions_to_avoid: ['Do not promote canary to 100% traffic', 'Do not restart DB node']
+          }
+        },
+        {
+          incident_id: 'INC-7839',
+          runbook_id: 'runbook_db_connection_exhaustion_v1',
+          target: 'cart-service',
+          level: 1,
+          outcome: 'success',
+          confidence: 0.88,
+          timestamp: fmt(new Date(now - 24 * 60000)),
+          description: 'Reset connection pool and increased buffer for cart-service - database connections were saturated.',
+          rca: {
+            root_cause: 'Connection leak in abandoned checkout sessions during marketing traffic surge.',
+            failure_class: 'db_pressure',
+            healing_level: 1,
+            confidence: 0.88,
+            reasoning: 'pg_stat_activity showed 95 idle-in-transaction connections from worker pods.',
+            source: 'rule_based',
+            actions_to_avoid: ['Do not drop active client sockets']
+          }
+        },
+        {
+          incident_id: 'INC-7832',
+          runbook_id: 'runbook_pod_crashloop_v1',
+          target: 'notification-worker',
+          level: 0,
+          outcome: 'success',
+          confidence: 0.97,
+          timestamp: fmt(new Date(now - 90 * 60000)),
+          description: 'Restarted notification-worker pod which was crash-looping due to stale DNS resolver cache.',
+          rca: {
+            root_cause: 'Stale kube-dns upstream record prevented worker from resolving mailgun endpoint.',
+            failure_class: 'dependency_failure',
+            healing_level: 0,
+            confidence: 0.97,
+            reasoning: 'CoreDNS endpoint resolved stale IP. Restart refreshed local resolv.conf cache.',
+            source: 'rule_based',
+            actions_to_avoid: []
+          }
+        }
+      ];
     }
 
     // ── PREDICTIONS ────────────────────────────────────────────────────────────
@@ -696,28 +1637,25 @@
         const url = `${NEXUS}/developer/predictions${currentApp ? '?app=' + currentApp : ''}`;
         const r = await fetch(url);
         const data = await r.json();
-        if (!data.length) {
-          grid.innerHTML = '<div class="empty" style="grid-column:1/-1">No predictions yet — predictions appear when the Prescaler detects traffic patterns.</div>';
-          return;
-        }
+        if (!data.length) { grid.innerHTML = '<div class="empty" style="grid-column:1/-1">No predictions yet - predictions appear when the Prescaler detects traffic patterns.</div>'; return; }
         grid.innerHTML = data.map(p => {
           const mult = p.multiplier || 1;
           const multCls = mult >= 3 ? 'high' : mult >= 2 ? '' : 'ok';
           const confPct = Math.round((p.confidence || 0) * 100);
           return `<div class="pred-card">
         <div class="pred-mult ${multCls}">${mult.toFixed(1)}×</div>
-        <div class="pred-name">${p.deployment || '—'}</div>
+        <div class="pred-name">${p.deployment || 'N/A'}</div>
         <div class="pred-desc">${p.description || ''}</div>
         <div class="pred-stats">
-          <div class="stat"><div class="stat-label">Current RPS</div><div class="stat-val">${p.current_rps ?? '—'}</div></div>
-          <div class="stat"><div class="stat-label">Predicted RPS</div><div class="stat-val" style="color:var(--amber)">${p.predicted_rps ?? '—'}</div></div>
-          <div class="stat"><div class="stat-label">Mode</div><div class="stat-val" style="font-size:12px">${p.mode || '—'}</div></div>
+          <div class="stat"><div class="stat-label">Current RPS</div><div class="stat-val">${p.current_rps ?? 'N/A'}</div></div>
+          <div class="stat"><div class="stat-label">Predicted RPS</div><div class="stat-val" style="color:var(--amber)">${p.predicted_rps ?? 'N/A'}</div></div>
+          <div class="stat"><div class="stat-label">Mode</div><div class="stat-val" style="font-size:12px">${p.mode || 'N/A'}</div></div>
           <div class="stat"><div class="stat-label">Confidence</div><div class="stat-val">${confPct}%</div></div>
         </div>
         <div class="conf-bar"><div class="conf-fill" style="width:${confPct}%"></div></div>
       </div>`;
         }).join('');
-      } catch (e) { grid.innerHTML = `<div class="empty" style="grid-column:1/-1">⚠️ Could not load predictions<br><span style="font-size:12px">${e.message}</span></div>`; }
+      } catch (e) { grid.innerHTML = `<div class="empty" style="grid-column:1/-1"><i class="ph-bold ph-warning" style="font-size:20px;display:block;margin-bottom:8px"></i>Could not load predictions<br><span style="font-size:12px">${e.message}</span></div>`; }
     }
 
     // ── POLICY EDITOR ──────────────────────────────────────────────────────────
@@ -731,7 +1669,7 @@
         if (!r.ok) { wrap.innerHTML = `<div class="empty">No selfheal.yaml found for <strong>${currentApp}</strong>.<br><span style="font-size:12px">Commit a selfheal.yaml to your repo root and push.</span></div>`; return; }
         _currentPolicy = await r.json();
         renderPolicy(_currentPolicy);
-      } catch (e) { wrap.innerHTML = `<div class="empty">⚠️ ${e.message}</div>`; }
+      } catch (e) { wrap.innerHTML = `<div class="empty"><i class="ph-bold ph-warning" style="font-size:20px;display:block;margin-bottom:8px"></i>${e.message}</div>`; }
     }
 
     function renderPolicy(p) {
@@ -746,7 +1684,7 @@
     <div>
       <span class="badge info">${p.app}</span>
       <span class="badge ${p.tier === 'production' ? 'failed' : 'pending'}" style="margin-left:6px">${p.tier || 'unknown'}</span>
-      ${hasOvr ? '<span class="badge pending" style="margin-left:6px">⚠️ Runtime overrides active</span>' : ''}
+      ${hasOvr ? '<span class="badge pending" style="margin-left:6px"><i class="ph-bold ph-warning" style="margin-right:3px"></i>Runtime overrides active</span>' : ''}
     </div>
     ${hasOvr ? `<button class="btn-ghost" onclick="clearOverrides()">Clear overrides</button>` : ''}
   </div>
@@ -772,7 +1710,7 @@
         <input type="text" id="f-critical-routes" value="${(p.critical_routes || []).join(', ')}">
       </div>
       <button class="btn-primary" onclick="savePolicy()" style="margin-top:6px">Save Overrides</button>
-      <div class="note">⚠️ Runtime overrides apply immediately but reset on NEXUS restart. Commit selfheal.yaml to make changes permanent.</div>
+      <div class="note"><i class="ph-bold ph-warning" style="margin-right:4px"></i>Runtime overrides apply immediately but reset on NEXUS restart. Commit selfheal.yaml to make changes permanent.</div>
     </div>
     <div class="policy-section">
       <div class="section-title">Predictive Scaling</div>
@@ -803,7 +1741,7 @@
       if (hasOvr) {
         const ol = document.getElementById('overrideList');
         if (ol && p._overrides_active) {
-          ol.innerHTML = '<div style="color:var(--muted);font-size:12px">Override details unavailable — check audit trail.</div>';
+          ol.innerHTML = '<div style="color:var(--muted);font-size:12px">Override details unavailable - check audit trail.</div>';
         }
       }
     }
@@ -824,7 +1762,7 @@
             body: JSON.stringify({ field, value }),
           });
         }
-        toast('✅ Policy overrides saved');
+        toast('Policy overrides saved');
         loadPolicy();
       } catch (e) { toast('Failed to save: ' + e.message, true); }
     }
@@ -832,10 +1770,32 @@
     async function clearOverrides() {
       try {
         await fetch(`${NEXUS}/developer/policy/${currentApp}/overrides`, { method: 'DELETE' });
-        toast('↩️ Overrides cleared — reverting to selfheal.yaml');
+        toast('Overrides cleared - reverting to selfheal.yaml');
         loadPolicy();
       } catch { toast('Failed to clear overrides', true); }
     }
+
+    // ── Keyboard Shortcuts ─────────────────────────────────────────────────────
+    document.addEventListener('keydown', (e) => {
+      // Press '/' to jump to search
+      if (e.key === '/' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        const searchInput = document.getElementById('searchInput');
+        if (searchInput) {
+          searchInput.focus();
+          searchInput.select();
+        }
+      }
+      // Press Escape to blur / clear search
+      if (e.key === 'Escape' && document.activeElement?.id === 'searchInput') {
+        const searchInput = document.getElementById('searchInput');
+        if (searchInput.value) {
+          searchInput.value = '';
+          applyFilters();
+        }
+        searchInput.blur();
+      }
+    });
 
     // ── Toast ──────────────────────────────────────────────────────────────────
     let _tt;

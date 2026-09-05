@@ -64,13 +64,20 @@ from nexus.observability.metrics import get_metrics
 
 
 # Phase 8 integration routers (imported lazily to avoid circular deps)
+_routers_included = False
+
 def _include_integration_routers(app: FastAPI) -> None:
+    global _routers_included
+    if _routers_included:
+        return
     try:
         from nexus.integration.dashboard import router as dev_router
         from nexus.integration.sdk_ingest import router as sdk_router
 
-        app.include_router(sdk_router)
-        app.include_router(dev_router)
+        if not any(getattr(r, "path", None) == "/developer/incidents" for r in app.routes):
+            app.include_router(sdk_router)
+            app.include_router(dev_router)
+        _routers_included = True
     except ImportError as exc:
         import logging
 
@@ -251,6 +258,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_include_integration_routers(app)
+
 _start_time = time.monotonic()
 
 
@@ -338,28 +347,6 @@ def runbook_list() -> list[str]:
     lib = _require(context.runbook_library, "RunbookLibrary")
     return list(lib._runbooks.keys())
 
-# Prescaler
-@app.get("/prescaler", tags=["predictive"])
-def prescaler_status() -> dict[str, Any]:
-    """Prescaler statistics, mode, and recent decisions."""
-    p = _require(context.prescaler, "Prescaler")
-    stats = p.stats
-    # Last 5 decisions
-    decisions = [
-        {
-            "id": d.decision_id,
-            "deployment": d.deployment_name,
-            "namespace": d.namespace,
-            "replicas": f"{d.current_replicas} → {d.recommended_replicas}",
-            "rps": f"{d.current_rps:.0f} → {d.predicted_rps:.0f}",
-            "confidence": d.confidence,
-            "outcome": d.outcome or "pending",
-            "decided_at": d.decided_at,
-        }
-        for d in p._all_decisions[-5:][::-1]  # newest first
-    ]
-    return {"stats": stats, "recent_decisions": decisions}
-
 @app.post("/prescaler/mode/{mode}", tags=["predictive"])
 def prescaler_set_mode(mode: str) -> dict[str, str]:
     """Change prescaler autonomy mode: shadow | advisory | autonomous."""
@@ -381,19 +368,6 @@ def learning_status() -> dict[str, Any]:
     fl = _require(context.feedback_loop, "FeedbackLoop")
     return fl.status
 
-@app.post("/learning/run", tags=["learning"])
-async def learning_run() -> dict[str, Any]:
-    """Trigger an immediate learning feedback cycle (useful for testing)."""
-    fl = _require(context.feedback_loop, "FeedbackLoop")
-    result = await fl.run_now()
-    return {"status": "ok", **result}
-
-@app.get("/knowledge", tags=["learning"])
-async def knowledge_records() -> list[dict[str, Any]]:
-    """All KnowledgeBase confidence adjustment records."""
-    kb = _require(context.knowledge_base, "KnowledgeBase")
-    records = await kb.get_all_records()
-    return [r.to_dict() for r in records]
 
 @app.get("/advisor", tags=["learning"])
 async def advisor_recommendations(days: int = 30) -> list[dict[str, Any]]:
@@ -409,22 +383,8 @@ async def advisor_recommendations(days: int = 30) -> list[dict[str, Any]]:
     recs.extend(chronic)
     return [r.to_dict() for r in recs]
 
-# Audit Trail
-@app.get("/audit/tail", tags=["governance"])
-async def audit_tail(n: int = 20) -> list[dict[str, Any]]:
-    """Return the N most recent audit records from the AuditTrail."""
-    at = _require(context.audit_trail, "AuditTrail")
-    rows = await at.query_recent(limit=n)
-    # Strip large JSON blobs from the tail view
-    return [
-        {
-            k: v
-            for k, v in row.items()
-            if k not in ("pre_check_results", "action_results", "post_check_results")
-        }
-        for row in rows
-    ]
 
+# Audit Trail
 @app.get("/audit/{incident_id}", tags=["governance"])
 async def audit_by_incident(incident_id: str) -> list[dict[str, Any]]:
     """Return all audit records for a specific incident/correlation ID."""
@@ -509,10 +469,19 @@ async def reject_action(action_id: str) -> dict[str, str]:
         # Idempotent: a repeat reject re-INSERTs the audit row (PK reject_{id}).
         if queue.is_rejected(action_id):
             return {"status": "already_rejected", "action_id": action_id}
-        ok = queue.reject(action_id)
-        if ok:
+        pending_item = queue.get(action_id)
+        if queue.reject(action_id):
             if context.audit_trail:
                 await context.audit_trail.record_rejection(action_id, "api_user")
+            if pending_item and hasattr(orc, "notify_incident_rejected"):
+                import asyncio
+                res = orc.notify_incident_rejected(
+                    pending_item.target,
+                    pending_item.incident_id,
+                    reason="Rejected via HTTP API",
+                )
+                if asyncio.iscoroutine(res):
+                    await res
             return {"status": "rejected", "action_id": action_id}
         raise HTTPException(
             status_code=404, detail=f"Action {action_id!r} not found in approval queue"
@@ -712,10 +681,20 @@ async def slack_interactive(
     # Reject: record and stop the workflow
     if queue.is_rejected(approval_id):
         return _slack_replace(f"❌ Action `{approval_id}` was already rejected.")
+    pending_item = queue.get(approval_id)
     if not queue.reject(approval_id):
         return _slack_replace(f"❌ Action `{approval_id}` not found.")
     if context.audit_trail:
         await context.audit_trail.record_rejection(approval_id, f"slack:{user}")
+    if pending_item and orc and hasattr(orc, "notify_incident_rejected"):
+        import asyncio
+        res = orc.notify_incident_rejected(
+            pending_item.target,
+            pending_item.incident_id,
+            reason=f"Rejected via Slack by @{user}",
+        )
+        if asyncio.iscoroutine(res):
+            await res
     return _slack_replace(f"❌ Rejected `{approval_id}` by @{user}.")
 
 
@@ -731,134 +710,6 @@ async def pending_approvals() -> list[dict[str, Any]]:
     except AttributeError:
         return []
 
-# PPA Integration Endpoints
-# Backed by the PpaOutcomeTracker started in the lifespan.
-# These are available without a full Orchestrator / Prescaler — the
-# OutcomeTracker subscribes to ppa.predictions.* via NATS directly.
-@app.get("/ppa/decisions", tags=["predictive"])
-def ppa_decisions(n: int = 20) -> list[dict[str, Any]]:
-    """
-    Recent PPA prediction events received from the PPA operator via NATS.
-
-    Each entry represents one ppa.predictions.* message recorded by the
-    PpaOutcomeTracker. Outcomes (verdict + SMAPE) are back-filled after
-    the prediction horizon elapses.
-
-    Returns [] when no events have been received yet (normal on first startup
-    before the PPA operator publishes its first cycle).
-    """
-    tracker = _ppa_outcome_tracker
-    if tracker is None:
-        return []
-
-    # Combine pending (unresolved) + resolved outcomes, newest first
-    pending = [
-        {
-            "decision_id": p.decision_id,
-            "deployment": p.deployment,
-            "namespace": p.namespace,
-            "predicted_rps": round(p.predicted_rps, 1),
-            "current_rps": round(p.current_rps, 1),
-            "confidence": round(p.confidence, 3),
-            "horizon_minutes": p.horizon_minutes,
-            "model_version": p.model_version,
-            "status": "pending",
-            "verdict": None,
-            "smape": None,
-            "created_at": p.created_at.isoformat(),
-            "resolves_at": p.expected_resolution_time.isoformat(),
-        }
-        for p in tracker._pending.values()
-    ]
-
-    resolved = [
-        {
-            "decision_id": o.get("decision_id"),
-            "deployment": o.get("deployment"),
-            "namespace": o.get("namespace"),
-            "predicted_rps": o.get("predicted_rps"),
-            "current_rps": None,  # not stored in outcome event
-            "confidence": o.get("confidence"),
-            "horizon_minutes": None,
-            "model_version": o.get("model_version"),
-            "status": "resolved",
-            "verdict": o.get("verdict"),
-            "smape": o.get("smape"),
-            "created_at": o.get("resolution_at"),
-            "resolves_at": None,
-        }
-        for o in tracker._recent_outcomes
-    ]
-
-    all_decisions = pending + resolved
-    # Sort newest first (pending have created_at; resolved have resolution_at)
-    all_decisions.sort(
-        key=lambda d: (d.get("created_at") or d.get("resolves_at") or ""),
-        reverse=True,
-    )
-    return all_decisions[:n]
-
-@app.get("/ppa/stats", tags=["predictive"])
-def ppa_stats() -> dict[str, Any]:
-    """
-    Aggregated PPA prediction statistics from the PpaOutcomeTracker.
-
-    Returns counts of pending / resolved predictions, mean SMAPE,
-    and spike hit-rate so you can gauge model quality without Grafana.
-    """
-    tracker = _ppa_outcome_tracker
-    if tracker is None:
-        return {
-            "tracker_ready": False,
-            "nats_connected": False,
-            "message": (
-                "PpaOutcomeTracker not initialised — "
-                "check NATS_URL in the nexus-api container."
-            ),
-        }
-
-    resolved = tracker._recent_outcomes
-    pending = list(tracker._pending.values())
-
-    total_resolved = len(resolved)
-    spike_hits = sum(1 for o in resolved if o.get("verdict") == "spike_hit")
-    spike_misses = sum(1 for o in resolved if o.get("verdict") == "spike_missed")
-    smape_vals = [o["smape"] for o in resolved if o.get("smape") is not None]
-    mean_smape = round(sum(smape_vals) / len(smape_vals), 3) if smape_vals else None
-    hit_rate = round(spike_hits / total_resolved, 3) if total_resolved else None
-
-    return {
-        "tracker_ready": True,
-        "nats_connected": _nats_client is not None,
-        "pending_count": len(pending),
-        "resolved_count": total_resolved,
-        "spike_hits": spike_hits,
-        "spike_misses": spike_misses,
-        "correct_no_spike": total_resolved - spike_hits - spike_misses,
-        "mean_smape": mean_smape,
-        "spike_hit_rate": hit_rate,
-        "ready_for_advisory": (hit_rate or 0) >= 0.7 and total_resolved >= 10,
-    }
-
-@app.get("/ppa/pending", tags=["predictive"])
-def ppa_pending() -> list[dict[str, Any]]:
-    """Predictions currently awaiting their horizon window to elapse."""
-    tracker = _ppa_outcome_tracker
-    if tracker is None:
-        return []
-    return [
-        {
-            "decision_id": p.decision_id,
-            "deployment": p.deployment,
-            "predicted_rps": round(p.predicted_rps, 1),
-            "current_rps": round(p.current_rps, 1),
-            "confidence": round(p.confidence, 3),
-            "horizon_minutes": p.horizon_minutes,
-            "resolves_at": p.expected_resolution_time.isoformat(),
-            "is_expired": p.is_expired,
-        }
-        for p in tracker._pending.values()
-    ]
 
 # AlertManager Webhook Integration
 @app.post("/webhook/alertmanager", tags=["integration"])
@@ -879,61 +730,4 @@ async def alertmanager_webhook(payload: dict[str, Any]) -> dict[str, str]:
         logging.getLogger(__name__).error(f"Failed to process alert webhook: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error processing webhook") from e
 
-
-# ── Unified Incident & Trace API (v2) ─────────────────────────────────────────
-
-@app.get("/api/v2/incidents", tags=["incidents_v2"])
-async def list_incidents_v2(
-    limit: int = 50, state: str | None = None
-) -> list[dict[str, Any]]:
-    """List incidents from the unified persistence layer."""
-    from nexus.db.postgres import get_database_client
-    db = await get_database_client()
-    return await db.list_incidents(limit=limit, state=state)
-
-
-@app.get("/api/v2/incidents/{incident_id}", tags=["incidents_v2"])
-async def get_incident_v2(incident_id: str) -> dict[str, Any]:
-    """Get single incident details."""
-    from nexus.db.postgres import get_database_client
-    db = await get_database_client()
-    inc = await db.get_incident(incident_id)
-    if not inc:
-        raise HTTPException(status_code=404, detail=f"Incident {incident_id} not found")
-    return inc
-
-
-@app.get("/api/v2/incidents/{incident_id}/traces", tags=["incidents_v2"])
-async def get_incident_traces_v2(incident_id: str) -> dict[str, Any]:
-    """Get full structured trace of an incident (state transitions, agent messages, tool calls, remediations)."""
-    from nexus.db.postgres import get_database_client
-    db = await get_database_client()
-    trace = await db.get_incident_trace(incident_id)
-    if not trace:
-        raise HTTPException(status_code=404, detail=f"Incident {incident_id} not found")
-    return trace
-
-
-@app.post("/api/v2/incidents", tags=["incidents_v2"])
-async def ingest_incident_v2(payload: dict[str, Any]) -> dict[str, Any]:
-    """Ingest a new incident event (Kubernetes or AWS CloudWatch/EventBridge)."""
-    import uuid as _uuid
-
-    from nexus.db.postgres import get_database_client
-    db = await get_database_client()
-    fingerprint = payload.get("fingerprint") or f"fp-{_uuid.uuid4().hex[:8]}"
-    env = payload.get("environment", "kubernetes")
-    target = payload.get("target_resource", "unknown")
-    sev = payload.get("severity", "error")
-    source = payload.get("trigger_source", "api_ingest")
-
-    inc_id = await db.create_incident(
-        fingerprint=fingerprint,
-        environment=env,
-        target_resource=target,
-        severity=sev,
-        trigger_source=source,
-        trigger_payload=payload.get("trigger_payload", payload),
-    )
-    return {"incident_id": inc_id, "status": "detected"}
 

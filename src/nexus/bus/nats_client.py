@@ -32,7 +32,7 @@ from collections.abc import Awaitable, Callable
 import nats
 from nats.aio.client import Client as NATSConnection
 from nats.js import JetStreamContext
-from nats.js.api import RetentionPolicy, StorageType, StreamConfig
+from nats.js.api import DeliverPolicy, RetentionPolicy, StorageType, StreamConfig
 from nats.js.errors import BadRequestError
 
 from nexus.bus.incident_event import IncidentEvent
@@ -346,17 +346,19 @@ class NATSClient:
         signal_filter: str = ">",
         durable_name: str | None = None,
         queue_group: str | None = None,
+        deliver_policy: DeliverPolicy = DeliverPolicy.NEW,
     ) -> None:
         """
         Subscribe to incident events matching the given filters.
 
         Args:
-            handler:       Async callback receiving a deserialized IncidentEvent.
-            agent_filter:  NATS wildcard for the agent segment. ">" = all agents.
-                           Example: "k8s" | "metrics" | "k8s.>"
-            signal_filter: NATS wildcard for the signal segment. ">" = all signals.
-            durable_name:  JetStream durable consumer name (for persistent offset tracking).
-            queue_group:   Queue group for load-balanced consumers.
+            handler:        Async callback receiving a deserialized IncidentEvent.
+            agent_filter:   NATS wildcard for the agent segment. ">" = all agents.
+                            Example: "k8s" | "metrics" | "k8s.>"
+            signal_filter:  NATS wildcard for the signal segment. ">" = all signals.
+            durable_name:   JetStream durable consumer name (for persistent offset tracking).
+            queue_group:    Queue group for load-balanced consumers.
+            deliver_policy: Deliver policy for consumer (default: DeliverPolicy.NEW to prevent replaying stale backlogs).
 
         Subject pattern: nexus.incidents.<agent_filter>.<signal_filter>
         """
@@ -369,7 +371,10 @@ class NATSClient:
 
         logger.info(f"[NATS] Subscribing to '{subject}' durable={durable_name}")
 
-        sub_kwargs = {"stream": NEXUS_STREAM}
+        sub_kwargs: dict = {
+            "stream": NEXUS_STREAM,
+            "deliver_policy": deliver_policy,
+        }
         if durable_name:
             sub_kwargs["durable"] = durable_name
         if queue_group:
@@ -404,6 +409,7 @@ class NATSClient:
         handler: RawHandlerType,
         durable_name: str | None = None,
         stream_name: str | None = None,
+        deliver_policy: DeliverPolicy = DeliverPolicy.NEW,
     ) -> None:
         """
         Subscribe to raw-dict NATS subjects (non-IncidentEvent payloads).
@@ -417,6 +423,7 @@ class NATSClient:
             stream_name:     Explicit JetStream stream to bind to.
                              Defaults to NEXUS_INCIDENTS when not provided.
                              Pass ``'PPA_PREDICTIONS'`` for ppa.predictions.* subjects.
+            deliver_policy:  Deliver policy (default DeliverPolicy.NEW).
         """
         if not self._js:
             raise RuntimeError("NATSClient not connected.")
@@ -426,7 +433,10 @@ class NATSClient:
             f"[NATS] Subscribing to raw pattern '{subject_pattern}' durable={durable_name} stream={resolved_stream}"
         )
 
-        sub_kwargs: dict = {"stream": resolved_stream}
+        sub_kwargs: dict = {
+            "stream": resolved_stream,
+            "deliver_policy": deliver_policy,
+        }
         if durable_name:
             sub_kwargs["durable"] = durable_name
 

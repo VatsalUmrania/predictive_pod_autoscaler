@@ -43,6 +43,16 @@ from nexus.bus.nats_client import NATSClient
 
 logger = logging.getLogger(__name__)
 
+SYSTEM_NAMESPACES = frozenset({
+    "kube-system",
+    "kube-public",
+    "kube-node-lease",
+    "monitoring",
+    "nexus",
+    "ingress-nginx",
+})
+
+
 class K8sAgent(BaseAgent):
     """
     Kubernetes event watcher agent.
@@ -71,7 +81,15 @@ class K8sAgent(BaseAgent):
             agent_type=AgentType.K8S,
             poll_interval_seconds=poll_interval_seconds,
         )
-        self.namespaces = namespaces  # None = all
+        import os
+
+        env_ns = os.getenv("NEXUS_WATCH_NAMESPACES")
+        if namespaces is not None:
+            self.namespaces = namespaces
+        elif env_ns:
+            self.namespaces = [n.strip() for n in env_ns.split(",") if n.strip()]
+        else:
+            self.namespaces = None
         self.crashloop_threshold = crashloop_threshold
         self.pending_threshold_s = pending_threshold_min * 60.0
         self.degraded_threshold_s = degraded_threshold_min * 60.0
@@ -273,7 +291,7 @@ class K8sAgent(BaseAgent):
         spec = dep.spec
         status = dep.status
 
-        desired = spec.replicas or 1
+        desired = spec.replicas if spec.replicas is not None else 1
         available = status.available_replicas or 0
         ready = status.ready_replicas or 0
 
@@ -410,6 +428,8 @@ class K8sAgent(BaseAgent):
             pods = result.items
 
         for pod in pods:
+            if not self.namespaces and pod.metadata.namespace in SYSTEM_NAMESPACES:
+                continue
             events.extend(self._check_pod(pod))
         # Deployments
         if self.namespaces:
@@ -433,6 +453,8 @@ class K8sAgent(BaseAgent):
             deployments = result.items
 
         for dep in deployments:
+            if not self.namespaces and dep.metadata.namespace in SYSTEM_NAMESPACES:
+                continue
             events.extend(self._check_deployment(dep))
 
         # HPAs
@@ -461,6 +483,8 @@ class K8sAgent(BaseAgent):
                 hpas = result.items
 
             for hpa in hpas:
+                if not self.namespaces and hpa.metadata.namespace in SYSTEM_NAMESPACES:
+                    continue
                 events.extend(self._check_hpa(hpa))
 
         except Exception as exc:

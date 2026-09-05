@@ -110,19 +110,38 @@ _CREATE_SQL = """
         outcome     TEXT,
         description TEXT,
         confidence  REAL,
-        timestamp   TEXT
+        timestamp   TEXT,
+        rca         TEXT,
+        accepted_by TEXT,
+        accepted_at TEXT
     )
 """
 
+def _migrate_db(con: _sqlite3.Connection) -> None:
+    """Ensure optional columns exist in existing SQLite databases."""
+    for col in ["rca TEXT", "accepted_by TEXT", "accepted_at TEXT"]:
+        try:
+            con.execute(f"ALTER TABLE developer_incidents ADD COLUMN {col}")
+        except Exception:
+            pass
+
 def _write_incident(row: dict[str, Any]) -> None:
     """Write one incident to SQLite. Creates the table on first write."""
+    import json
+    rca_val = row.get("rca")
+    if isinstance(rca_val, (dict, list)):
+        rca_val = json.dumps(rca_val)
+    elif rca_val is not None:
+        rca_val = str(rca_val)
+
     try:
         con = _sqlite3.connect(_INCIDENT_DB, timeout=10)
         con.execute(_CREATE_SQL)
+        _migrate_db(con)
         con.execute(
             """INSERT INTO developer_incidents
-               (incident_id, runbook_id, target, level, outcome, description, confidence, timestamp)
-               VALUES (?,?,?,?,?,?,?,?)""",
+               (incident_id, runbook_id, target, level, outcome, description, confidence, timestamp, rca, accepted_by, accepted_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 row.get("incident_id"),
                 row.get("runbook_id"),
@@ -132,6 +151,9 @@ def _write_incident(row: dict[str, Any]) -> None:
                 row.get("description"),
                 row.get("confidence"),
                 row.get("timestamp"),
+                rca_val,
+                row.get("accepted_by"),
+                row.get("accepted_at"),
             ),
         )
         con.execute("""
@@ -150,10 +172,12 @@ def _write_incident(row: dict[str, Any]) -> None:
 
 def _read_incidents(n: int, app: str | None) -> list[dict[str, Any]]:
     """Read recent incidents from SQLite. Returns [] if file/table don't exist yet."""
+    import json
     if not _os.path.exists(_INCIDENT_DB):
         return []  # no incidents written yet — file created on first write
     try:
         con = _sqlite3.connect(_INCIDENT_DB, timeout=10)
+        _migrate_db(con)
         con.row_factory = _sqlite3.Row
         cur = con.execute(
             "SELECT * FROM developer_incidents ORDER BY id DESC LIMIT ?",
@@ -166,6 +190,11 @@ def _read_incidents(n: int, app: str | None) -> list[dict[str, Any]]:
             d = dict(r)
             if app and app.lower() not in (d.get("target") or "").lower():
                 continue
+            if d.get("rca") and isinstance(d["rca"], str):
+                try:
+                    d["rca"] = json.loads(d["rca"])
+                except Exception:
+                    pass
             results.append(d)
             if len(results) >= n:
                 break
@@ -260,26 +289,36 @@ async def developer_incidents(
         except Exception as _e:
             logger.debug(f"[Dashboard] AuditTrail read skipped: {_e}")
 
+    # Enrich with RCA from orchestrator if available
+    if ctx.orchestrator is not None:
+        try:
+            recent_rca = ctx.orchestrator.last_rca_results(n=50)
+            rca_by_inc = {
+                r.get("incident_id"): r.get("rca")
+                for r in recent_rca
+                if r.get("incident_id") and r.get("rca")
+            }
+            rca_by_target = {
+                r.get("validation", {}).get("target", ""): r.get("rca")
+                for r in recent_rca
+                if r.get("validation", {}).get("target") and r.get("rca")
+            }
+            for item in results:
+                if not item.get("rca"):
+                    inc_id = item.get("incident_id")
+                    target = item.get("target")
+                    if inc_id in rca_by_inc:
+                        item["rca"] = rca_by_inc[inc_id]
+                    elif target and target in rca_by_target:
+                        item["rca"] = rca_by_target[target]
+        except Exception as _e:
+            logger.debug(f"[Dashboard] RCA enrichment skipped: {_e}")
+
     # Sort newest first
     results.sort(key=lambda r: r.get("timestamp", ""), reverse=True)
     return results[:n]
 
 
-@router.post("/developer/incidents", tags=["developer"])
-async def developer_post_incident(payload: dict[str, Any]) -> dict[str, str]:
-    """
-    Accept an incident from the demo orchestrator or SDK.
-    Persisted to SQLite so all uvicorn workers can read it.
-    """
-    import uuid
-
-    payload.setdefault("incident_id", str(uuid.uuid4())[:8])
-    payload.setdefault("timestamp", datetime.now(timezone.utc).isoformat()[:19])
-    _write_incident(payload)
-    logger.info(
-        f"[Dashboard] Incident stored: {payload.get('incident_id')} outcome={payload.get('outcome')}"
-    )
-    return {"status": "ok", "incident_id": payload["incident_id"]}
 
 # Predictions
 @router.get("/developer/predictions", tags=["developer"])

@@ -257,6 +257,9 @@ class HumanApprovalQueue:
             return True
         return False
 
+    def get(self, approval_id: str) -> PendingApproval | None:
+        return self._pending.get(approval_id)
+
     def reject(self, approval_id: str) -> bool:
         """Operator rejects a pending action."""
         if approval_id in self._approved or approval_id in self._rejected:
