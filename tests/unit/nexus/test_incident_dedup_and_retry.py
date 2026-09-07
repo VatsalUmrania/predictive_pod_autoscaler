@@ -421,3 +421,123 @@ def test_gemini_provider_thread_safe_init():
         assert mock_client_cls.call_count == 1
 
 
+@pytest.mark.asyncio
+async def test_llm_rca_blocked_falls_back_to_rule_based_rca():
+    """Verify that when LLM hallucinates an unsupported diagnosis (blocked by validator),
+    the orchestrator falls back to deterministic rule-based RCA instead of giving up."""
+    mock_nats = MagicMock()
+    mock_nats.publish_raw = AsyncMock()
+    mock_nats.publish = AsyncMock()
+
+    db = SQLiteFallbackClient(db_path=":memory:")
+    await db.initialize()
+
+    executor = build_mock_executor(mock_nats, db)
+
+    # LLM hallucinates resource_exhaustion from pod_crashloop alone
+    rca = MagicMock(spec=RCAEngine)
+    rca.analyze = AsyncMock(return_value=RCAResult(
+        failure_class="resource_exhaustion",
+        root_cause="Process failed during startup due to memory constraints",
+        reasoning="Pod is in CrashLoopBackOff",
+        healing_level=1,
+        confidence=0.8,
+        runbook_id="runbook_pod_crashloop_v1",
+        source="gemini",
+    ))
+    scorer = MagicMock(spec=ConfidenceScorer)
+    scorer.score.return_value = 0.82
+    scorer.gate.return_value = 1
+    scorer.describe.return_value = "high"
+
+    orchestrator = NexusOrchestrator(
+        nats_client=mock_nats,
+        correlator=EventCorrelator(),
+        rca_engine=rca,
+        confidence_scorer=scorer,
+        executor=executor,
+        db_client=db,
+    )
+
+    event = IncidentEvent(
+        agent=AgentType.K8S,
+        signal_type=SignalType.POD_CRASHLOOP,
+        severity=Severity.CRITICAL,
+        namespace="default",
+        resource_name="shop-demo",
+    )
+    cluster = IncidentCluster.new(event)
+    await orchestrator._process_cluster(cluster)
+
+    # Verify that rule fallback took over:
+    # Rule 4 matches pod_crashloop -> bad_deploy, runbook_high_error_rate_post_deploy_v1
+    assert executor.handle_event.await_count == 1
+    called_event = executor.handle_event.call_args[0][0]
+    assert called_event.suggested_runbook == "runbook_high_error_rate_post_deploy_v1"
+    assert called_event.context["_rca"]["failure_class"] == "bad_deploy"
+    assert called_event.context["_rca"]["source"] == "rule_based"
+
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_undispatched_incident_clears_active_state_preventing_deadlock():
+    """Verify that when an incident produces no autonomous action (L0 / no runbook),
+    _active_incidents is cleared so subsequent events for the target are not deadlocked."""
+    mock_nats = MagicMock()
+    mock_nats.publish_raw = AsyncMock()
+    mock_nats.publish = AsyncMock()
+
+    db = SQLiteFallbackClient(db_path=":memory:")
+    await db.initialize()
+
+    executor = build_mock_executor(mock_nats, db)
+
+    # RCA returns unknown / L0 / no runbook
+    rca = MagicMock(spec=RCAEngine)
+    rca.analyze = AsyncMock(return_value=RCAResult(
+        failure_class="unknown",
+        root_cause="Unknown issue",
+        reasoning="Cannot diagnose",
+        healing_level=0,
+        confidence=0.3,
+        runbook_id=None,
+        source="rule_based",
+    ))
+    scorer = MagicMock(spec=ConfidenceScorer)
+    scorer.score.return_value = 0.3
+    scorer.gate.return_value = 0
+    scorer.describe.return_value = "low"
+
+    orchestrator = NexusOrchestrator(
+        nats_client=mock_nats,
+        correlator=EventCorrelator(),
+        rca_engine=rca,
+        confidence_scorer=scorer,
+        executor=executor,
+        db_client=db,
+    )
+
+    event1 = IncidentEvent(
+        agent=AgentType.K8S,
+        signal_type=SignalType.POD_PENDING,
+        severity=Severity.WARNING,
+        namespace="default",
+        resource_name="shop-demo",
+    )
+    cluster1 = IncidentCluster.new(event1)
+    await orchestrator._process_cluster(cluster1)
+
+    # Active incidents must be cleared, not stuck in POLICY_CHECK
+    target = "default/shop-demo"
+    assert target not in orchestrator._active_incidents
+
+    # Second cluster for shop-demo must NOT be suppressed as duplicate
+    cluster2 = IncidentCluster.new(event1)
+    await orchestrator._process_cluster(cluster2)
+    assert rca.analyze.await_count == 2  # Analyzed again, not suppressed
+
+    await db.close()
+
+
+

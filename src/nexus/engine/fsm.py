@@ -60,6 +60,7 @@ VALID_TRANSITIONS: dict[IncidentState, set[IncidentState]] = {
         IncidentState.APPROVAL_PENDING,
         IncidentState.REJECTED,
         IncidentState.FAILED,
+        IncidentState.ESCALATED,
     },
     IncidentState.APPROVAL_PENDING: {
         IncidentState.EXECUTING,

@@ -44,25 +44,22 @@ Rules:
 - Write in plain technical prose: NO emojis, NO exclamation marks, no conversational filler
 - Be specific and technical — not generic filler text
 - Prefer the simplest hypothesis that explains all signals (Occam's razor)
-- Use the available runbook list to constrain your action recommendation
-- healing_level 0 = alert only, 1 = no-regret (restart), 2 = bounded mitigation (scale/memory increase/canary halt), 3 = significant change (rollout undo/Lambda alias rollback)
-- confidence 0.0-1.0 — be conservative; prefer 0.5-0.8 range unless signals are deterministic
-- If multiple explanations are equally plausible, choose the more conservative (lower healing_level)
+- Propose dynamic platform actions based on real failure symptoms and topology
+- Ground your confidence directly in verifiable evidence (e.g. restart counts, error rates, metric thresholds)
+- If multiple explanations are equally plausible, choose the more conservative hypothesis
 
-Available Kubernetes runbooks:
-- runbook_pod_crashloop_v1 (L1): Restart pod + VPA hint
-- runbook_high_error_rate_post_deploy_v1 (L2): Halt canary + alert
-- runbook_missing_env_key_v1 (L0): Block deploy + alert
-- runbook_dns_resolution_failure_v1 (L1): Flush CoreDNS cache + escalate
-- runbook_db_connection_exhaustion_v1 (L2): Alert + annotate deployment
+Available platform actions:
+Kubernetes:
+- k8s_restart_deployment: Restart deployment pods to clear startup crashes or transient deadlocks
+- k8s_scale_deployment: Adjust replica count to absorb load
+- k8s_rollback_deployment: Undo rollout to previous stable revision
+- k8s_patch_configmap: Update environment variables or configurations
 
-Available AWS Serverless runbooks:
-- runbook_lambda_error_spike_v1 (L3): Alert + rollback Lambda alias to previous version
-- runbook_lambda_throttle_v1 (L2): Alert + increase Lambda reserved concurrency
-- runbook_lambda_timeout_v1 (L2): Alert + increase Lambda timeout
-- runbook_lambda_oom_v1 (L2): Alert + increase Lambda memory allocation
-- runbook_sqs_dlq_v1 (L2): Alert + replay DLQ messages to source queue
-- runbook_dynamo_throttle_v1 (L0): Alert only — capacity change requires human review
+AWS Serverless:
+- aws_update_lambda_memory: Increase Lambda function memory limit
+- aws_update_lambda_timeout: Increase execution timeout limit
+- aws_replay_dlq: Replay failed messages from DLQ to source queue
+- aws_rollback_lambda_alias: Point alias back to previous stable function version
 
 Respond ONLY with valid JSON. No markdown fences, no prose outside the JSON structure.
 
@@ -70,15 +67,13 @@ Required schema:
 {
   "root_cause": "string — 1-2 sentences, specific technical cause",
   "failure_class": "one of: bad_deploy | resource_exhaustion | dependency_failure | config_error | cascading_failure | unknown",
-  "healing_level": 0,
-  "runbook_id": "exact runbook ID from the list above, or null",
+  "suggested_action": "specific platform tool to execute from above (e.g. k8s_restart_deployment, aws_update_lambda_memory), or null",
+  "action_params": {"key": "value parameters for the tool"},
   "confidence": 0.0,
   "reasoning": "string — 2-3 sentences of chain-of-thought",
   "actions_to_avoid": ["list of action types that would make this worse"],
   "domain": "kubernetes | aws | hybrid",
-  "suggested_action": "specific action tool to execute, e.g. k8s_restart_deployment or aws_update_lambda_memory, or null",
-  "action_params": {},
-  "rollback_plan": {}
+  "rollback_plan": {"rollback_action": "tool to revert", "params": {}}
 }\
 """
 

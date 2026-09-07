@@ -408,8 +408,8 @@ class ActionLadder:
             or getattr(event, "override_blast_radius", False),
         )
 
-        # L3 + confidence gate → human approval
-        if policy.requires_approval and not human_approved:
+        # Universal Human Approval: all mutating actions require approval unless pre-approved
+        if (policy.requires_approval or not human_approved) and action_type not in ("emit_alert", "patch_annotation"):
             approval_id = self._approval.enqueue(
                 runbook_id=runbook.id,
                 action_type=action_type,

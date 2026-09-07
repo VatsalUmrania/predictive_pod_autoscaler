@@ -46,7 +46,7 @@ from nexus.governance.runbook_executor import RunbookExecutor
 from nexus.reasoning.confidence_scorer import ConfidenceScorer
 from nexus.reasoning.event_correlator import EventCorrelator
 from nexus.reasoning.incident_cluster import IncidentCluster
-from nexus.reasoning.rca_engine import RCAEngine, RCAResult
+from nexus.reasoning.rca_engine import RCAEngine, RCAResult, _rule_based_rca
 from nexus.reasoning.rca_validator import RCAValidator, ValidationVerdict, downgrade_rca
 
 logger = logging.getLogger(__name__)
@@ -406,13 +406,30 @@ class NexusOrchestrator:
             cluster, rca_result
         )
         if validation_verdict.block_reason:
-            # LLM made an inference leap with no evidentiary support — demote to L0.
-            logger.warning(
-                f"[Orchestrator] RCA validation BLOCKED for {cluster.cluster_id} "
-                f"(incident={incident_id}): {validation_verdict.block_reason} "
-                f"— downgrading to unknown/L0"
-            )
-            rca_result = downgrade_rca(rca_result, validation_verdict.block_reason)
+            # LLM made an inference leap with no evidentiary support.
+            # Attempt to fall back to deterministic rule-based RCA before downgrading to L0.
+            rule_fallback = _rule_based_rca(cluster)
+            if rule_fallback.failure_class != "unknown" and rule_fallback.runbook_id:
+                logger.info(
+                    f"[Orchestrator] RCA validation BLOCKED for {cluster.cluster_id} "
+                    f"(incident={incident_id}): {validation_verdict.block_reason} "
+                    f"— falling back to deterministic rule-based RCA: "
+                    f"class={rule_fallback.failure_class}, runbook={rule_fallback.runbook_id}, L{rule_fallback.healing_level}"
+                )
+                rca_result = rule_fallback
+                validation_verdict = ValidationVerdict(
+                    passed=True,
+                    block_reason=None,
+                    confidence_delta=0.0,
+                    consistency_note="Fell back to deterministic rule-based RCA after LLM block",
+                )
+            else:
+                logger.warning(
+                    f"[Orchestrator] RCA validation BLOCKED for {cluster.cluster_id} "
+                    f"(incident={incident_id}): {validation_verdict.block_reason} "
+                    f"— downgrading to unknown/L0"
+                )
+                rca_result = downgrade_rca(rca_result, validation_verdict.block_reason)
 
         # ── Step 2: Confidence calibration ───────────────────────────────────
         confidence = self.scorer.score(
@@ -465,6 +482,9 @@ class NexusOrchestrator:
                 logger.info(
                     f"[Orchestrator] Target '{target}' is in cooldown for {rca_result.runbook_id} — suppressing remediation"
                 )
+                if fsm.can_transition_to(IncidentState.FAILED):
+                    await fsm.transition_to(IncidentState.FAILED, reason=f"Target in cooldown for {rca_result.runbook_id}")
+                self._active_incidents.pop(target, None)
                 return
 
         if rca_result.source in ("gemini", "openai"):
@@ -474,6 +494,11 @@ class NexusOrchestrator:
                     f"[Orchestrator] LLM RCA for {cluster.cluster_id} BLOCKED by validator: "
                     f"{validation_verdict.block_reason} — alert only, no approval queued"
                 )
+                if fsm.can_transition_to(IncidentState.ESCALATED):
+                    await fsm.transition_to(IncidentState.ESCALATED, reason=f"LLM RCA blocked: {validation_verdict.block_reason}")
+                elif fsm.can_transition_to(IncidentState.FAILED):
+                    await fsm.transition_to(IncidentState.FAILED, reason=f"LLM RCA blocked: {validation_verdict.block_reason}")
+                self._active_incidents.pop(target, None)
                 return
 
             if effective_level == 0 and rca_result.runbook_id:
@@ -483,6 +508,11 @@ class NexusOrchestrator:
                     f"(raw_conf={rca_result.confidence:.2f}, "
                     f"calibrated={confidence:.2f}) — alert only, no approval queued"
                 )
+                if fsm.can_transition_to(IncidentState.ESCALATED):
+                    await fsm.transition_to(IncidentState.ESCALATED, reason="Confidence gated to L0")
+                elif fsm.can_transition_to(IncidentState.FAILED):
+                    await fsm.transition_to(IncidentState.FAILED, reason="Confidence gated to L0")
+                self._active_incidents.pop(target, None)
                 return
             self._actions_dispatched += 1
             await self._stage_llm_remediation(
@@ -492,11 +522,16 @@ class NexusOrchestrator:
             return
 
         # Rule-based RCA — governed RunbookExecutor path
-        if not rca_result.runbook_id and effective_level == 0:
+        if not rca_result.runbook_id and not rca_result.suggested_action and effective_level == 0:
             logger.info(
-                f"[Orchestrator] L0 / no runbook for {cluster.cluster_id} "
+                f"[Orchestrator] L0 / no action for {cluster.cluster_id} "
                 f"— alert dispatched, no autonomous action"
             )
+            if fsm.can_transition_to(IncidentState.ESCALATED):
+                await fsm.transition_to(IncidentState.ESCALATED, reason="L0 / no action available")
+            elif fsm.can_transition_to(IncidentState.FAILED):
+                await fsm.transition_to(IncidentState.FAILED, reason="L0 / no action available")
+            self._active_incidents.pop(target, None)
             return
 
         if self._dry_run:
@@ -504,6 +539,7 @@ class NexusOrchestrator:
                 f"[Orchestrator] DRY RUN — would dispatch L{effective_level} "
                 f"runbook={rca_result.runbook_id} for {cluster.cluster_id}"
             )
+            self._active_incidents.pop(target, None)
             return
 
         # Build an enriched event from the most critical signal in the cluster
@@ -557,7 +593,7 @@ class NexusOrchestrator:
             deploy_sha=primary.deploy_sha,
             correlation_id=incident_id or cluster.cluster_id,
             context=enriched_context,
-            suggested_runbook=rca.runbook_id,
+            suggested_runbook=rca.runbook_id or rca.suggested_action,
             suggested_healing_level=rca.healing_level,
             confidence=confidence,
         )
@@ -601,6 +637,10 @@ class NexusOrchestrator:
                 logger.info(
                     f"[Orchestrator] Target '{resolved_target}' is in cooldown for {runbook.id} — skipping approval staging"
                 )
+                if fsm and fsm.can_transition_to(IncidentState.FAILED):
+                    await fsm.transition_to(IncidentState.FAILED, reason=f"Target in cooldown for {runbook.id}")
+                if target:
+                    self._active_incidents.pop(target, None)
                 return
 
             approval_id = queue.enqueue(
@@ -639,29 +679,46 @@ class NexusOrchestrator:
                 target
                 or f"{cluster.namespace or 'default'}/{cluster.primary_resource or 'unknown'}"
             )
+            proposed_tool = rca.suggested_action
+            if not proposed_tool and rca.healing_level == 0:
+                proposed_tool = "manual_review"
+                action_level = 0
+            else:
+                proposed_tool = proposed_tool or "k8s_restart_deployment"
+                action_level = rca.healing_level or 1
+
+            tool_args = rca.action_params or {}
+            if proposed_tool != "manual_review":
+                if "deployment_name" not in tool_args and "resource_name" not in tool_args:
+                    tool_args["deployment_name"] = cluster.primary_resource
+                if "namespace" not in tool_args:
+                    tool_args["namespace"] = cluster.namespace or "default"
+
             approval_id = queue.enqueue(
                 runbook_id="llm_dynamic",
-                action_type="manual_review",
+                action_type=proposed_tool,
                 target=resolved_target,
                 incident_id=resolved_incident_id,
-                healing_level=0,
+                healing_level=action_level,
                 confidence=confidence,
                 context={
                     "cluster_summary": cluster.to_summary(),
                     "llm_diagnosis": rca.root_cause,
                     "rca_source": rca.source,
                     "effective_level": effective_level,
+                    "proposed_tool": proposed_tool,
+                    "tool_args": tool_args,
                 },
             )
             if fsm and fsm.can_transition_to(IncidentState.APPROVAL_PENDING):
                 await fsm.transition_to(
                     IncidentState.APPROVAL_PENDING,
-                    reason="Staged manual review for human sign-off",
+                    reason=f"Staged dynamic platform action {proposed_tool} for human sign-off",
                 )
             logger.info(
-                f"[Orchestrator] No mapped runbook for LLM RCA {cluster.cluster_id} "
-                f"→ staged for manual review (class={rca.failure_class}, "
-                f"confidence={confidence:.2f})"
+                f"[Orchestrator] Dynamic platform action for LLM RCA {cluster.cluster_id} "
+                f"→ staged tool={proposed_tool} (approval_id={approval_id}, "
+                f"L{action_level}, confidence={confidence:.2f})"
             )
 
     async def _publish_decision_event(

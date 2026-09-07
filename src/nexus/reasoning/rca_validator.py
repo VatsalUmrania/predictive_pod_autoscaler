@@ -88,18 +88,27 @@ _ACTION_EVIDENCE: dict[str, frozenset[str]] = {
     "restart_pod": frozenset({"pod_crashloop", "pod_oomkilled", "pod_pending"}),
     "restart_deployment": frozenset({"pod_crashloop", "pod_oomkilled",
                                      "deployment_degraded", "rollout_stuck"}),
+    "k8s_restart_deployment": frozenset({"pod_crashloop", "pod_oomkilled",
+                                         "deployment_degraded", "rollout_stuck"}),
     "kubectl_rollout_undo": frozenset({"pod_crashloop", "high_error_rate",
                                        "rollout_stuck"}),
     "rollback_deployment": frozenset({"pod_crashloop", "high_error_rate",
                                       "rollout_stuck"}),
+    "k8s_rollback_deployment": frozenset({"pod_crashloop", "high_error_rate",
+                                          "rollout_stuck"}),
     "scale_deployment": frozenset({"hpa_maxed", "high_error_rate", "pod_pending"}),
+    "k8s_scale_deployment": frozenset({"hpa_maxed", "high_error_rate", "pod_pending"}),
     "scale_resource": frozenset({"hpa_maxed", "high_error_rate", "pod_pending",
                                   "lambda_throttle_spike"}),
+    "aws_update_lambda_memory": frozenset({"lambda_oom", "lambda_timeout"}),
+    "aws_update_lambda_timeout": frozenset({"lambda_timeout"}),
+    "aws_replay_dlq": frozenset({"sqs_dlq_depth_high"}),
     "flush_coredns_cache": frozenset({"dns_resolution_failure"}),
     # Low-blast actions always allowed — no signal gate needed
     "emit_alert": frozenset(),
     "patch_annotation": frozenset(),
     "patch_configmap": frozenset(),
+    "k8s_patch_configmap": frozenset(),
     "cordon_node": frozenset(),
     "drain_node": frozenset(),
 }
@@ -538,23 +547,50 @@ class RCAValidator:
 # ── Convenience helpers used by Orchestrator ──────────────────────────────────
 
 
-def downgrade_rca(rca_result: RCAResult, reason: str) -> RCAResult:
+def downgrade_rca(
+    rca_result: RCAResult,
+    reason: str,
+    cluster: IncidentCluster | None = None,
+) -> RCAResult:
     """
-    Return a new RCAResult demoted to failure_class='unknown', healing_level=0.
-    Called by the Orchestrator when the validator blocks an LLM RCA.
-    The original reasoning is preserved; reason is prepended.
+    Return a new RCAResult demoting unverified causal claims, while dynamically
+    preserving evidence-based symptom confidence and safe L1 platform remediation.
     """
+    signals = cluster.signal_types if cluster else set()
+
+    symptom_conf = 0.50
+    healing_level = 0
+    suggested_action = None
+
+    if any(s in signals for s in ("pod_crashloop", "pod_oomkilled", "deployment_degraded", "rollout_stuck")):
+        # Observable pod / deployment failure is real even if causal theory was blocked
+        symptom_conf = 0.85
+        healing_level = 1
+        suggested_action = "k8s_restart_deployment"
+    elif any(s in signals for s in ("lambda_oom", "lambda_timeout")):
+        symptom_conf = 0.80
+        healing_level = 2
+        suggested_action = "aws_update_lambda_memory" if "lambda_oom" in signals else "aws_update_lambda_timeout"
+    elif any(s in signals for s in ("high_error_rate", "apigw_5xx_spike")):
+        symptom_conf = 0.75
+        healing_level = 1
+        suggested_action = "k8s_restart_deployment"
+    elif signals:
+        # Detected signals exist
+        symptom_conf = 0.65
+        healing_level = 0
+
     return RCAResult(
         root_cause=rca_result.root_cause,
         failure_class="unknown",
-        healing_level=0,
+        healing_level=healing_level,
         runbook_id=None,
-        confidence=0.30,
+        confidence=symptom_conf,
         reasoning=f"[VALIDATION BLOCKED: {reason}] Original LLM reasoning: {rca_result.reasoning}",
         source=rca_result.source,
         actions_to_avoid=rca_result.actions_to_avoid,
         domain=rca_result.domain,
-        suggested_action=None,
-        action_params={},
+        suggested_action=suggested_action,
+        action_params={"resource_name": cluster.primary_resource, "namespace": cluster.namespace} if cluster else {},
         rollback_plan=None,
     )

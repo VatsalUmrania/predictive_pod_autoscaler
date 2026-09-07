@@ -210,16 +210,17 @@ class ConfidenceScorer:
         Map a confidence score to the maximum permitted healing level.
         Used by the Orchestrator to set the executor's confidence.
 
-            < 0.50 → L0  (alert only)
-            0.50-0.70 → L1
-            0.70-0.85 → L2
-            ≥ 0.85  → L3
+        Action Ladder Alignment:
+            L1 actions are no-regret (restart already failing pods, flush cache).
+            They are permitted whenever evidence indicates a real failure (>= 0.40).
+            L2 actions (scale, resize) require solid evidence (>= 0.70).
+            L3 actions (rollbacks, reverts) require high confidence (>= 0.85).
         """
         if confidence >= 0.85:
             return 3
         if confidence >= 0.70:
             return 2
-        if confidence >= 0.50:
+        if confidence >= 0.40:
             return 1
         return 0
 

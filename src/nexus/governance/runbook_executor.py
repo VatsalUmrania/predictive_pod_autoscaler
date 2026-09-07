@@ -406,7 +406,6 @@ class RunbookExecutor:
                         namespace,
                         label_selector=label_str,
                     ).items
-                    from datetime import datetime, timezone
                     _epoch = datetime.fromtimestamp(0, tz=timezone.utc)
                     sorted_rs = sorted(
                         rs_list,

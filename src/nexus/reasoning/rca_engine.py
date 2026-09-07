@@ -487,12 +487,67 @@ _RULES: list[tuple[frozenset[str], bool, dict[str, Any]]] = [
     ),
 ]
 
+def _calculate_evidence_confidence(cluster: IncidentCluster, failure_class: str, healing_level: int) -> float:
+    """Dynamically calculate confidence from observable signals, quorum, and telemetry."""
+    signals = cluster.signal_types
+    if not signals:
+        return 0.50
+
+    # Deterministic signals
+    if any(s in signals for s in ("env_contract_violation", "secret_committed", "pod_oomkilled", "lambda_oom")):
+        return 0.95
+
+    # Crashloop evidence: check restart count from event contexts if present
+    if "pod_crashloop" in signals or "deployment_degraded" in signals:
+        restarts = 0
+        for e in cluster.events:
+            if isinstance(e.context, dict) and "restart_count" in e.context:
+                try:
+                    restarts = max(restarts, int(e.context["restart_count"]))
+                except (ValueError, TypeError):
+                    pass
+        base = 0.82
+        if restarts >= 3:
+            base += 0.08
+        elif restarts >= 1:
+            base += 0.03
+        if cluster.has_deploy_event:
+            base += 0.05
+        return min(0.95, base)
+
+    # Error rate / latency metrics
+    if "high_error_rate" in signals or "apigw_5xx_spike" in signals:
+        base = 0.80
+        if cluster.has_deploy_event:
+            base += 0.05
+        if len(cluster.agent_types) >= 2:
+            base += 0.05
+        return min(0.95, base)
+
+    # AWS timeout / throttle
+    if any("throttle" in s or "timeout" in s or "dlq" in s for s in signals):
+        return 0.82
+
+    # Default for matched rule
+    return 0.75
+
+
 def _rule_based_rca(cluster: IncidentCluster) -> RCAResult:
     """
     Deterministic fallback RCA — evaluates rule table against cluster signal types.
     Rules are priority-ordered (most specific first).
     """
     signal_types = cluster.signal_types  # Set[str]
+
+    action_map = {
+        "pod_crashloop": "k8s_restart_deployment",
+        "pod_oomkilled": "k8s_restart_deployment",
+        "deployment_degraded": "k8s_restart_deployment",
+        "rollout_stuck": "k8s_rollback_deployment",
+        "lambda_oom": "aws_update_lambda_memory",
+        "lambda_timeout": "aws_update_lambda_timeout",
+        "sqs_dlq_depth_high": "aws_replay_dlq",
+    }
 
     for required, partial_ok, tmpl in _RULES:
         if partial_ok:
@@ -501,14 +556,24 @@ def _rule_based_rca(cluster: IncidentCluster) -> RCAResult:
             matched = required.issubset(signal_types)  # ALL required signals present
 
         if matched:
+            conf = _calculate_evidence_confidence(cluster, tmpl["failure_class"], tmpl["healing_level"])
+            suggested_action = tmpl.get("suggested_action")
+            if not suggested_action:
+                for sig, act in action_map.items():
+                    if sig in signal_types:
+                        suggested_action = act
+                        break
+
             return RCAResult(
                 root_cause=tmpl["root_cause"],
                 failure_class=tmpl["failure_class"],
                 healing_level=tmpl["healing_level"],
                 runbook_id=tmpl.get("runbook_id"),
-                confidence=tmpl["confidence"],
+                confidence=conf,
                 reasoning=tmpl["reasoning"],
                 source="rule_based",
+                suggested_action=suggested_action,
+                action_params={"resource_name": cluster.primary_resource, "namespace": cluster.namespace},
             )
 
     # Default — cannot determine
@@ -517,7 +582,7 @@ def _rule_based_rca(cluster: IncidentCluster) -> RCAResult:
         failure_class="unknown",
         healing_level=0,
         runbook_id=None,
-        confidence=0.30,
+        confidence=0.50 if signal_types else 0.30,
         reasoning="No matching rule found — alerting only.",
         source="rule_based",
     )
@@ -656,6 +721,63 @@ class RCAEngine:
             f"runbook={result.runbook_id}"
         )
         return result
+
+    async def refine(
+        self,
+        cluster: IncidentCluster,
+        previous_rca: RCAResult,
+        critique: str,
+        evidence_gaps: list[str] | None = None,
+    ) -> RCAResult | None:
+        """
+        Diagnostic Reflexion / Evaluator-Optimizer refinement.
+        Sends previous hypothesis and validator critique back to the LLM to refine the RCA.
+        """
+        if not self._provider.is_available():
+            return None
+
+        gaps_str = f"\nMissing required evidence signals: {sorted(evidence_gaps)}" if evidence_gaps else ""
+        refinement_prompt = f"""\
+[DIAGNOSTIC REFLECTION & CORRECTION REQUEST]
+An automated neuro-symbolic validator evaluated your previous RCA hypothesis and rejected it:
+- Validator Critique: {critique}{gaps_str}
+
+Your previous hypothesis was:
+- root_cause: {previous_rca.root_cause}
+- failure_class: {previous_rca.failure_class}
+- healing_level: {previous_rca.healing_level}
+- suggested_action: {previous_rca.suggested_action}
+
+Observable Incident Context:
+{cluster.to_llm_context()}
+
+Instructions for correction:
+1. Re-evaluate the observable signals. Do NOT claim causes that lack supporting signals in the incident context (e.g. do not claim 'resource_exhaustion' without OOM or throttling signals; do not claim 'bad_deploy' if deploy events are absent; do not propose actions without supporting failure evidence).
+2. Ground your failure_class and suggested_action directly in the verifiable signals present.
+3. If the failure cause is ambiguous, classify as 'unknown' or choose a conservative safe automated action (e.g. k8s_restart_deployment at healing_level 1) rather than unsupported speculation.
+
+Respond ONLY with valid JSON following the required schema.\
+"""
+        try:
+            raw_text = await asyncio.wait_for(
+                self._provider.complete(refinement_prompt),
+                timeout=self._timeout_s,
+            )
+            self._llm_calls += 1
+            result = self._parse_response(raw_text)
+            if result:
+                result.source = f"{self._provider.name}_refined"
+                logger.info(
+                    f"[RCAEngine] Refined RCA from {self._provider.name}: "
+                    f"class={result.failure_class} L{result.healing_level} "
+                    f"conf={result.confidence:.2f} action={result.suggested_action}"
+                )
+                return result
+        except Exception as exc:
+            self._llm_errors += 1
+            logger.warning(f"[RCAEngine] Diagnostic refinement error: {exc}")
+
+        return None
 
     def _parse_response(self, raw: str) -> RCAResult | None:
         """Parse LLM JSON response into an RCAResult."""
