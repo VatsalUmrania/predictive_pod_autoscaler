@@ -9,47 +9,107 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from nexus.tools.base import NexusTool, NexusToolResult, ToolDomain, ToolRiskLevel
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
 class GetPodLogsSchema(BaseModel):
+    model_config = {"extra": "ignore"}
     namespace: str = Field(default="default", description="Kubernetes namespace")
     pod_name: str = Field(..., description="Target pod name")
     tail_lines: int = Field(default=50, description="Number of log lines to retrieve")
 
 
 class DescribeResourceSchema(BaseModel):
+    model_config = {"extra": "ignore"}
     namespace: str = Field(default="default", description="Kubernetes namespace")
     resource_kind: str = Field(default="deployment", description="Resource kind: pod, deployment, service, configmap")
-    resource_name: str = Field(..., description="Resource name")
+    resource_name: str = Field(default="", description="Resource name")
+    deployment_name: str | None = Field(default=None, description="Optional alias for resource_name")
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_name(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            if not values.get("resource_name") and values.get("deployment_name"):
+                values["resource_name"] = values["deployment_name"]
+        return values
 
 
 class GetMetricsSchema(BaseModel):
+    model_config = {"extra": "ignore"}
     namespace: str = Field(default="default", description="Kubernetes namespace")
     pod_name: str = Field(..., description="Target pod name")
 
 
 class RestartDeploymentSchema(BaseModel):
+    model_config = {"extra": "ignore"}
     namespace: str = Field(default="default", description="Kubernetes namespace")
-    deployment_name: str = Field(..., description="Deployment name to rollout restart")
+    deployment_name: str = Field(default="", description="Deployment name to rollout restart")
+    resource_name: str | None = Field(default=None, description="Optional alias for deployment_name")
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_name(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            if not values.get("deployment_name") and values.get("resource_name"):
+                values["deployment_name"] = values["resource_name"]
+        return values
 
 
 class ScaleResourceSchema(BaseModel):
+    model_config = {"extra": "ignore"}
     namespace: str = Field(default="default", description="Kubernetes namespace")
     resource_kind: str = Field(default="deployment", description="Resource kind to scale (deployment)")
-    resource_name: str = Field(..., description="Target resource name")
+    resource_name: str = Field(default="", description="Target resource name")
+    deployment_name: str | None = Field(default=None, description="Optional alias for resource_name")
     replicas: int = Field(..., description="Target replica count")
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_name(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            if not values.get("resource_name") and values.get("deployment_name"):
+                values["resource_name"] = values["deployment_name"]
+        return values
 
 
 class RollbackDeploymentSchema(BaseModel):
+    model_config = {"extra": "ignore"}
     namespace: str = Field(default="default", description="Kubernetes namespace")
-    deployment_name: str = Field(..., description="Deployment name to roll back to previous revision")
+    deployment_name: str = Field(default="", description="Deployment name to roll back to previous revision")
+    resource_name: str | None = Field(default=None, description="Optional alias for deployment_name")
+    target_revision: int | None = Field(default=None, description="Optional target revision number to roll back to")
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_name(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            if not values.get("deployment_name") and values.get("resource_name"):
+                values["deployment_name"] = values["resource_name"]
+        return values
+
+
+class RemoveContainerCommandSchema(BaseModel):
+    model_config = {"extra": "ignore"}
+    namespace: str = Field(default="default", description="Kubernetes namespace")
+    deployment_name: str = Field(default="", description="Deployment name")
+    resource_name: str | None = Field(default=None, description="Optional alias for deployment_name")
+    container_name: str | None = Field(default=None, description="Target container name (defaults to primary container)")
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_name(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            if not values.get("deployment_name") and values.get("resource_name"):
+                values["deployment_name"] = values["resource_name"]
+        return values
 
 
 class PatchResourceLimitsSchema(BaseModel):
+    model_config = {"extra": "ignore"}
     namespace: str = Field(default="default", description="Kubernetes namespace")
     deployment_name: str = Field(..., description="Deployment name to patch")
     container_name: str | None = Field(default=None, description="Optional container name (defaults to first container)")
@@ -194,7 +254,7 @@ class K8sScaleResourceTool(NexusTool):
 
 class K8sRollbackDeploymentTool(NexusTool):
     name = "k8s_rollback_deployment"
-    description = "Roll back a Kubernetes deployment to its previous ReplicaSet revision."
+    description = "Roll back a Kubernetes deployment to its previous stable ReplicaSet revision."
     domain = ToolDomain.K8S
     risk_level = ToolRiskLevel.L3_DESTRUCTIVE
     args_schema = RollbackDeploymentSchema
@@ -206,8 +266,33 @@ class K8sRollbackDeploymentTool(NexusTool):
             k8s_tools.rollback_deployment,
             namespace=args.namespace,
             deployment_name=args.deployment_name,
+            target_revision=args.target_revision,
         )
         is_err = "Error rolling back" in res or "No previous ReplicaSet" in res
+        return NexusToolResult(
+            success=not is_err,
+            data={"message": res} if not is_err else None,
+            error=res if is_err else None,
+        )
+
+
+class K8sRemoveContainerCommandTool(NexusTool):
+    name = "k8s_remove_command_override"
+    description = "Remove faulty container command/args override from a deployment to restore container entrypoint."
+    domain = ToolDomain.K8S
+    risk_level = ToolRiskLevel.L2_MUTATE_APPROVAL
+    args_schema = RemoveContainerCommandSchema
+
+    async def execute(self, **kwargs: Any) -> NexusToolResult:
+        from nexus.agents import k8s_tools
+        args = self.args_schema(**kwargs)
+        res = await asyncio.to_thread(
+            k8s_tools.remove_container_command,
+            namespace=args.namespace,
+            deployment_name=args.deployment_name,
+            container_name=args.container_name,
+        )
+        is_err = "Error removing" in res or "not found" in res
         return NexusToolResult(
             success=not is_err,
             data={"message": res} if not is_err else None,

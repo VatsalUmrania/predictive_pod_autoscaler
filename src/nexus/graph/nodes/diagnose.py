@@ -13,12 +13,15 @@ from datetime import datetime, timezone
 from typing import Any
 
 from nexus.engine.fsm import IncidentState
+from nexus.graph.rca import RCALeadSynthesizer, RCAResult
 from nexus.graph.state import IncidentGraphState
 from nexus.reasoning.incident_cluster import IncidentCluster
-from nexus.reasoning.rca_engine import RCAEngine, RCAResult
 from nexus.reasoning.rca_validator import RCAValidator, ValidationVerdict, downgrade_rca
 
 logger = logging.getLogger(__name__)
+
+# Backwards-compatible alias for tests and reflection harness
+RCAEngine = RCALeadSynthesizer
 
 
 async def diagnose_node(state: IncidentGraphState) -> dict[str, Any]:
@@ -29,7 +32,7 @@ async def diagnose_node(state: IncidentGraphState) -> dict[str, Any]:
     target_name = target.get("name", "unknown")
 
     # 1. Synthesize cluster for RCA engine
-    from nexus.bus.incident_event import AgentType, IncidentEvent, Severity
+    from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
 
     now = datetime.now(timezone.utc)
     cluster = IncidentCluster(
@@ -54,10 +57,21 @@ async def diagnose_node(state: IncidentGraphState) -> dict[str, Any]:
                 sev_val = str(raw_evt.get("severity", "warning")).lower()
                 sev_enum = Severity.CRITICAL if sev_val == "critical" else Severity.WARNING
 
+                sig_raw = str(raw_evt.get("signal_type", "threshold_breach")).lower().replace("-", "_")
+                if sig_raw in ("crashloopbackoff", "crashloop", "crash_loop", "pod_crash_loop"):
+                    sig_enum = SignalType.POD_CRASHLOOP
+                elif sig_raw in ("oomkilled", "oom_killed", "pod_oom"):
+                    sig_enum = SignalType.POD_OOMKILLED
+                else:
+                    try:
+                        sig_enum = SignalType(sig_raw)
+                    except ValueError:
+                        sig_enum = sig_raw
+
                 evt = IncidentEvent(
-                    agent=agent_enum,
-                    signal_type=str(raw_evt.get("signal_type", "threshold_breach")),
-                    severity=sev_enum,
+                    agent=agent_enum.value if hasattr(agent_enum, "value") else str(agent_enum),
+                    signal_type=sig_enum.value if hasattr(sig_enum, "value") else str(sig_enum),
+                    severity=sev_enum.value if hasattr(sev_enum, "value") else str(sev_enum),
                     namespace=str(raw_evt.get("namespace") or target.get("namespace", "default")),
                     resource_name=str(raw_evt.get("resource_name") or target_name),
                 )
@@ -65,9 +79,47 @@ async def diagnose_node(state: IncidentGraphState) -> dict[str, Any]:
         except Exception as evt_exc:
             logger.debug("[Diagnose] Note processing event: %s", evt_exc)
 
-    # 2. Execute RCA analysis
+    desc = str(telemetry.get("live_config", {}).get("describe", "")).lower()
+    has_deploy = (
+        "active rollout=true" in desc
+        or "replicasets: 2" in desc
+        or "scalingreplicaset" in desc
+        or "command:" in desc
+        or "command override" in desc
+    )
+    if has_deploy and "deploy_event" not in cluster.signal_types:
+        cluster.events.append(
+            IncidentEvent(
+                agent=AgentType.K8S,
+                signal_type=SignalType.DEPLOY_EVENT,
+                severity=Severity.WARNING,
+                namespace=str(target.get("namespace", "default")),
+                resource_name=str(target_name),
+            )
+        )
+
+    # 2. Execute Multi-Agent RCA analysis
     rca_engine = RCAEngine()
-    rca_result: RCAResult = await rca_engine.analyze(cluster)
+    if type(rca_engine) is RCALeadSynthesizer:
+        rca_result: RCAResult = await rca_engine.investigate(
+            telemetry=telemetry,
+            events=events,
+            target=target,
+            platform=state.get("platform", "kubernetes"),
+        )
+    elif hasattr(rca_engine, "analyze"):
+        import inspect
+        res = rca_engine.analyze(cluster)
+        rca_result = await res if inspect.isawaitable(res) else res
+    else:
+        import inspect
+        res = rca_engine.investigate(
+            telemetry=telemetry,
+            events=events,
+            target=target,
+            platform=state.get("platform", "kubernetes"),
+        )
+        rca_result = await res if inspect.isawaitable(res) else res
 
     # 3. Neuro-symbolic validation via RCAValidator (Evaluator-Optimizer Harness)
     validator = RCAValidator()
@@ -79,7 +131,8 @@ async def diagnose_node(state: IncidentGraphState) -> dict[str, Any]:
     # Evaluator-Optimizer (Reflexion) Loop:
     # If the initial hypothesis was blocked, and an LLM is active,
     # critique the hypothesis back to the LLM to self-correct against real cluster signals.
-    if not verdict.passed and rca_engine._provider.is_available() and rca_result.source != "rule_based":
+    is_engine_available = getattr(getattr(rca_engine, "_provider", None), "is_available", lambda: False)()
+    if not verdict.passed and is_engine_available and rca_result.source != "rule_based" and hasattr(rca_engine, "refine"):
         logger.info(
             "[Diagnose Reflexion] Validator BLOCKED initial RCA (%s: %s). Prompting LLM critic reflection.",
             rca_result.failure_class,
@@ -172,6 +225,7 @@ async def diagnose_node(state: IncidentGraphState) -> dict[str, Any]:
         "failure_class": final_rca.failure_class,
         "confidence": final_rca.confidence,
         "suggested_action": final_rca.suggested_action,
+        "suggested_fix": getattr(final_rca, "suggested_fix", None),
         "action_params": final_rca.action_params,
         "runbook_id": final_rca.runbook_id,
         "reasoning": final_rca.reasoning,

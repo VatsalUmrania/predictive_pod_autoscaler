@@ -182,7 +182,6 @@ class NetworkAgent(BaseAgent):
                         error_message=f"getaddrinfo failed after {self.dns_timeout_s}s timeout",
                         affected_services=[hostname],
                     ).model_dump(),
-                    suggested_runbook="runbook_dns_resolution_failure_v1",
                     suggested_healing_level=1,
                     confidence=0.90,
                 )

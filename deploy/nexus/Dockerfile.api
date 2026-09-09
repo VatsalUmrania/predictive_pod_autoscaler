@@ -45,10 +45,7 @@ COPY --from=builder /venv /venv
 COPY --from=builder /build/src ./src
 
 # Create data directory with correct permissions
-RUN mkdir -p /data /app/logs /runbooks && chown -R nexus:nexus /data /app /runbooks
-
-# Copy runbooks into image (will be overlay-mounted at runtime via ConfigMap)
-COPY deploy/nexus/runbooks/*.yaml /runbooks/
+RUN mkdir -p /data /app/logs && chown -R nexus:nexus /data /app
 
 USER nexus
 
@@ -68,5 +65,4 @@ ENTRYPOINT ["nexus"]
 CMD ["server", "start", \
     "--nats-url=nats://nats.nexus.svc.cluster.local:4222", \
     "--port=8080", \
-    "--runbook-dir=/runbooks", \
     "--log-level=INFO"]

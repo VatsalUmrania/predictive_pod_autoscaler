@@ -27,6 +27,7 @@ from nexus.tools.k8s_adapter import (
     K8sGetMetricsTool,
     K8sGetPodLogsTool,
     K8sPatchResourceLimitsTool,
+    K8sRemoveContainerCommandTool,
     K8sRestartDeploymentTool,
     K8sRollbackDeploymentTool,
     K8sScaleResourceTool,
@@ -47,7 +48,18 @@ class K8sPlatformAdapter(BasePlatformAdapter):
             K8sScaleResourceTool.name: K8sScaleResourceTool(),
             K8sRollbackDeploymentTool.name: K8sRollbackDeploymentTool(),
             K8sPatchResourceLimitsTool.name: K8sPatchResourceLimitsTool(),
+            K8sRemoveContainerCommandTool.name: K8sRemoveContainerCommandTool(),
         }
+        # Standard aliases
+        self._tools["k8s_scale_deployment"] = self._tools[K8sScaleResourceTool.name]
+        self._tools["scale_deployment"] = self._tools[K8sScaleResourceTool.name]
+        self._tools["restart_deployment"] = self._tools[K8sRestartDeploymentTool.name]
+        self._tools["rollback_deployment"] = self._tools[K8sRollbackDeploymentTool.name]
+        self._tools["k8s_restart"] = self._tools[K8sRestartDeploymentTool.name]
+        self._tools["k8s_rollback"] = self._tools[K8sRollbackDeploymentTool.name]
+        self._tools["remove_command_override"] = self._tools[K8sRemoveContainerCommandTool.name]
+        self._tools["k8s_remove_command"] = self._tools[K8sRemoveContainerCommandTool.name]
+        self._tools["k8s_clear_command"] = self._tools[K8sRemoveContainerCommandTool.name]
 
     @property
     def platform_id(self) -> str:
@@ -86,24 +98,56 @@ class K8sPlatformAdapter(BasePlatformAdapter):
                 primary_evt = evt
                 break
 
-        raw_name = str(primary_evt.get("resource_name", "unknown"))
+        ctx = primary_evt.get("context", {}) if isinstance(primary_evt.get("context"), dict) else {}
         namespace = str(primary_evt.get("namespace", "default"))
-        kind = "deployment"
+        raw_kind = str(primary_evt.get("resource_kind") or "").lower()
+        deployment_name = ctx.get("deployment_name") or primary_evt.get("deployment")
+        pod_name = ctx.get("pod_name")
 
-        # Handle namespace/name syntax if present
+        raw_name = str(primary_evt.get("resource_name", "unknown"))
         if "/" in raw_name and not raw_name.startswith("arn:"):
             parts = raw_name.split("/", 1)
             namespace = parts[0]
             raw_name = parts[1]
 
-        if "pod" in raw_name or "pod" in str(primary_evt.get("signal_type", "")).lower():
+        # Prioritize explicit deployment target
+        if raw_kind in ("deployment", "deploy"):
+            kind = "deployment"
+            name = deployment_name or raw_name
+        elif raw_kind == "pod":
             kind = "pod"
+            name = pod_name or raw_name
+        elif deployment_name and raw_name == deployment_name:
+            kind = "deployment"
+            name = deployment_name
+        elif pod_name and raw_name == pod_name:
+            kind = "pod"
+            name = pod_name
+        elif "pod" in str(primary_evt.get("signal_type", "")).lower() or (raw_name and len(raw_name.split("-")) >= 3 and not raw_kind):
+            kind = "pod"
+            name = pod_name or raw_name
+        elif raw_name and raw_name != "unknown":
+            kind = "deployment"
+            name = raw_name
+        elif pod_name:
+            kind = "pod"
+            name = pod_name
+        else:
+            kind = "deployment"
+            name = raw_name
+
+        labels: dict[str, str] = {}
+        if pod_name:
+            labels["pod_name"] = str(pod_name)
+        if deployment_name:
+            labels["deployment_name"] = str(deployment_name)
 
         return TargetResource(
             platform="kubernetes",
             namespace=namespace or "default",
-            name=raw_name,
+            name=name,
             kind=kind,
+            labels=labels,
         )
 
     async def collect_telemetry(self, target: TargetResource) -> PlatformTelemetry:
@@ -125,10 +169,11 @@ class K8sPlatformAdapter(BasePlatformAdapter):
             live_config["describe"] = desc_res
 
             # 2. Gather logs if target is a pod or deployment
+            pod_for_logs = target.labels.get("pod_name") or target.name
             log_res = await asyncio.to_thread(
                 k8s_tools.get_pod_logs,
                 namespace=target.namespace,
-                pod_name=target.name,
+                pod_name=pod_for_logs,
                 tail_lines=50,
             )
             if "Error fetching logs" not in log_res:

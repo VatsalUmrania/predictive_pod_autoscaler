@@ -70,11 +70,27 @@ class IncidentCluster:
 
     @property
     def signal_types(self) -> set[str]:
-        return {str(e.signal_type) for e in self.events}
+        res = set()
+        for e in self.events:
+            st = getattr(e, "signal_type", None)
+            if hasattr(st, "value"):
+                res.add(str(st.value).lower())
+            elif st is not None:
+                s = str(st).lower()
+                res.add(s.split(".")[-1] if "." in s else s)
+        return res
 
     @property
     def agent_types(self) -> set[str]:
-        return {str(e.agent) for e in self.events}
+        res = set()
+        for e in self.events:
+            ag = getattr(e, "agent", None)
+            if hasattr(ag, "value"):
+                res.add(str(ag.value).lower())
+            elif ag is not None:
+                s = str(ag).lower()
+                res.add(s.split(".")[-1] if "." in s else s)
+        return res
 
     @property
     def age_seconds(self) -> float:

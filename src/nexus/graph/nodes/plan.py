@@ -146,7 +146,10 @@ def plan_remediation_node(state: IncidentGraphState) -> dict[str, Any]:
         # Dynamic tool proposal from diagnosis / evidence
         rollback_tool = None
         rollback_params = None
-        if "rollback" in suggested_action or "undo" in suggested_action:
+        suggested_fix = diagnosis.get("suggested_fix")
+        if suggested_fix:
+            approval_reason = suggested_fix
+        elif "rollback" in suggested_action or "undo" in suggested_action:
             approval_reason = f"Rollback action: {suggested_action}"
             rollback_tool = "k8s_restart_deployment" if platform == "kubernetes" else None
             rollback_params = {"namespace": target_ns, "deployment_name": target_name} if platform == "kubernetes" else None
@@ -180,12 +183,14 @@ def plan_remediation_node(state: IncidentGraphState) -> dict[str, Any]:
 
         params.update(action_params)
 
+        step_description = suggested_fix or f"Execute dynamic remediation {tool_full_name} on {target_name}"
+
         steps.append(
             PlanStep(
                 step_index=0,
                 tool_name=tool_full_name,
                 parameters=params,
-                description=f"Execute dynamic remediation {tool_full_name} on {target_name}",
+                description=step_description,
                 rollback_tool=rollback_tool,
                 rollback_parameters=rollback_params,
             )

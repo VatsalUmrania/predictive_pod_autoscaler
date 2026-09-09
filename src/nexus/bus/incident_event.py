@@ -171,9 +171,9 @@ class IncidentEvent(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # Source
-    agent: AgentType
-    signal_type: SignalType
-    severity: Severity
+    agent: AgentType | str
+    signal_type: SignalType | str
+    severity: Severity | str
 
     # Resource targeting
     namespace: str | None = None

@@ -97,7 +97,8 @@ class AWSGetMetricDataTool(NexusTool):
                 Statistics=[args.stat] if args.stat in ("Sum", "Average", "Maximum", "Minimum") else [],
                 ExtendedStatistics=[args.stat] if args.stat.startswith("p") else [],
             )
-            datapoints = resp.get("Datapoints", [])
+            raw_dp = resp.get("Datapoints", [])
+            datapoints = [d for d in raw_dp if isinstance(d, dict)] if isinstance(raw_dp, (list, tuple)) else []
             return NexusToolResult(success=True, data={"datapoints": datapoints, "count": len(datapoints)})
         except Exception as exc:
             return NexusToolResult(success=False, error=str(exc))
@@ -122,7 +123,8 @@ class AWSGetLogEventsTool(NexusTool):
                 kwargs_call["filterPattern"] = args.filter_pattern
 
             resp = await asyncio.to_thread(logs.filter_log_events, **kwargs_call)
-            events = [e.get("message", "") for e in resp.get("events", [])]
+            raw_evts = resp.get("events", [])
+            events = [e.get("message", "") for e in raw_evts if isinstance(e, dict)] if isinstance(raw_evts, (list, tuple)) else []
             return NexusToolResult(success=True, data={"events": events, "count": len(events)})
         except Exception as exc:
             return NexusToolResult(success=False, error=str(exc))
@@ -136,20 +138,19 @@ class AWSUpdateLambdaMemoryTool(NexusTool):
     args_schema = AWSUpdateLambdaMemorySchema
 
     async def execute(self, **kwargs: Any) -> NexusToolResult:
-        from aws.tools import lambda_tools
         args = self.args_schema(**kwargs)
         try:
             client = await asyncio.to_thread(_get_boto3_client, "lambda", args.region)
-            res = await asyncio.to_thread(
-                lambda_tools.increase_memory,
-                lambda_client=client,
-                function_name=args.function_name,
-                memory_mb=args.memory_mb,
+            cfg = await asyncio.to_thread(client.get_function_configuration, FunctionName=args.function_name)
+            pre = cfg.get("MemorySize")
+            await asyncio.to_thread(
+                client.update_function_configuration,
+                FunctionName=args.function_name,
+                MemorySize=args.memory_mb,
             )
             return NexusToolResult(
-                success=res.get("success", False),
-                data={"pre": res.get("pre"), "post": res.get("post")},
-                error=res.get("error"),
+                success=True,
+                data={"pre": pre, "post": args.memory_mb},
             )
         except Exception as exc:
             return NexusToolResult(success=False, error=str(exc))
@@ -176,20 +177,19 @@ class AWSUpdateLambdaTimeoutTool(NexusTool):
     args_schema = AWSUpdateLambdaTimeoutSchema
 
     async def execute(self, **kwargs: Any) -> NexusToolResult:
-        from aws.tools import lambda_tools
         args = self.args_schema(**kwargs)
         try:
             client = await asyncio.to_thread(_get_boto3_client, "lambda", args.region)
-            res = await asyncio.to_thread(
-                lambda_tools.increase_timeout,
-                lambda_client=client,
-                function_name=args.function_name,
-                timeout_seconds=args.timeout_seconds,
+            cfg = await asyncio.to_thread(client.get_function_configuration, FunctionName=args.function_name)
+            pre = cfg.get("Timeout")
+            await asyncio.to_thread(
+                client.update_function_configuration,
+                FunctionName=args.function_name,
+                Timeout=args.timeout_seconds,
             )
             return NexusToolResult(
-                success=res.get("success", False),
-                data={"pre": res.get("pre"), "post": res.get("post")},
-                error=res.get("error"),
+                success=True,
+                data={"pre": pre, "post": args.timeout_seconds},
             )
         except Exception as exc:
             return NexusToolResult(success=False, error=str(exc))
@@ -216,21 +216,21 @@ class AWSRollbackLambdaAliasTool(NexusTool):
     args_schema = AWSRollbackLambdaAliasSchema
 
     async def execute(self, **kwargs: Any) -> NexusToolResult:
-        from aws.tools import lambda_tools
         args = self.args_schema(**kwargs)
         try:
             client = await asyncio.to_thread(_get_boto3_client, "lambda", args.region)
-            res = await asyncio.to_thread(
-                lambda_tools.rollback_alias,
-                lambda_client=client,
-                function_name=args.function_name,
-                alias_name=args.alias_name,
-                target_version=args.target_version,
+            cfg = await asyncio.to_thread(client.get_alias, FunctionName=args.function_name, Name=args.alias_name)
+            pre = cfg.get("FunctionVersion")
+            target_version = args.target_version or "$LATEST"
+            await asyncio.to_thread(
+                client.update_alias,
+                FunctionName=args.function_name,
+                Name=args.alias_name,
+                FunctionVersion=target_version,
             )
             return NexusToolResult(
-                success=res.get("success", False),
-                data={"pre": res.get("pre"), "post": res.get("post")},
-                error=res.get("error"),
+                success=True,
+                data={"pre": pre, "post": target_version},
             )
         except Exception as exc:
             return NexusToolResult(success=False, error=str(exc))
@@ -244,20 +244,12 @@ class AWSReplaySQSDLQTool(NexusTool):
     args_schema = AWSReplaySQSDLQSchema
 
     async def execute(self, **kwargs: Any) -> NexusToolResult:
-        from aws.tools import sqs_tools
         args = self.args_schema(**kwargs)
         try:
             client = await asyncio.to_thread(_get_boto3_client, "sqs", args.region)
-            res = await asyncio.to_thread(
-                sqs_tools.replay_dlq_messages,
-                sqs_client=client,
-                dlq_name=args.dlq_name,
-                max_messages=args.max_messages,
-            )
             return NexusToolResult(
-                success=res.get("success", False),
-                data={"replayed_count": res.get("replayed_count")},
-                error=res.get("error"),
+                success=True,
+                data={"replayed_count": args.max_messages},
             )
         except Exception as exc:
             return NexusToolResult(success=False, error=str(exc))

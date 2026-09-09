@@ -52,7 +52,6 @@ from typing import Any
 from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
 from nexus.bus.nats_client import NATSClient
 from nexus.governance.action_ladder import ActionLadder
-from nexus.governance.runbook import Runbook, RunbookAction, RunbookTrigger
 
 logger = logging.getLogger(__name__)
 
@@ -506,33 +505,24 @@ class Prescaler:
             )
             return
 
-        # Build a synthetic Runbook for the ActionLadder governance checks
-        scale_action = RunbookAction(
-            type="scale_deployment",
-            description=f"Pre-scale {decision.deployment_name} for predicted traffic spike",
-            params={
+        # Build dynamic scale action for ActionLadder governance checks
+        scale_action = {
+            "type": "scale_deployment",
+            "description": f"Pre-scale {decision.deployment_name} for predicted traffic spike",
+            "params": {
                 "namespace": decision.namespace,
                 "name": decision.deployment_name,
                 "replicas": decision.recommended_replicas,
             },
-        )
-        synthetic_runbook = Runbook(
-            id=f"prescale_{decision.decision_id}",
-            description="Predictive pre-scale",
-            failure_class="resource_exhaustion",
-            healing_level=2,
-            blast_radius="single_deployment",
-            cooldown_seconds=int(self._cooldown),
-            trigger=RunbookTrigger(signal_types=["traffic_spike_predicted"]),
-            actions=[scale_action],
-        )
+        }
 
         ladder_decision = await self._ladder.evaluate(
-            runbook=synthetic_runbook,
             action=scale_action,
             event=source_event,
             target=f"{decision.namespace}/{decision.deployment_name}",
             confidence=decision.confidence,
+            action_type="scale_deployment",
+            healing_level=2,
         )
 
         if not ladder_decision.can_proceed:

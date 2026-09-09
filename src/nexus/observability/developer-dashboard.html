@@ -1265,6 +1265,14 @@
             for (const p of pendingList) {
               const exists = data.find(i => i.incident_id === p.incident_id || i.incident_id === p.approval_id);
               if (!exists) {
+                const rcaObj = p.context?.rca || p.rca || (p.plan ? {
+                  root_cause: p.plan.root_cause,
+                  failure_class: p.plan.failure_mode,
+                  confidence: p.confidence,
+                  suggested_action: p.action_type,
+                  suggested_fix: p.suggested_fix || (p.plan.steps && p.plan.steps[0]?.description)
+                } : null);
+
                 data.unshift({
                   incident_id: p.approval_id || p.incident_id,
                   runbook_id: p.runbook_id,
@@ -1273,11 +1281,18 @@
                   outcome: 'pending',
                   confidence: p.confidence,
                   timestamp: (p.enqueued_at || new Date().toISOString()).slice(0, 19).replace('T', ' '),
-                  description: `Staged L${p.healing_level} action '${p.runbook_id}' on ${p.target} awaiting human approval.`,
-                  rca: p.context?.rca || null
+                  description: p.prompt || p.suggested_fix || `Staged L${p.healing_level} action '${p.runbook_id}' on ${p.target} awaiting human approval.`,
+                  suggested_fix: p.suggested_fix || (p.plan?.steps && p.plan.steps[0]?.description),
+                  suggested_action: p.action_type,
+                  plan: p.plan,
+                  rca: rcaObj
                 });
               } else {
                 exists.outcome = 'pending';
+                if (!exists.rca && (p.context?.rca || p.rca)) {
+                  exists.rca = p.context?.rca || p.rca;
+                }
+                if (p.suggested_fix) exists.suggested_fix = p.suggested_fix;
               }
             }
           }
@@ -1420,6 +1435,12 @@
             </div>
             <div class="rca-conf-bar"><div class="rca-conf-fill" style="width:${confPct}%"></div></div>
             <div class="rca-cause"><strong>Root Cause:</strong> ${rca.root_cause || inc.description}</div>
+            ${(rca.suggested_fix || inc.suggested_fix || (inc.plan?.steps && inc.plan.steps[0]?.description)) ? `
+              <div class="rca-fix" style="margin-top:8px;padding:8px 12px;background:rgba(59,130,246,0.12);border-left:3px solid var(--blue);border-radius:4px;">
+                <strong style="color:var(--blue);display:block;margin-bottom:3px;"><i class="ph-bold ph-wrench"></i> Suggested Remediation:</strong>
+                <span style="color:var(--text-bright);font-size:13px;line-height:1.4;display:block;">${rca.suggested_fix || inc.suggested_fix || inc.plan.steps[0].description}</span>
+                ${(rca.suggested_action || inc.suggested_action) ? `<div style="margin-top:5px;font-size:11px;color:var(--text-muted)">Tool: <code style="color:var(--cyan);background:rgba(0,0,0,0.3);padding:2px 5px;border-radius:3px;">${rca.suggested_action || inc.suggested_action}</code></div>` : ''}
+              </div>` : ''}
             ${rca.reasoning ? `<div class="rca-reason"><strong>Reasoning:</strong> ${rca.reasoning}</div>` : ''}
             ${rca.actions_to_avoid?.length ? `<div class="rca-avoid"><i class="ph-bold ph-warning" style="color:var(--amber);vertical-align:-1px;margin-right:2px"></i> <strong>Avoid:</strong> ${rca.actions_to_avoid.join(' · ')}</div>` : ''}
           </div>

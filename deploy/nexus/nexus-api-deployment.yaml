@@ -37,9 +37,9 @@ metadata:
     app.kubernetes.io/name: nexus-api
     app.kubernetes.io/component: self-healing
 rules:
-  # K8sAgent: list/watch pods, nodes, events
+  # K8sAgent: list/watch pods, pod logs, nodes, events
   - apiGroups: [""]
-    resources: ["pods", "nodes", "events", "services", "endpoints", "namespaces"]
+    resources: ["pods", "pods/log", "nodes", "events", "services", "endpoints", "namespaces"]
     verbs: ["get", "list", "watch"]
   # L1 restart_pod heal: delete the pod so its ReplicaSet recreates it.
   # Cluster-wide because NEXUS heals pods across namespaces (shop-demo in
@@ -48,10 +48,10 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["delete"]
-  # K8sAgent: read deployments/replicasets for scaling context
+  # K8sAgent & Remediation: read and mutate deployments/replicasets for restart & rollback
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "update", "patch"]
   # Prescaler autonomous mode: scale deployments
   - apiGroups: ["apps"]
     resources: ["deployments/scale"]
@@ -126,9 +126,6 @@ spec:
             # OPA policy engine — deploy/nexus/opa-deployment.yaml
             - name: NEXUS_OPA_URL
               value: "http://opa.nexus.svc.cluster.local:8181"
-            # Runbooks — baked into the image at /runbooks (Dockerfile API)
-            - name: NEXUS_RUNBOOK_DIR
-              value: "/runbooks"
             # LLM Provider configuration (Gemini / OpenAI / Anthropic / none)
             - name: NEXUS_LLM_PROVIDER
               value: "gemini"

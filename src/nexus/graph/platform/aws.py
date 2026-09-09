@@ -22,6 +22,7 @@ from nexus.graph.platform.base import (
     TargetResource,
 )
 from nexus.tools.aws_adapter import (
+    _get_boto3_client,
     AWSGetLogEventsTool,
     AWSGetMetricDataTool,
     AWSReplaySQSDLQTool,
@@ -32,13 +33,6 @@ from nexus.tools.aws_adapter import (
 from nexus.tools.base import NexusTool, NexusToolResult
 
 logger = logging.getLogger(__name__)
-
-
-def _get_boto3_client(service_name: str, region: str | None = None) -> Any:
-    import boto3
-
-    target_region = region or os.getenv("AWS_DEFAULT_REGION", "us-east-1")
-    return boto3.client(service_name, region_name=target_region)
 
 
 class AWSPlatformAdapter(BasePlatformAdapter):

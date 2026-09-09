@@ -254,7 +254,6 @@ class MetricsAgent(BaseAgent):
             current: float,
             threshold: float,
             severity: Severity,
-            runbook: str | None = None,
             healing_level: int | None = None,
             confidence: float = 0.85,
         ) -> IncidentEvent:
@@ -272,7 +271,6 @@ class MetricsAgent(BaseAgent):
                     anomaly_score=score,
                     window_seconds=120,
                 ).model_dump(),
-                suggested_runbook=runbook,
                 suggested_healing_level=healing_level,
                 confidence=confidence,
             )
@@ -298,7 +296,6 @@ class MetricsAgent(BaseAgent):
                     mem,
                     self.mem_threshold,
                     severity=Severity.CRITICAL if mem > 95 else Severity.WARNING,
-                    runbook="runbook_pod_crashloop_v1",
                     healing_level=1,
                 )
             )
@@ -312,7 +309,6 @@ class MetricsAgent(BaseAgent):
                     err,
                     self.err_threshold,
                     severity=Severity.CRITICAL if err > 0.20 else Severity.WARNING,
-                    runbook="runbook_high_error_rate_post_deploy_v1",
                     healing_level=2,
                     confidence=0.88,
                 )

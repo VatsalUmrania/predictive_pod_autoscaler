@@ -129,17 +129,31 @@ async def check_live_state(
     if action_type in _ALWAYS_PROCEED_UNVERIFIABLE:
         return _PROCEED_UNVERIFIABLE(action_type)
 
-    if action_type in ("restart_pod", "restart_deployment"):
+    if k8s_core is None or k8s_apps is None:
+        try:
+            from kubernetes import client as _k8s_c, config as _k8s_cfg
+            try:
+                _k8s_cfg.load_incluster_config()
+            except Exception:
+                _k8s_cfg.load_kube_config()
+            if k8s_core is None:
+                k8s_core = _k8s_c.CoreV1Api()
+            if k8s_apps is None:
+                k8s_apps = _k8s_c.AppsV1Api()
+        except Exception as _k_exc:
+            logger.debug(f"[LiveStateValidator] Could not auto-init K8s clients: {_k_exc}")
+
+    if action_type in ("restart_pod", "restart_deployment", "k8s_restart_deployment"):
         return await _check_pod_failure_condition(
             action_type, namespace, resource_name, k8s_core, k8s_apps
         )
 
-    if action_type in ("kubectl_rollout_undo", "rollback_deployment"):
+    if action_type in ("kubectl_rollout_undo", "rollback_deployment", "k8s_rollback_deployment"):
         return await _check_deployment_degraded(
-            action_type, namespace, resource_name, k8s_apps
+            action_type, namespace, resource_name, k8s_apps, k8s_core
         )
 
-    if action_type in ("scale_deployment", "scale_resource"):
+    if action_type in ("scale_deployment", "scale_resource", "k8s_scale_deployment"):
         return await _check_scale_condition(
             action_type, namespace, resource_name, k8s_apps
         )
@@ -293,10 +307,14 @@ async def _check_deployment_degraded(
     namespace: str,
     resource_name: str,
     k8s_apps: Any,
+    k8s_core: Any = None,
 ) -> LiveStateReport:
     """
-    For kubectl_rollout_undo / rollback_deployment:
-    Condition is still active if deployment.status.availableReplicas < spec.replicas.
+    For kubectl_rollout_undo / rollback_deployment / k8s_rollback_deployment:
+    Condition is still active if:
+      - deployment.status.available_replicas < spec.replicas, OR
+      - deployment.status.unavailable_replicas > 0, OR
+      - ANY pod belonging to this deployment is in CrashLoopBackOff, Error, OOMKilled, or restarting.
     """
     import asyncio
 
@@ -315,19 +333,22 @@ async def _check_deployment_degraded(
         return _UNKNOWN(action_type, exc)
 
     desired = dep.spec.replicas or 1
-    available = dep.status.available_replicas or 0
-    ready = dep.status.ready_replicas or 0
+    available = getattr(dep.status, "available_replicas", 0) or 0
+    ready = getattr(dep.status, "ready_replicas", 0) or 0
+    unavailable = getattr(dep.status, "unavailable_replicas", 0) or 0
 
     evidence = {
         "desired_replicas": desired,
         "available_replicas": available,
         "ready_replicas": ready,
+        "unavailable_replicas": unavailable,
     }
 
-    if available < desired:
+    # Check 1: replica counts directly degraded
+    if available < desired or unavailable > 0:
         logger.info(
             f"[LiveStateValidator] Degraded condition confirmed for "
-            f"{namespace}/{resource_name}: {available}/{desired} available "
+            f"{namespace}/{resource_name}: {available}/{desired} available, {unavailable} unavailable "
             f"— proceeding with {action_type}"
         )
         return LiveStateReport(
@@ -336,6 +357,57 @@ async def _check_deployment_degraded(
             evidence=evidence,
             action_type=action_type,
         )
+
+    # Check 2: pod statuses — during rolling updates, an old pod might still be
+    # reporting 'available' while new rollout pods are caught in CrashLoopBackOff!
+    if k8s_core is not None:
+        try:
+            pod_list = await loop.run_in_executor(
+                None,
+                lambda: k8s_core.list_namespaced_pod(namespace),
+            )
+            owned_pods = [
+                p for p in pod_list.items
+                if _pod_belongs_to_deployment(p, resource_name)
+            ]
+            failing_pods: list[dict[str, Any]] = []
+            for pod in owned_pods:
+                phase = (pod.status.phase or "").lower()
+                for cs in (pod.status.container_statuses or []):
+                    reason = cs.state.waiting.reason if (cs.state and cs.state.waiting) else None
+                    term_state = cs.state.terminated if (cs.state and cs.state.terminated) else (cs.last_state.terminated if cs.last_state else None)
+                    term_reason = term_state.reason if term_state else None
+                    exit_code = term_state.exit_code if term_state else None
+
+                    is_failing = (
+                        reason in ("CrashLoopBackOff", "Error", "CreateContainerConfigError")
+                        or term_reason in ("OOMKilled", "Error")
+                        or (exit_code is not None and exit_code != 0)
+                        or (cs.restart_count and cs.restart_count >= 1 and not cs.ready)
+                        or phase in ("pending", "failed")
+                    )
+                    if is_failing:
+                        failing_pods.append({
+                            "pod": pod.metadata.name,
+                            "phase": phase,
+                            "reason": reason or term_reason or f"exit_{exit_code}",
+                            "restarts": cs.restart_count,
+                        })
+                        break
+
+            if failing_pods:
+                logger.info(
+                    f"[LiveStateValidator] Active pod failure detected during rollout of {namespace}/{resource_name}: "
+                    f"{len(failing_pods)} failing pod(s) — proceeding with {action_type}"
+                )
+                return LiveStateReport(
+                    condition_still_active=True,
+                    verdict="proceed",
+                    evidence={**evidence, "failing_pods": failing_pods},
+                    action_type=action_type,
+                )
+        except Exception as p_exc:
+            logger.debug(f"[LiveStateValidator] Could not inspect pods for deployment {resource_name}: {p_exc}")
 
     logger.info(
         f"[LiveStateValidator] Deployment {namespace}/{resource_name} is healthy: "

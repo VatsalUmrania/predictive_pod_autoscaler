@@ -460,7 +460,6 @@ class DBAgent(BaseAgent):
                         utilization_pct=stats.utilization_pct,
                         blocking_query=stats.blocking_query,
                     ).model_dump(),
-                    suggested_runbook="runbook_db_connection_exhaustion_v1",
                     suggested_healing_level=2,
                     confidence=0.92,
                 )

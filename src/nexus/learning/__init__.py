@@ -1,5 +1,5 @@
-# nexus.learning — Phase 6 Learning Plane
-# =========================================
+# nexus.learning — Learning Plane
+# ==================================
 # Closes the act → verify → learn loop
 # AuditTrail → OutcomeStore → KnowledgeBase → ConfidenceScorer feedback
 
@@ -12,7 +12,6 @@ from nexus.learning.outcome_store import (
     SystemKPIs,
 )
 from nexus.learning.ppa_outcome_tracker import PpaOutcomeTracker
-from nexus.learning.runbook_advisor import RunbookAdvisor, RunbookRecommendation
 
 __all__ = [
     # Outcome store
@@ -23,12 +22,9 @@ __all__ = [
     # Knowledge base
     "KnowledgeBase",
     "AdjustmentRecord",
-    # Advisor
-    "RunbookAdvisor",
-    "RunbookRecommendation",
     # Feedback loop
     "FeedbackLoop",
     "build_feedback_loop",
-    # PPA outcome tracker
+    # PPA tracker
     "PpaOutcomeTracker",
 ]

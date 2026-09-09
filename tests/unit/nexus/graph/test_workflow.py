@@ -102,45 +102,45 @@ async def test_aws_hitl_approval_and_resume():
         }
     ]
 
-    with patch("nexus.graph.platform.aws._get_boto3_client") as mock_boto:
+    with patch("nexus.graph.platform.aws._get_boto3_client") as mock_boto, \
+         patch("nexus.tools.aws_adapter._get_boto3_client") as mock_tools_boto:
         client = MagicMock()
         client.get_function_configuration.return_value = {"MemorySize": 256, "Timeout": 30, "State": "Active"}
         client.update_function_configuration.return_value = {"MemorySize": 512, "Timeout": 30}
         mock_boto.return_value = client
+        mock_tools_boto.return_value = client
 
-        # Mock lambda_tools execution
-        with patch("aws.tools.lambda_tools.increase_memory", return_value={"success": True, "pre": 256, "post": 512}):
-            with patch.object(
-                adapter,
-                "verify_health",
-                AsyncMock(return_value=HealthCheckResult(healthy=True, slo_restored=True, details="Memory verified 512MB")),
-            ):
-                # 1. First run: should execute triage -> collect -> diagnose -> plan -> govern -> pause at approval
-                interrupted_state = await workflow.run_incident(
-                    {
-                        "incident_id": "inc-aws-hitl-01",
-                        "platform": "aws",
-                        "events": events,
-                    },
-                    thread_id=thread_id,
-                )
+        with patch.object(
+            adapter,
+            "verify_health",
+            AsyncMock(return_value=HealthCheckResult(healthy=True, slo_restored=True, details="Memory verified 512MB")),
+        ):
+            # 1. First run: should execute triage -> collect -> diagnose -> plan -> govern -> pause at approval
+            interrupted_state = await workflow.run_incident(
+                {
+                    "incident_id": "inc-aws-hitl-01",
+                    "platform": "aws",
+                    "events": events,
+                },
+                thread_id=thread_id,
+            )
 
-                assert interrupted_state["fsm_state"] == "approval_pending"
-                assert interrupted_state["plan"]["requires_approval"] is True
-                assert len(interrupted_state["execution_records"]) == 0
+            assert interrupted_state["fsm_state"] == "approval_pending"
+            assert interrupted_state["plan"]["requires_approval"] is True
+            assert len(interrupted_state["execution_records"]) == 0
 
-                # 2. Operator reviews and approves via resume_incident
-                resumed_state = await workflow.resume_incident(
-                    thread_id=thread_id,
-                    approval_decision="approved",
-                )
+            # 2. Operator reviews and approves via resume_incident
+            resumed_state = await workflow.resume_incident(
+                thread_id=thread_id,
+                approval_decision="approved",
+            )
 
-                assert resumed_state["approval_decision"] == "approved"
-                assert resumed_state["resolved"] is True
-                assert resumed_state["fsm_state"] == "resolved"
-                assert len(resumed_state["execution_records"]) == 1
-                assert resumed_state["execution_records"][0]["tool_name"] == "aws_update_lambda_memory"
-                assert resumed_state["execution_records"][0]["success"] is True
+            assert resumed_state["approval_decision"] == "approved"
+            assert resumed_state["resolved"] is True
+            assert resumed_state["fsm_state"] == "resolved"
+            assert len(resumed_state["execution_records"]) == 1
+            assert resumed_state["execution_records"][0]["tool_name"] == "aws_update_lambda_memory"
+            assert resumed_state["execution_records"][0]["success"] is True
 
 
 # ── Test 3: Operator Rejection Pathway ────────────────────────────────────────
@@ -302,38 +302,130 @@ async def test_dynamic_tool_planning_without_runbooks_and_evidence_confidence():
 
     with patch("nexus.agents.k8s_tools.describe_resource", return_value="Pod: shop-demo\nState: CrashLoopBackOff\nRestarts: 5"):
         with patch("nexus.agents.k8s_tools.restart_deployment", return_value="restarted deployment shop-demo"):
-            with patch.object(
-                adapter,
-                "verify_health",
-                AsyncMock(return_value=HealthCheckResult(healthy=True, slo_restored=True)),
-            ):
-                interrupted = await workflow.run_incident(
-                    {
-                        "incident_id": "inc-dynamic-tool-01",
-                        "platform": "kubernetes",
-                        "events": events,
-                        "max_retries": 1,
-                    },
-                    thread_id="thread-dynamic-tool-01",
-                )
+            with patch("nexus.graph.nodes.govern.check_live_state", AsyncMock(return_value=MagicMock(verdict="degraded", evidence="Pod crashlooping"))):
+                with patch.object(
+                    adapter,
+                    "verify_health",
+                    AsyncMock(return_value=HealthCheckResult(healthy=True, slo_restored=True)),
+                ):
+                    interrupted = await workflow.run_incident(
+                        {
+                            "incident_id": "inc-dynamic-tool-01",
+                            "platform": "kubernetes",
+                            "events": events,
+                            "max_retries": 1,
+                        },
+                        thread_id="thread-dynamic-tool-01",
+                    )
 
-                # Verify dynamic plan requires human approval
-                assert interrupted["fsm_state"] == "approval_pending"
-                plan = interrupted["plan"]
-                assert len(plan["steps"]) == 1
-                assert plan["steps"][0]["tool_name"] == "k8s_restart_deployment"
-                assert plan["requires_approval"] is True
+                    # Verify dynamic plan requires human approval
+                    assert interrupted["fsm_state"] == "approval_pending"
+                    plan = interrupted["plan"]
+                    assert len(plan["steps"]) == 1
+                    assert plan["steps"][0]["tool_name"] == "k8s_restart_deployment"
+                    assert plan["requires_approval"] is True
 
-                # Operator approves
-                result = await workflow.resume_incident(
-                    thread_id="thread-dynamic-tool-01",
-                    approval_decision="approved",
-                )
+                    # Operator approves
+                    result = await workflow.resume_incident(
+                        thread_id="thread-dynamic-tool-01",
+                        approval_decision="approved",
+                    )
 
-                assert result["resolved"] is True
-                assert result["escalated"] is False
-                assert result["fsm_state"] == "resolved"
+                    assert result["resolved"] is True
+                    assert result["escalated"] is False
+                    assert result["fsm_state"] == "resolved"
 
-                # Verify evidence-based confidence
-                assert result["diagnosis"]["confidence"] >= 0.80
+                    # Verify evidence-based confidence
+                    assert result["diagnosis"]["confidence"] >= 0.80
+
+
+@pytest.mark.asyncio
+async def test_workflow_pending_approvals_and_status_api_integration():
+    """Verify pending approvals are registered upon interrupt and accessible via status API."""
+    from nexus.observability import status_api as status_api_module
+
+    workflow = IncidentWorkflow()
+    adapter = get_platform_registry().get("kubernetes")
+    thread_id = "thread-approval-integration"
+    incident_id = "inc-approval-integration"
+
+    events = [
+        {
+            "agent": "k8s",
+            "resource_name": "shop-demo",
+            "namespace": "default",
+            "severity": "critical",
+            "signal_type": "crashloopbackoff",
+        }
+    ]
+
+    desc_call_count = 0
+    def mock_describe(*args: Any, **kwargs: Any) -> str:
+        nonlocal desc_call_count
+        desc_call_count += 1
+        if desc_call_count <= 2:
+            return "Pod: shop-demo\nState: CrashLoopBackOff\nRestarts: 5"
+        return "Pod: shop-demo\nState: Running\nReady: 1/1"
+
+    with patch("nexus.agents.k8s_tools.describe_resource", side_effect=mock_describe):
+        with patch("nexus.agents.k8s_tools.get_pod_logs", return_value="panic: runtime crash"):
+            with patch("nexus.agents.k8s_tools.restart_deployment", return_value="restarted deployment shop-demo"):
+                with patch("nexus.graph.nodes.govern.check_live_state", AsyncMock(return_value=MagicMock(verdict="degraded", evidence="Pod crashlooping"))):
+                    with patch.object(
+                        get_platform_registry().get("kubernetes"),
+                        "verify_health",
+                        AsyncMock(return_value=HealthCheckResult(healthy=True, slo_restored=True)),
+                    ):
+                        interrupted = await workflow.run_incident(
+                            {
+                                "incident_id": incident_id,
+                                "platform": "kubernetes",
+                                "events": events,
+                            },
+                            thread_id=thread_id,
+                        )
+
+                        assert interrupted["fsm_state"] == "approval_pending"
+                        assert workflow.has_pending(thread_id) is True
+                        assert workflow.has_pending(incident_id) is True
+                        assert workflow.status["pending_approvals"] == 1
+
+                        approvals = workflow.pending_approvals()
+                        assert len(approvals) == 1
+                        appr = approvals[0]
+                        assert appr["approval_id"] == thread_id
+                        assert appr["incident_id"] == incident_id
+                        assert appr["action_type"] == "k8s_restart_deployment"
+                        assert appr["target"] == "default/shop-demo"
+
+                        # Integrate with status_api
+                        status_api_module.context.workflow = workflow
+                        status_api_module.context.orchestrator = None
+
+                        api_pending = await status_api_module.pending_approvals()
+                        assert len(api_pending) == 1
+                        assert api_pending[0]["approval_id"] == thread_id
+
+                        # Approve via status API
+                        res = await status_api_module.approve_action(thread_id)
+                        assert res["status"] == "approved"
+                        assert workflow.has_pending(thread_id) is False
+                        assert len(workflow.pending_approvals()) == 0
+
+                        # Test rejection pathway
+                        thread_id_rej = "thread-reject-integration"
+                        await workflow.run_incident(
+                            {
+                                "incident_id": "inc-reject-integration",
+                                "platform": "kubernetes",
+                                "events": events,
+                            },
+                            thread_id=thread_id_rej,
+                        )
+                        assert workflow.has_pending(thread_id_rej) is True
+                        rej_res = await status_api_module.reject_action(thread_id_rej)
+                        assert rej_res["status"] == "rejected"
+                        assert workflow.has_pending(thread_id_rej) is False
+                        assert len(workflow.pending_approvals()) == 0
+
 

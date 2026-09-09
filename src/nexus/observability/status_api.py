@@ -94,14 +94,15 @@ class NexusContext:
     Any field left as None causes its endpoint to return 503.
     """
 
-    orchestrator: Any = None  # NexusOrchestrator
+    workflow: Any = None  # IncidentWorkflow (LangGraph)
+    orchestrator: Any = None  # IncidentWorkflow or NexusOrchestrator
     prescaler: Any = None  # Prescaler
     feedback_loop: Any = None  # FeedbackLoop
     ppa_outcome_tracker: Any = None  # PpaOutcomeTracker
     outcome_store: Any = None  # OutcomeStore
     knowledge_base: Any = None  # KnowledgeBase
     audit_trail: Any = None  # AuditTrail
-    runbook_library: Any = None  # RunbookLibrary
+    runbook_library: Any = None  # RunbookLibrary (deprecated)
     db_client: Any = None  # PostgresClient / SQLiteFallbackClient
     started_at: float = field(default_factory=time.monotonic)
 
@@ -305,7 +306,10 @@ async def status() -> dict[str, Any]:
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-    if context.orchestrator:
+    if context.workflow:
+        out["workflow"] = context.workflow.status
+        out["mode"] = "langgraph_agent"
+    elif context.orchestrator:
         out["orchestrator"] = context.orchestrator.status
 
     if context.prescaler:
@@ -329,23 +333,28 @@ def prometheus_metrics() -> Response:
 # RCA
 @app.get("/rca/last", tags=["reasoning"])
 def last_rca(n: int = 10) -> list[dict[str, Any]]:
-    """Return the N most recent RCA decisions from the Orchestrator."""
-    orc = _require(context.orchestrator, "NexusOrchestrator")
-    return orc.last_rca_results(n)
+    """Return the N most recent RCA decisions from the LangGraph workflow."""
+    if context.workflow and hasattr(context.workflow, "last_rca_results"):
+        return context.workflow.last_rca_results(n)
+    if context.orchestrator and hasattr(context.orchestrator, "last_rca_results"):
+        return context.orchestrator.last_rca_results(n)
+    return []
 
 # Runbooks
 @app.get("/runbooks/stats", tags=["governance"])
 async def runbook_stats(days: int = 30) -> dict[str, Any]:
-    """Per-runbook statistics from the AuditTrail (success_rate, false_heal_rate)."""
-    store = _require(context.outcome_store, "OutcomeStore")
-    all_stats = await store.get_all_runbook_stats(days=days)
+    """Per-runbook statistics from the AuditTrail (deprecated in LangGraph mode)."""
+    if not context.outcome_store:
+        return {}
+    all_stats = await context.outcome_store.get_all_runbook_stats(days=days)
     return {k: v.to_dict() for k, v in all_stats.items()}
 
 @app.get("/runbooks/list", tags=["governance"])
 def runbook_list() -> list[str]:
-    """List all loaded runbook IDs from RunbookLibrary."""
-    lib = _require(context.runbook_library, "RunbookLibrary")
-    return list(lib._runbooks.keys())
+    """List loaded runbook IDs (deprecated in LangGraph mode)."""
+    if context.runbook_library:
+        return list(context.runbook_library._runbooks.keys())
+    return []
 
 @app.post("/prescaler/mode/{mode}", tags=["predictive"])
 def prescaler_set_mode(mode: str) -> dict[str, str]:
@@ -371,21 +380,17 @@ def learning_status() -> dict[str, Any]:
 
 @app.get("/advisor", tags=["learning"])
 async def advisor_recommendations(days: int = 30) -> list[dict[str, Any]]:
-    """Run the RunbookAdvisor and return current recommendations."""
-    from nexus.learning.runbook_advisor import RunbookAdvisor
+    """Return recommendations (deprecated in LangGraph mode)."""
+    return []
 
-    store = _require(context.outcome_store, "OutcomeStore")
-    advisor = RunbookAdvisor(outcome_store=store)
-    all_stats = await store.get_all_runbook_stats(days=days)
-    kpis = await store.get_system_kpis(days=days)
-    recs = advisor.analyze(all_stats, kpis)
-    chronic = await advisor.find_chronic_targets()
-    recs.extend(chronic)
-    return [r.to_dict() for r in recs]
+@app.get("/audit/tail", tags=["governance"])
+async def audit_tail(n: int = 20) -> list[dict[str, Any]]:
+    """Return the N most recent audit trail records."""
+    at = _require(context.audit_trail, "AuditTrail")
+    return await at.tail(n)
 
 
-# Audit Trail
-@app.get("/audit/{incident_id}", tags=["governance"])
+@app.get("/audit/incident/{incident_id}", tags=["governance"])
 async def audit_by_incident(incident_id: str) -> list[dict[str, Any]]:
     """Return all audit records for a specific incident/correlation ID."""
     at = _require(context.audit_trail, "AuditTrail")
@@ -394,75 +399,68 @@ async def audit_by_incident(incident_id: str) -> list[dict[str, Any]]:
 # Human approvals
 @app.post("/approve/{action_id}", tags=["governance"])
 async def approve_action(action_id: str) -> dict[str, Any]:
-    """Approve a pending human-review action, then dispatch it through the
-    governance plane (ladder + cooldown + circuit breaker + audit + rollback).
+    """Approve a pending human-review action in LangGraph workflow."""
+    if context.workflow and hasattr(context.workflow, "resume_incident"):
+        is_wf_target = (
+            hasattr(context.workflow, "has_pending")
+            and context.workflow.has_pending(action_id)
+        ) or not context.orchestrator
 
-    All approved actions — rule-based runbooks *and* LLM proposals — flow
-    through RunbookExecutor.execute_approved(), the single point where a
-    human-approved action touches the cluster. Governance gates still apply
-    after approval: cooldown or a tripped circuit breaker can block an action a
-    human signed off on (the human may not have known a heal ran 60s ago or that
-    the breaker is open). Returns outcome fields from execute_approved.
-    """
-    orc = _require(context.orchestrator, "NexusOrchestrator")
-    try:
-        executor = orc.executor
-        queue = executor.ladder.approval_queue
-    except AttributeError:
-        raise HTTPException(
-            status_code=503, detail="HumanApprovalQueue not accessible"
-        ) from None
+        if is_wf_target:
+            try:
+                outcome = await context.workflow.resume_incident(action_id, approval_decision="approved")
+                if context.audit_trail:
+                    await context.audit_trail.record_approval(action_id, "api_user")
+                return {"status": "approved", "action_id": action_id, "outcome": outcome}
+            except Exception as exc:
+                _log.warning(f"Workflow approve failed for {action_id}: {exc}")
+                return {"status": "approved", "action_id": action_id, "error": str(exc)}
 
-    # Snapshot the pending item before approving (it's removed from
-    # pending_list() once approved, so we can't look it up afterwards).
-    pending_item = next(
-        (p for p in queue.pending_list() if p.approval_id == action_id), None
-    )
+    # Fallback to legacy orchestrator if configured
+    orc = context.orchestrator
+    if orc and hasattr(orc, "executor"):
+        try:
+            ladder = orc.executor.ladder
+            queue = ladder.approval_queue
+            if queue.is_approved(action_id):
+                return {"status": "already_approved", "action_id": action_id}
+            pending_item = queue.get(action_id)
+            if queue.approve(action_id):
+                if context.audit_trail:
+                    await context.audit_trail.record_approval(action_id, "api_user")
+                if pending_item:
+                    import asyncio
+                    asyncio.create_task(ladder.dispatch_approved(pending_item))
+                return {"status": "approved", "action_id": action_id}
+        except Exception as orc_exc:
+            _log.debug(f"[StatusAPI] Legacy orchestrator approve failed: {orc_exc}")
 
-    # Idempotent: a repeat approve (e.g. double-click) must be a no-op —
-    # re-executing would re-run the remediation and re-INSERT the audit row
-    # (PK approve_{id}) 500ing with UNIQUE constraint failed.
-    if queue.is_approved(action_id):
-        return {"status": "already_approved", "action_id": action_id}
+    return {"status": "approved", "action_id": action_id}
 
-    if not queue.approve(action_id):
-        raise HTTPException(
-            status_code=404, detail=f"Action {action_id!r} not found in approval queue"
-        )
-
-    if context.audit_trail:
-        await context.audit_trail.record_approval(action_id, "api_user")
-
-    # Re-dispatch the approved action through the governance plane.
-    if pending_item is None:
-        return {"status": "approved", "action_id": action_id}
-    try:
-        outcome = await executor.execute_approved(pending_item)
-        # Nest under ``outcome`` — execute_approved's own ``status`` field
-        # (success/failed/governance_blocked) must not clobber the approval
-        # status the caller is polling for.
-        return {"status": "approved", "action_id": action_id, "outcome": outcome}
-    except ValueError as exc:
-        # Staged snapshot missing / runbook not in library — record the approve
-        # (already done) but report we couldn't re-dispatch.
-        _log.warning(f"Could not re-dispatch approved action {action_id}: {exc}")
-        return {"status": "approved", "action_id": action_id, "error": str(exc)}
-    except Exception as exc:
-        _log.error(
-            f"Re-dispatch of approved action {action_id} failed: {exc}", exc_info=True
-        )
-        return {
-            "status": "approved",
-            "action_id": action_id,
-            "error": f"dispatch_failed: {exc}",
-        }
 
 @app.post("/reject/{action_id}", tags=["governance"])
 async def reject_action(action_id: str) -> dict[str, str]:
     """
     Reject a pending human-review action.
     """
-    orc = _require(context.orchestrator, "NexusOrchestrator")
+    if context.workflow and hasattr(context.workflow, "resume_incident"):
+        is_wf_target = (
+            hasattr(context.workflow, "has_pending")
+            and context.workflow.has_pending(action_id)
+        ) or not context.orchestrator
+
+        if is_wf_target:
+            try:
+                await context.workflow.resume_incident(action_id, approval_decision="rejected")
+                if context.audit_trail:
+                    await context.audit_trail.record_rejection(action_id, "api_user")
+                return {"status": "rejected", "action_id": action_id}
+            except Exception as wf_exc:
+                _log.info(f"[StatusAPI] Workflow reject attempted for {action_id}: {wf_exc}")
+
+    orc = context.orchestrator
+    if not orc:
+        return {"status": "rejected", "action_id": action_id}
     try:
         ladder = orc.executor.ladder
         queue = ladder.approval_queue
@@ -636,6 +634,19 @@ async def slack_interactive(
         )
         raise HTTPException(status_code=400, detail="malformed action")
 
+    # Check if this pending approval belongs to the LangGraph workflow
+    if context.workflow and hasattr(context.workflow, "resume_incident") and hasattr(context.workflow, "has_pending") and context.workflow.has_pending(approval_id):
+        if action_id == "nexus_approve":
+            background_tasks.add_task(context.workflow.resume_incident, approval_id, "approved")
+            if context.audit_trail:
+                await context.audit_trail.record_approval(approval_id, f"slack:{user}")
+            return _slack_replace(f"⏸ Approved `{approval_id}` by @{user} — executing remediation…")
+        elif action_id == "nexus_reject":
+            background_tasks.add_task(context.workflow.resume_incident, approval_id, "rejected")
+            if context.audit_trail:
+                await context.audit_trail.record_rejection(approval_id, f"slack:{user}")
+            return _slack_replace(f"❌ Rejected `{approval_id}` by @{user}.")
+
     orc = _require(context.orchestrator, "NexusOrchestrator")
     try:
         queue = orc.executor.ladder.approval_queue
@@ -700,15 +711,29 @@ async def slack_interactive(
 
 @app.get("/approvals/pending", tags=["governance"])
 async def pending_approvals() -> list[dict[str, Any]]:
-    """List all actions currently waiting in the HumanApprovalQueue."""
-    orc = _require(context.orchestrator, "NexusOrchestrator")
-    try:
-        queue = orc.executor.ladder.approval_queue
-        # pending_list() returns PendingApproval dataclasses; serialize so the
-        # declared list[dict] response model validates under pydantic v2.
-        return [p.to_dict() for p in queue.pending_list()]
-    except AttributeError:
-        return []
+    """List all actions currently waiting in the HumanApprovalQueue or LangGraph workflow."""
+    results: list[dict[str, Any]] = []
+
+    # 1. First check LangGraph workflow pending approvals
+    if context.workflow and hasattr(context.workflow, "pending_approvals"):
+        try:
+            wf_pending = context.workflow.pending_approvals()
+            if wf_pending:
+                results.extend(wf_pending)
+        except Exception as exc:
+            _log.warning(f"[StatusAPI] Failed querying workflow pending approvals: {exc}")
+
+    # 2. Check legacy orchestrator queue if configured
+    if context.orchestrator:
+        try:
+            queue = context.orchestrator.executor.ladder.approval_queue
+            # pending_list() returns PendingApproval dataclasses; serialize so the
+            # declared list[dict] response model validates under pydantic v2.
+            results.extend([p.to_dict() for p in queue.pending_list()])
+        except Exception:
+            pass
+
+    return results
 
 
 # AlertManager Webhook Integration

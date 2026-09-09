@@ -481,7 +481,6 @@ class GitAgent(BaseAgent):
                         deployment_name=self.deployment_name,
                         namespace=self.k8s_namespace,
                     ).model_dump(),
-                    suggested_runbook="runbook_missing_env_key_v1",
                     suggested_healing_level=0,
                     confidence=0.99,  # Deterministic check — always certain
                 )

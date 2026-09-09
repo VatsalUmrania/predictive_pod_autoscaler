@@ -38,8 +38,10 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from nexus.graph.rca import RCAResult, deterministic_baseline_rca
 from nexus.reasoning.incident_cluster import IncidentCluster
-from nexus.reasoning.rca_engine import RCAResult, _rule_based_rca
+
+_rule_based_rca = deterministic_baseline_rca
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +106,8 @@ _ACTION_EVIDENCE: dict[str, frozenset[str]] = {
     "aws_update_lambda_timeout": frozenset({"lambda_timeout"}),
     "aws_replay_dlq": frozenset({"sqs_dlq_depth_high"}),
     "flush_coredns_cache": frozenset({"dns_resolution_failure"}),
+    "k8s_remove_command_override": frozenset({"pod_crashloop", "high_error_rate", "rollout_stuck"}),
+    "remove_command_override": frozenset({"pod_crashloop", "high_error_rate", "rollout_stuck"}),
     # Low-blast actions always allowed — no signal gate needed
     "emit_alert": frozenset(),
     "patch_annotation": frozenset(),
@@ -112,6 +116,17 @@ _ACTION_EVIDENCE: dict[str, frozenset[str]] = {
     "cordon_node": frozenset(),
     "drain_node": frozenset(),
 }
+
+
+def _normalize_signals(sigs: frozenset[str] | set[str]) -> set[str]:
+    res = set(sigs)
+    for s in sigs:
+        s_clean = s.lower().replace("-", "_")
+        if s_clean in ("crashloopbackoff", "crashloop", "crash_loop", "pod_crash_loop"):
+            res.add("pod_crashloop")
+        elif s_clean in ("oomkilled", "oom_killed", "pod_oom"):
+            res.add("pod_oomkilled")
+    return res
 
 # Penalty applied when LLM and rule engine disagree on failure_class
 # (rule engine has a definite non-unknown opinion that differs from LLM)
@@ -371,7 +386,7 @@ class RCAValidator:
                 consistency_note=f"no evidence requirements defined for {rca_result.failure_class}",
             )
 
-        sigs = cluster.signal_types
+        sigs = _normalize_signals(cluster.signal_types)
         gaps: list[str] = []
 
         # Check must_have_any
@@ -454,7 +469,7 @@ class RCAValidator:
                 consistency_note=f"no signal requirement for action {action!r}",
             )
 
-        sigs = cluster.signal_types
+        sigs = _normalize_signals(cluster.signal_types)
         if required & sigs:
             return ValidationVerdict(
                 passed=True,

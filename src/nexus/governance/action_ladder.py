@@ -36,7 +36,6 @@ from typing import Any
 from nexus.bus.incident_event import IncidentEvent
 from nexus.governance.cooldown_store import CooldownStore
 from nexus.governance.policy_engine import PolicyDecision, PolicyEngine
-from nexus.governance.runbook import Runbook, RunbookAction
 
 logger = logging.getLogger(__name__)
 
@@ -337,13 +336,16 @@ class ActionLadder:
 
     async def evaluate(
         self,
-        runbook: Runbook,
-        action: RunbookAction,
-        event: IncidentEvent,
-        target: str,
+        runbook: Any = None,
+        action: Any = None,
+        event: Any = None,
+        target: str = "",
         confidence: float = 1.0,
         human_approved: bool = False,
         override_blast_radius: bool = False,
+        action_type: str | None = None,
+        healing_level: int | None = None,
+        blast_radius: str | None = None,
     ) -> LadderDecision:
         """
         Evaluate whether an action may proceed.
@@ -353,9 +355,10 @@ class ActionLadder:
             LadderDecision(requires_approval=True)   — stage for human approval
             LadderDecision(can_proceed=False)         — blocked (reason included)
         """
-        level = runbook.healing_level
-        action_type = action.type
-        blast_radius = runbook.blast_radius
+        level = healing_level if healing_level is not None else (getattr(runbook, "healing_level", 1) if runbook else 1)
+        action_type = action_type or (getattr(action, "type", str(action)) if action else "unknown")
+        blast_radius = blast_radius or (getattr(runbook, "blast_radius", "single_pod") if runbook else "single_pod")
+        action_id = getattr(runbook, "id", action_type) if runbook else action_type
 
         # L0 fast path
         # L0 actions (emit_alert, patch_annotation) bypass CB + cooldown checks.
@@ -378,7 +381,7 @@ class ActionLadder:
             )
 
         # Cooldown check
-        cooldown_key = CooldownStore.make_key(runbook.id, target)
+        cooldown_key = CooldownStore.make_key(action_id, target)
         in_cooldown = await self._cooldown.is_in_cooldown(cooldown_key)
         remaining = (
             await self._cooldown.remaining_seconds(cooldown_key) if in_cooldown else 0.0
@@ -386,7 +389,7 @@ class ActionLadder:
 
         if in_cooldown:
             logger.info(
-                f"[ActionLadder] COOLDOWN: {runbook.id} on {target} "
+                f"[ActionLadder] COOLDOWN: {action_id} on {target} "
                 f"({remaining:.0f}s remaining)"
             )
             return LadderDecision(
@@ -410,24 +413,22 @@ class ActionLadder:
 
         # Universal Human Approval: all mutating actions require approval unless pre-approved
         if (policy.requires_approval or not human_approved) and action_type not in ("emit_alert", "patch_annotation"):
+            inc_id = getattr(event, "correlation_id", None) or getattr(event, "event_id", "incident-unknown")
+            evt_id = getattr(event, "event_id", inc_id)
             approval_id = self._approval.enqueue(
-                runbook_id=runbook.id,
+                runbook_id=action_id,
                 action_type=action_type,
                 target=target,
-                incident_id=event.correlation_id or event.event_id,
+                incident_id=inc_id,
                 healing_level=level,
                 confidence=confidence,
                 context={
-                    "event_id": event.event_id,
-                    "signal_type": event.signal_type,
-                    "namespace": event.namespace,
-                    "resource": event.resource_name,
-                    # Full snapshots so RunbookExecutor.execute_approved() can
-                    # re-dispatch ONE action through the governance plane without
-                    # the original cluster/event still in scope. Pydantic
-                    # round-trips via model_dump / model_validate.
+                    "event_id": evt_id,
+                    "signal_type": getattr(event, "signal_type", "unknown"),
+                    "namespace": getattr(event, "namespace", "default"),
+                    "resource": getattr(event, "resource_name", target),
                     "action": (action.model_dump() if hasattr(action, "model_dump")
-                               else {"type": action_type, "params": action.params}),
+                               else {"type": action_type, "params": getattr(action, "params", {})}),
                     "event": (event.model_dump()
                               if hasattr(event, "model_dump") else None),
                     "blast_radius": blast_radius,
@@ -468,10 +469,12 @@ class ActionLadder:
         """Call after failed post-checks — may trip governance CB."""
         self._cb.record_post_check_failure()
 
-    async def set_cooldown(self, runbook: Runbook, target: str) -> None:
-        """Set the cooldown for this runbook+target after successful execution."""
-        key = CooldownStore.make_key(runbook.id, target)
-        await self._cooldown.set_cooldown(key, runbook.cooldown_seconds)
+    async def set_cooldown(self, runbook_or_id: Any, target: str, cooldown_seconds: int = 300) -> None:
+        """Set the cooldown for this action+target after successful execution."""
+        key_id = getattr(runbook_or_id, "id", str(runbook_or_id))
+        secs = getattr(runbook_or_id, "cooldown_seconds", cooldown_seconds)
+        key = CooldownStore.make_key(key_id, target)
+        await self._cooldown.set_cooldown(key, secs)
 
     @property
     def governance_cb(self) -> GovernanceCircuitBreaker:

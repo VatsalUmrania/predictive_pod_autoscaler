@@ -34,8 +34,8 @@ from __future__ import annotations
 
 import logging
 
+from nexus.graph.rca import RCAResult
 from nexus.reasoning.incident_cluster import IncidentCluster
-from nexus.reasoning.rca_engine import RCAResult
 
 logger = logging.getLogger(__name__)
 

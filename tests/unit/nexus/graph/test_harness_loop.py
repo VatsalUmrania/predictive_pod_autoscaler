@@ -15,7 +15,7 @@ from nexus.graph.nodes.plan import plan_remediation_node
 from nexus.graph.platform import HealthCheckResult, TargetResource, get_platform_registry
 from nexus.graph.platform.base import NexusToolResult
 from nexus.graph.workflow import IncidentWorkflow, route_after_govern
-from nexus.reasoning.rca_engine import RCAResult
+from nexus.graph.rca import RCAResult
 
 
 # ── 1. Diagnostic Evaluator-Optimizer (Reflexion) Loop Tests ──────────────────
@@ -310,13 +310,6 @@ async def test_e2e_workflow_adaptive_ladder_pause_and_resume():
             "namespace": "production",
             "severity": "critical",
             "signal_type": "pod_crashloop",
-        },
-        {
-            "agent": "git",
-            "resource_name": "checkout-web",
-            "namespace": "production",
-            "severity": "warning",
-            "signal_type": "deploy_event",
         },
     ]
 

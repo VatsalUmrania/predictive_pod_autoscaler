@@ -66,6 +66,7 @@ def approval_node(state: IncidentGraphState) -> dict[str, Any]:
         }
 
     return {
+        "approval_id": incident_id,
         "approval_decision": "approved" if approved else "rejected",
         "fsm_state": next_fsm,
         "audit_log": [audit_entry],

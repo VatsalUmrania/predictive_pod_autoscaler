@@ -200,7 +200,6 @@ class K8sAgent(BaseAgent):
                             restart_count=restart_count,
                             reason="CrashLoopBackOff",
                         ).model_dump(),
-                        suggested_runbook="runbook_pod_crashloop_v1",
                         suggested_healing_level=1,
                         confidence=0.95,
                     )
@@ -232,7 +231,6 @@ class K8sAgent(BaseAgent):
                             reason="OOMKilled",
                             memory_limit_mi=mem_limit,
                         ).model_dump(),
-                        suggested_runbook="runbook_pod_crashloop_v1",
                         suggested_healing_level=1,
                         confidence=0.95,
                     )
