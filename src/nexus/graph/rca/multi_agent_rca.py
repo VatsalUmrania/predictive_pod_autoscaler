@@ -16,7 +16,7 @@ import re
 from typing import Any
 
 from nexus.graph.llm import get_llm
-from nexus.graph.rca.result import RCAResult, VALID_FAILURE_CLASSES
+from nexus.graph.rca.result import RCAResult
 
 logger = logging.getLogger(__name__)
 

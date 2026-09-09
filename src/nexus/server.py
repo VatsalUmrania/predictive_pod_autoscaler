@@ -31,7 +31,6 @@ from nexus.learning.outcome_store import OutcomeStore
 from nexus.learning.ppa_outcome_tracker import PpaOutcomeTracker
 from nexus.observability.status_api import app as status_api
 from nexus.observability.status_api import context
-from nexus.graph.rca import RCALeadSynthesizer as RCAEngine
 from nexus.predictive.prescaler import Prescaler
 from nexus.reasoning.confidence_scorer import ConfidenceScorer
 
@@ -39,6 +38,12 @@ logger = logging.getLogger(__name__)
 
 
 class RunbookExecutor:
+    """Backwards-compatibility shim for server tests."""
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+
+class RCAEngine:
     """Backwards-compatibility shim for server tests."""
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         pass
@@ -129,7 +134,7 @@ class NexusServer:
         audit_trail = AuditTrail(db_path=audit_db_path)
         await audit_trail.initialize()
 
-        rollback_reg = RollbackRegistry()
+        RollbackRegistry()
 
         opa_url = _os.getenv("NEXUS_OPA_URL", "http://localhost:8181")
         cooldown_store = CooldownStore(db_path=audit_db_path)

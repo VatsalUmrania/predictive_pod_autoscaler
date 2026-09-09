@@ -1,9 +1,8 @@
-import json
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from nexus.observability.status_api import app, context
-from nexus.integration.dashboard import _write_incident, _read_incidents
+from nexus.integration.dashboard import _read_incidents, _write_incident
+from nexus.observability.status_api import app
 
 
 @pytest.mark.asyncio

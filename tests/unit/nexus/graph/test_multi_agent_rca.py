@@ -11,12 +11,12 @@ import pytest
 
 from nexus.graph.nodes.diagnose import diagnose_node
 from nexus.graph.rca import (
+    VALID_FAILURE_CLASSES,
     LogAnalystAgent,
     MetricsAnalystAgent,
     RCALeadSynthesizer,
     RCAResult,
     TopologyAnalystAgent,
-    VALID_FAILURE_CLASSES,
 )
 
 

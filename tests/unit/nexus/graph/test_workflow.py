@@ -10,6 +10,7 @@ Covers:
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -345,7 +346,7 @@ async def test_workflow_pending_approvals_and_status_api_integration():
     from nexus.observability import status_api as status_api_module
 
     workflow = IncidentWorkflow()
-    adapter = get_platform_registry().get("kubernetes")
+    get_platform_registry().get("kubernetes")
     thread_id = "thread-approval-integration"
     incident_id = "inc-approval-integration"
 

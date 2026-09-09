@@ -374,7 +374,7 @@ class FeedbackLoop:
     async def _publish_summary(
         self,
         kpis: SystemKPIs,
-        recs: list[RunbookRecommendation],
+        recs: list[Any],
         adjustments: dict[str, float],
         cycle_ms: int,
     ) -> None:

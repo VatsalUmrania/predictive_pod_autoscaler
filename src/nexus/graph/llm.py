@@ -47,6 +47,7 @@ def get_llm(provider: str | None = None, model: str | None = None, temperature: 
             # Fallback to direct google.genai client wrapped in a ChatModel interface
             try:
                 import asyncio
+
                 from google import genai
                 from google.genai import types
 

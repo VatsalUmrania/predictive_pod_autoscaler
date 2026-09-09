@@ -131,7 +131,8 @@ async def check_live_state(
 
     if k8s_core is None or k8s_apps is None:
         try:
-            from kubernetes import client as _k8s_c, config as _k8s_cfg
+            from kubernetes import client as _k8s_c
+            from kubernetes import config as _k8s_cfg
             try:
                 _k8s_cfg.load_incluster_config()
             except Exception:
@@ -332,10 +333,26 @@ async def _check_deployment_degraded(
         )
         return _UNKNOWN(action_type, exc)
 
-    desired = dep.spec.replicas or 1
-    available = getattr(dep.status, "available_replicas", 0) or 0
-    ready = getattr(dep.status, "ready_replicas", 0) or 0
-    unavailable = getattr(dep.status, "unavailable_replicas", 0) or 0
+    try:
+        desired = int(dep.spec.replicas) if getattr(dep, "spec", None) and getattr(dep.spec, "replicas", None) is not None else 1
+    except (ValueError, TypeError):
+        desired = 1
+
+    try:
+        available = int(dep.status.available_replicas) if getattr(dep, "status", None) and getattr(dep.status, "available_replicas", None) is not None else 0
+    except (ValueError, TypeError):
+        available = 0
+
+    try:
+        ready = int(dep.status.ready_replicas) if getattr(dep, "status", None) and getattr(dep.status, "ready_replicas", None) is not None else 0
+    except (ValueError, TypeError):
+        ready = 0
+
+    try:
+        raw_unavail = getattr(dep.status, "unavailable_replicas", 0) if getattr(dep, "status", None) else 0
+        unavailable = int(raw_unavail) if raw_unavail is not None else 0
+    except (ValueError, TypeError):
+        unavailable = 0
 
     evidence = {
         "desired_replicas": desired,

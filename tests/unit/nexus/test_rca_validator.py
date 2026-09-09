@@ -11,19 +11,13 @@ Covers:
 
 from __future__ import annotations
 
-import pytest
-from datetime import datetime, timezone
-from unittest.mock import MagicMock
-
-from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
+from nexus.bus.incident_event import IncidentEvent, Severity
 from nexus.reasoning.incident_cluster import IncidentCluster
 from nexus.reasoning.rca_engine import RCAResult
 from nexus.reasoning.rca_validator import (
     RCAValidator,
-    ValidationVerdict,
     downgrade_rca,
 )
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -42,7 +36,7 @@ def _cluster(*signal_types: str, agents: list[str] | None = None) -> IncidentClu
     agents = agents or ["k8s"] * len(signal_types)
     first_event = _event(signal_types[0], agents[0])
     cluster = IncidentCluster.new(first_event)
-    for sig, ag in zip(signal_types[1:], agents[1:]):
+    for sig, ag in zip(signal_types[1:], agents[1:], strict=False):
         cluster.add_event(_event(sig, ag))
     return cluster
 

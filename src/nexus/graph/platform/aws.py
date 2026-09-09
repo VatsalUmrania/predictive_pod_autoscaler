@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import uuid
 from typing import Any
 
@@ -22,13 +21,13 @@ from nexus.graph.platform.base import (
     TargetResource,
 )
 from nexus.tools.aws_adapter import (
-    _get_boto3_client,
     AWSGetLogEventsTool,
     AWSGetMetricDataTool,
     AWSReplaySQSDLQTool,
     AWSRollbackLambdaAliasTool,
     AWSUpdateLambdaMemoryTool,
     AWSUpdateLambdaTimeoutTool,
+    _get_boto3_client,
 )
 from nexus.tools.base import NexusTool, NexusToolResult
 

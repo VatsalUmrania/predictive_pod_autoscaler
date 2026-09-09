@@ -15,10 +15,10 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
-import pytest
-from datetime import datetime, timezone
+from datetime import datetime
 from unittest.mock import MagicMock
+
+import pytest
 
 from nexus.governance.live_state_validator import (
     LiveStateReport,
@@ -79,11 +79,13 @@ def _deployment(
     desired: int = 2,
     available: int = 2,
     ready: int = 2,
+    unavailable: int = 0,
 ) -> MagicMock:
     dep = MagicMock()
     dep.spec.replicas = desired
     dep.status.available_replicas = available
     dep.status.ready_replicas = ready
+    dep.status.unavailable_replicas = unavailable
     return dep
 
 

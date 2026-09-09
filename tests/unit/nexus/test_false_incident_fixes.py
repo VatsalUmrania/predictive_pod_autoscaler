@@ -1,8 +1,7 @@
 """Unit test verifying fixes for false incident detection, NATS replay, and approval suppression."""
 
-import asyncio
-from datetime import datetime, timezone, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from nats.js.api import DeliverPolicy
@@ -11,7 +10,6 @@ from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalT
 from nexus.bus.nats_client import NATSClient
 from nexus.engine.fsm import IncidentFSM, IncidentState
 from nexus.governance.action_ladder import HumanApprovalQueue
-from nexus.reasoning.event_correlator import EventCorrelator
 from nexus.reasoning.incident_cluster import IncidentCluster
 from nexus.reasoning.orchestrator import NexusOrchestrator
 from nexus.reasoning.rca_engine import RCAResult

@@ -30,7 +30,6 @@ from __future__ import annotations
 import logging
 import os as _os
 import sqlite3 as _sqlite3
-from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException

@@ -553,8 +553,8 @@ class RCAValidator:
             block_reason=None,
             confidence_delta=-_CASCADING_WITHOUT_DIVERSITY_PENALTY,
             consistency_note=(
-                f"cascading_failure from single agent — penalising "
-                f"(need ≥2 independent agents)"
+                "cascading_failure from single agent — penalising "
+                "(need ≥2 independent agents)"
             ),
         )
 

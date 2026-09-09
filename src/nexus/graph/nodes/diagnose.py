@@ -216,7 +216,7 @@ async def diagnose_node(state: IncidentGraphState) -> dict[str, Any]:
     # Enrich with logs context if available
     recent_logs = telemetry.get("recent_logs", [])
     log_snippet = " | ".join(recent_logs[-3:]) if recent_logs else "None"
-    log_errors = any("error" in l.lower() or "exception" in l.lower() or "crash" in l.lower() for l in recent_logs)
+    log_errors = any("error" in line.lower() or "exception" in line.lower() or "crash" in line.lower() for line in recent_logs)
     if log_errors and final_rca.confidence < 0.90:
         final_rca.confidence = min(0.95, final_rca.confidence + 0.05)
 

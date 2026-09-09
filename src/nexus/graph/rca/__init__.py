@@ -1,6 +1,5 @@
 """NEXUS LangGraph Multi-Agent Root Cause Analysis (RCA) package."""
 
-from nexus.graph.rca.result import RCAResult, VALID_FAILURE_CLASSES
 from nexus.graph.rca.baseline import deterministic_baseline_rca
 from nexus.graph.rca.multi_agent_rca import (
     LogAnalystAgent,
@@ -8,6 +7,7 @@ from nexus.graph.rca.multi_agent_rca import (
     RCALeadSynthesizer,
     TopologyAnalystAgent,
 )
+from nexus.graph.rca.result import VALID_FAILURE_CLASSES, RCAResult
 
 __all__ = [
     "RCAResult",

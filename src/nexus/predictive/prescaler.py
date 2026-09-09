@@ -549,7 +549,9 @@ class Prescaler:
                 decision.deployment_name, decision.namespace, patch
             )
             await self._ladder.set_cooldown(
-                synthetic_runbook, f"{decision.namespace}/{decision.deployment_name}"
+                "scale_deployment",
+                f"{decision.namespace}/{decision.deployment_name}",
+                cooldown_seconds=int(self._cooldown),
             )
             decision.executed = True
             decision.outcome = "executed"

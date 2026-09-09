@@ -62,7 +62,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from nexus.integration.notifier import SLACK_SIGNING_SECRET
 from nexus.observability.metrics import get_metrics
 
-
 # Phase 8 integration routers (imported lazily to avoid circular deps)
 _routers_included = False
 

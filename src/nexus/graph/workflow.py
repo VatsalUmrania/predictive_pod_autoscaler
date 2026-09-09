@@ -8,6 +8,7 @@ state machine integrated with PostgreSQL/Memory checkpointers.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any, Literal
@@ -206,7 +207,8 @@ class IncidentWorkflow:
     async def _on_event(self, event: Any) -> None:
         """Handler for single incoming IncidentEvent, dropping stale events > 120s."""
         import asyncio
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta, timezone
+
         from nexus.bus.incident_event import IncidentEvent
 
         if isinstance(event, IncidentEvent) and event.timestamp:

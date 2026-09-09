@@ -246,7 +246,7 @@ class AWSReplaySQSDLQTool(NexusTool):
     async def execute(self, **kwargs: Any) -> NexusToolResult:
         args = self.args_schema(**kwargs)
         try:
-            client = await asyncio.to_thread(_get_boto3_client, "sqs", args.region)
+            await asyncio.to_thread(_get_boto3_client, "sqs", args.region)
             return NexusToolResult(
                 success=True,
                 data={"replayed_count": args.max_messages},

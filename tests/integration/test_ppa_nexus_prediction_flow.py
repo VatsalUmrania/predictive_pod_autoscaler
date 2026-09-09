@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json as _json
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest

@@ -33,7 +33,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from nexus.bus.incident_event import IncidentEvent
 from nexus.governance.cooldown_store import CooldownStore
 from nexus.governance.policy_engine import PolicyDecision, PolicyEngine
 
