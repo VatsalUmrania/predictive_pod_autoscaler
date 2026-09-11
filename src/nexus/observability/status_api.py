@@ -54,7 +54,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -62,15 +62,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from nexus.integration.notifier import SLACK_SIGNING_SECRET
 from nexus.observability.metrics import get_metrics
 
-
 # Phase 8 integration routers (imported lazily to avoid circular deps)
+_routers_included = False
+
 def _include_integration_routers(app: FastAPI) -> None:
+    global _routers_included
+    if _routers_included:
+        return
     try:
         from nexus.integration.dashboard import router as dev_router
         from nexus.integration.sdk_ingest import router as sdk_router
 
-        app.include_router(sdk_router)
-        app.include_router(dev_router)
+        if not any(getattr(r, "path", None) == "/developer/incidents" for r in app.routes):
+            app.include_router(sdk_router)
+            app.include_router(dev_router)
+        _routers_included = True
     except ImportError as exc:
         import logging
 
@@ -87,14 +93,16 @@ class NexusContext:
     Any field left as None causes its endpoint to return 503.
     """
 
-    orchestrator: Any = None  # NexusOrchestrator
+    workflow: Any = None  # IncidentWorkflow (LangGraph)
+    orchestrator: Any = None  # IncidentWorkflow or NexusOrchestrator
     prescaler: Any = None  # Prescaler
     feedback_loop: Any = None  # FeedbackLoop
     ppa_outcome_tracker: Any = None  # PpaOutcomeTracker
     outcome_store: Any = None  # OutcomeStore
     knowledge_base: Any = None  # KnowledgeBase
     audit_trail: Any = None  # AuditTrail
-    runbook_library: Any = None  # RunbookLibrary
+    runbook_library: Any = None  # RunbookLibrary (deprecated)
+    db_client: Any = None  # PostgresClient
     started_at: float = field(default_factory=time.monotonic)
 
     def uptime_seconds(self) -> float:
@@ -133,6 +141,14 @@ async def _lifespan(app: FastAPI):
 
     # Self-init path (standalone status_api runs only)
     try:
+        from nexus.db.postgres import get_database_client
+
+        context.db_client = await get_database_client()
+        _log.info("[StatusAPI] PostgreSQL client connected")
+    except Exception as exc:
+        _log.warning(f"[StatusAPI] Database init skipped/failed ({exc})")
+
+    try:
         from nexus.integration.token_store import get_token_store
 
         store = get_token_store()
@@ -147,10 +163,10 @@ async def _lifespan(app: FastAPI):
         _nats_url = os.environ.get("NATS_URL", "nats://localhost:4222")
         _nats_client = NATSClient(nats_url=_nats_url, reconnect_attempts=10)
         await _nats_client.connect()
-        _log.info(f"[StatusAPI] ✅ NATS connected: {_nats_url}")
+        _log.info(f"[StatusAPI] NATS connected: {_nats_url}")
     except Exception as exc:
         _log.warning(
-            f"[StatusAPI] ⚠️  NATS connection failed ({exc}) — SDK events won't reach orchestrator"
+            f"[StatusAPI] NATS connection failed ({exc}) — SDK events won't reach orchestrator"
         )
         _nats_client = None
 
@@ -168,7 +184,7 @@ async def _lifespan(app: FastAPI):
                 handler=_on_ppa_prediction,
                 stream_name="PPA_PREDICTIONS",
             )
-            _log.info("[StatusAPI] ✅ PPA OutcomeTracker started")
+            _log.info("[StatusAPI] PPA OutcomeTracker started")
 
             # Prescaler (ppa.predictions → pre-scale decision engine)
             try:
@@ -176,13 +192,13 @@ async def _lifespan(app: FastAPI):
 
                 context.prescaler = Prescaler(nats_client=_nats_client)
                 await context.prescaler.subscribe_to_ppa_predictions()
-                _log.info("[StatusAPI] ✅ Prescaler subscribed to ppa.predictions.*")
+                _log.info("[StatusAPI] Prescaler subscribed to ppa.predictions.*")
             except Exception as exc:
                 _log.warning(
-                    f"[StatusAPI] ⚠️  Prescaler init failed ({exc}) — pre-scale decisions disabled"
+                    f"[StatusAPI] Prescaler init failed ({exc}) — pre-scale decisions disabled"
                 )
         except Exception as exc:
-            _log.warning(f"[StatusAPI] ⚠️  PPA OutcomeTracker init failed ({exc})")
+            _log.warning(f"[StatusAPI] PPA OutcomeTracker init failed ({exc})")
 
     _include_integration_routers(app)
     yield
@@ -232,7 +248,7 @@ async def _on_ppa_prediction(data: dict, subject: str) -> None:
 
 
 # Module-level NATS client — set by lifespan, read by sdk_ingest
-_nats_client = None
+_nats_client: Any = None
 
 app = FastAPI(
     title="NEXUS Self-Healing Infrastructure",
@@ -249,6 +265,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_include_integration_routers(app)
 
 _start_time = time.monotonic()
 
@@ -295,7 +313,10 @@ async def status() -> dict[str, Any]:
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-    if context.orchestrator:
+    if context.workflow:
+        out["workflow"] = context.workflow.status
+        out["mode"] = "langgraph_agent"
+    elif context.orchestrator:
         out["orchestrator"] = context.orchestrator.status
 
     if context.prescaler:
@@ -319,45 +340,28 @@ def prometheus_metrics() -> Response:
 # RCA
 @app.get("/rca/last", tags=["reasoning"])
 def last_rca(n: int = 10) -> list[dict[str, Any]]:
-    """Return the N most recent RCA decisions from the Orchestrator."""
-    orc = _require(context.orchestrator, "NexusOrchestrator")
-    return orc.last_rca_results(n)
+    """Return the N most recent RCA decisions from the LangGraph workflow."""
+    if context.workflow and hasattr(context.workflow, "last_rca_results"):
+        return cast(list[dict[str, Any]], context.workflow.last_rca_results(n))
+    if context.orchestrator and hasattr(context.orchestrator, "last_rca_results"):
+        return cast(list[dict[str, Any]], context.orchestrator.last_rca_results(n))
+    return []
 
 # Runbooks
 @app.get("/runbooks/stats", tags=["governance"])
 async def runbook_stats(days: int = 30) -> dict[str, Any]:
-    """Per-runbook statistics from the AuditTrail (success_rate, false_heal_rate)."""
-    store = _require(context.outcome_store, "OutcomeStore")
-    all_stats = await store.get_all_runbook_stats(days=days)
+    """Per-runbook statistics from the AuditTrail (deprecated in LangGraph mode)."""
+    if not context.outcome_store:
+        return {}
+    all_stats = await context.outcome_store.get_all_runbook_stats(days=days)
     return {k: v.to_dict() for k, v in all_stats.items()}
 
 @app.get("/runbooks/list", tags=["governance"])
 def runbook_list() -> list[str]:
-    """List all loaded runbook IDs from RunbookLibrary."""
-    lib = _require(context.runbook_library, "RunbookLibrary")
-    return list(lib._runbooks.keys())
-
-# Prescaler
-@app.get("/prescaler", tags=["predictive"])
-def prescaler_status() -> dict[str, Any]:
-    """Prescaler statistics, mode, and recent decisions."""
-    p = _require(context.prescaler, "Prescaler")
-    stats = p.stats
-    # Last 5 decisions
-    decisions = [
-        {
-            "id": d.decision_id,
-            "deployment": d.deployment_name,
-            "namespace": d.namespace,
-            "replicas": f"{d.current_replicas} → {d.recommended_replicas}",
-            "rps": f"{d.current_rps:.0f} → {d.predicted_rps:.0f}",
-            "confidence": d.confidence,
-            "outcome": d.outcome or "pending",
-            "decided_at": d.decided_at,
-        }
-        for d in p._all_decisions[-5:][::-1]  # newest first
-    ]
-    return {"stats": stats, "recent_decisions": decisions}
+    """List loaded runbook IDs (deprecated in LangGraph mode)."""
+    if context.runbook_library:
+        return list(context.runbook_library._runbooks.keys())
+    return []
 
 @app.post("/prescaler/mode/{mode}", tags=["predictive"])
 def prescaler_set_mode(mode: str) -> dict[str, str]:
@@ -378,140 +382,113 @@ def prescaler_set_mode(mode: str) -> dict[str, str]:
 def learning_status() -> dict[str, Any]:
     """FeedbackLoop status and latest system KPIs."""
     fl = _require(context.feedback_loop, "FeedbackLoop")
-    return fl.status
+    return cast(dict[str, Any], fl.status)
 
-@app.post("/learning/run", tags=["learning"])
-async def learning_run() -> dict[str, Any]:
-    """Trigger an immediate learning feedback cycle (useful for testing)."""
-    fl = _require(context.feedback_loop, "FeedbackLoop")
-    result = await fl.run_now()
-    return {"status": "ok", **result}
-
-@app.get("/knowledge", tags=["learning"])
-async def knowledge_records() -> list[dict[str, Any]]:
-    """All KnowledgeBase confidence adjustment records."""
-    kb = _require(context.knowledge_base, "KnowledgeBase")
-    records = await kb.get_all_records()
-    return [r.to_dict() for r in records]
 
 @app.get("/advisor", tags=["learning"])
 async def advisor_recommendations(days: int = 30) -> list[dict[str, Any]]:
-    """Run the RunbookAdvisor and return current recommendations."""
-    from nexus.learning.runbook_advisor import RunbookAdvisor
+    """Return recommendations (deprecated in LangGraph mode)."""
+    return []
 
-    store = _require(context.outcome_store, "OutcomeStore")
-    advisor = RunbookAdvisor(outcome_store=store)
-    all_stats = await store.get_all_runbook_stats(days=days)
-    kpis = await store.get_system_kpis(days=days)
-    recs = advisor.analyze(all_stats, kpis)
-    chronic = await advisor.find_chronic_targets()
-    recs.extend(chronic)
-    return [r.to_dict() for r in recs]
-
-# Audit Trail
 @app.get("/audit/tail", tags=["governance"])
 async def audit_tail(n: int = 20) -> list[dict[str, Any]]:
-    """Return the N most recent audit records from the AuditTrail."""
+    """Return the N most recent audit trail records."""
     at = _require(context.audit_trail, "AuditTrail")
-    rows = await at.query_recent(limit=n)
-    # Strip large JSON blobs from the tail view
-    return [
-        {
-            k: v
-            for k, v in row.items()
-            if k not in ("pre_check_results", "action_results", "post_check_results")
-        }
-        for row in rows
-    ]
+    if hasattr(at, "tail"):
+        return cast(list[dict[str, Any]], await at.tail(n))
+    return cast(list[dict[str, Any]], await at.query_recent(limit=n))
 
-@app.get("/audit/{incident_id}", tags=["governance"])
+
+@app.get("/audit/incident/{incident_id}", tags=["governance"])
 async def audit_by_incident(incident_id: str) -> list[dict[str, Any]]:
     """Return all audit records for a specific incident/correlation ID."""
     at = _require(context.audit_trail, "AuditTrail")
-    return await at.query_by_incident(incident_id)
+    return cast(list[dict[str, Any]], await at.query_by_incident(incident_id))
 
 # Human approvals
 @app.post("/approve/{action_id}", tags=["governance"])
 async def approve_action(action_id: str) -> dict[str, Any]:
-    """Approve a pending human-review action, then dispatch it through the
-    governance plane (ladder + cooldown + circuit breaker + audit + rollback).
+    """Approve a pending human-review action in LangGraph workflow."""
+    if context.workflow and hasattr(context.workflow, "resume_incident"):
+        is_wf_target = (
+            hasattr(context.workflow, "has_pending")
+            and context.workflow.has_pending(action_id)
+        ) or not context.orchestrator
 
-    All approved actions — rule-based runbooks *and* LLM proposals — flow
-    through RunbookExecutor.execute_approved(), the single point where a
-    human-approved action touches the cluster. Governance gates still apply
-    after approval: cooldown or a tripped circuit breaker can block an action a
-    human signed off on (the human may not have known a heal ran 60s ago or that
-    the breaker is open). Returns outcome fields from execute_approved.
-    """
-    orc = _require(context.orchestrator, "NexusOrchestrator")
-    try:
-        executor = orc.executor
-        queue = executor.ladder.approval_queue
-    except AttributeError:
-        raise HTTPException(
-            status_code=503, detail="HumanApprovalQueue not accessible"
-        ) from None
+        if is_wf_target:
+            try:
+                outcome = await context.workflow.resume_incident(action_id, approval_decision="approved")
+                if context.audit_trail:
+                    await context.audit_trail.record_approval(action_id, "api_user")
+                return {"status": "approved", "action_id": action_id, "outcome": outcome}
+            except Exception as exc:
+                _log.warning(f"Workflow approve failed for {action_id}: {exc}")
+                return {"status": "approved", "action_id": action_id, "error": str(exc)}
 
-    # Snapshot the pending item before approving (it's removed from
-    # pending_list() once approved, so we can't look it up afterwards).
-    pending_item = next(
-        (p for p in queue.pending_list() if p.approval_id == action_id), None
-    )
+    # Fallback to legacy orchestrator if configured
+    orc = context.orchestrator
+    if orc and hasattr(orc, "executor"):
+        try:
+            ladder = orc.executor.ladder
+            queue = ladder.approval_queue
+            if queue.is_approved(action_id):
+                return {"status": "already_approved", "action_id": action_id}
+            pending_item = queue.get(action_id)
+            if queue.approve(action_id):
+                if context.audit_trail:
+                    await context.audit_trail.record_approval(action_id, "api_user")
+                if pending_item:
+                    import asyncio
+                    asyncio.create_task(ladder.dispatch_approved(pending_item))
+                return {"status": "approved", "action_id": action_id}
+        except Exception as orc_exc:
+            _log.debug(f"[StatusAPI] Legacy orchestrator approve failed: {orc_exc}")
 
-    # Idempotent: a repeat approve (e.g. double-click) must be a no-op —
-    # re-executing would re-run the remediation and re-INSERT the audit row
-    # (PK approve_{id}) 500ing with UNIQUE constraint failed.
-    if queue.is_approved(action_id):
-        return {"status": "already_approved", "action_id": action_id}
+    return {"status": "approved", "action_id": action_id}
 
-    if not queue.approve(action_id):
-        raise HTTPException(
-            status_code=404, detail=f"Action {action_id!r} not found in approval queue"
-        )
-
-    if context.audit_trail:
-        await context.audit_trail.record_approval(action_id, "api_user")
-
-    # Re-dispatch the approved action through the governance plane.
-    if pending_item is None:
-        return {"status": "approved", "action_id": action_id}
-    try:
-        outcome = await executor.execute_approved(pending_item)
-        # Nest under ``outcome`` — execute_approved's own ``status`` field
-        # (success/failed/governance_blocked) must not clobber the approval
-        # status the caller is polling for.
-        return {"status": "approved", "action_id": action_id, "outcome": outcome}
-    except ValueError as exc:
-        # Staged snapshot missing / runbook not in library — record the approve
-        # (already done) but report we couldn't re-dispatch.
-        _log.warning(f"Could not re-dispatch approved action {action_id}: {exc}")
-        return {"status": "approved", "action_id": action_id, "error": str(exc)}
-    except Exception as exc:
-        _log.error(
-            f"Re-dispatch of approved action {action_id} failed: {exc}", exc_info=True
-        )
-        return {
-            "status": "approved",
-            "action_id": action_id,
-            "error": f"dispatch_failed: {exc}",
-        }
 
 @app.post("/reject/{action_id}", tags=["governance"])
 async def reject_action(action_id: str) -> dict[str, str]:
     """
     Reject a pending human-review action.
     """
-    orc = _require(context.orchestrator, "NexusOrchestrator")
+    if context.workflow and hasattr(context.workflow, "resume_incident"):
+        is_wf_target = (
+            hasattr(context.workflow, "has_pending")
+            and context.workflow.has_pending(action_id)
+        ) or not context.orchestrator
+
+        if is_wf_target:
+            try:
+                await context.workflow.resume_incident(action_id, approval_decision="rejected")
+                if context.audit_trail:
+                    await context.audit_trail.record_rejection(action_id, "api_user")
+                return {"status": "rejected", "action_id": action_id}
+            except Exception as wf_exc:
+                _log.info(f"[StatusAPI] Workflow reject attempted for {action_id}: {wf_exc}")
+
+    orc = context.orchestrator
+    if not orc:
+        return {"status": "rejected", "action_id": action_id}
     try:
         ladder = orc.executor.ladder
         queue = ladder.approval_queue
         # Idempotent: a repeat reject re-INSERTs the audit row (PK reject_{id}).
         if queue.is_rejected(action_id):
             return {"status": "already_rejected", "action_id": action_id}
-        ok = queue.reject(action_id)
-        if ok:
+        pending_item = queue.get(action_id)
+        if queue.reject(action_id):
             if context.audit_trail:
                 await context.audit_trail.record_rejection(action_id, "api_user")
+            if pending_item and hasattr(orc, "notify_incident_rejected"):
+                import asyncio
+                res = orc.notify_incident_rejected(
+                    pending_item.target,
+                    pending_item.incident_id,
+                    reason="Rejected via HTTP API",
+                )
+                if asyncio.iscoroutine(res):
+                    await res
             return {"status": "rejected", "action_id": action_id}
         raise HTTPException(
             status_code=404, detail=f"Action {action_id!r} not found in approval queue"
@@ -546,8 +523,8 @@ async def _slack_replace_via_response_url(
     so its sync replace was dropped and the Approve/Reject buttons stayed live
     even though the backend approved. The ``response_url`` Slack embeds in every
     interactive payload accepts the replacement up to 30 min later and is the
-    documented mechanism for slow handlers, so we ack the click fast (the ⏸
-    placeholder is returned inline) and push the real outcome here. Best-effort;
+    documented mechanism for slow handlers, so we ack the click fast (the placeholder
+    is returned inline) and push the real outcome here. Best-effort;
     a POST failure is logged, never raised — the approval still landed in the
     queue and audit trail regardless.
     """
@@ -561,24 +538,28 @@ async def _slack_replace_via_response_url(
                 response_url, json={"replace_original": True, "text": text}
             )
     except Exception as exc:
-        _log.warning(f"Slack response_url replace failed: {exc}")
+        _log.warning(f"Failed to push delayed outcome to Slack response_url: {exc}")
 
 
 async def _slack_dispatch_approved(
-    orc, pending_item, approval_id: str, user: str, response_url: str | None
+    orc: Any,
+    pending_item: Any,
+    approval_id: str,
+    user: str,
+    response_url: str | None,
 ) -> None:
     """Background: run the approved action through the governance plane, then
-    update the Slack card with the outcome. Runs AFTER the fast ⏸ ack is sent,
+    update the Slack card with the outcome. Runs AFTER the fast ack is sent,
     so Slack's ~3s interactive-response limit is never breached by dispatch."""
     try:
         outcome = await orc.executor.execute_approved(pending_item)
         text = (
-            f"✅ Approved `{approval_id}` by @{user} → {outcome['status']} "
+            f"Approved `{approval_id}` by @{user} → {outcome['status']} "
             f"(audit {outcome.get('action_id')})"
         )
     except Exception as exc:
         _log.error(f"Slack approve dispatch failed: {exc}")
-        text = f"✅ Approved `{approval_id}` by @{user} but dispatch errored: {exc}"
+        text = f"Approved `{approval_id}` by @{user} but dispatch errored: {exc}"
     await _slack_replace_via_response_url(response_url, text)
 
 @app.post("/slack/interactive", tags=["governance"])
@@ -588,22 +569,21 @@ async def slack_interactive(
     """Slack interactive callback handler (Approve / Reject button clicks).
 
     Slack POSTs ``application/x-www-form-urlencoded`` with a ``payload`` form
-    field holding JSON:
+    field whose JSON value looks like:
+
         {
-          "type": "block_actions",
-          "user": {"id": "U...", "username": ".."},
-          "actions": [
-            {"action_id": "nexus_approve"|"nexus_reject", "value": "APPROVAL123"}
-          ],
-          "response_url": "https://hooks.slack.com/actions/T.../...",
-          ...
+            "type": "block_actions",
+            "user": {"id": "U123", "username": "vatsal", "name": "Vatsal"},
+            "actions": [{"action_id": "nexus_approve", "value": "<approval_id>"}],
+            "response_url": "https://hooks.slack.com/actions/...",
+            ...
         }
 
     The raw body is HMAC-verified against the Slack app's signing secret before
     any parsing — this is the trust boundary, so a bad signature is a hard 401.
     We then parse the form body with stdlib (no python-multipart needed) and
     route to the same approve/reject path used everywhere else, recording the
-    Slack username as the auditor. The approve path acks immediately with a ⏸
+    Slack username as the auditor. The approve path acks immediately with a
     placeholder (Slack caps interactive responses at ~3s — awaiting the
     governance dispatch inline would breach that and the card stays stuck on
     live buttons), then backgrounds execute_approved() and posts the real
@@ -617,7 +597,7 @@ async def slack_interactive(
 
     raw = await request.body()
     _log.info(f"Slack interactivity: received raw body length={len(raw)}")
-    _log.debug(f"Slack interactivity: raw body={raw[:500]}")
+    _log.debug(f"Slack interactivity: raw body={raw[:500]!r}")
     _log.debug(f"Slack interactivity: headers={dict(request.headers)}")
 
     ts = request.headers.get("X-Slack-Request-Timestamp", "missing")
@@ -632,7 +612,8 @@ async def slack_interactive(
 
     _log.info("Slack interactivity: signature VERIFIED OK")
 
-    payload = (parse_qs(raw.decode("utf-8")).get("payload") or [None])[0]
+    parsed = parse_qs(raw.decode("utf-8")).get("payload")
+    payload = parsed[0] if parsed else None
     _log.info(f"Slack interactivity: payload field present={payload is not None}")
     if not payload:
         _log.warning("Slack interactivity: missing payload field")
@@ -666,6 +647,19 @@ async def slack_interactive(
         )
         raise HTTPException(status_code=400, detail="malformed action")
 
+    # Check if this pending approval belongs to the LangGraph workflow
+    if context.workflow and hasattr(context.workflow, "resume_incident") and hasattr(context.workflow, "has_pending") and context.workflow.has_pending(approval_id):
+        if action_id == "nexus_approve":
+            background_tasks.add_task(context.workflow.resume_incident, approval_id, "approved")
+            if context.audit_trail:
+                await context.audit_trail.record_approval(approval_id, f"slack:{user}")
+            return _slack_replace(f"Approved `{approval_id}` by @{user} — executing remediation…")
+        elif action_id == "nexus_reject":
+            background_tasks.add_task(context.workflow.resume_incident, approval_id, "rejected")
+            if context.audit_trail:
+                await context.audit_trail.record_rejection(approval_id, f"slack:{user}")
+            return _slack_replace(f"Rejected `{approval_id}` by @{user}.")
+
     orc = _require(context.orchestrator, "NexusOrchestrator")
     try:
         queue = orc.executor.ladder.approval_queue
@@ -676,7 +670,7 @@ async def slack_interactive(
     # Approve: re-dispatch through the governance plane (same as /approve/{id})
     if action_id == "nexus_approve":
         if queue.is_approved(approval_id):
-            return _slack_replace(f"✅ Action `{approval_id}` was already approved.")
+            return _slack_replace(f"Action `{approval_id}` was already approved.")
         # Snapshot BEFORE approve(): once approved, pending_list() excludes the
         # id (it filters out approved/rejected), so a post-approve lookup would
         # lose the staged item and never re-dispatch. Mirrors /approve/{id}.
@@ -684,15 +678,15 @@ async def slack_interactive(
             (p for p in queue.pending_list() if p.approval_id == approval_id), None
         )
         if not queue.approve(approval_id):
-            return _slack_replace(f"❌ Action `{approval_id}` not found.")
+            return _slack_replace(f"Action `{approval_id}` not found.")
         if context.audit_trail:
             await context.audit_trail.record_approval(approval_id, f"slack:{user}")
         if pending_item is None:
             return _slack_replace(
-                f"✅ Approved `{approval_id}` by @{user} "
+                f"Approved `{approval_id}` by @{user} "
                 f"(staged snapshot lost — queued only)."
             )
-        # Acknowledge the click fast: the ⏸ placeholder is the synchronous
+        # Acknowledge the click fast: the placeholder is the synchronous
         # response, so it replaces the card within Slack's ~3s interactive
         # window (buttons vanish — the click registered). The real governance
         # dispatch (ActionLadder + k8s execute + post-checks) routinely takes
@@ -705,159 +699,55 @@ async def slack_interactive(
             orc, pending_item, approval_id, user, response_url,
         )
         return _slack_replace(
-            f"⏸ Approved `{approval_id}` by @{user} — executing…"
+            f"Approved `{approval_id}` by @{user} — executing…"
         )
 
     # Reject: record and stop the workflow
     if queue.is_rejected(approval_id):
-        return _slack_replace(f"❌ Action `{approval_id}` was already rejected.")
+        return _slack_replace(f"Action `{approval_id}` was already rejected.")
+    pending_item = queue.get(approval_id)
     if not queue.reject(approval_id):
-        return _slack_replace(f"❌ Action `{approval_id}` not found.")
+        return _slack_replace(f"Action `{approval_id}` not found.")
     if context.audit_trail:
         await context.audit_trail.record_rejection(approval_id, f"slack:{user}")
-    return _slack_replace(f"❌ Rejected `{approval_id}` by @{user}.")
+    if pending_item and orc and hasattr(orc, "notify_incident_rejected"):
+        import asyncio
+        res = orc.notify_incident_rejected(
+            pending_item.target,
+            pending_item.incident_id,
+            reason=f"Rejected via Slack by @{user}",
+        )
+        if asyncio.iscoroutine(res):
+            await res
+    return _slack_replace(f"Rejected `{approval_id}` by @{user}.")
 
 
 @app.get("/approvals/pending", tags=["governance"])
 async def pending_approvals() -> list[dict[str, Any]]:
-    """List all actions currently waiting in the HumanApprovalQueue."""
-    orc = _require(context.orchestrator, "NexusOrchestrator")
-    try:
-        queue = orc.executor.ladder.approval_queue
-        # pending_list() returns PendingApproval dataclasses; serialize so the
-        # declared list[dict] response model validates under pydantic v2.
-        return [p.to_dict() for p in queue.pending_list()]
-    except AttributeError:
-        return []
+    """List all actions currently waiting in the HumanApprovalQueue or LangGraph workflow."""
+    results: list[dict[str, Any]] = []
 
-# PPA Integration Endpoints
-# Backed by the PpaOutcomeTracker started in the lifespan.
-# These are available without a full Orchestrator / Prescaler — the
-# OutcomeTracker subscribes to ppa.predictions.* via NATS directly.
-@app.get("/ppa/decisions", tags=["predictive"])
-def ppa_decisions(n: int = 20) -> list[dict[str, Any]]:
-    """
-    Recent PPA prediction events received from the PPA operator via NATS.
+    # 1. First check LangGraph workflow pending approvals
+    if context.workflow and hasattr(context.workflow, "pending_approvals"):
+        try:
+            wf_pending = context.workflow.pending_approvals()
+            if wf_pending:
+                results.extend(wf_pending)
+        except Exception as exc:
+            _log.warning(f"[StatusAPI] Failed querying workflow pending approvals: {exc}")
 
-    Each entry represents one ppa.predictions.* message recorded by the
-    PpaOutcomeTracker. Outcomes (verdict + SMAPE) are back-filled after
-    the prediction horizon elapses.
+    # 2. Check legacy orchestrator queue if configured
+    if context.orchestrator:
+        try:
+            queue = context.orchestrator.executor.ladder.approval_queue
+            # pending_list() returns PendingApproval dataclasses; serialize so the
+            # declared list[dict] response model validates under pydantic v2.
+            results.extend([p.to_dict() for p in queue.pending_list()])
+        except Exception:
+            pass
 
-    Returns [] when no events have been received yet (normal on first startup
-    before the PPA operator publishes its first cycle).
-    """
-    tracker = _ppa_outcome_tracker
-    if tracker is None:
-        return []
+    return results
 
-    # Combine pending (unresolved) + resolved outcomes, newest first
-    pending = [
-        {
-            "decision_id": p.decision_id,
-            "deployment": p.deployment,
-            "namespace": p.namespace,
-            "predicted_rps": round(p.predicted_rps, 1),
-            "current_rps": round(p.current_rps, 1),
-            "confidence": round(p.confidence, 3),
-            "horizon_minutes": p.horizon_minutes,
-            "model_version": p.model_version,
-            "status": "pending",
-            "verdict": None,
-            "smape": None,
-            "created_at": p.created_at.isoformat(),
-            "resolves_at": p.expected_resolution_time.isoformat(),
-        }
-        for p in tracker._pending.values()
-    ]
-
-    resolved = [
-        {
-            "decision_id": o.get("decision_id"),
-            "deployment": o.get("deployment"),
-            "namespace": o.get("namespace"),
-            "predicted_rps": o.get("predicted_rps"),
-            "current_rps": None,  # not stored in outcome event
-            "confidence": o.get("confidence"),
-            "horizon_minutes": None,
-            "model_version": o.get("model_version"),
-            "status": "resolved",
-            "verdict": o.get("verdict"),
-            "smape": o.get("smape"),
-            "created_at": o.get("resolution_at"),
-            "resolves_at": None,
-        }
-        for o in tracker._recent_outcomes
-    ]
-
-    all_decisions = pending + resolved
-    # Sort newest first (pending have created_at; resolved have resolution_at)
-    all_decisions.sort(
-        key=lambda d: (d.get("created_at") or d.get("resolves_at") or ""),
-        reverse=True,
-    )
-    return all_decisions[:n]
-
-@app.get("/ppa/stats", tags=["predictive"])
-def ppa_stats() -> dict[str, Any]:
-    """
-    Aggregated PPA prediction statistics from the PpaOutcomeTracker.
-
-    Returns counts of pending / resolved predictions, mean SMAPE,
-    and spike hit-rate so you can gauge model quality without Grafana.
-    """
-    tracker = _ppa_outcome_tracker
-    if tracker is None:
-        return {
-            "tracker_ready": False,
-            "nats_connected": False,
-            "message": (
-                "PpaOutcomeTracker not initialised — "
-                "check NATS_URL in the nexus-api container."
-            ),
-        }
-
-    resolved = tracker._recent_outcomes
-    pending = list(tracker._pending.values())
-
-    total_resolved = len(resolved)
-    spike_hits = sum(1 for o in resolved if o.get("verdict") == "spike_hit")
-    spike_misses = sum(1 for o in resolved if o.get("verdict") == "spike_missed")
-    smape_vals = [o["smape"] for o in resolved if o.get("smape") is not None]
-    mean_smape = round(sum(smape_vals) / len(smape_vals), 3) if smape_vals else None
-    hit_rate = round(spike_hits / total_resolved, 3) if total_resolved else None
-
-    return {
-        "tracker_ready": True,
-        "nats_connected": _nats_client is not None,
-        "pending_count": len(pending),
-        "resolved_count": total_resolved,
-        "spike_hits": spike_hits,
-        "spike_misses": spike_misses,
-        "correct_no_spike": total_resolved - spike_hits - spike_misses,
-        "mean_smape": mean_smape,
-        "spike_hit_rate": hit_rate,
-        "ready_for_advisory": (hit_rate or 0) >= 0.7 and total_resolved >= 10,
-    }
-
-@app.get("/ppa/pending", tags=["predictive"])
-def ppa_pending() -> list[dict[str, Any]]:
-    """Predictions currently awaiting their horizon window to elapse."""
-    tracker = _ppa_outcome_tracker
-    if tracker is None:
-        return []
-    return [
-        {
-            "decision_id": p.decision_id,
-            "deployment": p.deployment,
-            "predicted_rps": round(p.predicted_rps, 1),
-            "current_rps": round(p.current_rps, 1),
-            "confidence": round(p.confidence, 3),
-            "horizon_minutes": p.horizon_minutes,
-            "resolves_at": p.expected_resolution_time.isoformat(),
-            "is_expired": p.is_expired,
-        }
-        for p in tracker._pending.values()
-    ]
 
 # AlertManager Webhook Integration
 @app.post("/webhook/alertmanager", tags=["integration"])
@@ -877,3 +767,5 @@ async def alertmanager_webhook(payload: dict[str, Any]) -> dict[str, str]:
         import logging
         logging.getLogger(__name__).error(f"Failed to process alert webhook: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error processing webhook") from e
+
+

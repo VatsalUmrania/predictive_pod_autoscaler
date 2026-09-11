@@ -43,6 +43,16 @@ from nexus.bus.nats_client import NATSClient
 
 logger = logging.getLogger(__name__)
 
+SYSTEM_NAMESPACES = frozenset({
+    "kube-system",
+    "kube-public",
+    "kube-node-lease",
+    "monitoring",
+    "nexus",
+    "ingress-nginx",
+})
+
+
 class K8sAgent(BaseAgent):
     """
     Kubernetes event watcher agent.
@@ -71,7 +81,16 @@ class K8sAgent(BaseAgent):
             agent_type=AgentType.K8S,
             poll_interval_seconds=poll_interval_seconds,
         )
-        self.namespaces = namespaces  # None = all
+        import os
+
+        env_ns = os.getenv("NEXUS_WATCH_NAMESPACES")
+        self.namespaces: list[str] | None = None
+        if namespaces is not None:
+            self.namespaces = namespaces
+        elif env_ns:
+            self.namespaces = [n.strip() for n in env_ns.split(",") if n.strip()]
+        else:
+            self.namespaces = None
         self.crashloop_threshold = crashloop_threshold
         self.pending_threshold_s = pending_threshold_min * 60.0
         self.degraded_threshold_s = degraded_threshold_min * 60.0
@@ -182,7 +201,6 @@ class K8sAgent(BaseAgent):
                             restart_count=restart_count,
                             reason="CrashLoopBackOff",
                         ).model_dump(),
-                        suggested_runbook="runbook_pod_crashloop_v1",
                         suggested_healing_level=1,
                         confidence=0.95,
                     )
@@ -214,7 +232,6 @@ class K8sAgent(BaseAgent):
                             reason="OOMKilled",
                             memory_limit_mi=mem_limit,
                         ).model_dump(),
-                        suggested_runbook="runbook_pod_crashloop_v1",
                         suggested_healing_level=1,
                         confidence=0.95,
                     )
@@ -228,7 +245,7 @@ class K8sAgent(BaseAgent):
             if ref.kind == "ReplicaSet":
                 # ReplicaSet names are <deployment>-<hash>; strip the hash suffix
                 parts = ref.name.rsplit("-", 1)
-                return parts[0] if len(parts) == 2 else ref.name
+                return str(parts[0]) if len(parts) == 2 else str(ref.name)
         return None
 
     @staticmethod
@@ -273,7 +290,7 @@ class K8sAgent(BaseAgent):
         spec = dep.spec
         status = dep.status
 
-        desired = spec.replicas or 1
+        desired = spec.replicas if spec.replicas is not None else 1
         available = status.available_replicas or 0
         ready = status.ready_replicas or 0
 
@@ -381,7 +398,7 @@ class K8sAgent(BaseAgent):
 
     # BaseAgent interface
     async def sense(self) -> list[IncidentEvent]:
-        if not self._k8s_core:
+        if not self._k8s_core or not self._k8s_apps or not self._k8s_autoscaling:
             return []
 
         events: list[IncidentEvent] = []
@@ -399,7 +416,7 @@ class K8sAgent(BaseAgent):
             )
             pods = []
             for pl in pod_lists:
-                if isinstance(pl, Exception):
+                if isinstance(pl, BaseException):
                     logger.warning(f"[K8sAgent] Pod list error: {pl}")
                 else:
                     pods.extend(pl.items)
@@ -410,6 +427,8 @@ class K8sAgent(BaseAgent):
             pods = result.items
 
         for pod in pods:
+            if not self.namespaces and pod.metadata.namespace in SYSTEM_NAMESPACES:
+                continue
             events.extend(self._check_pod(pod))
         # Deployments
         if self.namespaces:
@@ -424,7 +443,7 @@ class K8sAgent(BaseAgent):
             )
             deployments = []
             for dl in dep_lists:
-                if not isinstance(dl, Exception):
+                if not isinstance(dl, BaseException):
                     deployments.extend(dl.items)
         else:
             result = await loop.run_in_executor(
@@ -433,6 +452,8 @@ class K8sAgent(BaseAgent):
             deployments = result.items
 
         for dep in deployments:
+            if not self.namespaces and dep.metadata.namespace in SYSTEM_NAMESPACES:
+                continue
             events.extend(self._check_deployment(dep))
 
         # HPAs
@@ -451,7 +472,7 @@ class K8sAgent(BaseAgent):
                 )
                 hpas = []
                 for hl in hpa_lists:
-                    if not isinstance(hl, Exception):
+                    if not isinstance(hl, BaseException):
                         hpas.extend(hl.items)
             else:
                 result = await loop.run_in_executor(
@@ -461,6 +482,8 @@ class K8sAgent(BaseAgent):
                 hpas = result.items
 
             for hpa in hpas:
+                if not self.namespaces and hpa.metadata.namespace in SYSTEM_NAMESPACES:
+                    continue
                 events.extend(self._check_hpa(hpa))
 
         except Exception as exc:

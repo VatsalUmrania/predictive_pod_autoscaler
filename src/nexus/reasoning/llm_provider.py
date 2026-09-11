@@ -27,7 +27,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 from abc import ABC, abstractmethod
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -43,25 +45,22 @@ Rules:
 - Write in plain technical prose: NO emojis, NO exclamation marks, no conversational filler
 - Be specific and technical — not generic filler text
 - Prefer the simplest hypothesis that explains all signals (Occam's razor)
-- Use the available runbook list to constrain your action recommendation
-- healing_level 0 = alert only, 1 = no-regret (restart), 2 = bounded mitigation (scale/memory increase/canary halt), 3 = significant change (rollout undo/Lambda alias rollback)
-- confidence 0.0-1.0 — be conservative; prefer 0.5-0.8 range unless signals are deterministic
-- If multiple explanations are equally plausible, choose the more conservative (lower healing_level)
+- Propose dynamic platform actions based on real failure symptoms and topology
+- Ground your confidence directly in verifiable evidence (e.g. restart counts, error rates, metric thresholds)
+- If multiple explanations are equally plausible, choose the more conservative hypothesis
 
-Available Kubernetes runbooks:
-- runbook_pod_crashloop_v1 (L1): Restart pod + VPA hint
-- runbook_high_error_rate_post_deploy_v1 (L2): Halt canary + alert
-- runbook_missing_env_key_v1 (L0): Block deploy + alert
-- runbook_dns_resolution_failure_v1 (L1): Flush CoreDNS cache + escalate
-- runbook_db_connection_exhaustion_v1 (L2): Alert + annotate deployment
+Available platform actions:
+Kubernetes:
+- k8s_restart_deployment: Restart deployment pods to clear startup crashes or transient deadlocks
+- k8s_scale_deployment: Adjust replica count to absorb load
+- k8s_rollback_deployment: Undo rollout to previous stable revision
+- k8s_patch_configmap: Update environment variables or configurations
 
-Available AWS Serverless runbooks:
-- runbook_lambda_error_spike_v1 (L3): Alert + rollback Lambda alias to previous version
-- runbook_lambda_throttle_v1 (L2): Alert + increase Lambda reserved concurrency
-- runbook_lambda_timeout_v1 (L2): Alert + increase Lambda timeout
-- runbook_lambda_oom_v1 (L2): Alert + increase Lambda memory allocation
-- runbook_sqs_dlq_v1 (L2): Alert + replay DLQ messages to source queue
-- runbook_dynamo_throttle_v1 (L0): Alert only — capacity change requires human review
+AWS Serverless:
+- aws_update_lambda_memory: Increase Lambda function memory limit
+- aws_update_lambda_timeout: Increase execution timeout limit
+- aws_replay_dlq: Replay failed messages from DLQ to source queue
+- aws_rollback_lambda_alias: Point alias back to previous stable function version
 
 Respond ONLY with valid JSON. No markdown fences, no prose outside the JSON structure.
 
@@ -69,11 +68,13 @@ Required schema:
 {
   "root_cause": "string — 1-2 sentences, specific technical cause",
   "failure_class": "one of: bad_deploy | resource_exhaustion | dependency_failure | config_error | cascading_failure | unknown",
-  "healing_level": 0,
-  "runbook_id": "exact runbook ID from the list above, or null",
+  "suggested_action": "specific platform tool to execute from above (e.g. k8s_restart_deployment, aws_update_lambda_memory), or null",
+  "action_params": {"key": "value parameters for the tool"},
   "confidence": 0.0,
   "reasoning": "string — 2-3 sentences of chain-of-thought",
-  "actions_to_avoid": ["list of action types that would make this worse"]
+  "actions_to_avoid": ["list of action types that would make this worse"],
+  "domain": "kubernetes | aws | hybrid",
+  "rollback_plan": {"rollback_action": "tool to revert", "params": {}}
 }\
 """
 
@@ -110,8 +111,9 @@ class GeminiProvider(LLMProvider):
 
     def __init__(self, api_key: str | None = None, model: str | None = None):
         self._api_key = api_key or os.getenv("NEXUS_LLM_API_KEY", "")
-        self._model_name = self.DEFAULT_MODEL
-        self._client = None
+        self._model_name: str = model or os.getenv("NEXUS_LLM_MODEL") or self.DEFAULT_MODEL
+        self._client: Any = None
+        self._lock = threading.Lock()
 
     @property
     def name(self) -> str:
@@ -129,36 +131,40 @@ class GeminiProvider(LLMProvider):
             return True
         if not self._api_key:
             return False
-        try:
-            from google import genai
+        with self._lock:
+            if self._client is not None:
+                return True
+            try:
+                from google import genai
 
-            self._client = genai.Client(api_key=self._api_key)
-        except ImportError:
-            logger.warning("[LLM] google-genai not installed: pip install google-genai")
-            return False
-        except Exception as exc:
-            logger.warning(f"[LLM] Gemini init failed: {exc}")
-            return False
-
-        logger.info("[LLM] Gemini client ready — model=%s", self._model_name)
-        return True
+                self._client = genai.Client(api_key=self._api_key)
+                logger.info("[LLM] Gemini client ready — model=%s", self._model_name)
+                return True
+            except ImportError:
+                logger.warning("[LLM] google-genai not installed: pip install google-genai")
+                return False
+            except Exception as exc:
+                logger.warning(f"[LLM] Gemini init failed: {exc}")
+                return False
 
     def _sync_complete(self, prompt: str) -> str:
         if not self._ensure_client():
             raise RuntimeError("Gemini client not available")
         from google.genai import types
 
+        config = types.GenerateContentConfig(
+            system_instruction=SYSTEM_INSTRUCTION,
+            temperature=0.2,
+            max_output_tokens=512,
+            response_mime_type="application/json",
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        )
         response = self._client.models.generate_content(
             model=self._model_name,
             contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION,
-                temperature=0.2,
-                max_output_tokens=512,
-                response_mime_type="application/json",
-            ),
+            config=config,
         )
-        return response.text.strip()
+        return str(response.text).strip()
 
     async def complete(self, user_prompt: str) -> str:
         return await asyncio.to_thread(self._sync_complete, user_prompt)
@@ -173,8 +179,9 @@ class OpenAIProvider(LLMProvider):
         self._api_key = (
             api_key or os.getenv("NEXUS_LLM_API_KEY") or os.getenv("OPENAI_API_KEY", "")
         )
-        self._model_name = model or os.getenv("NEXUS_LLM_MODEL", self.DEFAULT_MODEL)
-        self._client = None
+        self._model_name: str = model or os.getenv("NEXUS_LLM_MODEL") or self.DEFAULT_MODEL
+        self._client: Any = None
+        self._lock = threading.Lock()
 
     @property
     def name(self) -> str:
@@ -192,17 +199,20 @@ class OpenAIProvider(LLMProvider):
             return True
         if not self._api_key:
             return False
-        try:
-            from openai import OpenAI
+        with self._lock:
+            if self._client is not None:
+                return True
+            try:
+                from openai import OpenAI
 
-            self._client = OpenAI(api_key=self._api_key)
-            logger.info(f"[LLM] OpenAI client ready — model={self._model_name}")
-            return True
-        except ImportError:
-            logger.warning("[LLM] openai not installed: pip install openai")
-        except Exception as exc:
-            logger.warning(f"[LLM] OpenAI init failed: {exc}")
-        return False
+                self._client = OpenAI(api_key=self._api_key)
+                logger.info(f"[LLM] OpenAI client ready — model={self._model_name}")
+                return True
+            except ImportError:
+                logger.warning("[LLM] openai not installed: pip install openai")
+            except Exception as exc:
+                logger.warning(f"[LLM] OpenAI init failed: {exc}")
+            return False
 
     def _sync_complete(self, prompt: str) -> str:
         if not self._ensure_client():
@@ -217,7 +227,7 @@ class OpenAIProvider(LLMProvider):
             max_tokens=512,
             response_format={"type": "json_object"},
         )
-        return response.choices[0].message.content.strip()
+        return str(response.choices[0].message.content).strip()
 
     async def complete(self, user_prompt: str) -> str:
         return await asyncio.to_thread(self._sync_complete, user_prompt)
@@ -234,8 +244,9 @@ class AnthropicProvider(LLMProvider):
             or os.getenv("NEXUS_LLM_API_KEY")
             or os.getenv("ANTHROPIC_API_KEY", "")
         )
-        self._model_name = model or os.getenv("NEXUS_LLM_MODEL", self.DEFAULT_MODEL)
-        self._client = None
+        self._model_name: str = model or os.getenv("NEXUS_LLM_MODEL") or self.DEFAULT_MODEL
+        self._client: Any = None
+        self._lock = threading.Lock()
 
     @property
     def name(self) -> str:
@@ -253,17 +264,20 @@ class AnthropicProvider(LLMProvider):
             return True
         if not self._api_key:
             return False
-        try:
-            import anthropic
+        with self._lock:
+            if self._client is not None:
+                return True
+            try:
+                import anthropic
 
-            self._client = anthropic.Anthropic(api_key=self._api_key)
-            logger.info(f"[LLM] Anthropic client ready — model={self._model_name}")
-            return True
-        except ImportError:
-            logger.warning("[LLM] anthropic not installed: pip install anthropic")
-        except Exception as exc:
-            logger.warning(f"[LLM] Anthropic init failed: {exc}")
-        return False
+                self._client = anthropic.Anthropic(api_key=self._api_key)
+                logger.info(f"[LLM] Anthropic client ready — model={self._model_name}")
+                return True
+            except ImportError:
+                logger.warning("[LLM] anthropic not installed: pip install anthropic")
+            except Exception as exc:
+                logger.warning(f"[LLM] Anthropic init failed: {exc}")
+            return False
 
     def _sync_complete(self, prompt: str) -> str:
         if not self._ensure_client():
@@ -277,7 +291,7 @@ class AnthropicProvider(LLMProvider):
         text_block = next((blk for blk in message.content if blk.type == "text"), None)
         if text_block is None:
             raise RuntimeError("No text block found in Claude response")
-        return text_block.text.strip()
+        return str(text_block.text).strip()
 
     async def complete(self, user_prompt: str) -> str:
         return await asyncio.to_thread(self._sync_complete, user_prompt)
@@ -325,12 +339,20 @@ def get_llm_provider(
         4. NullProvider (rule-based fallback only)
     """
     global _cached_provider
-    if _cached_provider is not None and provider is None and api_key is None:
-        return _cached_provider
 
     provider_name = (
         provider or os.getenv("NEXUS_LLM_PROVIDER", "") or _autodetect_provider()
     ).lower()
+
+    expected_model = model or os.getenv("NEXUS_LLM_MODEL")
+
+    if _cached_provider is not None and provider is None and api_key is None and model is None:
+        # Check if the environment config has changed, making the cache stale
+        env_provider_match = (provider_name == "") or (_cached_provider.name == provider_name)
+        env_model_match = (expected_model is None) or (_cached_provider.model == expected_model)
+
+        if env_provider_match and env_model_match:
+            return _cached_provider
 
     cls = _PROVIDERS.get(provider_name, NullProvider)
     instance: LLMProvider

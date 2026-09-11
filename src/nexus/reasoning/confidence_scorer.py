@@ -34,8 +34,8 @@ from __future__ import annotations
 
 import logging
 
+from nexus.graph.rca import RCAResult
 from nexus.reasoning.incident_cluster import IncidentCluster
-from nexus.reasoning.rca_engine import RCAResult
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +98,7 @@ class ConfidenceScorer:
         self,
         cluster: IncidentCluster,
         rca_result: RCAResult,
+        external_penalty: float = 0.0,
     ) -> float:
         """
         Compute a calibrated confidence score in [0.0, 1.0].
@@ -107,6 +108,12 @@ class ConfidenceScorer:
 
         For Gemini RCA:
             Blends: LLM confidence + signal agreement + failure class adjustment.
+
+        Args:
+            external_penalty: Additional penalty (≥ 0.0) subtracted from the
+                              blended score.  Supplied by RCAValidator when the
+                              LLM's RCA fails consistency or evidence checks.
+                              Applied after all other factors, before clamping.
         """
         if rca_result.source == "rule_based":
             # Rule-based scores are pre-calibrated — apply only conservative bias
@@ -145,6 +152,10 @@ class ConfidenceScorer:
         # Conservative bias
         blended -= self._bias
 
+        # RCA validation penalty — subtracted after all other factors so the
+        # deduction is visible in the debug log as a discrete line item.
+        blended -= abs(external_penalty)
+
         # Cap based on healing level and quorum
         n_agents = len(cluster.agent_types)
         if rca_result.healing_level == 3 and n_agents < 2:
@@ -159,6 +170,7 @@ class ConfidenceScorer:
             f"class_adj={class_adj_raw:+.2f} "
             f"hist_boost={hist_boost:+.3f} "
             f"deploy_bonus={'+0.05' if cluster.has_deploy_event and rca_result.failure_class == 'bad_deploy' else '0'} "
+            f"validation_penalty={-abs(external_penalty):+.2f} "
             f"→ final={final:.2f}"
         )
         return final
@@ -198,16 +210,17 @@ class ConfidenceScorer:
         Map a confidence score to the maximum permitted healing level.
         Used by the Orchestrator to set the executor's confidence.
 
-            < 0.50 → L0  (alert only)
-            0.50-0.70 → L1
-            0.70-0.85 → L2
-            ≥ 0.85  → L3
+        Action Ladder Alignment:
+            L1 actions are no-regret (restart already failing pods, flush cache).
+            They are permitted whenever evidence indicates a real failure (>= 0.40).
+            L2 actions (scale, resize) require solid evidence (>= 0.70).
+            L3 actions (rollbacks, reverts) require high confidence (>= 0.85).
         """
         if confidence >= 0.85:
             return 3
         if confidence >= 0.70:
             return 2
-        if confidence >= 0.50:
+        if confidence >= 0.40:
             return 1
         return 0
 

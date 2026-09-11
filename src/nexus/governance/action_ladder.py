@@ -33,10 +33,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from nexus.bus.incident_event import IncidentEvent
 from nexus.governance.cooldown_store import CooldownStore
 from nexus.governance.policy_engine import PolicyDecision, PolicyEngine
-from nexus.governance.runbook import Runbook, RunbookAction
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +179,20 @@ class HumanApprovalQueue:
         Stage an action for human approval.
         Returns an approval_id the operator passes to approve() or reject().
         """
+        # Deduplication: check if an approval is already pending for this target or incident
+        for existing_id, existing in list(self._pending.items()):
+            if existing_id in self._approved or existing_id in self._rejected:
+                continue
+            if existing.target == target or (incident_id and existing.incident_id == incident_id):
+                existing.confidence = max(existing.confidence, confidence)
+                if context:
+                    existing.context.update(context)
+                logger.info(
+                    f"[HumanApprovalQueue] Target '{target}' (incident={incident_id}) already has pending approval "
+                    f"id={existing_id} (runbook={existing.runbook_id}) — suppressing duplicate"
+                )
+                return existing_id
+
         approval_id = str(uuid.uuid4())[:8].upper()
         self._pending[approval_id] = PendingApproval(
             approval_id=approval_id,
@@ -225,6 +237,13 @@ class HumanApprovalQueue:
 
         return approval_id
 
+    def get_pending_by_target(self, target: str) -> PendingApproval | None:
+        """Find an active pending approval for a given target resource."""
+        for p in self.pending_list():
+            if p.target == target:
+                return p
+        return None
+
     def approve(self, approval_id: str) -> bool:
         """Operator approves a pending action."""
         if approval_id in self._approved or approval_id in self._rejected:
@@ -235,6 +254,9 @@ class HumanApprovalQueue:
             logger.info(f"[HumanApprovalQueue] APPROVED: {approval_id}")
             return True
         return False
+
+    def get(self, approval_id: str) -> PendingApproval | None:
+        return self._pending.get(approval_id)
 
     def reject(self, approval_id: str) -> bool:
         """Operator rejects a pending action."""
@@ -291,7 +313,7 @@ class ActionLadder:
 
     Args:
         policy_engine:        PolicyEngine (OPA — hard dependency).
-        cooldown_store:       CooldownStore (SQLite + memory fallback).
+        cooldown_store:       CooldownStore (PostgreSQL + memory fallback).
         approval_queue:       HumanApprovalQueue for L3 staging.
         governance_cb:        GovernanceCircuitBreaker.
         l3_confidence_gate:   Minimum confidence to auto-approve L3 (default 0.85).
@@ -313,13 +335,16 @@ class ActionLadder:
 
     async def evaluate(
         self,
-        runbook: Runbook,
-        action: RunbookAction,
-        event: IncidentEvent,
-        target: str,
+        runbook: Any = None,
+        action: Any = None,
+        event: Any = None,
+        target: str = "",
         confidence: float = 1.0,
         human_approved: bool = False,
         override_blast_radius: bool = False,
+        action_type: str | None = None,
+        healing_level: int | None = None,
+        blast_radius: str | None = None,
     ) -> LadderDecision:
         """
         Evaluate whether an action may proceed.
@@ -329,9 +354,10 @@ class ActionLadder:
             LadderDecision(requires_approval=True)   — stage for human approval
             LadderDecision(can_proceed=False)         — blocked (reason included)
         """
-        level = runbook.healing_level
-        action_type = action.type
-        blast_radius = runbook.blast_radius
+        level = healing_level if healing_level is not None else (getattr(runbook, "healing_level", 1) if runbook else 1)
+        action_type_val: str = str(action_type or (getattr(action, "type", str(action)) if action else "unknown"))
+        blast_radius_val: str = str(blast_radius or (getattr(runbook, "blast_radius", "single_pod") if runbook else "single_pod"))
+        action_id_val: str = str(getattr(runbook, "id", action_type_val) if runbook else action_type_val)
 
         # L0 fast path
         # L0 actions (emit_alert, patch_annotation) bypass CB + cooldown checks.
@@ -343,7 +369,7 @@ class ActionLadder:
         if self._cb.is_open:
             logger.warning(
                 f"[ActionLadder] BLOCKED by governance CB: "
-                f"{action_type} for {target} (L{level})"
+                f"{action_type_val} for {target} (L{level})"
             )
             return LadderDecision(
                 can_proceed=False,
@@ -354,7 +380,7 @@ class ActionLadder:
             )
 
         # Cooldown check
-        cooldown_key = CooldownStore.make_key(runbook.id, target)
+        cooldown_key = CooldownStore.make_key(action_id_val, target)
         in_cooldown = await self._cooldown.is_in_cooldown(cooldown_key)
         remaining = (
             await self._cooldown.remaining_seconds(cooldown_key) if in_cooldown else 0.0
@@ -362,7 +388,7 @@ class ActionLadder:
 
         if in_cooldown:
             logger.info(
-                f"[ActionLadder] COOLDOWN: {runbook.id} on {target} "
+                f"[ActionLadder] COOLDOWN: {action_id_val} on {target} "
                 f"({remaining:.0f}s remaining)"
             )
             return LadderDecision(
@@ -373,9 +399,9 @@ class ActionLadder:
 
         # OPA policy check
         policy = await self._policy.evaluate(
-            action_type=action_type,
+            action_type=action_type_val,
             healing_level=level,
-            blast_radius=blast_radius,
+            blast_radius=blast_radius_val,
             in_cooldown=in_cooldown,
             governance_cb_open=self._cb.is_open,
             confidence=confidence,
@@ -384,26 +410,24 @@ class ActionLadder:
             or getattr(event, "override_blast_radius", False),
         )
 
-        # L3 + confidence gate → human approval
-        if policy.requires_approval and not human_approved:
+        # Universal Human Approval: all mutating actions require approval unless pre-approved
+        if (policy.requires_approval or not human_approved) and action_type_val not in ("emit_alert", "patch_annotation"):
+            inc_id: str = str(getattr(event, "correlation_id", None) or getattr(event, "event_id", "incident-unknown"))
+            evt_id = getattr(event, "event_id", inc_id)
             approval_id = self._approval.enqueue(
-                runbook_id=runbook.id,
-                action_type=action_type,
+                runbook_id=action_id_val,
+                action_type=action_type_val,
                 target=target,
-                incident_id=event.correlation_id or event.event_id,
+                incident_id=inc_id,
                 healing_level=level,
                 confidence=confidence,
                 context={
-                    "event_id": event.event_id,
-                    "signal_type": event.signal_type,
-                    "namespace": event.namespace,
-                    "resource": event.resource_name,
-                    # Full snapshots so RunbookExecutor.execute_approved() can
-                    # re-dispatch ONE action through the governance plane without
-                    # the original cluster/event still in scope. Pydantic
-                    # round-trips via model_dump / model_validate.
+                    "event_id": evt_id,
+                    "signal_type": getattr(event, "signal_type", "unknown"),
+                    "namespace": getattr(event, "namespace", "default"),
+                    "resource": getattr(event, "resource_name", target),
                     "action": (action.model_dump() if hasattr(action, "model_dump")
-                               else {"type": action_type, "params": action.params}),
+                               else {"type": action_type_val, "params": getattr(action, "params", {})}),
                     "event": (event.model_dump()
                               if hasattr(event, "model_dump") else None),
                     "blast_radius": blast_radius,
@@ -444,10 +468,12 @@ class ActionLadder:
         """Call after failed post-checks — may trip governance CB."""
         self._cb.record_post_check_failure()
 
-    async def set_cooldown(self, runbook: Runbook, target: str) -> None:
-        """Set the cooldown for this runbook+target after successful execution."""
-        key = CooldownStore.make_key(runbook.id, target)
-        await self._cooldown.set_cooldown(key, runbook.cooldown_seconds)
+    async def set_cooldown(self, runbook_or_id: Any, target: str, cooldown_seconds: int = 300) -> None:
+        """Set the cooldown for this action+target after successful execution."""
+        key_id = getattr(runbook_or_id, "id", str(runbook_or_id))
+        secs = getattr(runbook_or_id, "cooldown_seconds", cooldown_seconds)
+        key = CooldownStore.make_key(key_id, target)
+        await self._cooldown.set_cooldown(key, secs)
 
     @property
     def governance_cb(self) -> GovernanceCircuitBreaker:

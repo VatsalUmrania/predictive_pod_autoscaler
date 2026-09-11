@@ -89,7 +89,7 @@ class NexusMetrics:
 
     def __init__(self) -> None:
         self._available = False
-        self._registry = None
+        self._registry: Any = None
         self._initialized = False
         self._lock = threading.Lock()
         self._init()
@@ -241,7 +241,7 @@ class NexusMetrics:
 
     def generate_latest(self) -> bytes:
         """Return current metrics in Prometheus text format."""
-        if not self._available:
+        if not self._available or self._registry is None:
             return b"# prometheus_client not installed\n"
         from prometheus_client import generate_latest as _gen
 

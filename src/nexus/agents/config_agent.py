@@ -300,7 +300,6 @@ class ConfigAgent(BaseAgent):
                                 "missing_key": key,
                                 "note": "Key may be injected via envFrom (ConfigMap/Secret) — verify manually",
                             },
-                            suggested_runbook="runbook_missing_env_key_v1",
                             suggested_healing_level=0,
                             confidence=0.60,  # Lower confidence — envFrom not introspectable
                         )

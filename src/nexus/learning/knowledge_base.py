@@ -4,82 +4,23 @@ NEXUS Knowledge Base
 Stores learned confidence adjustments per runbook, derived from historical
 healing outcomes supplied by the FeedbackLoop.
 
-This is the memory of NEXUS — it closes the `act → learn` half of the
-sense→reason→act→verify→learn loop.
-
 Persistence:
-    SQLite database (default: data/nexus_knowledge.db)
-    Survives process restarts. Written by FeedbackLoop, read by ConfidenceScorer
+    PostgreSQL database. Written by FeedbackLoop, read by ConfidenceScorer
     via the Orchestrator.
-
-Confidence adjustment formula:
-    high_performer  success_rate ≥ 0.85, n ≥ 10  → delta = +0.05
-    mid_performer   success_rate 0.50–0.85         → delta ∝ (rate - 0.67)/0.18 × 0.05
-    low_performer   success_rate < 0.50, n ≥ 5    → delta = −0.10
-
-Evidence weighting (shrinkage):
-    delta_applied = delta × min(n / target_n, 1.0)
-    target_n = 10 for positive adjustments, 5 for negative
-    Small sample sizes produce small adjustments — prevents over-fitting to noise.
-
-Signal patterns:
-    The knowledge base also records which signal-type combinations reliably
-    led to successful heals. The RCAEngine can query this to supplement its
-    prompt context (Phase 7 — LLM context enrichment).
-
-Schema:
-    confidence_adjustments: runbook_id → delta, evidence_count, success_rate
-    signal_patterns:        signal_type_set → runbook_id, success_count, total_count
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
-import aiosqlite
-
+from nexus.db.postgres import PostgresClient, get_database_client
 from nexus.learning.outcome_store import RunbookStats
 
 logger = logging.getLogger(__name__)
-
-_CREATE_ADJUSTMENTS = """
-CREATE TABLE IF NOT EXISTS confidence_adjustments (
-    runbook_id      TEXT PRIMARY KEY,
-    delta           REAL    NOT NULL DEFAULT 0.0,
-    evidence_count  INTEGER NOT NULL DEFAULT 0,
-    success_rate    REAL    NOT NULL DEFAULT 0.0,
-    false_heal_rate REAL    NOT NULL DEFAULT 0.0,
-    last_updated    TEXT    NOT NULL
-);
-"""
-
-_CREATE_PATTERNS = """
-CREATE TABLE IF NOT EXISTS signal_patterns (
-    pattern_key   TEXT    PRIMARY KEY,
-    signal_types  TEXT    NOT NULL,
-    runbook_id    TEXT    NOT NULL,
-    success_count INTEGER NOT NULL DEFAULT 0,
-    total_count   INTEGER NOT NULL DEFAULT 0,
-    last_seen     TEXT    NOT NULL
-);
-"""
-
-_CREATE_INCIDENT_OUTCOMES = """
-CREATE TABLE IF NOT EXISTS incident_outcomes (
-    incident_id   TEXT    PRIMARY KEY,
-    runbook_id    TEXT    NOT NULL,
-    action_type   TEXT    NOT NULL,
-    resolved      INTEGER NOT NULL DEFAULT 0,  -- 1 = resolved, 0 = re-fired
-    reason        TEXT    NOT NULL,            -- 'verified' | 're-fired' | 'timeout'
-    recorded_at   TEXT    NOT NULL
-);
-"""
 
 # Thresholds for adjustment computation
 _HIGH_PERFORMER_RATE = 0.85
@@ -87,7 +28,7 @@ _LOW_PERFORMER_RATE = 0.50
 _MAX_POSITIVE_DELTA = +0.05
 _MAX_NEGATIVE_DELTA = -0.10
 _POSITIVE_TARGET_N = 10  # Evidence required for full positive boost
-_NEGATIVE_TARGET_N = 5  # Evidence required for full negative penalty
+_NEGATIVE_TARGET_N = 5   # Evidence required for full negative penalty
 
 
 def _compute_delta(stats: RunbookStats) -> float:
@@ -102,22 +43,18 @@ def _compute_delta(stats: RunbookStats) -> float:
         return 0.0
 
     if rate >= _HIGH_PERFORMER_RATE:
-        # Positive boost, scaled by evidence volume
         raw = _MAX_POSITIVE_DELTA
         scale = min(n / _POSITIVE_TARGET_N, 1.0)
         return round(raw * scale, 4)
 
     if rate < _LOW_PERFORMER_RATE:
-        # Negative penalty, scaled by evidence volume
         raw = _MAX_NEGATIVE_DELTA
         scale = min(n / _NEGATIVE_TARGET_N, 1.0)
         return round(raw * scale, 4)
 
-    # Linear interpolation through the middle band (0.50 → 0.85) → (0.0 → 0.0)
-    # No adjustment in the middle — neither promote nor penalize
     return 0.0
 
-# Knowledge Base
+
 @dataclass
 class AdjustmentRecord:
     """One row from the confidence_adjustments table."""
@@ -142,43 +79,36 @@ class AdjustmentRecord:
 
 class KnowledgeBase:
     """
-    SQLite-backed store of learned confidence adjustments and signal patterns.
+    PostgreSQL-backed store of learned confidence adjustments and signal patterns.
 
     Args:
-        db_path: Path to the knowledge database file.
-                 Reads NEXUS_KNOWLEDGE_DB_PATH from env (default: data/nexus_knowledge.db).
+        db_path: Deprecated argument kept for backwards compatibility.
+        db_client: Optional PostgresClient instance.
     """
 
-    def __init__(self, db_path: str | None = None):
-        self._db_path = db_path or os.getenv(
-            "NEXUS_KNOWLEDGE_DB_PATH", "data/nexus_knowledge.db"
-        )
-        self._db: aiosqlite.Connection | None = None
-
+    def __init__(
+        self,
+        db_path: str | None = None,
+        db_client: PostgresClient | None = None,
+    ):
+        self._db_path = db_path
+        self._db_client = db_client
         # In-memory cache of adjustments (refreshed every update cycle)
         self._cache: dict[str, float] = {}
 
     async def initialize(self) -> None:
-        """Create tables if they don't exist."""
-        Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._db = await aiosqlite.connect(self._db_path)
-        self._db.row_factory = aiosqlite.Row
-
-        await self._db.execute(_CREATE_ADJUSTMENTS)
-        await self._db.execute(_CREATE_PATTERNS)
-        await self._db.execute(_CREATE_INCIDENT_OUTCOMES)
-        await self._db.commit()
+        """Connect to PostgreSQL and refresh cache."""
+        if self._db_client is None:
+            self._db_client = await get_database_client()
 
         await self._refresh_cache()
         logger.info(
-            f"[KnowledgeBase] Initialized at {self._db_path} — "
+            f"[KnowledgeBase] Initialized with PostgreSQL — "
             f"{len(self._cache)} adjustment(s) loaded"
         )
 
     async def close(self) -> None:
-        if self._db:
-            await self._db.close()
-            self._db = None
+        self._db_client = None
 
     async def __aenter__(self) -> KnowledgeBase:
         await self.initialize()
@@ -193,7 +123,6 @@ class KnowledgeBase:
         """
         Return the learned confidence delta for a runbook.
         Served from in-memory cache — zero latency for the hot path.
-        Returns 0.0 if no history is available.
         """
         return self._cache.get(runbook_id, 0.0)
 
@@ -205,36 +134,34 @@ class KnowledgeBase:
         """
         Compute and persist the confidence adjustment for one runbook.
         Updates the in-memory cache immediately.
-        Returns the computed delta.
         """
-        if not self._db:
+        if not self._db_client:
             return 0.0
 
         delta = _compute_delta(stats)
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
 
-        await self._db.execute(
-            """
-            INSERT INTO confidence_adjustments
-                (runbook_id, delta, evidence_count, success_rate, false_heal_rate, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(runbook_id) DO UPDATE SET
-                delta           = excluded.delta,
-                evidence_count  = excluded.evidence_count,
-                success_rate    = excluded.success_rate,
-                false_heal_rate = excluded.false_heal_rate,
-                last_updated    = excluded.last_updated
-            """,
-            (
+        sql = """
+        INSERT INTO confidence_adjustments (
+            runbook_id, delta, evidence_count, success_rate, false_heal_rate, last_updated
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT(runbook_id) DO UPDATE SET
+            delta           = EXCLUDED.delta,
+            evidence_count  = EXCLUDED.evidence_count,
+            success_rate    = EXCLUDED.success_rate,
+            false_heal_rate = EXCLUDED.false_heal_rate,
+            last_updated    = EXCLUDED.last_updated
+        """
+        async with self._db_client.acquire() as conn:
+            await conn.execute(
+                sql,
                 stats.runbook_id,
-                delta,
-                stats.completed,
-                stats.success_rate,
-                stats.false_heal_rate,
+                float(delta),
+                int(stats.completed),
+                float(stats.success_rate),
+                float(stats.false_heal_rate),
                 now,
-            ),
-        )
-        await self._db.commit()
+            )
 
         self._cache[stats.runbook_id] = delta
 
@@ -259,23 +186,28 @@ class KnowledgeBase:
 
     async def get_all_records(self) -> list[AdjustmentRecord]:
         """Return full adjustment table for dashboard queries."""
-        if not self._db:
+        if not self._db_client:
             return []
-        async with self._db.execute(
-            "SELECT * FROM confidence_adjustments ORDER BY delta DESC"
-        ) as cur:
-            rows = await cur.fetchall()
-            return [
-                AdjustmentRecord(
-                    runbook_id=r["runbook_id"],
-                    delta=r["delta"],
-                    evidence_count=r["evidence_count"],
-                    success_rate=r["success_rate"],
-                    false_heal_rate=r["false_heal_rate"],
-                    last_updated=r["last_updated"],
+        async with self._db_client.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM confidence_adjustments ORDER BY delta DESC"
+            )
+            records = []
+            for r in rows:
+                lu = r["last_updated"]
+                if isinstance(lu, datetime):
+                    lu = lu.isoformat()
+                records.append(
+                    AdjustmentRecord(
+                        runbook_id=str(r["runbook_id"]),
+                        delta=float(r["delta"]),
+                        evidence_count=int(r["evidence_count"]),
+                        success_rate=float(r["success_rate"]),
+                        false_heal_rate=float(r["false_heal_rate"]),
+                        last_updated=str(lu),
+                    )
                 )
-                for r in rows
-            ]
+            return records
 
     # ── Signal patterns ───────────────────────────────────────────────────────
 
@@ -287,93 +219,89 @@ class KnowledgeBase:
     ) -> None:
         """
         Record a signal_type combination and whether the associated runbook succeeded.
-        Used for future LLM prompt enrichment (Phase 7).
         """
-        if not self._db:
+        if not self._db_client:
             return
 
         key = "|".join(sorted(signal_types))
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
+        succ = 1 if success else 0
 
-        await self._db.execute(
-            """
-            INSERT INTO signal_patterns
-                (pattern_key, signal_types, runbook_id, success_count, total_count, last_seen)
-            VALUES (?, ?, ?, ?, 1, ?)
-            ON CONFLICT(pattern_key) DO UPDATE SET
-                success_count = success_count + ?,
-                total_count   = total_count + 1,
-                last_seen     = excluded.last_seen
-            """,
-            (
+        sql = """
+        INSERT INTO signal_patterns (
+            pattern_key, signal_types, runbook_id, success_count, total_count, last_seen
+        ) VALUES ($1, $2, $3, $4, 1, $5)
+        ON CONFLICT(pattern_key) DO UPDATE SET
+            success_count = signal_patterns.success_count + EXCLUDED.success_count,
+            total_count   = signal_patterns.total_count + 1,
+            last_seen     = EXCLUDED.last_seen
+        """
+        async with self._db_client.acquire() as conn:
+            await conn.execute(
+                sql,
                 key,
                 json.dumps(sorted(signal_types)),
                 runbook_id,
-                1 if success else 0,
+                succ,
                 now,
-                1 if success else 0,
-            ),
-        )
-        await self._db.commit()
+            )
 
     async def get_best_runbook_for_pattern(self, signal_types: set[str]) -> str | None:
         """
         Look up which runbook historically worked best for a given signal-type set.
-        Returns the runbook_id with highest success_count / total_count.
         """
-        if not self._db:
+        if not self._db_client:
             return None
 
         key = "|".join(sorted(signal_types))
-        async with self._db.execute(
-            """
-            SELECT runbook_id,
-                   CAST(success_count AS REAL) / MAX(total_count, 1) AS rate
-            FROM signal_patterns
-            WHERE pattern_key = ?
-            ORDER BY rate DESC
-            LIMIT 1
-            """,
-            (key,),
-        ) as cur:
-            row = await cur.fetchone()
-            return row["runbook_id"] if row else None
+        sql = """
+        SELECT runbook_id,
+               CAST(success_count AS REAL) / GREATEST(total_count, 1) AS rate
+        FROM signal_patterns
+        WHERE pattern_key = $1
+        ORDER BY rate DESC
+        LIMIT 1
+        """
+        async with self._db_client.acquire() as conn:
+            row = await conn.fetchrow(sql, key)
+            return str(row["runbook_id"]) if row else None
 
     async def get_working_patterns(
         self, min_success_rate: float = 0.80
     ) -> list[dict[str, Any]]:
         """
         Return signal patterns that reliably led to successful healing.
-        Used to enrich RCA prompts and advisor recommendations.
         """
-        if not self._db:
+        if not self._db_client:
             return []
-        async with self._db.execute(
-            """
-            SELECT pattern_key, signal_types, runbook_id,
-                   success_count, total_count,
-                   CAST(success_count AS REAL) / MAX(total_count, 1) AS success_rate
-            FROM signal_patterns
-            WHERE total_count >= 3
-            AND   CAST(success_count AS REAL) / MAX(total_count, 1) >= ?
-            ORDER BY success_rate DESC
-            """,
-            (min_success_rate,),
-        ) as cur:
-            rows = await cur.fetchall()
+
+        sql = """
+        SELECT pattern_key, signal_types, runbook_id,
+               success_count, total_count,
+               CAST(success_count AS REAL) / GREATEST(total_count, 1) AS success_rate
+        FROM signal_patterns
+        WHERE total_count >= 3
+        AND   CAST(success_count AS REAL) / GREATEST(total_count, 1) >= $1
+        ORDER BY success_rate DESC
+        """
+        async with self._db_client.acquire() as conn:
+            rows = await conn.fetch(sql, min_success_rate)
             return [dict(r) for r in rows]
 
     # ── Cache refresh ─────────────────────────────────────────────────────────
 
     async def _refresh_cache(self) -> None:
         """Reload the in-memory confidence cache from the database."""
-        if not self._db:
+        if not self._db_client:
             return
-        async with self._db.execute(
-            "SELECT runbook_id, delta FROM confidence_adjustments"
-        ) as cur:
-            rows = await cur.fetchall()
-            self._cache = {r["runbook_id"]: r["delta"] for r in rows}
+        try:
+            async with self._db_client.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT runbook_id, delta FROM confidence_adjustments"
+                )
+                self._cache = {str(r["runbook_id"]): float(r["delta"]) for r in rows}
+        except Exception as exc:
+            logger.warning(f"[KnowledgeBase] Cache refresh failed: {exc}")
 
     # ── Per-incident outcome recording (P3b) ──────────────────────────────────
 
@@ -387,40 +315,32 @@ class KnowledgeBase:
     ) -> None:
         """
         Record whether an incident was resolved by a specific runbook/action.
-
-        Args:
-            incident_id: The cluster ID from the orchestrator
-            runbook_id: The runbook that was executed
-            action_type: The action type (e.g., 'restart_pod', 'scale_deployment')
-            resolved: True if the incident stopped firing, False if it re-fired
-            reason: 'verified' | 're-fired' | 'timeout'
         """
-        if not self._db:
+        if not self._db_client:
             return
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
         try:
-            await self._db.execute(
-                """
-                INSERT INTO incident_outcomes
-                    (incident_id, runbook_id, action_type, resolved, reason, recorded_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(incident_id) DO UPDATE SET
-                    runbook_id     = excluded.runbook_id,
-                    action_type    = excluded.action_type,
-                    resolved       = excluded.resolved,
-                    reason         = excluded.reason,
-                    recorded_at    = excluded.recorded_at
-                """,
-                (
-                    incident_id,
+            sql = """
+            INSERT INTO incident_outcomes (
+                incident_id, runbook_id, action_type, resolved, reason, recorded_at
+            ) VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT(incident_id) DO UPDATE SET
+                runbook_id  = EXCLUDED.runbook_id,
+                action_type = EXCLUDED.action_type,
+                resolved    = EXCLUDED.resolved,
+                reason      = EXCLUDED.reason,
+                recorded_at = EXCLUDED.recorded_at
+            """
+            async with self._db_client.acquire() as conn:
+                await conn.execute(
+                    sql,
+                    str(incident_id),
                     runbook_id,
                     action_type,
-                    1 if resolved else 0,
+                    bool(resolved),
                     reason,
                     now,
-                ),
-            )
-            await self._db.commit()
+                )
             logger.debug(
                 f"[KnowledgeBase] Recorded incident outcome: "
                 f"{incident_id} runbook={runbook_id} resolved={resolved} reason={reason}"

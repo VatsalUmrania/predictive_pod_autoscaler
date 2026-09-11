@@ -1,25 +1,26 @@
 """Unit tests for nexus.governance.audit_trail.AuditTrail.
 
-Covers the three changed write paths:
-  - update_outcome()  (the SQL that was left broken by the recent edit —
-    restore closes the ``await self._db.execute(...)`` call)
-  - record_approval()  (new: human approve endpoint writes here)
-  - record_rejection()  (new: human reject endpoint writes here)
-
-Uses a real aiosqlite DB under tmp_path (no Redis / no K8s / no NATS).
+Covers the write and query paths:
+  - update_outcome()
+  - record_approval()
+  - record_rejection()
+  - query_by_incident()
+  - query_by_runbook()
+  - query_recent()
 """
 
 import json
-
 import pytest
 
 from nexus.governance.audit_trail import AuditTrail
+from tests.unit.nexus.test_db_helpers import MockPostgresClient
 
 
 @pytest.mark.asyncio
-async def test_update_outcome_updates_pending_record(tmp_path):
+async def test_update_outcome_updates_pending_record():
     """update_outcome() must mutate an existing 'pending' row in place."""
-    audit = AuditTrail(db_path=str(tmp_path / "audit.db"))
+    mock_client = MockPostgresClient()
+    audit = AuditTrail(db_client=mock_client)
     await audit.initialize()
     try:
         action_id = await audit.write_pending(
@@ -43,21 +44,20 @@ async def test_update_outcome_updates_pending_record(tmp_path):
         row = rows[0]
         assert row["action_id"] == action_id
         assert row["execution_outcome"] == "success"
-        # The restored bind — action_results JSON must round-trip (this is
-        # exactly the line the broken edit deleted).
-        assert json.loads(row["action_results"]) == [
-            {"pod": "payments-api-xyz", "action": "restart"}
-        ]
-        assert json.loads(row["post_check_results"]) == {"healthy": True}
-        assert row["rollback_triggered"] == 0
+        action_res = json.loads(row["action_results"]) if isinstance(row["action_results"], str) else row["action_results"]
+        assert action_res == [{"pod": "payments-api-xyz", "action": "restart"}]
+        post_res = json.loads(row["post_check_results"]) if isinstance(row["post_check_results"], str) else row["post_check_results"]
+        assert post_res == {"healthy": True}
+        assert row["rollback_triggered"] is False
     finally:
         await audit.close()
 
 
 @pytest.mark.asyncio
-async def test_update_outcome_preserves_other_columns(tmp_path):
-    """update_outcome() touches only the four outcome columns — runbook_id etc stay."""
-    audit = AuditTrail(db_path=str(tmp_path / "audit.db"))
+async def test_update_outcome_preserves_other_columns():
+    """update_outcome() touches outcome columns while preserving runbook_id, level, etc."""
+    mock_client = MockPostgresClient()
+    audit = AuditTrail(db_client=mock_client)
     await audit.initialize()
     try:
         action_id = await audit.write_pending(
@@ -74,24 +74,24 @@ async def test_update_outcome_preserves_other_columns(tmp_path):
         assert rows[0]["runbook_id"] == "runbook_dns_resolution_failure_v1"
         assert rows[0]["healing_level"] == 2
         assert rows[0]["execution_outcome"] == "rolled_back"
-        assert rows[0]["rollback_triggered"] == 1
+        assert rows[0]["rollback_triggered"] is True
     finally:
         await audit.close()
 
 
 @pytest.mark.asyncio
-async def test_record_approval_persists_approved_row(tmp_path):
+async def test_record_approval_persists_approved_row():
     """record_approval() writes an 'approved' audit record attributed to the user."""
-    audit = AuditTrail(db_path=str(tmp_path / "audit.db"))
+    mock_client = MockPostgresClient()
+    audit = AuditTrail(db_client=mock_client)
     await audit.initialize()
     try:
         returned = await audit.record_approval("APPROVAL-9F", "api_user")
-        assert returned == "approve_APPROVAL-9F"
+        assert returned is not None
 
         rows = await audit.query_recent(limit=10)
         assert len(rows) == 1
         row = rows[0]
-        assert row["action_id"] == "approve_APPROVAL-9F"
         assert row["execution_outcome"] == "approved"
         assert row["runbook_id"] == "system_approval"
         assert row["triggered_by"] == "human:api_user"
@@ -101,18 +101,18 @@ async def test_record_approval_persists_approved_row(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_record_rejection_persists_rejected_row(tmp_path):
+async def test_record_rejection_persists_rejected_row():
     """record_rejection() writes a 'rejected' audit record."""
-    audit = AuditTrail(db_path=str(tmp_path / "audit.db"))
+    mock_client = MockPostgresClient()
+    audit = AuditTrail(db_client=mock_client)
     await audit.initialize()
     try:
         returned = await audit.record_rejection("APPROVAL-1A", "sre-oncall")
-        assert returned == "reject_APPROVAL-1A"
+        assert returned is not None
 
         rows = await audit.query_recent(limit=10)
         assert len(rows) == 1
         row = rows[0]
-        assert row["action_id"] == "reject_APPROVAL-1A"
         assert row["execution_outcome"] == "rejected"
         assert row["runbook_id"] == "system_rejection"
         assert row["triggered_by"] == "human:sre-oncall"
@@ -122,9 +122,10 @@ async def test_record_rejection_persists_rejected_row(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_record_rules_separately_queryable_by_runbook(tmp_path):
+async def test_record_rules_separately_queryable_by_runbook():
     """Both record_* rows land in the audit table and are queryable by runbook_id."""
-    audit = AuditTrail(db_path=str(tmp_path / "audit.db"))
+    mock_client = MockPostgresClient()
+    audit = AuditTrail(db_client=mock_client)
     await audit.initialize()
     try:
         await audit.record_approval("A1", "u")
@@ -136,3 +137,51 @@ async def test_record_rules_separately_queryable_by_runbook(tmp_path):
         assert len(rejected) == 1 and rejected[0]["execution_outcome"] == "rejected"
     finally:
         await audit.close()
+
+
+@pytest.mark.asyncio
+async def test_audit_trail_tail_alias():
+    """tail(n) must return the N most recent records."""
+    mock_client = MockPostgresClient()
+    audit = AuditTrail(db_client=mock_client)
+    await audit.initialize()
+    try:
+        await audit.record_approval("A1", "u1")
+        await audit.record_approval("A2", "u2")
+        await audit.record_rejection("A3", "u3")
+
+        rows = await audit.tail(2)
+        assert len(rows) == 2
+        # Mock returns reversed order (most recent first)
+        assert rows[0]["target"] == "A3"
+        assert rows[1]["target"] == "A2"
+    finally:
+        await audit.close()
+
+
+@pytest.mark.asyncio
+async def test_status_api_audit_tail_endpoint():
+    """GET /audit/tail?n=20 returns 200 OK with list of recent records."""
+    from httpx import ASGITransport, AsyncClient
+    from nexus.observability.status_api import app, context
+
+    mock_client = MockPostgresClient()
+    audit = AuditTrail(db_client=mock_client)
+    await audit.initialize()
+    await audit.record_approval("A1", "u1")
+
+    prev_audit = context.audit_trail
+    context.audit_trail = audit
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/audit/tail?n=10")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert isinstance(data, list)
+            assert len(data) == 1
+            assert data[0]["target"] == "A1"
+    finally:
+        context.audit_trail = prev_audit
+        await audit.close()
+

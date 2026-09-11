@@ -108,3 +108,79 @@ def test_pending_list_returns_staged_approval_objects():
     assert entry.approval_id == aid
     assert entry.runbook_id == "runbook_x"
     assert entry.healing_level == 2
+
+
+@pytest.mark.asyncio
+async def test_enqueue_duplicate_target_suppresses_and_reuses_id_k8s():
+    """Subsequent enqueue calls for the same K8s target reuse approval_id without re-publishing NATS."""
+    nats = MagicMock()
+    nats.publish_raw = AsyncMock()
+    queue = HumanApprovalQueue(nats_client=nats)
+
+    id1 = queue.enqueue(
+        runbook_id="runbook_pod_crashloop_v1",
+        action_type="restart_pod",
+        target="nexus/opa",
+        incident_id="INC-K8S-1",
+        healing_level=3,
+        confidence=0.55,
+    )
+    await asyncio.sleep(0.02)
+    assert nats.publish_raw.await_count == 1
+
+    # Second enqueue for same target
+    id2 = queue.enqueue(
+        runbook_id="runbook_pod_crashloop_v1",
+        action_type="restart_pod",
+        target="nexus/opa",
+        incident_id="INC-K8S-2",
+        healing_level=3,
+        confidence=0.85,
+    )
+    await asyncio.sleep(0.02)
+
+    # Must reuse the same approval_id and NOT publish a second NATS event
+    assert id2 == id1
+    assert nats.publish_raw.await_count == 1
+    pending = queue.get_pending_by_target("nexus/opa")
+    assert pending is not None
+    assert pending.approval_id == id1
+    assert pending.confidence == 0.85  # Updated to higher confidence
+
+
+@pytest.mark.asyncio
+async def test_enqueue_duplicate_target_suppresses_and_reuses_id_aws():
+    """Subsequent enqueue calls for the same AWS target reuse approval_id."""
+    nats = MagicMock()
+    nats.publish_raw = AsyncMock()
+    queue = HumanApprovalQueue(nats_client=nats)
+
+    aws_target = "arn:aws:lambda:us-east-1:123456789012:function:order-processor"
+    id1 = queue.enqueue(
+        runbook_id="runbook_lambda_error_spike_v1",
+        action_type="rollback_alias",
+        target=aws_target,
+        incident_id="INC-AWS-1",
+        healing_level=3,
+        confidence=0.60,
+    )
+    await asyncio.sleep(0.02)
+    assert nats.publish_raw.await_count == 1
+
+    id2 = queue.enqueue(
+        runbook_id="runbook_lambda_error_spike_v1",
+        action_type="rollback_alias",
+        target=aws_target,
+        incident_id="INC-AWS-2",
+        healing_level=3,
+        confidence=0.75,
+    )
+    await asyncio.sleep(0.02)
+
+    assert id2 == id1
+    assert nats.publish_raw.await_count == 1
+    pending = queue.get_pending_by_target(aws_target)
+    assert pending is not None
+    assert pending.approval_id == id1
+    assert pending.confidence == 0.75
+

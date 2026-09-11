@@ -37,9 +37,9 @@ metadata:
     app.kubernetes.io/name: nexus-api
     app.kubernetes.io/component: self-healing
 rules:
-  # K8sAgent: list/watch pods, nodes, events
+  # K8sAgent: list/watch pods, pod logs, nodes, events
   - apiGroups: [""]
-    resources: ["pods", "nodes", "events", "services", "endpoints", "namespaces"]
+    resources: ["pods", "pods/log", "nodes", "events", "services", "endpoints", "namespaces"]
     verbs: ["get", "list", "watch"]
   # L1 restart_pod heal: delete the pod so its ReplicaSet recreates it.
   # Cluster-wide because NEXUS heals pods across namespaces (shop-demo in
@@ -48,10 +48,10 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["delete"]
-  # K8sAgent: read deployments/replicasets for scaling context
+  # K8sAgent & Remediation: read and mutate deployments/replicasets for restart & rollback
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "update", "patch"]
   # Prescaler autonomous mode: scale deployments
   - apiGroups: ["apps"]
     resources: ["deployments/scale"]
@@ -112,10 +112,8 @@ spec:
           env:
             - name: NATS_URL
               value: "nats://nats.nexus.svc.cluster.local:4222"
-            - name: NEXUS_AUDIT_DB_PATH
-              value: /data/nexus_audit.db
-            - name: NEXUS_KNOWLEDGE_DB_PATH
-              value: /data/nexus_knowledge.db
+            - name: NEXUS_POSTGRES_DSN
+              value: "postgresql://nexus:nexus@postgres.nexus.svc.cluster.local:5432/nexus"
             - name: NEXUS_LOG_LEVEL
               value: info
             # Prometheus — kube-prometheus-stack service in monitoring namespace
@@ -124,9 +122,6 @@ spec:
             # OPA policy engine — deploy/nexus/opa-deployment.yaml
             - name: NEXUS_OPA_URL
               value: "http://opa.nexus.svc.cluster.local:8181"
-            # Runbooks — baked into the image at /runbooks (Dockerfile API)
-            - name: NEXUS_RUNBOOK_DIR
-              value: "/runbooks"
             # LLM Provider configuration (Gemini / OpenAI / Anthropic / none)
             - name: NEXUS_LLM_PROVIDER
               value: "gemini"
@@ -141,8 +136,6 @@ spec:
                   key: NEXUS_LLM_API_KEY
                   optional: true
           volumeMounts:
-            - name: nexus-data
-              mountPath: /data
             - name: shop-demo-policy
               mountPath: /app/selfheal.yaml
               subPath: selfheal.yaml
@@ -169,9 +162,6 @@ spec:
             periodSeconds: 10
             failureThreshold: 3
       volumes:
-        - name: nexus-data
-          persistentVolumeClaim:
-            claimName: nexus-api-data
         - name: shop-demo-policy
           configMap:
             name: selfheal-shop-demo
@@ -216,18 +206,6 @@ data:
       page_sre_after: 2
       notify_on_heal: true
       notify_on_prescale: true
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: nexus-api-data
-  namespace: nexus
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1Gi
 ---
 # ClusterIP — used by PPA operator and shop-demo inside the cluster.
 apiVersion: v1

@@ -182,7 +182,6 @@ class NetworkAgent(BaseAgent):
                         error_message=f"getaddrinfo failed after {self.dns_timeout_s}s timeout",
                         affected_services=[hostname],
                     ).model_dump(),
-                    suggested_runbook="runbook_dns_resolution_failure_v1",
                     suggested_healing_level=1,
                     confidence=0.90,
                 )
@@ -295,10 +294,10 @@ class NetworkAgent(BaseAgent):
                 *[self._check_service_http(ep) for ep in self.extra_endpoints],
                 return_exceptions=True,
             )
-            for r in http_results:
-                if isinstance(r, list):
-                    events.extend(r)
-                elif isinstance(r, Exception):
-                    logger.debug(f"[NetworkAgent] HTTP check exception: {r}")
+            for hr in http_results:
+                if isinstance(hr, list):
+                    events.extend(hr)
+                elif isinstance(hr, Exception):
+                    logger.debug(f"[NetworkAgent] HTTP check exception: {hr}")
 
         return events

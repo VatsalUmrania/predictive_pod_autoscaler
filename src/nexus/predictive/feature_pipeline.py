@@ -5,10 +5,10 @@ Transforms raw DBAgent `QuerySnapshot` data and Prometheus time-series
 into normalized feature vectors for the predictive models.
 
 Key fixes over the original PPA operator (ARCHITECTURE_REVIEW_CRITICAL.md):
-    ✅ §1.4  NaN / Inf guard: every normalization step checks before dividing
-    ✅ §6.2  Feature bounds: clamp all values to [feature_min, feature_max]
-    ✅ §1.5  Missing feature handling: configurable fill (zero | mean | last)
-    ✅ §9.1  No global state: all state lives in FeaturePipeline instance
+    - §1.4  NaN / Inf guard: every normalization step checks before dividing
+    - §6.2  Feature bounds: clamp all values to [feature_min, feature_max]
+    - §1.5  Missing feature handling: configurable fill (zero | mean | last)
+    - §9.1  No global state: all state lives in FeaturePipeline instance
 
 Feature groups produced:
     DB layer (from QuerySnapshot — window of raw counts):

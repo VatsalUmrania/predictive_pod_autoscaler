@@ -34,7 +34,7 @@ test-e2e:
 
 lint:
 	ruff check src tests
-	mypy src/ppa --ignore-missing-imports
+	mypy src/ppa src/nexus --ignore-missing-imports
 
 format:
 	black src tests

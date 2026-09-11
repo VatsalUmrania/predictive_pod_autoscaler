@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json as _json
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -67,21 +68,38 @@ class MockNATS:
     def __init__(self) -> None:
         self._subs: dict[str, dict] = {}
         self._published: list[tuple[str, IncidentEvent | dict]] = []
+        self._js = self
+        self._nc = self
 
     async def subscribe_raw(
-        self, subject_pattern: str, *, handler, durable_name: str | None = None
+        self,
+        subject_pattern: str,
+        *,
+        handler,
+        durable_name: str | None = None,
+        stream_name: str | None = None,
     ) -> None:
-        self._subs[subject_pattern] = {"handler": handler, "durable_name": durable_name}
+        self._subs[subject_pattern] = {
+            "handler": handler,
+            "durable_name": durable_name,
+            "stream_name": stream_name,
+        }
 
     async def publish(
-        self, arg1: IncidentEvent | str, arg2: dict | None = None
+        self, arg1: IncidentEvent | str, arg2: Any = None
     ) -> None:
         if isinstance(arg1, IncidentEvent):
             subject = arg1.nats_subject()
             payload = arg1
         else:
             subject = arg1
-            payload = arg2 if arg2 is not None else {}
+            if isinstance(arg2, bytes):
+                try:
+                    payload = _json.loads(arg2.decode("utf-8"))
+                except Exception:
+                    payload = arg2
+            else:
+                payload = arg2 if arg2 is not None else {}
         self._published.append((subject, payload))
 
     async def emit(self, subject: str, data: dict) -> None:
@@ -118,16 +136,15 @@ class TestSharedNATSBus:
 
     @pytest.mark.asyncio
     async def test_prescaler_subscribes_with_correct_durable_name(self):
-        """The NATS durable subscription name is a cross-component integration detail."""
+        """Prescaler must subscribe to ppa.predictions.> with PPA_PREDICTIONS stream."""
         nats = MockNATS()
-        prescaler = Prescaler(nats_client=nats, mode=PrescaleMode.SHADOW)
+        prescaler = Prescaler(nats_client=nats)
+
         await prescaler.subscribe_to_ppa_predictions()
 
-        # Exactly one subscription registered
-        assert len(nats._subs) == 1
-        pattern, sub = list(nats._subs.items())[0]
-        assert pattern == "ppa.predictions.>"
-        assert sub["durable_name"] == "prescaler-ppa-predictions"
+        assert "ppa.predictions.>" in nats._subs
+        sub = nats._subs["ppa.predictions.>"]
+        assert sub["stream_name"] == "PPA_PREDICTIONS"
 
     @pytest.mark.asyncio
     async def test_prediction_emits_to_correct_subject(self):
@@ -411,11 +428,11 @@ class TestPredictionOutcomeSequence:
         tracker._fetch_actual_rps = AsyncMock(return_value=950.0)
         await tracker._check_and_emit_outcome()
 
-        outcome_subjects = [
-            s for s, _ in nats._published if s.startswith("ppa.outcomes.")
+        outcome_events = [
+            (s, p) for s, p in nats._published if s.startswith("ppa.outcomes.")
         ]
-        assert len(outcome_subjects) == 1
-        subject, payload = nats._published[0]
+        assert len(outcome_events) == 1
+        subject, payload = outcome_events[0]
         assert subject == "ppa.outcomes.checkout-api"
         assert payload["verdict"] == "spike_hit"
         assert payload["actual_rps"] == 950.0

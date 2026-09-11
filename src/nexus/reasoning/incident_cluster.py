@@ -57,7 +57,7 @@ class IncidentCluster:
         for e in self.events:
             if e.namespace:
                 counts[e.namespace] = counts.get(e.namespace, 0) + 1
-        return max(counts, key=counts.get) if counts else None
+        return max(counts, key=counts.__getitem__) if counts else None
 
     @property
     def primary_resource(self) -> str | None:
@@ -66,19 +66,44 @@ class IncidentCluster:
         for e in self.events:
             if e.resource_name:
                 counts[e.resource_name] = counts.get(e.resource_name, 0) + 1
-        return max(counts, key=counts.get) if counts else None
+        return max(counts, key=counts.__getitem__) if counts else None
 
     @property
     def signal_types(self) -> set[str]:
-        return {str(e.signal_type) for e in self.events}
+        res = set()
+        for e in self.events:
+            st = getattr(e, "signal_type", None)
+            if st is not None:
+                if hasattr(st, "value"):
+                    res.add(str(st.value).lower())
+                else:
+                    s = str(st).lower()
+                    res.add(s.split(".")[-1] if "." in s else s)
+        return res
 
     @property
     def agent_types(self) -> set[str]:
-        return {str(e.agent) for e in self.events}
+        res = set()
+        for e in self.events:
+            ag = getattr(e, "agent", None)
+            if ag is not None:
+                if hasattr(ag, "value"):
+                    res.add(str(ag.value).lower())
+                else:
+                    s = str(ag).lower()
+                    res.add(s.split(".")[-1] if "." in s else s)
+        return res
 
     @property
     def age_seconds(self) -> float:
         return (datetime.now(timezone.utc) - self.created_at).total_seconds()
+
+    @property
+    def fingerprint(self) -> str:
+        """Deterministic fingerprint representing the incident cluster target."""
+        ns = self.namespace or "default"
+        res = self.primary_resource or self.cluster_id
+        return f"{ns}:{res}"
 
     @property
     def has_deploy_event(self) -> bool:

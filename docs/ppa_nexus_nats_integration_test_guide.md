@@ -26,10 +26,12 @@ kubectl apply -f deploy/crd.yaml
 kubectl apply -f deploy/rbac.yaml
 kubectl apply -f deploy/ppa-models-pvc.yaml
 
-# NEXUS (NATS + nexus-api)
+# NEXUS (PostgreSQL + NATS + OPA Policy Engine + nexus-api)
 kubectl apply -f deploy/nexus/nats-statefulset.yaml
 kubectl apply -f deploy/nexus/nexus-api-deployment.yaml
-kubectl get pods -n nexus   # Wait for: nats-0 Running + nexus-api-xxxx Running
+kubectl apply -f deploy/nexus/opa-deployment.yaml
+kubectl apply -f deploy/nexus/postgres-statefulset.yaml
+kubectl get pods -n nexus   # Wait for: postgres-0, nats-0, opa-xxxx, nexus-api-xxxx Running
 ```
 
 ---

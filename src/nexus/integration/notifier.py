@@ -224,7 +224,7 @@ class Notifier:
         predicted_rps: float,
         horizon_min: int = 10,
         confidence: float = 0.0,
-        tables: list = None,
+        tables: list[Any] | None = None,
     ) -> None:
         """Send a pre-scale prediction notification."""
         webhook = self._get_webhook(app_name)
@@ -410,10 +410,161 @@ class Notifier:
                 },
             }
         )
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"To approve this action, run:\n`nexus approve {approval_id}`",
+                },
+            }
+        )
         blocks.append(_approval_buttons_block(approval_id))
 
         payload = {"attachments": [{"color": "#ff9900", "fallback": f"NEXUS L{healing_level} Action Requires Approval: {runbook_id} for {target}", "blocks": blocks}]}
         await self._send(webhook, payload, app_name)
+
+    async def notify_incident_resolved(
+        self,
+        app_name: str,
+        incident_id: str,
+        target: str,
+        failure_class: str = "Unknown",
+        root_cause: str = "Unknown",
+        action_taken: str = "Automated remediation",
+        verification_details: str = "Target verified healthy and SLO restored",
+        confidence: float = 1.0,
+        duration_s: float | None = None,
+        context: dict | None = None,
+    ) -> None:
+        """Send a rich Slack Block Kit notification when an incident is successfully resolved."""
+        webhook = self._get_webhook(app_name)
+        if not webhook:
+            return
+
+        conf_str = f"{confidence * 100:.0f}%" if confidence <= 1.0 else f"{confidence:.0f}%"
+        dur_str = f" in {duration_s:.1f}s" if duration_s is not None else ""
+
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"✅ *NEXUS Incident Resolved — `{target}`*{dur_str}",
+                },
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Incident ID:*\n`{incident_id}`"},
+                    {"type": "mrkdwn", "text": f"*Target:*\n`{target}`"},
+                    {"type": "mrkdwn", "text": f"*Failure Class:*\n`{failure_class}`"},
+                    {"type": "mrkdwn", "text": f"*Confidence:*\n`{conf_str}`"},
+                ],
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Root Cause Analysis:*\n{root_cause[:350]}{'...' if len(root_cause) > 350 else ''}",
+                },
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Action Executed:*\n{action_taken[:350]}{'...' if len(action_taken) > 350 else ''}",
+                },
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Health & SLO Verification:*\n`{verification_details[:350]}`",
+                },
+            },
+        ]
+
+        payload = {
+            "attachments": [
+                {
+                    "color": "#059669",
+                    "fallback": f"✅ NEXUS Incident Resolved for {target}: {failure_class}",
+                    "blocks": blocks,
+                }
+            ]
+        }
+
+        await self._send(webhook, payload, app_name)
+        logger.info(
+            f"[Notifier] Incident resolved notification sent for target='{target}' inc='{incident_id}'"
+        )
+
+    async def notify_incident_escalated(
+        self,
+        app_name: str,
+        incident_id: str,
+        target: str,
+        reason: str = "Remediation failed or maximum retries exhausted",
+        failure_class: str = "Unknown",
+        root_cause: str = "Unknown",
+        context: dict | None = None,
+    ) -> None:
+        """Send a Slack notification when an incident escalates to human operators."""
+        webhook = self._get_webhook(app_name)
+        if not webhook:
+            return
+
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"🚨 *NEXUS Incident Escalation — `{target}` requires human intervention*",
+                },
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Incident ID:*\n`{incident_id}`"},
+                    {"type": "mrkdwn", "text": f"*Target:*\n`{target}`"},
+                    {"type": "mrkdwn", "text": f"*Failure Class:*\n`{failure_class}`"},
+                    {"type": "mrkdwn", "text": "*Status:*\n`ESCALATED`"},
+                ],
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Escalation Reason:*\n{reason[:350]}",
+                },
+            },
+        ]
+        if root_cause and root_cause != "Unknown":
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Suspected Cause:*\n{root_cause[:350]}{'...' if len(root_cause) > 350 else ''}",
+                    },
+                }
+            )
+
+        payload = {
+            "attachments": [
+                {
+                    "color": "#dc2626",
+                    "fallback": f"🚨 NEXUS Incident Escalated for {target}: {reason}",
+                    "blocks": blocks,
+                }
+            ]
+        }
+
+        await self._send(webhook, payload, app_name)
+        logger.warning(
+            f"[Notifier] Incident escalation sent for target='{target}' inc='{incident_id}'"
+        )
 
     # Policy helpers
     def _get_webhook(self, app_name: str) -> str | None:
@@ -432,7 +583,7 @@ class Notifier:
             from nexus.integration.dashboard import _policy_cache
 
             cfg = _policy_cache.get(app_name, {})
-            return cfg.get("notifications", {}).get("page_sre_after", 3)
+            return int(cfg.get("notifications", {}).get("page_sre_after", 3))
         except Exception:
             return 3
 
@@ -505,12 +656,19 @@ class Notifier:
         async def _approval_wrapper(data: dict, subject: str) -> None:
             await self._on_approval_message(data)
 
-        # Retry both subscriptions until both succeed, with capped backoff
+        async def _incident_wrapper(data: dict, subject: str) -> None:
+            if "resolved" in subject:
+                await self._on_incident_resolved_message(data)
+            elif "escalated" in subject:
+                await self._on_incident_escalated_message(data)
+
+        # Retry all subscriptions until all succeed, with capped backoff
         action_ok = False
         prescale_ok = False
         approval_ok = False
+        incident_ok = False
         backoff = 1.0
-        while self._running and not (action_ok and prescale_ok and approval_ok):
+        while self._running and not (action_ok and prescale_ok and approval_ok and incident_ok):
             if not action_ok:
                 try:
                     await nc.subscribe_raw("nexus.actions.>", handler=_action_wrapper)
@@ -535,13 +693,23 @@ class Notifier:
                     logger.warning(
                         f"[Notifier] nexus.approvals.> subscribe retry: {exc}"
                     )
+            if not incident_ok:
+                try:
+                    await nc.subscribe_raw(
+                        "nexus.lifecycle.>", handler=_incident_wrapper
+                    )
+                    incident_ok = True
+                except Exception as exc:
+                    logger.warning(
+                        f"[Notifier] nexus.lifecycle.> subscribe retry: {exc}"
+                    )
 
-            if not (action_ok and prescale_ok and approval_ok):
+            if not (action_ok and prescale_ok and approval_ok and incident_ok):
                 await asyncio.sleep(min(backoff, 30.0))
                 backoff *= 2
             else:
                 logger.info(
-                    "[Notifier] Subscribed to NATS nexus.actions.> + nexus.prescale.> + nexus.approvals.>"
+                    "[Notifier] Subscribed to NATS nexus.actions.> + nexus.prescale.> + nexus.approvals.> + nexus.lifecycle.>"
                 )
 
         # Park until stopped. If the NATS connection is severed the
@@ -590,6 +758,64 @@ class Notifier:
             )
         except Exception as exc:
             logger.debug(f"[Notifier] approval message error: {exc}")
+
+    async def _on_incident_resolved_message(self, data: dict) -> None:
+        try:
+            app_name = data.get("app") or data.get("namespace") or data.get("target_name") or "default"
+            target = data.get("target") or f"{app_name}/{data.get('target_name', 'resource')}"
+            rca = data.get("rca") or data.get("diagnosis") or {}
+            verif = data.get("verification") or {}
+            plan = data.get("plan") or {}
+
+            failure_class = rca.get("failure_class") or plan.get("failure_mode") or "Unknown"
+            root_cause = rca.get("root_cause") or rca.get("reasoning") or "Target restored to healthy baseline."
+
+            steps = plan.get("steps") or []
+            action_taken = (
+                steps[0].get("description")
+                if steps and steps[0].get("description")
+                else data.get("action_taken") or data.get("description") or "Remediation plan executed"
+            )
+
+            verif_details = verif.get("details") or "Target verified healthy and SLO restored"
+            conf = float(rca.get("confidence") or data.get("confidence") or 1.0)
+            dur = data.get("duration_s")
+
+            await self.notify_incident_resolved(
+                app_name=app_name,
+                incident_id=data.get("incident_id", "unknown"),
+                target=str(target),
+                failure_class=failure_class,
+                root_cause=root_cause,
+                action_taken=action_taken,
+                verification_details=verif_details,
+                confidence=conf,
+                duration_s=dur,
+                context=data,
+            )
+        except Exception as exc:
+            logger.debug(f"[Notifier] incident resolved message error: {exc}")
+
+    async def _on_incident_escalated_message(self, data: dict) -> None:
+        try:
+            app_name = data.get("app") or data.get("namespace") or data.get("target_name") or "default"
+            target = data.get("target") or f"{app_name}/{data.get('target_name', 'resource')}"
+            rca = data.get("rca") or data.get("diagnosis") or {}
+            reason = data.get("reason") or data.get("error_message") or "Remediation failed or maximum retries exhausted"
+            failure_class = rca.get("failure_class") or "Unknown"
+            root_cause = rca.get("root_cause") or rca.get("reasoning") or "Unknown"
+
+            await self.notify_incident_escalated(
+                app_name=app_name,
+                incident_id=data.get("incident_id", "unknown"),
+                target=str(target),
+                reason=reason,
+                failure_class=failure_class,
+                root_cause=root_cause,
+                context=data,
+            )
+        except Exception as exc:
+            logger.debug(f"[Notifier] incident escalated message error: {exc}")
 
 if __name__ == "__main__":
     # Self-check: Slack signs with HMAC-SHA256 over "v0:ts:body" keyed by the

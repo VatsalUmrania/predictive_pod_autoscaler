@@ -109,16 +109,16 @@ class EventCorrelator:
         # Immediate-emit signals
         # Do NOT cluster these — emit a single-event cluster right away.
         if signal_type in _IMMEDIATE_EMIT:
-            cluster = IncidentCluster.new(event)
+            imm_cluster = IncidentCluster.new(event)
 
             # Also absorb any open cluster in the same namespace for context
             open_cluster = self._open.get(key)
             if open_cluster:
                 for prior_event in open_cluster.events:
-                    cluster.add_event(prior_event)
+                    imm_cluster.add_event(prior_event)
                 del self._open[key]
 
-            return self._emit(cluster)
+            return self._emit(imm_cluster)
 
         # Normal correlation
         cluster = self._open.get(key)
@@ -192,9 +192,9 @@ class EventCorrelator:
                 stale_keys.append(key)
 
         for key in stale_keys:
-            cluster = self._open.pop(key, None)
-            if cluster and cluster.cluster_id not in self._emitted:
-                emitted = self._emit(cluster)
+            c = self._open.pop(key, None)
+            if c and c.cluster_id not in self._emitted:
+                emitted = self._emit(c)
                 if emitted:
                     ready.append(emitted)
 
@@ -220,7 +220,7 @@ class EventCorrelator:
             self._emitted.discard(oldest)
         self._total_emitted += 1
         logger.info(
-            f"[EventCorrelator] ✦ Cluster ready: {cluster.cluster_id} "
+            f"[EventCorrelator] Cluster ready: {cluster.cluster_id} "
             f"| {len(cluster.events)} events "
             f"| agents=[{', '.join(sorted(cluster.agent_types))}] "
             f"| signals=[{', '.join(sorted(cluster.signal_types))}] "

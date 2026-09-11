@@ -59,3 +59,46 @@ async def test_publish_raw_propagates_nats_failure():
 
     with pytest.raises(Exception, match="NATS down"):  # noqa: B017
         await client.publish_raw("nexus.approvals.required", {"x": 1})
+
+
+@pytest.mark.asyncio
+async def test_subscribe_drops_unparseable_incident_events():
+    """Non-IncidentEvent or corrupted messages on the subscription stream are termed/acked, not looped."""
+    import asyncio
+
+    client = NATSClient()
+    mock_js = AsyncMock()
+
+    # Fake message stream with one unparseable message
+    mock_msg = MagicMock()
+    mock_msg.subject = "nexus.incidents.bad"
+    mock_msg.data = b'{"not_an_event": true}'  # Missing required IncidentEvent fields
+    mock_msg.term = AsyncMock()
+    mock_msg.ack = AsyncMock()
+    mock_msg.nak = AsyncMock()
+
+    class _FakeSub:
+        def __init__(self):
+            self.messages = self._gen()
+
+        async def _gen(self):
+            yield mock_msg
+
+        async def unsubscribe(self):
+            pass
+
+    mock_js.subscribe.return_value = _FakeSub()
+    client._js = mock_js
+
+    handler = AsyncMock()
+    await client.subscribe(handler=handler, agent_filter=">")
+
+    # Let the background task run
+    await asyncio.sleep(0.05)
+
+    # Handler should NOT be called on invalid message
+    handler.assert_not_awaited()
+    # Message should be termed or acked to avoid infinite nak loops
+    assert mock_msg.term.await_count == 1 or mock_msg.ack.await_count == 1
+    mock_msg.nak.assert_not_awaited()
+

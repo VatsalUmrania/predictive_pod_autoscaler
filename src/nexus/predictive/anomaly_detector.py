@@ -21,10 +21,10 @@ Auto-selection:
     • Otherwise → ZScoreDetector
 
 Key fixes over original PPA GRU (ARCHITECTURE_REVIEW_CRITICAL.md §1.4, §3.1):
-    ✅ §1.4  NaN guard before feeding to model (replaces raw tensor creation)
-    ✅ §3.1  Reconstruction error properly normalized (not raw MSE)
-    ✅ §9.1  State isolated per-instance (no module-level globals)
-    ✅ §3.2  Checkpoint loading with version check + graceful fallback
+    - §1.4  NaN guard before feeding to model (replaces raw tensor creation)
+    - §3.1  Reconstruction error properly normalized (not raw MSE)
+    - §9.1  State isolated per-instance (no module-level globals)
+    - §3.2  Checkpoint loading with version check + graceful fallback
 
 Training:
     GRUAutoencoder.train_from_prometheus(data: List[Dict[str, float]])
@@ -220,7 +220,7 @@ class GRUAutoencoder(AnomalyDetector):
         self._hidden_dim = int(os.getenv("NEXUS_GRU_HIDDEN_DIM", str(hidden_dim)))
         self._seq_len = int(os.getenv("NEXUS_GRU_SEQ_LEN", str(seq_len)))
         self._error_thresh = error_threshold
-        self._model = None
+        self._model: Any = None
         self._buffer: deque[list[float]] = deque(maxlen=self._seq_len)
         self._ready = False
         self._torch_ok = False
@@ -261,7 +261,6 @@ class GRUAutoencoder(AnomalyDetector):
     def _build_model(self, nn: Any) -> Any:
         """Build the GRU encoder-decoder model."""
         import torch
-        import torch.nn as nn
 
         class _GRUAutoencoder(nn.Module):
             def __init__(self, n_features: int, hidden_dim: int, seq_len: int):

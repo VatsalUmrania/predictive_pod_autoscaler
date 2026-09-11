@@ -45,7 +45,6 @@ from nexus.bus.nats_client import NATSClient
 from nexus.learning.knowledge_base import KnowledgeBase
 from nexus.learning.outcome_store import OutcomeStore, RunbookStats, SystemKPIs
 from nexus.learning.ppa_outcome_tracker import PpaOutcomeTracker
-from nexus.learning.runbook_advisor import RunbookAdvisor, RunbookRecommendation
 from nexus.reasoning.confidence_scorer import ConfidenceScorer
 
 logger = logging.getLogger(__name__)
@@ -122,7 +121,7 @@ class FeedbackLoop:
         self._verify_window_s = float(
             os.getenv("NEXUS_INCIDENT_VERIFY_WINDOW_S", str(verify_window_s))
         )
-        self._advisor = RunbookAdvisor(outcome_store=outcome_store)
+        self._advisor = None
 
         # Tracking incident verification (P3b)
         self._pending_verifications: dict[str, PendingIncidentVerification] = {}
@@ -324,14 +323,12 @@ class FeedbackLoop:
         all_adjustments = await self._kb.get_all_adjustments()
         self._scorer.set_historical_boosts(all_adjustments)
 
-        # ── 4. Run RunbookAdvisor ─────────────────────────────────────────────
-        recs: list[RunbookRecommendation] = self._advisor.analyze(
-            all_stats, system_kpis
-        )
-
-        # Also check chronic targets (async)
-        chronic = await self._advisor.find_chronic_targets()
-        recs.extend(chronic)
+        # ── 4. Run Advisor (if present) ─────────────────────────────────────────────
+        recs: list[Any] = []
+        if self._advisor:
+            recs = self._advisor.analyze(all_stats, system_kpis)
+            chronic = await self._advisor.find_chronic_targets()
+            recs.extend(chronic)
 
         # ── 5. Update signal-pattern records ─────────────────────────────────
         await self._update_signal_patterns()
@@ -377,7 +374,7 @@ class FeedbackLoop:
     async def _publish_summary(
         self,
         kpis: SystemKPIs,
-        recs: list[RunbookRecommendation],
+        recs: list[Any],
         adjustments: dict[str, float],
         cycle_ms: int,
     ) -> None:
@@ -491,7 +488,7 @@ async def build_feedback_loop(
         knowledge_db_path:  Override for KnowledgeBase DB path (used only when
                             knowledge_base is not provided).
         outcome_store:      Provide to share an already-connected OutcomeStore.
-                            Avoids opening two SQLite handles to the same file when
+                            Avoids creating redundant instances when
                             the caller needs the store on NexusContext too.
         knowledge_base:     Provide to share an already-initialized KnowledgeBase.
         interval_s:         Polling interval (default 300s / 5 min).

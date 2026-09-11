@@ -203,7 +203,7 @@ async def test_approve_routes_through_governance_and_records_slack_user(
     # vanish immediately so Slack's ~3s interactive window is never breached by
     # the governance dispatch, which runs in the background task below.
     assert body["replace_original"] is True
-    assert body["text"].startswith("⏸")
+    assert body["text"].startswith("Approved")
     assert "ABC12345" in body["text"]
     assert "vatsal" in body["text"]
     assert queue.is_approved("ABC12345")
@@ -229,7 +229,7 @@ async def test_approve_idempotent_when_already_approved(fresh_context, signed_se
         resp = await _post(client, "nexus_approve", "OK000001")
 
     assert resp.status_code == 200
-    assert resp.json()["text"].lower().startswith("✅")  # already-approved message
+    assert "already approved" in resp.json()["text"].lower()
     executor.execute_approved.assert_not_awaited()
     audit.record_approval.assert_not_awaited()
 

@@ -29,6 +29,7 @@ dependencies = [
     "python-json-logger>=2.0.0",
     "pydantic>=2.7.0",
     "nats-py>=2.7.0",
+    "langchain-google-genai>=2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -42,8 +43,7 @@ nexus = [
     "opentelemetry-api>=1.24.0",
     "opentelemetry-sdk>=1.24.0",
     "opentelemetry-exporter-otlp-proto-http>=1.24.0",
-    # Async DB (audit trail + DBAgent)
-    "aiosqlite>=0.20.0",
+    # Async DB (audit trail, incidents + DBAgent)
     "asyncpg>=0.29.0",        # PostgreSQL async driver
     "aiomysql>=0.2.0",        # MySQL async driver
     "motor>=3.3.0",           # MongoDB async driver
@@ -55,6 +55,7 @@ nexus = [
     "redis[hiredis]>=5.0.0",
     # LLM for RCA Engine — Gemini is default; openai/anthropic installed via extras
     "google-genai>=1.0.0",
+    "langchain-google-genai>=2.0.0",
     # LangGraph remediation agent (multi-turn investigation + interrupt/resume approval)
     "langgraph>=0.2.50",
     "langchain-core>=0.3.0",
@@ -73,6 +74,7 @@ nexus = [
 # ── LLM provider extras (install the one you use) ─────────────────────────────
 gemini = [
     "google-genai>=1.0.0",
+    "langchain-google-genai>=2.0.0",
 ]
 openai = [
     "openai>=1.30.0",
@@ -109,7 +111,7 @@ nexus = "nexus.cli.main:main"
 where = ["src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests/unit"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"

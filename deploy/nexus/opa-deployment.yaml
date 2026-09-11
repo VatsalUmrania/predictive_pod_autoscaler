@@ -226,7 +226,7 @@ spec:
             - run
             - --server
             - --log-level=error
-            - /policies
+            - /policies/nexus_policies.rego
           ports:
             - name: http
               containerPort: 8181
@@ -252,7 +252,8 @@ spec:
               memory: 128Mi
           volumeMounts:
             - name: policies
-              mountPath: /policies
+              mountPath: /policies/nexus_policies.rego
+              subPath: nexus_policies.rego
               readOnly: true
       volumes:
         - name: policies

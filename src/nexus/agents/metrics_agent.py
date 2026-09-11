@@ -6,14 +6,14 @@ Scrapes Prometheus for system health metrics and detects threshold breaches.
 Key improvements over the current PPA operator's Prometheus scraping
 (see docs/ARCHITECTURE_REVIEW_CRITICAL.md):
 
-    ✅ Circuit breaker — stops hammering Prometheus when it's unreachable
+    - Circuit breaker — stops hammering Prometheus when it's unreachable
        (fixes §2: socket exhaustion on network partition)
-    ✅ Explicit NaN guard — raises rather than silently propagating NaN
+    - Explicit NaN guard — raises rather than silently propagating NaN
        (fixes §1.4: silent NaN in feature vector)
-    ✅ Feature bounds clamping — clamps out-of-distribution values
+    - Feature bounds clamping — clamps out-of-distribution values
        (fixes §6.2: extrapolation beyond training distribution)
-    ✅ Structured IncidentEvent output — not raw metrics
-    ✅ RPS baseline tracking — detects spikes vs rolling median
+    - Structured IncidentEvent output — not raw metrics
+    - RPS baseline tracking — detects spikes vs rolling median
 
 Phase 2: simple threshold-based detection
 Phase 5: GRU Autoencoder replaces thresholds with learned anomaly scores
@@ -167,9 +167,8 @@ class MetricsAgent(BaseAgent):
             poll_interval_seconds=poll_interval_seconds,
             failure_threshold=cb_failure_threshold,
         )
-        self.prom_url = (
-            prometheus_url or os.getenv("NEXUS_PROMETHEUS_URL", "http://localhost:9090")
-        ).rstrip("/")
+        url = prometheus_url or os.getenv("NEXUS_PROMETHEUS_URL") or "http://localhost:9090"
+        self.prom_url = url.rstrip("/")
         self.http_timeout = http_timeout
         self.namespace = namespace
         self.deployment_name = deployment_name
@@ -254,7 +253,6 @@ class MetricsAgent(BaseAgent):
             current: float,
             threshold: float,
             severity: Severity,
-            runbook: str | None = None,
             healing_level: int | None = None,
             confidence: float = 0.85,
         ) -> IncidentEvent:
@@ -272,7 +270,6 @@ class MetricsAgent(BaseAgent):
                     anomaly_score=score,
                     window_seconds=120,
                 ).model_dump(),
-                suggested_runbook=runbook,
                 suggested_healing_level=healing_level,
                 confidence=confidence,
             )
@@ -298,7 +295,6 @@ class MetricsAgent(BaseAgent):
                     mem,
                     self.mem_threshold,
                     severity=Severity.CRITICAL if mem > 95 else Severity.WARNING,
-                    runbook="runbook_pod_crashloop_v1",
                     healing_level=1,
                 )
             )
@@ -312,7 +308,6 @@ class MetricsAgent(BaseAgent):
                     err,
                     self.err_threshold,
                     severity=Severity.CRITICAL if err > 0.20 else Severity.WARNING,
-                    runbook="runbook_high_error_rate_post_deploy_v1",
                     healing_level=2,
                     confidence=0.88,
                 )

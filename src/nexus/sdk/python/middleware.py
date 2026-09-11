@@ -78,14 +78,14 @@ class SelfHealMiddleware:
         finally:
             duration_ms = (time.monotonic() - start) * 1000
             status = status_ref[0]
-            exc = exc_ref[0]
+            caught_exc = exc_ref[0]
 
-            if status >= 500 or exc is not None or duration_ms > self._slow_ms:
+            if status >= 500 or caught_exc is not None or duration_ms > self._slow_ms:
                 path = scope.get("path", "/unknown")
                 method = scope.get("method", "GET")
                 err_msg = (
-                    traceback.format_exception_only(type(exc), exc)[-1].strip()
-                    if exc
+                    traceback.format_exception_only(type(caught_exc), caught_exc)[-1].strip()
+                    if caught_exc
                     else None
                 )
                 # Fire-and-forget — does not block the response
@@ -94,7 +94,7 @@ class SelfHealMiddleware:
                         self._emit(
                             path,
                             method,
-                            status if not exc else 500,
+                            status if not caught_exc else 500,
                             duration_ms,
                             err_msg,
                         )

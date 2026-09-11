@@ -77,7 +77,7 @@ class HealingPolicy(BaseModel):
     """Governance constraints declared by the developer."""
 
     auto_rollback: bool = True
-    max_auto_actions_per_hour: int = Field(10, ge=0, le=100)
+    max_auto_actions_per_hour: int = Field(default=10, ge=0, le=100)
     require_approval_for: list[str | dict[str, str]] = Field(
         default_factory=list,
         description=(
@@ -122,7 +122,7 @@ class PredictiveConfig(BaseModel):
         description="DB table names to watch for traffic spike prediction.",
     )
     pre_scale_threshold: float = Field(
-        2.5,
+        default=2.5,
         ge=1.1,
         le=20.0,
         description="Replica multiplier at which pre-scaling is triggered (e.g. 2.5 = 2.5x RPS).",
@@ -136,9 +136,9 @@ class PredictiveConfig(BaseModel):
 class NotificationsConfig(BaseModel):
     """Slack and paging configuration."""
 
-    slack_webhook: str = Field("", description="Slack incoming webhook URL.")
+    slack_webhook: str = Field(default="", description="Slack incoming webhook URL.")
     page_sre_after: int = Field(
-        3,
+        default=3,
         ge=1,
         le=20,
         description="Number of failed healing attempts before SRE paging.",
@@ -166,7 +166,7 @@ class SelfhealConfig(BaseModel):
         description="Application name (used for token lookup + incident labelling).",
     )
     tier: str = Field(
-        "production", description="Deployment tier: production | staging | dev"
+        default="production", description="Deployment tier: production | staging | dev"
     )
     critical_routes: list[str] = Field(default_factory=list)
     healing_policy: HealingPolicy = Field(default_factory=HealingPolicy)

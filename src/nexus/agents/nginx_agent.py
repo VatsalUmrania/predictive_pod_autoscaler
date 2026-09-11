@@ -215,7 +215,6 @@ class NginxAgent(BaseAgent):
                             rps=rps,
                             window_seconds=self.window_s,
                         ).model_dump(),
-                        suggested_runbook="runbook_high_error_rate_post_deploy_v1",
                         suggested_healing_level=2,
                         confidence=0.88,
                     )

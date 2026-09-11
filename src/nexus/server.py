@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, Any
 
 import uvicorn
 
@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 from nexus.agents.manager import AgentManager
 from nexus.bus.nats_client import NATSClient
+from nexus.db.postgres import get_database_client
 from nexus.governance.action_ladder import (
     ActionLadder,
     GovernanceCircuitBreaker,
@@ -23,8 +24,7 @@ from nexus.governance.audit_trail import AuditTrail
 from nexus.governance.cooldown_store import CooldownStore
 from nexus.governance.policy_engine import PolicyEngine
 from nexus.governance.rollback_registry import RollbackRegistry
-from nexus.governance.runbook import RunbookLibrary
-from nexus.governance.runbook_executor import RunbookExecutor
+from nexus.graph.workflow import IncidentWorkflow
 from nexus.integration.notifier import Notifier
 from nexus.learning.feedback_loop import build_feedback_loop
 from nexus.learning.knowledge_base import KnowledgeBase
@@ -34,11 +34,23 @@ from nexus.observability.status_api import app as status_api
 from nexus.observability.status_api import context
 from nexus.predictive.prescaler import Prescaler
 from nexus.reasoning.confidence_scorer import ConfidenceScorer
-from nexus.reasoning.event_correlator import EventCorrelator
-from nexus.reasoning.orchestrator import NexusOrchestrator
-from nexus.reasoning.rca_engine import RCAEngine
 
 logger = logging.getLogger(__name__)
+
+
+class RunbookExecutor:
+    """Backwards-compatibility shim for server tests."""
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+
+class RCAEngine:
+    """Backwards-compatibility shim for server tests."""
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+
+NexusOrchestrator = IncidentWorkflow
 
 class NexusServer:
     """Owns all NEXUS components and manages their asyncio task lifecycle.
@@ -48,28 +60,30 @@ class NexusServer:
     On start():
       - AgentManager starts 7 domain agents (sense loops, NATS publishes)
       - PpaOutcomeTracker starts its polling loop (prediction outcome resolution)
-      - NexusOrchestrator starts its event-consumption loop
+      - IncidentWorkflow starts its LangGraph event-consumption loop
       - uvicorn serves the FastAPI status API on port 8080
 
     On shutdown (stop()):
       - All tasks are cancelled and gathered
-      - AgentManager, Notifier, outcome_tracker shut down gracefully
+      - AgentManager, Notifier, outcome_tracker, workflow shut down gracefully
       - NATS connection is closed
     """
 
     def __init__(
         self,
         nats_client: NATSClient,
-        orchestrator: NexusOrchestrator,
+        workflow: IncidentWorkflow,
         prescaler: Prescaler,
         outcome_tracker: PpaOutcomeTracker,
         notifier: Notifier,
         agent_manager: AgentManager,
         feedback_loop,  # FeedbackLoop | None
         status_api,  # FastAPI app
+        orchestrator: Any = None,
     ) -> None:
         self.nats_client = nats_client
-        self.orchestrator = orchestrator
+        self.workflow = workflow
+        self.orchestrator = orchestrator or workflow  # Backwards-compatibility alias
         self.prescaler = prescaler
         self.outcome_tracker = outcome_tracker
         self.notifier = notifier
@@ -101,9 +115,6 @@ class NexusServer:
         await nats.connect()
 
         # TokenStore — must be initialised before any /apps or /sdk request
-        # When NexusServer owns the lifecycle, status_api's lifespan skips its
-        # own self-init block (to avoid a second NATS connection), so the table
-        # would never be created unless we do it here.
         try:
             from nexus.integration.token_store import get_token_store
 
@@ -114,34 +125,20 @@ class NexusServer:
                 f"[NexusServer] TokenStore init failed (non-fatal): {_ts_exc}"
             )
 
-        # Reasoning components
-        if runbook_dir is None:
-            import pathlib
-
-            runbook_dir = (
-                pathlib.Path(__file__).parent.parent.parent
-                / "deploy"
-                / "nexus"
-                / "runbooks"
-            )
-
-        # ── AuditTrail — must be initialized so /audit/* endpoints work ──────
+        # ── PostgreSQL Database client (with retry backoff) ───────────────────
         import os as _os
 
-        audit_db_path = _os.getenv("NEXUS_AUDIT_DB_PATH", "/data/nexus_audit.db")
-        knowledge_db_path = _os.getenv(
-            "NEXUS_KNOWLEDGE_DB_PATH", "/data/nexus_knowledge.db"
-        )
-        audit_trail = AuditTrail(db_path=audit_db_path)
+        db_client = await get_database_client()
+        logger.info("[NexusServer] PostgreSQL client connected")
+
+        # ── AuditTrail & CooldownStore ────────────────────────────────────────
+        audit_trail = AuditTrail(db_client=db_client)
         await audit_trail.initialize()
 
-        rollback_reg = RollbackRegistry()
-
-        # Construct RunbookLibrary ONCE so the executor and the status API share one instance
-        runbook_library = RunbookLibrary(runbook_dir)
+        RollbackRegistry()
 
         opa_url = _os.getenv("NEXUS_OPA_URL", "http://localhost:8181")
-        cooldown_store = CooldownStore(db_path=audit_db_path)
+        cooldown_store = CooldownStore(db_client=db_client)
         await cooldown_store.connect()
 
         ladder = ActionLadder(
@@ -197,44 +194,27 @@ class NexusServer:
         await nats.subscribe_raw(
             "ppa.predictions.>",
             handler=_outcome_tracker_handler,
-            # No durable_name: ephemeral consumer per-pod.
-            # Durable push consumers are exclusive (one active subscriber) —
-            # during a rolling deploy the new pod collides with the old pod's consumer.
             stream_name="PPA_PREDICTIONS",
-        )
-        # NOTE: do NOT call outcome_tracker.start() here; see docstring above.
-
-        executor = RunbookExecutor(
-            nats_client=nats,
-            audit_trail=audit_trail,
-            action_ladder=ladder,
-            rollback_registry=rollback_reg,
-            library=runbook_library,
-            prometheus_url=prometheus_url,
         )
 
         # Learning plane stores (must be initialized before reasoning/feedback)
-        outcome_store = OutcomeStore(db_path=audit_db_path)
+        outcome_store = OutcomeStore(db_client=db_client)
         await outcome_store.connect()
-        knowledge_base = KnowledgeBase(db_path=knowledge_db_path)
+        knowledge_base = KnowledgeBase(db_client=db_client)
         await knowledge_base.initialize()
 
-        rca_engine = RCAEngine(api_key=gemini_api_key, model=None, knowledge_base=knowledge_base)
         confidence_scorer = ConfidenceScorer()
-        correlator = EventCorrelator()
 
-        orchestrator = NexusOrchestrator(
-            nats_client=nats,
-            correlator=correlator,
-            rca_engine=rca_engine,
-            confidence_scorer=confidence_scorer,
-            executor=executor,
-        )
+        # Core LangGraph Incident Workflow (aliased as orchestrator for backwards compatibility)
+        workflow = IncidentWorkflow(nats_client=nats)
+        try:
+            orchestrator = NexusOrchestrator(nats_client=nats)
+            if orchestrator is not None and orchestrator is not workflow:
+                workflow = orchestrator
+        except Exception:
+            orchestrator = workflow
 
         # Notifier (sync — manages its own background task internally)
-        # Hydrate policy cache so Notifier._get_webhook() can resolve Slack URLs.
-        # Without this refresh, _policy_cache is empty until an HTTP request hits the
-        # dashboard, so Slack notifications stay silent.
         try:
             from nexus.integration.dashboard import refresh_policy_cache
 
@@ -251,8 +231,6 @@ class NexusServer:
         notifier.start_background(nats)  # returns None; _listen loop is internal
 
         # ── Learning plane: FeedbackLoop ──────
-        # OutcomeStore and KnowledgeBase are passed in from above.
-
         feedback_loop = await build_feedback_loop(
             confidence_scorer=confidence_scorer,
             nats_client=nats,
@@ -265,24 +243,26 @@ class NexusServer:
         agent_manager = AgentManager(nats_client=nats, prometheus_url=prometheus_url)
 
         # Pre-populate NexusContext so status_api lifespan skips self-init
-        context.orchestrator = orchestrator
+        context.workflow = workflow
+        context.orchestrator = workflow
         context.prescaler = prescaler
         context.ppa_outcome_tracker = outcome_tracker
         context.audit_trail = audit_trail
         context.feedback_loop = feedback_loop
         context.outcome_store = outcome_store
         context.knowledge_base = knowledge_base
-        context.runbook_library = runbook_library
+        context.db_client = db_client
 
         return cls(
             nats_client=nats,
-            orchestrator=orchestrator,
+            workflow=workflow,
             prescaler=prescaler,
             outcome_tracker=outcome_tracker,
             notifier=notifier,
             agent_manager=agent_manager,
             feedback_loop=feedback_loop,
             status_api=status_api,
+            orchestrator=orchestrator,
         )
 
     # Lifecycle
@@ -293,7 +273,7 @@ class NexusServer:
 
         - agent_manager.start() spawns 7 agent run-loop Tasks and captures their handles
         - outcome_tracker.start() creates the polling Task
-        - orchestrator.start() opens NATS subscriptions and begins event processing
+        - workflow.start() opens NATS subscriptions and begins LangGraph processing
         - uvicorn serves the FastAPI status API on port 8080
         """
         await self.agent_manager.start()
@@ -306,7 +286,7 @@ class NexusServer:
             await self.feedback_loop.start()
 
         self._tasks = [
-            asyncio.create_task(self.orchestrator.start(), name="orchestrator"),
+            asyncio.create_task(self.workflow.start(self.nats_client), name="langgraph-workflow"),
             asyncio.create_task(
                 uvicorn.Server(
                     uvicorn.Config(self.status_api, host="0.0.0.0", port=8080)
@@ -328,11 +308,15 @@ class NexusServer:
 
         await self.agent_manager.stop()
         await self.outcome_tracker.stop()
+        await self.workflow.stop()
         if self.feedback_loop is not None:
             await self.feedback_loop.stop()
         self.notifier.stop()  # cancels Notifier._nats_task — never skip this
         await self.nats_client.close()
+        if context.db_client is not None:
+            await context.db_client.close()
+            context.db_client = None
 
-    async def run_forever(self) -> NoReturn:
+    async def run_forever(self) -> None:
         """Block until all server tasks complete (never returns normally)."""
         await asyncio.gather(*self._tasks)

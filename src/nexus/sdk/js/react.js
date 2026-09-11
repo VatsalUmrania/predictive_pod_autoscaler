@@ -186,7 +186,7 @@
           }
         },
           React.createElement('strong', null,
-            '⚠️ ' + (this.props.component || 'Component') + ' failed'
+            (this.props.component || 'Component') + ' failed'
           ),
           React.createElement('p', { style: { margin: '8px 0 0', color: '#aaa' } },
             'NEXUS has been notified and is investigating. '
