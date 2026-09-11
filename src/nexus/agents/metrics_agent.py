@@ -167,9 +167,8 @@ class MetricsAgent(BaseAgent):
             poll_interval_seconds=poll_interval_seconds,
             failure_threshold=cb_failure_threshold,
         )
-        self.prom_url = (
-            prometheus_url or os.getenv("NEXUS_PROMETHEUS_URL", "http://localhost:9090")
-        ).rstrip("/")
+        url = prometheus_url or os.getenv("NEXUS_PROMETHEUS_URL") or "http://localhost:9090"
+        self.prom_url = url.rstrip("/")
         self.http_timeout = http_timeout
         self.namespace = namespace
         self.deployment_name = deployment_name

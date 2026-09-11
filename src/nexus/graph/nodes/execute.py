@@ -57,17 +57,18 @@ async def execute_node(state: IncidentGraphState) -> dict[str, Any]:
             if snapshot:
                 snapshot_id = snapshot.snapshot_id
                 # Register in RollbackRegistry if possible
-                try:
-                    await rollback_registry.register_snapshot(
-                        action_id=f"{incident_id}-step-{step_idx}",
-                        target_resource=target.name,
-                        action_type=tool_name,
-                        rollback_action=snapshot.rollback_tool,
-                        snapshot_data=snapshot.rollback_parameters,
-                        platform=platform_id,
-                    )
-                except Exception as reg_exc:
-                    logger.debug("[Execute] RollbackRegistry registration note: %s", reg_exc)
+                if hasattr(rollback_registry, "register_snapshot"):
+                    try:
+                        await rollback_registry.register_snapshot(
+                            action_id=f"{incident_id}-step-{step_idx}",
+                            target_resource=target.name,
+                            action_type=tool_name,
+                            rollback_action=snapshot.rollback_tool,
+                            snapshot_data=snapshot.rollback_parameters,
+                            platform=platform_id,
+                        )
+                    except Exception as reg_exc:
+                        logger.debug("[Execute] RollbackRegistry registration note: %s", reg_exc)
         except Exception as snap_exc:
             logger.warning("[Execute] Failed to capture pre-state snapshot: %s", snap_exc)
 

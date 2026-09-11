@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any
 
 import uvicorn
 
@@ -321,6 +321,6 @@ class NexusServer:
         self.notifier.stop()  # cancels Notifier._nats_task — never skip this
         await self.nats_client.close()
 
-    async def run_forever(self) -> NoReturn:
+    async def run_forever(self) -> None:
         """Block until all server tasks complete (never returns normally)."""
         await asyncio.gather(*self._tasks)

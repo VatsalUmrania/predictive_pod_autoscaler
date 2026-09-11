@@ -24,7 +24,7 @@ async def escalate_node(state: IncidentGraphState) -> dict[str, Any]:
     incident_id = state["incident_id"]
     target = state.get("target", {})
     platform = state.get("platform", "kubernetes")
-    err_msg = state.get("error_message") or state.get("governance", {}).get("reasons") or "Remediation escalated"
+    err_msg = state.get("error_message") or (state.get("governance") or {}).get("reasons") or "Remediation escalated"
     rollback_executed = state.get("rollback_executed", False)
 
     now_iso = datetime.now(timezone.utc).isoformat()

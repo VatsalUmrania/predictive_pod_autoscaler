@@ -42,7 +42,7 @@ class PostgresClient:
             "NEXUS_POSTGRES_DSN",
             os.getenv("DATABASE_URL", "")
         )
-        self._pool = None
+        self._pool: Any = None
         self._lock = asyncio.Lock()
 
     async def initialize(self) -> None:
@@ -529,7 +529,7 @@ class SQLiteFallbackClient:
 
     def __init__(self, db_path: str = ":memory:"):
         self.db_path = db_path
-        self._db = None
+        self._db: Any = None
         self._lock = asyncio.Lock()
 
     async def initialize(self) -> None:
@@ -1020,7 +1020,7 @@ class SQLiteFallbackClient:
 
 
 # Global database factory
-_global_db_client = None
+_global_db_client: PostgresClient | SQLiteFallbackClient | None = None
 
 
 async def get_database_client(dsn: str | None = None) -> PostgresClient | SQLiteFallbackClient:

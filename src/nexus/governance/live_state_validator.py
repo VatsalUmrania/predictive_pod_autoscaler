@@ -506,4 +506,4 @@ def _pod_belongs_to_deployment(pod: Any, deployment_name: str) -> bool:
         if ref.kind == "ReplicaSet" and ref.name.startswith(deployment_name):
             return True
     # Fallback: pod name starts with deployment name (e.g. bare pods in tests)
-    return pod.metadata.name.startswith(deployment_name)
+    return bool(pod.metadata.name.startswith(deployment_name))

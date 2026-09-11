@@ -121,7 +121,7 @@ async def govern_node(state: IncidentGraphState) -> dict[str, Any]:
         next_fsm,
     )
 
-    result_payload = {
+    result_payload: dict[str, Any] = {
         "governance": verdict.model_dump(),
         "fsm_state": next_fsm,
         "audit_log": [audit_entry],

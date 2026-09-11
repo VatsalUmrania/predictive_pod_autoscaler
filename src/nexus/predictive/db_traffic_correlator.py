@@ -83,6 +83,8 @@ class TableEndpointMapper:
             self._load()
 
     def _load(self) -> None:
+        if not self._path:
+            return
         try:
             with open(self._path, encoding="utf-8") as f:
                 raw = yaml.safe_load(f) or {}

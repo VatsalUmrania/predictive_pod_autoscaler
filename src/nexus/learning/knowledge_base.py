@@ -150,8 +150,8 @@ class KnowledgeBase:
     """
 
     def __init__(self, db_path: str | None = None):
-        self._db_path = db_path or os.getenv(
-            "NEXUS_KNOWLEDGE_DB_PATH", "data/nexus_knowledge.db"
+        self._db_path: str = (
+            db_path or os.getenv("NEXUS_KNOWLEDGE_DB_PATH") or "data/nexus_knowledge.db"
         )
         self._db: aiosqlite.Connection | None = None
 

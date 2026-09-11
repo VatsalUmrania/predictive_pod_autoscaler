@@ -158,6 +158,9 @@ class NATSClient:
           js.add_stream(config)                 — create stream
           js.update_stream(config)              — update existing stream config
         """
+        if self._js is None:
+            raise RuntimeError("[NATS] JetStream is not connected")
+
         # ─ Step 1: Check if stream exists; reconcile config if so. ────────────
         try:
             existing_info = await self._js.stream_info(name)
@@ -230,6 +233,9 @@ class NATSClient:
         Uses js.find_stream_name_by_subject(subject) — the correct nats-py 2.7
         API that resolves a subject string to the name of the owning stream.
         """
+        if self._js is None:
+            raise RuntimeError("[NATS] JetStream is not connected")
+
         desired_subjects = list(config.subjects or [])
         assert (
             desired_subjects

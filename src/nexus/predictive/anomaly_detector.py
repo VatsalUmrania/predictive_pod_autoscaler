@@ -220,7 +220,7 @@ class GRUAutoencoder(AnomalyDetector):
         self._hidden_dim = int(os.getenv("NEXUS_GRU_HIDDEN_DIM", str(hidden_dim)))
         self._seq_len = int(os.getenv("NEXUS_GRU_SEQ_LEN", str(seq_len)))
         self._error_thresh = error_threshold
-        self._model = None
+        self._model: Any = None
         self._buffer: deque[list[float]] = deque(maxlen=self._seq_len)
         self._ready = False
         self._torch_ok = False
@@ -261,7 +261,6 @@ class GRUAutoencoder(AnomalyDetector):
     def _build_model(self, nn: Any) -> Any:
         """Build the GRU encoder-decoder model."""
         import torch
-        import torch.nn as nn
 
         class _GRUAutoencoder(nn.Module):
             def __init__(self, n_features: int, hidden_dim: int, seq_len: int):

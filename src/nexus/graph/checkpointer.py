@@ -39,6 +39,7 @@ class GraphCheckpointStore:
     def __init__(self, saver: Any = None) -> None:
         self.saver = saver or MemorySaver()
         self._is_postgres = False
+        self._dsn: str | None = None
 
     @classmethod
     def from_env(cls) -> GraphCheckpointStore:
@@ -68,7 +69,7 @@ class GraphCheckpointStore:
 
     async def start(self) -> None:
         """Initialize connection pool and tables if using PostgreSQL."""
-        if getattr(self, "_is_postgres", False):
+        if getattr(self, "_is_postgres", False) and self._dsn:
             try:
                 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
                 # In production, AsyncPostgresSaver.from_conn_string creates the pool

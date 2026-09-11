@@ -143,11 +143,11 @@ class TokenStore:
                 row = await cur.fetchone()
 
         if row:
-            self._cache[token] = row[0]
+            self._cache[token] = str(row[0])
             import asyncio
 
             asyncio.create_task(self._touch(token))
-            return row[0]
+            return str(row[0])
 
         return None
 

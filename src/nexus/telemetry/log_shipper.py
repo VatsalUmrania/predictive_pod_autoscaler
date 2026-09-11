@@ -116,7 +116,7 @@ class EndpointStats:
             return None
         times.sort()
         idx = int(len(times) * 0.95)
-        return times[min(idx, len(times) - 1)]
+        return float(times[min(idx, len(times) - 1)])
 
 # Log Shipper
 class NginxLogShipper:

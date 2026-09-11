@@ -33,7 +33,9 @@ def plan_remediation_node(state: IncidentGraphState) -> dict[str, Any]:
     retry_count = state.get("retry_count", 0)
     verification = state.get("verification") or {}
     execution_records = state.get("execution_records") or []
-    prior_tools = [rec.get("tool_name") for rec in execution_records]
+    prior_tools: list[str] = [
+        str(rec["tool_name"]) for rec in execution_records if rec.get("tool_name")
+    ]
     verif_failure = verification.get("failure_reason") or verification.get("details") or "Target remained unhealthy"
 
     steps: list[PlanStep] = []
@@ -379,7 +381,7 @@ def plan_remediation_node(state: IncidentGraphState) -> dict[str, Any]:
         "is_adaptive_escalation": retry_count > 0,
     }
 
-    result_dict = {
+    result_dict: dict[str, Any] = {
         "plan": plan.model_dump(),
         "remediation_history": [remediation_entry],
         "fsm_state": IncidentState.POLICY_CHECK.value,

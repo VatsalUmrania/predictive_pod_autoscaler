@@ -58,6 +58,7 @@ async def diagnose_node(state: IncidentGraphState) -> dict[str, Any]:
                 sev_enum = Severity.CRITICAL if sev_val == "critical" else Severity.WARNING
 
                 sig_raw = str(raw_evt.get("signal_type", "threshold_breach")).lower().replace("-", "_")
+                sig_enum: SignalType | str
                 if sig_raw in ("crashloopbackoff", "crashloop", "crash_loop", "pod_crash_loop"):
                     sig_enum = SignalType.POD_CRASHLOOP
                 elif sig_raw in ("oomkilled", "oom_killed", "pod_oom"):

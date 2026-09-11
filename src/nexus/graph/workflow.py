@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from langgraph.graph import END, START, StateGraph
 
@@ -195,12 +195,12 @@ class IncidentWorkflow:
                 logger.warning("[IncidentWorkflow] Could not default EventCorrelator: %s", _corr_exc)
         self.correlator = correlator
         self._flush_interval = kwargs.get("flush_interval_s", 15.0)
-        self._flush_task: asyncio.Task | None = None
+        self._flush_task: asyncio.Task[Any] | None = None
         self._active_incidents: dict[str, dict[str, Any]] = {}
         self._pending_approvals: dict[str, dict[str, Any]] = {}
         self._rca_results: list[dict[str, Any]] = []
         self._running = False
-        self._sub_tasks: list[asyncio.Task] = []
+        self._sub_tasks: list[asyncio.Task[Any]] = []
         self._incidents_processed = 0
         self._actions_dispatched = 0
 
@@ -255,14 +255,14 @@ class IncidentWorkflow:
                 if isinstance(event, dict)
                 else {}
             )
-            task = asyncio.create_task(
+            inc_task = asyncio.create_task(
                 self.run_incident(
                     {"incident_id": inc_id, "events": [e_dict]},
                     thread_id=inc_id,
                 ),
                 name=f"process-{inc_id}",
             )
-            self._sub_tasks.append(task)
+            self._sub_tasks.append(inc_task)
 
     async def _flush_loop(self) -> None:
         """Periodically flush stale clusters from correlator."""
@@ -490,7 +490,7 @@ class IncidentWorkflow:
         if (state_snapshot.next and "approval" in state_snapshot.next) or result.get("__interrupt__"):
             await self._record_pending_approval(result, inc_id=inc_id, thread_id=tid)
 
-        return result
+        return cast(dict[str, Any], result)
 
     async def _record_pending_approval(
         self,
@@ -667,4 +667,4 @@ class IncidentWorkflow:
         if result.get("diagnosis"):
             self._rca_results.append(result["diagnosis"])
             self._rca_results = self._rca_results[-100:]
-        return result
+        return cast(dict[str, Any], result)

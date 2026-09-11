@@ -29,6 +29,7 @@ import logging
 import os
 import threading
 from abc import ABC, abstractmethod
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -110,8 +111,8 @@ class GeminiProvider(LLMProvider):
 
     def __init__(self, api_key: str | None = None, model: str | None = None):
         self._api_key = api_key or os.getenv("NEXUS_LLM_API_KEY", "")
-        self._model_name = model or os.getenv("NEXUS_LLM_MODEL", self.DEFAULT_MODEL)
-        self._client = None
+        self._model_name: str = model or os.getenv("NEXUS_LLM_MODEL") or self.DEFAULT_MODEL
+        self._client: Any = None
         self._lock = threading.Lock()
 
     @property
@@ -163,7 +164,7 @@ class GeminiProvider(LLMProvider):
             contents=prompt,
             config=config,
         )
-        return response.text.strip()
+        return str(response.text).strip()
 
     async def complete(self, user_prompt: str) -> str:
         return await asyncio.to_thread(self._sync_complete, user_prompt)
@@ -178,8 +179,8 @@ class OpenAIProvider(LLMProvider):
         self._api_key = (
             api_key or os.getenv("NEXUS_LLM_API_KEY") or os.getenv("OPENAI_API_KEY", "")
         )
-        self._model_name = model or os.getenv("NEXUS_LLM_MODEL", self.DEFAULT_MODEL)
-        self._client = None
+        self._model_name: str = model or os.getenv("NEXUS_LLM_MODEL") or self.DEFAULT_MODEL
+        self._client: Any = None
         self._lock = threading.Lock()
 
     @property
@@ -226,7 +227,7 @@ class OpenAIProvider(LLMProvider):
             max_tokens=512,
             response_format={"type": "json_object"},
         )
-        return response.choices[0].message.content.strip()
+        return str(response.choices[0].message.content).strip()
 
     async def complete(self, user_prompt: str) -> str:
         return await asyncio.to_thread(self._sync_complete, user_prompt)
@@ -243,8 +244,8 @@ class AnthropicProvider(LLMProvider):
             or os.getenv("NEXUS_LLM_API_KEY")
             or os.getenv("ANTHROPIC_API_KEY", "")
         )
-        self._model_name = model or os.getenv("NEXUS_LLM_MODEL", self.DEFAULT_MODEL)
-        self._client = None
+        self._model_name: str = model or os.getenv("NEXUS_LLM_MODEL") or self.DEFAULT_MODEL
+        self._client: Any = None
         self._lock = threading.Lock()
 
     @property
@@ -290,7 +291,7 @@ class AnthropicProvider(LLMProvider):
         text_block = next((blk for blk in message.content if blk.type == "text"), None)
         if text_block is None:
             raise RuntimeError("No text block found in Claude response")
-        return text_block.text.strip()
+        return str(text_block.text).strip()
 
     async def complete(self, user_prompt: str) -> str:
         return await asyncio.to_thread(self._sync_complete, user_prompt)

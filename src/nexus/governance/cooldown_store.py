@@ -32,6 +32,7 @@ import logging
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ class CooldownStore:
             db_path = os.getenv("NEXUS_AUDIT_DB_PATH", "/tmp/nexus_audit.db")
         self._db_path = db_path
         self._prefix = key_prefix
-        self._db = None
+        self._db: Any = None
         # In-memory cache (hydrated from SQLite) — used if SQLite fails at runtime.
         self._memory: dict[str, float] = {}
 
@@ -179,6 +180,8 @@ class CooldownStore:
             await self._delete_row(full)
 
     async def _delete_row(self, full_key: str) -> None:
+        if self._db is None:
+            return
         try:
             await self._db.execute(
                 f"DELETE FROM {self._TABLE} WHERE key = ?", (full_key,)
@@ -199,7 +202,7 @@ class CooldownStore:
                     row = await cur.fetchone()
                 if row is None:
                     return 0.0
-                return max(0.0, row["expires_at"] - time.time())
+                return max(0.0, float(row["expires_at"]) - time.time())
             except Exception as exc:
                 logger.warning(
                     f"[CooldownStore] SQLite read error: {exc} — using memory"

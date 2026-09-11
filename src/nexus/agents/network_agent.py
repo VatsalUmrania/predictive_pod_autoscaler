@@ -294,10 +294,10 @@ class NetworkAgent(BaseAgent):
                 *[self._check_service_http(ep) for ep in self.extra_endpoints],
                 return_exceptions=True,
             )
-            for r in http_results:
-                if isinstance(r, list):
-                    events.extend(r)
-                elif isinstance(r, Exception):
-                    logger.debug(f"[NetworkAgent] HTTP check exception: {r}")
+            for hr in http_results:
+                if isinstance(hr, list):
+                    events.extend(hr)
+                elif isinstance(hr, Exception):
+                    logger.debug(f"[NetworkAgent] HTTP check exception: {hr}")
 
         return events

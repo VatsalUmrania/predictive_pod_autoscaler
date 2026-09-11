@@ -211,7 +211,7 @@ class RCALeadSynthesizer:
 
         # 1. Primary Reasoning Path: Autonomous LLM SRE Synthesis
         llm = get_llm()
-        if hasattr(llm, "ainvoke") and getattr(llm, "__class__", None).__name__ != "FakeListChatModel":
+        if hasattr(llm, "ainvoke") and type(llm).__name__ != "FakeListChatModel":
             try:
                 describe_sample = str(live_config.get("describe", ""))[:2500]
                 logs_sample = "\n".join(logs[-40:]) if logs else "No container logs captured"
@@ -490,14 +490,18 @@ class RCALeadSynthesizer:
             text = str(text)
 
         try:
-            return json.loads(text)
+            data = json.loads(text)
+            if isinstance(data, dict):
+                return data
         except Exception:
             pass
 
         match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
         if match:
             try:
-                return json.loads(match.group(1))
+                data = json.loads(match.group(1))
+                if isinstance(data, dict):
+                    return data
             except Exception:
                 pass
 
@@ -505,7 +509,9 @@ class RCALeadSynthesizer:
         end = text.rfind("}")
         if start != -1 and end != -1 and end > start:
             try:
-                return json.loads(text[start : end + 1])
+                data = json.loads(text[start : end + 1])
+                if isinstance(data, dict):
+                    return data
             except Exception:
                 pass
 

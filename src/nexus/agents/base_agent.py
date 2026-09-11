@@ -168,7 +168,7 @@ class BaseAgent(ABC):
             return self.poll_interval
         # poll_interval * 2^(failures - 1), capped at backoff_max
         backoff = self.poll_interval * (2 ** (self._consecutive_failures - 1))
-        return min(backoff, self.backoff_max)
+        return float(min(backoff, self.backoff_max))
 
     async def _emit_circuit_breaker(self, error: str) -> None:
         """Emit a CIRCUIT_BREAKER_TRIPPED event to notify the Orchestrator."""

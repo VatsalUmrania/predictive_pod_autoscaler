@@ -20,7 +20,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -197,8 +197,8 @@ class IncidentEvent(BaseModel):
 
     # Advisory fields (agent can optionally suggest a path)
     suggested_runbook: str | None = None
-    suggested_healing_level: HealingLevel | None = None
-    confidence: float | None = Field(None, ge=0.0, le=1.0)
+    suggested_healing_level: HealingLevel | int | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
     model_config = {"use_enum_values": True}
 
@@ -209,7 +209,7 @@ class IncidentEvent(BaseModel):
             v = datetime.fromisoformat(v)
         if isinstance(v, datetime) and v.tzinfo is None:
             v = v.replace(tzinfo=timezone.utc)
-        return v
+        return cast(datetime, v)
 
     # ── Convenience helpers ───────────────────────────────────────────────────
 

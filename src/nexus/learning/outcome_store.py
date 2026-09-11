@@ -186,8 +186,8 @@ class OutcomeStore:
     def __init__(self, db_path: str | None = None):
         import os
 
-        self._db_path = db_path or os.getenv(
-            "NEXUS_AUDIT_DB_PATH", "/tmp/nexus_audit.db"
+        self._db_path: str = (
+            db_path or os.getenv("NEXUS_AUDIT_DB_PATH") or "/tmp/nexus_audit.db"
         )
         self._db: aiosqlite.Connection | None = None
 

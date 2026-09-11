@@ -57,7 +57,7 @@ class IncidentCluster:
         for e in self.events:
             if e.namespace:
                 counts[e.namespace] = counts.get(e.namespace, 0) + 1
-        return max(counts, key=counts.get) if counts else None
+        return max(counts, key=counts.__getitem__) if counts else None
 
     @property
     def primary_resource(self) -> str | None:
@@ -66,18 +66,19 @@ class IncidentCluster:
         for e in self.events:
             if e.resource_name:
                 counts[e.resource_name] = counts.get(e.resource_name, 0) + 1
-        return max(counts, key=counts.get) if counts else None
+        return max(counts, key=counts.__getitem__) if counts else None
 
     @property
     def signal_types(self) -> set[str]:
         res = set()
         for e in self.events:
             st = getattr(e, "signal_type", None)
-            if hasattr(st, "value"):
-                res.add(str(st.value).lower())
-            elif st is not None:
-                s = str(st).lower()
-                res.add(s.split(".")[-1] if "." in s else s)
+            if st is not None:
+                if hasattr(st, "value"):
+                    res.add(str(st.value).lower())
+                else:
+                    s = str(st).lower()
+                    res.add(s.split(".")[-1] if "." in s else s)
         return res
 
     @property
@@ -85,11 +86,12 @@ class IncidentCluster:
         res = set()
         for e in self.events:
             ag = getattr(e, "agent", None)
-            if hasattr(ag, "value"):
-                res.add(str(ag.value).lower())
-            elif ag is not None:
-                s = str(ag).lower()
-                res.add(s.split(".")[-1] if "." in s else s)
+            if ag is not None:
+                if hasattr(ag, "value"):
+                    res.add(str(ag.value).lower())
+                else:
+                    s = str(ag).lower()
+                    res.add(s.split(".")[-1] if "." in s else s)
         return res
 
     @property

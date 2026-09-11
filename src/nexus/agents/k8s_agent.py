@@ -84,6 +84,7 @@ class K8sAgent(BaseAgent):
         import os
 
         env_ns = os.getenv("NEXUS_WATCH_NAMESPACES")
+        self.namespaces: list[str] | None = None
         if namespaces is not None:
             self.namespaces = namespaces
         elif env_ns:
@@ -244,7 +245,7 @@ class K8sAgent(BaseAgent):
             if ref.kind == "ReplicaSet":
                 # ReplicaSet names are <deployment>-<hash>; strip the hash suffix
                 parts = ref.name.rsplit("-", 1)
-                return parts[0] if len(parts) == 2 else ref.name
+                return str(parts[0]) if len(parts) == 2 else str(ref.name)
         return None
 
     @staticmethod
@@ -397,7 +398,7 @@ class K8sAgent(BaseAgent):
 
     # BaseAgent interface
     async def sense(self) -> list[IncidentEvent]:
-        if not self._k8s_core:
+        if not self._k8s_core or not self._k8s_apps or not self._k8s_autoscaling:
             return []
 
         events: list[IncidentEvent] = []
@@ -415,7 +416,7 @@ class K8sAgent(BaseAgent):
             )
             pods = []
             for pl in pod_lists:
-                if isinstance(pl, Exception):
+                if isinstance(pl, BaseException):
                     logger.warning(f"[K8sAgent] Pod list error: {pl}")
                 else:
                     pods.extend(pl.items)
@@ -442,7 +443,7 @@ class K8sAgent(BaseAgent):
             )
             deployments = []
             for dl in dep_lists:
-                if not isinstance(dl, Exception):
+                if not isinstance(dl, BaseException):
                     deployments.extend(dl.items)
         else:
             result = await loop.run_in_executor(
@@ -471,7 +472,7 @@ class K8sAgent(BaseAgent):
                 )
                 hpas = []
                 for hl in hpa_lists:
-                    if not isinstance(hl, Exception):
+                    if not isinstance(hl, BaseException):
                         hpas.extend(hl.items)
             else:
                 result = await loop.run_in_executor(

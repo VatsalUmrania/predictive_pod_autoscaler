@@ -355,9 +355,9 @@ class ActionLadder:
             LadderDecision(can_proceed=False)         — blocked (reason included)
         """
         level = healing_level if healing_level is not None else (getattr(runbook, "healing_level", 1) if runbook else 1)
-        action_type = action_type or (getattr(action, "type", str(action)) if action else "unknown")
-        blast_radius = blast_radius or (getattr(runbook, "blast_radius", "single_pod") if runbook else "single_pod")
-        action_id = getattr(runbook, "id", action_type) if runbook else action_type
+        action_type_val: str = str(action_type or (getattr(action, "type", str(action)) if action else "unknown"))
+        blast_radius_val: str = str(blast_radius or (getattr(runbook, "blast_radius", "single_pod") if runbook else "single_pod"))
+        action_id_val: str = str(getattr(runbook, "id", action_type_val) if runbook else action_type_val)
 
         # L0 fast path
         # L0 actions (emit_alert, patch_annotation) bypass CB + cooldown checks.
@@ -369,7 +369,7 @@ class ActionLadder:
         if self._cb.is_open:
             logger.warning(
                 f"[ActionLadder] BLOCKED by governance CB: "
-                f"{action_type} for {target} (L{level})"
+                f"{action_type_val} for {target} (L{level})"
             )
             return LadderDecision(
                 can_proceed=False,
@@ -380,7 +380,7 @@ class ActionLadder:
             )
 
         # Cooldown check
-        cooldown_key = CooldownStore.make_key(action_id, target)
+        cooldown_key = CooldownStore.make_key(action_id_val, target)
         in_cooldown = await self._cooldown.is_in_cooldown(cooldown_key)
         remaining = (
             await self._cooldown.remaining_seconds(cooldown_key) if in_cooldown else 0.0
@@ -388,7 +388,7 @@ class ActionLadder:
 
         if in_cooldown:
             logger.info(
-                f"[ActionLadder] COOLDOWN: {action_id} on {target} "
+                f"[ActionLadder] COOLDOWN: {action_id_val} on {target} "
                 f"({remaining:.0f}s remaining)"
             )
             return LadderDecision(
@@ -399,9 +399,9 @@ class ActionLadder:
 
         # OPA policy check
         policy = await self._policy.evaluate(
-            action_type=action_type,
+            action_type=action_type_val,
             healing_level=level,
-            blast_radius=blast_radius,
+            blast_radius=blast_radius_val,
             in_cooldown=in_cooldown,
             governance_cb_open=self._cb.is_open,
             confidence=confidence,
@@ -411,12 +411,12 @@ class ActionLadder:
         )
 
         # Universal Human Approval: all mutating actions require approval unless pre-approved
-        if (policy.requires_approval or not human_approved) and action_type not in ("emit_alert", "patch_annotation"):
-            inc_id = getattr(event, "correlation_id", None) or getattr(event, "event_id", "incident-unknown")
+        if (policy.requires_approval or not human_approved) and action_type_val not in ("emit_alert", "patch_annotation"):
+            inc_id: str = str(getattr(event, "correlation_id", None) or getattr(event, "event_id", "incident-unknown"))
             evt_id = getattr(event, "event_id", inc_id)
             approval_id = self._approval.enqueue(
-                runbook_id=action_id,
-                action_type=action_type,
+                runbook_id=action_id_val,
+                action_type=action_type_val,
                 target=target,
                 incident_id=inc_id,
                 healing_level=level,
@@ -427,7 +427,7 @@ class ActionLadder:
                     "namespace": getattr(event, "namespace", "default"),
                     "resource": getattr(event, "resource_name", target),
                     "action": (action.model_dump() if hasattr(action, "model_dump")
-                               else {"type": action_type, "params": getattr(action, "params", {})}),
+                               else {"type": action_type_val, "params": getattr(action, "params", {})}),
                     "event": (event.model_dump()
                               if hasattr(event, "model_dump") else None),
                     "blast_radius": blast_radius,

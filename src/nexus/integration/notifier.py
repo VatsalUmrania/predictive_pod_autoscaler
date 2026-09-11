@@ -224,7 +224,7 @@ class Notifier:
         predicted_rps: float,
         horizon_min: int = 10,
         confidence: float = 0.0,
-        tables: list = None,
+        tables: list[Any] | None = None,
     ) -> None:
         """Send a pre-scale prediction notification."""
         webhook = self._get_webhook(app_name)
@@ -432,7 +432,7 @@ class Notifier:
             from nexus.integration.dashboard import _policy_cache
 
             cfg = _policy_cache.get(app_name, {})
-            return cfg.get("notifications", {}).get("page_sre_after", 3)
+            return int(cfg.get("notifications", {}).get("page_sre_after", 3))
         except Exception:
             return 3
 

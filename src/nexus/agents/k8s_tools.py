@@ -46,7 +46,7 @@ def get_pod_logs(namespace: str, pod_name: str, tail_lines: int = 50) -> str:
             namespace=namespace,
             tail_lines=tail_lines,
         )
-        return logs
+        return str(logs)
     except Exception as e:
         try:
             pods = api.list_namespaced_pod(namespace=namespace).items
@@ -56,11 +56,11 @@ def get_pod_logs(namespace: str, pod_name: str, tail_lines: int = 50) -> str:
                 or (p.metadata.labels and p.metadata.labels.get("app") == pod_name)
             ]
             if matching:
-                return api.read_namespaced_pod_log(
+                return str(api.read_namespaced_pod_log(
                     name=matching[0],
                     namespace=namespace,
                     tail_lines=tail_lines,
-                )
+                ))
         except Exception:
             pass
         return f"Error fetching logs for {pod_name}: {str(e)}"
@@ -142,7 +142,7 @@ def describe_resource(namespace: str, resource_kind: str, resource_name: str) ->
     except Exception as e:
         return f"Error describing {resource_kind} {resource_name}: {str(e)}"
 
-def get_events(namespace: str, resource_name: str = None) -> str:
+def get_events(namespace: str, resource_name: str | None = None) -> str:
     """Get recent events in a namespace, optionally filtered by resource."""
     api = _get_api()
     try:
@@ -242,7 +242,7 @@ def get_yaml(namespace: str, resource_kind: str, resource_name: str) -> str:
         if "metadata" in data:
             for key in ["creation_timestamp", "resource_version", "uid", "generation"]:
                 data["metadata"].pop(key, None)
-        return yaml.dump(data, default_flow_style=False)
+        return str(yaml.dump(data, default_flow_style=False))
 
     except Exception as e:
         return f"Error fetching YAML for {resource_kind} {resource_name}: {str(e)}"

@@ -89,7 +89,7 @@ def get_llm(provider: str | None = None, model: str | None = None, temperature: 
                             def __init__(self, text: str):
                                 self.content = text
 
-                        return _BridgeResponse(resp.text.strip())
+                        return _BridgeResponse((resp.text or "").strip())
 
                 client = genai.Client(api_key=api_key)
                 logger.info("[LLM Factory] Initialized google.genai bridge with model=%s", gemini_model)

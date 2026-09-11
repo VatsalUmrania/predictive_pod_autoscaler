@@ -54,7 +54,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -240,7 +240,7 @@ async def _on_ppa_prediction(data: dict, subject: str) -> None:
 
 
 # Module-level NATS client — set by lifespan, read by sdk_ingest
-_nats_client = None
+_nats_client: Any = None
 
 app = FastAPI(
     title="NEXUS Self-Healing Infrastructure",
@@ -334,9 +334,9 @@ def prometheus_metrics() -> Response:
 def last_rca(n: int = 10) -> list[dict[str, Any]]:
     """Return the N most recent RCA decisions from the LangGraph workflow."""
     if context.workflow and hasattr(context.workflow, "last_rca_results"):
-        return context.workflow.last_rca_results(n)
+        return cast(list[dict[str, Any]], context.workflow.last_rca_results(n))
     if context.orchestrator and hasattr(context.orchestrator, "last_rca_results"):
-        return context.orchestrator.last_rca_results(n)
+        return cast(list[dict[str, Any]], context.orchestrator.last_rca_results(n))
     return []
 
 # Runbooks
@@ -374,7 +374,7 @@ def prescaler_set_mode(mode: str) -> dict[str, str]:
 def learning_status() -> dict[str, Any]:
     """FeedbackLoop status and latest system KPIs."""
     fl = _require(context.feedback_loop, "FeedbackLoop")
-    return fl.status
+    return cast(dict[str, Any], fl.status)
 
 
 @app.get("/advisor", tags=["learning"])
@@ -386,14 +386,14 @@ async def advisor_recommendations(days: int = 30) -> list[dict[str, Any]]:
 async def audit_tail(n: int = 20) -> list[dict[str, Any]]:
     """Return the N most recent audit trail records."""
     at = _require(context.audit_trail, "AuditTrail")
-    return await at.tail(n)
+    return cast(list[dict[str, Any]], await at.tail(n))
 
 
 @app.get("/audit/incident/{incident_id}", tags=["governance"])
 async def audit_by_incident(incident_id: str) -> list[dict[str, Any]]:
     """Return all audit records for a specific incident/correlation ID."""
     at = _require(context.audit_trail, "AuditTrail")
-    return await at.query_by_incident(incident_id)
+    return cast(list[dict[str, Any]], await at.query_by_incident(incident_id))
 
 # Human approvals
 @app.post("/approve/{action_id}", tags=["governance"])
@@ -584,7 +584,7 @@ async def slack_interactive(
 
     raw = await request.body()
     _log.info(f"Slack interactivity: received raw body length={len(raw)}")
-    _log.debug(f"Slack interactivity: raw body={raw[:500]}")
+    _log.debug(f"Slack interactivity: raw body={raw[:500]!r}")
     _log.debug(f"Slack interactivity: headers={dict(request.headers)}")
 
     ts = request.headers.get("X-Slack-Request-Timestamp", "missing")
@@ -599,7 +599,8 @@ async def slack_interactive(
 
     _log.info("Slack interactivity: signature VERIFIED OK")
 
-    payload = (parse_qs(raw.decode("utf-8")).get("payload") or [None])[0]
+    parsed = parse_qs(raw.decode("utf-8")).get("payload")
+    payload = parsed[0] if parsed else None
     _log.info(f"Slack interactivity: payload field present={payload is not None}")
     if not payload:
         _log.warning("Slack interactivity: missing payload field")

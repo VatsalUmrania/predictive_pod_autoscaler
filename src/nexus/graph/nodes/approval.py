@@ -36,7 +36,7 @@ def approval_node(state: IncidentGraphState) -> dict[str, Any]:
             "target": state.get("target"),
             "platform": state.get("platform"),
             "plan": state.get("plan"),
-            "governance_reasons": state.get("governance", {}).get("reasons", []),
+            "governance_reasons": (state.get("governance") or {}).get("reasons", []),
             "prompt": "Operator approval required to execute mutating remediation plan.",
         }
         # Calling interrupt halts execution until resume_incident() provides input
