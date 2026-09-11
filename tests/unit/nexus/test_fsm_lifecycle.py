@@ -2,13 +2,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from nexus.db.postgres import SQLiteFallbackClient
+from tests.unit.nexus.test_db_helpers import MockPostgresClient
 from nexus.engine.fsm import IncidentFSM, IncidentState
 
 
 @pytest.mark.asyncio
 async def test_fsm_happy_path_with_db_and_nats():
-    db = SQLiteFallbackClient(db_path=":memory:")
+    db = MockPostgresClient()
     await db.initialize()
     inc_id = await db.create_incident(
         fingerprint="fp-fsm-1",
@@ -67,7 +67,7 @@ async def test_fsm_happy_path_with_db_and_nats():
 
 @pytest.mark.asyncio
 async def test_fsm_invalid_transition_rejected():
-    db = SQLiteFallbackClient(db_path=":memory:")
+    db = MockPostgresClient()
     await db.initialize()
     inc_id = await db.create_incident(
         fingerprint="fp-fsm-2",
@@ -88,7 +88,7 @@ async def test_fsm_invalid_transition_rejected():
 
 @pytest.mark.asyncio
 async def test_fsm_rollback_and_escalation():
-    db = SQLiteFallbackClient(db_path=":memory:")
+    db = MockPostgresClient()
     await db.initialize()
     inc_id = await db.create_incident(
         fingerprint="fp-fsm-3",

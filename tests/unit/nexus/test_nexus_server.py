@@ -31,6 +31,16 @@ def test_nexus_server_has_create_classmethod():
     assert callable(NexusServer.create)
 
 
+@pytest.fixture(autouse=True)
+def mock_db_client():
+    from tests.unit.nexus.test_db_helpers import MockPostgresClient
+
+    client = MockPostgresClient()
+    with patch("nexus.server.get_database_client", new=AsyncMock(return_value=client)):
+        yield client
+
+
+
 @pytest.mark.asyncio
 async def test_create_wires_all_components():
     mock_nats = MagicMock()

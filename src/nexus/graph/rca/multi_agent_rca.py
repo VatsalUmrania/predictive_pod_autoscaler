@@ -262,7 +262,7 @@ class RCALeadSynthesizer:
 
                 model_desc = getattr(llm, "model_name", getattr(llm, "model", getattr(llm, "_model", type(llm).__name__)))
                 logger.info(
-                    "🤖 [MultiAgentRCA] Invoking LLM (%s) for root cause analysis on %s/%s",
+                    "[MultiAgentRCA] Invoking LLM (%s) for root cause analysis on %s/%s",
                     model_desc,
                     target_ns,
                     target_name,
@@ -274,7 +274,7 @@ class RCALeadSynthesizer:
                 parsed = self._parse_llm_json(raw_text)
                 if parsed:
                     logger.info(
-                        "🧠 [MultiAgentRCA] LLM Diagnosis succeeded: failure_class=%s, action=%s, conf=%.2f\n  Root Cause: %s\n  Suggested Fix: %s",
+                        "[MultiAgentRCA] LLM Diagnosis succeeded: failure_class=%s, action=%s, conf=%.2f\n  Root Cause: %s\n  Suggested Fix: %s",
                         parsed.get("failure_class"),
                         parsed.get("suggested_action"),
                         parsed.get("confidence", 0.85),
@@ -299,7 +299,7 @@ class RCALeadSynthesizer:
                     logger.warning("[MultiAgentRCA] LLM returned non-JSON response:\n%s", raw_text[:300])
             except Exception as llm_exc:
                 logger.error(
-                    "❌ [MultiAgentRCA] LLM invocation failed (%s: %s). Falling back to neuro-symbolic synthesis.",
+                    "[MultiAgentRCA] LLM invocation failed (%s: %s). Falling back to neuro-symbolic synthesis.",
                     type(llm_exc).__name__,
                     llm_exc,
                     exc_info=True,

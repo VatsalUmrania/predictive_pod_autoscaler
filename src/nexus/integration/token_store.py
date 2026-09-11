@@ -1,82 +1,67 @@
 """
-NEXUS Token Store
-==================
-Maps SELFHEAL_TOKEN → app_name for SDK authentication.
+NEXUS SDK App Token Registry
+=============================
+Maintains authentication tokens for SDK-instrumented applications.
 
-Tokens are auto-generated (UUID4) when a new app's selfheal.yaml is first
-detected by GitAgent. They're stored in SQLite alongside the AuditTrail.
+When a developer drops `selfheal.yaml` into their repo, GitAgent calls
+`TokenStore.register_app()` to issue a `SELFHEAL_TOKEN`. That token is
+embedded into the deployment manifest as an environment variable and
+verified by NEXUS on every incoming SDK payload.
 
-Schema:
-    app_tokens (
-        app_name    TEXT PRIMARY KEY,
-        token       TEXT UNIQUE NOT NULL,
-        tier        TEXT DEFAULT 'production',
-        created_at  TEXT NOT NULL,
-        last_used   TEXT,
-        event_count INTEGER DEFAULT 0
-    )
-
-Usage:
-    store = TokenStore(db_path="data/nexus_knowledge.db")
-    await store.init()
-
-    # Register a new app (returns existing token if already registered)
-    token = await store.register_app("checkout-service", tier="production")
-
-    # Validate an incoming SDK request
-    app_name = await store.validate_token(token)   # → "checkout-service" or None
-
-    # Rotate if compromised
-    new_token = await store.rotate_token("checkout-service")
+Tokens are stored in PostgreSQL.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import os
 import secrets
 from datetime import datetime, timezone
+from typing import Any
 
-import aiosqlite
+from nexus.db.postgres import PostgresClient, get_database_client
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_DB = os.getenv("NEXUS_KNOWLEDGE_DB_PATH", "data/nexus_knowledge.db")
+
+def _generate_token() -> str:
+    """Generate a cryptographically secure SELFHEAL_TOKEN."""
+    return "sh_" + secrets.token_urlsafe(32)
+
 
 class TokenStore:
-    """Async SQLite-backed token registry for SDK app authentication."""
+    """Async PostgreSQL-backed token registry for SDK app authentication."""
 
-    def __init__(self, db_path: str = _DEFAULT_DB) -> None:
+    def __init__(
+        self,
+        db_path: str | None = None,
+        db_client: PostgresClient | None = None,
+    ) -> None:
         self._db_path = db_path
+        self._db_client = db_client
         self._cache: dict[str, str] = {}  # token → app_name (in-memory fast-path)
         self._ready = False
 
-    #  Lifecycle
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     async def init(self) -> None:
-        """Create the app_tokens table if it doesn't exist."""
-        async with aiosqlite.connect(self._db_path) as db:
-            await db.execute("""
-                CREATE TABLE IF NOT EXISTS app_tokens (
-                    app_name    TEXT PRIMARY KEY,
-                    token       TEXT UNIQUE NOT NULL,
-                    tier        TEXT DEFAULT 'production',
-                    created_at  TEXT NOT NULL,
-                    last_used   TEXT,
-                    event_count INTEGER DEFAULT 0
+        """Initialize connection and preload cache from PostgreSQL."""
+        if self._db_client is None:
+            self._db_client = await get_database_client()
+
+        try:
+            async with self._db_client.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT app_name, token FROM app_tokens WHERE revoked = FALSE"
                 )
-            """)
-            await db.commit()
+                for r in rows:
+                    self._cache[str(r["token"])] = str(r["app_name"])
+            self._ready = True
+            logger.info(f"[TokenStore] Initialized — {len(self._cache)} app(s) registered")
+        except Exception as exc:
+            logger.warning(f"[TokenStore] Cache preload failed: {exc}")
 
-            # Pre-load cache
-            async with db.execute("SELECT app_name, token FROM app_tokens") as cur:
-                async for row in cur:
-                    self._cache[row[1]] = row[0]
-
-        self._ready = True
-        logger.info(f"[TokenStore] Initialized — {len(self._cache)} app(s) registered")
-
-    # Registration
+    # ── Registration ──────────────────────────────────────────────────────────
 
     async def register_app(
         self,
@@ -86,10 +71,7 @@ class TokenStore:
         """
         Register a new app and return its SELFHEAL_TOKEN.
         If the app is already registered, returns the existing token.
-
-        Called by GitAgent when selfheal.yaml is first detected.
         """
-        # Check if already registered
         existing = await self.get_token(app_name)
         if existing:
             logger.info(
@@ -98,17 +80,16 @@ class TokenStore:
             return existing
 
         token = _generate_token()
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
 
-        async with aiosqlite.connect(self._db_path) as db:
-            await db.execute(
-                """
-                INSERT OR IGNORE INTO app_tokens (app_name, token, tier, created_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (app_name, token, tier, now),
-            )
-            await db.commit()
+        if self._db_client is not None:
+            sql = """
+            INSERT INTO app_tokens (app_name, token, tier, created_at)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (app_name) DO NOTHING
+            """
+            async with self._db_client.acquire() as conn:
+                await conn.execute(sql, app_name, token, tier, now)
 
         self._cache[token] = app_name
         logger.info(
@@ -117,88 +98,90 @@ class TokenStore:
         )
         return token
 
-    # Validation
+    # ── Validation ────────────────────────────────────────────────────────────
 
     async def validate_token(self, token: str) -> str | None:
         """
         Validate an incoming SDK token.
-
         Returns the app_name if valid, None if not found.
-        Updates last_used + event_count on success (non-blocking via background).
         """
         # Fast path — in-memory cache
         app_name = self._cache.get(token)
         if app_name:
-            # Fire-and-forget update (don't block the request)
-            import asyncio
-
             asyncio.create_task(self._touch(token))
             return app_name
 
-        # Slow path — DB lookup (handles cache miss after restart)
-        async with aiosqlite.connect(self._db_path) as db:
-            async with db.execute(
-                "SELECT app_name FROM app_tokens WHERE token = ?", (token,)
-            ) as cur:
-                row = await cur.fetchone()
-
-        if row:
-            self._cache[token] = str(row[0])
-            import asyncio
-
-            asyncio.create_task(self._touch(token))
-            return str(row[0])
+        # Slow path — DB lookup (handles cache miss)
+        if self._db_client is not None:
+            sql = "SELECT app_name FROM app_tokens WHERE token = $1 AND revoked = FALSE"
+            async with self._db_client.acquire() as conn:
+                row = await conn.fetchrow(sql, token)
+            if row:
+                name = str(row["app_name"])
+                self._cache[token] = name
+                asyncio.create_task(self._touch(token))
+                return name
 
         return None
 
     async def _touch(self, token: str) -> None:
         """Update last_used and event_count for a token."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
+        if self._db_client is None:
+            return
         try:
-            async with aiosqlite.connect(self._db_path) as db:
-                await db.execute(
-                    """
-                    UPDATE app_tokens
-                    SET last_used = ?, event_count = event_count + 1
-                    WHERE token = ?
-                    """,
-                    (now, token),
-                )
-                await db.commit()
+            sql = """
+            UPDATE app_tokens
+            SET last_used = $1, event_count = event_count + 1
+            WHERE token = $2
+            """
+            async with self._db_client.acquire() as conn:
+                await conn.execute(sql, now, token)
         except Exception as exc:
             logger.debug(f"[TokenStore] touch failed: {exc}")
 
-    #  Lookup
+    # ── Lookup ────────────────────────────────────────────────────────────────
 
     async def get_token(self, app_name: str) -> str | None:
-        """Return the current token for an app (for display / ops use)."""
-        async with aiosqlite.connect(self._db_path) as db:
-            async with db.execute(
-                "SELECT token FROM app_tokens WHERE app_name = ?", (app_name,)
-            ) as cur:
-                row = await cur.fetchone()
-        return row[0] if row else None
+        """Return the current token for an app."""
+        if self._db_client is None:
+            for t, a in self._cache.items():
+                if a == app_name:
+                    return t
+            return None
 
-    async def list_apps(self) -> list[dict]:
-        """List all registered apps (for /apps endpoint)."""
-        async with aiosqlite.connect(self._db_path) as db:
-            async with db.execute("""
-                SELECT app_name, tier, created_at, last_used, event_count
-                FROM app_tokens
-                ORDER BY created_at DESC
-                """) as cur:
-                rows = await cur.fetchall()
-        return [
-            {
-                "app_name": r[0],
-                "tier": r[1],
-                "created_at": r[2],
-                "last_used": r[3],
-                "event_count": r[4],
-                "token_prefix": (await self.get_token(r[0]) or "")[:8] + "…",
-            }
-            for r in rows
-        ]
+        sql = "SELECT token FROM app_tokens WHERE app_name = $1 AND revoked = FALSE"
+        async with self._db_client.acquire() as conn:
+            row = await conn.fetchrow(sql, app_name)
+        return str(row["token"]) if row else None
+
+    async def list_apps(self) -> list[dict[str, Any]]:
+        """List all registered apps."""
+        if self._db_client is None:
+            return []
+
+        sql = """
+        SELECT app_name, tier, created_at, last_used, event_count, token
+        FROM app_tokens
+        ORDER BY created_at DESC
+        """
+        async with self._db_client.acquire() as conn:
+            rows = await conn.fetch(sql)
+
+        result = []
+        for r in rows:
+            ca = r["created_at"].isoformat() if isinstance(r["created_at"], datetime) else str(r["created_at"])
+            lu = r["last_used"].isoformat() if isinstance(r["last_used"], datetime) else (str(r["last_used"]) if r["last_used"] else None)
+            tok = str(r["token"])
+            result.append({
+                "app_name": str(r["app_name"]),
+                "tier": str(r["tier"]),
+                "created_at": ca,
+                "last_used": lu,
+                "event_count": int(r["event_count"]),
+                "token_prefix": tok[:8] + "…",
+            })
+        return result
 
     # ── Token rotation ────────────────────────────────────────────────────────
 
@@ -208,16 +191,13 @@ class TokenStore:
         Returns the new token.
         """
         new_token = _generate_token()
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
 
-        async with aiosqlite.connect(self._db_path) as db:
-            await db.execute(
-                "UPDATE app_tokens SET token = ?, last_used = ? WHERE app_name = ?",
-                (new_token, now, app_name),
-            )
-            await db.commit()
+        if self._db_client is not None:
+            sql = "UPDATE app_tokens SET token = $1, last_used = $2 WHERE app_name = $3"
+            async with self._db_client.acquire() as conn:
+                await conn.execute(sql, new_token, now, app_name)
 
-        # Invalidate cache entries for this app
         old_entries = [t for t, a in self._cache.items() if a == app_name]
         for t in old_entries:
             del self._cache[t]
@@ -226,13 +206,10 @@ class TokenStore:
         logger.info(f"[TokenStore] Rotated token for '{app_name}'")
         return new_token
 
-# Token generation
-def _generate_token() -> str:
-    """Generate a cryptographically secure SELFHEAL_TOKEN."""
-    return "sh_" + secrets.token_urlsafe(32)
 
 # Module-level singleton
 _token_store: TokenStore | None = None
+
 
 def get_token_store() -> TokenStore:
     """Return the global TokenStore singleton (must call await .init() first)."""

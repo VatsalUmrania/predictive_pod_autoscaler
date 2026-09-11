@@ -1,13 +1,14 @@
 """
 NEXUS Unified Database Layer
 =============================
-Async database client supporting PostgreSQL via asyncpg with seamless
-fallback to SQLite for local development and test environments without a running Postgres server.
+Async database client supporting PostgreSQL via asyncpg with connection pooling,
+exponential backoff retries, and unified schema initialization.
 """
 
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
 import os
@@ -42,28 +43,82 @@ class PostgresClient:
             "NEXUS_POSTGRES_DSN",
             os.getenv("DATABASE_URL", "")
         )
+        self.min_pool = int(os.getenv("NEXUS_PG_MIN_POOL", "2"))
+        self.max_pool = int(os.getenv("NEXUS_PG_MAX_POOL", "10"))
         self._pool: Any = None
         self._lock = asyncio.Lock()
 
-    async def initialize(self) -> None:
-        """Create pool and execute schema initialization."""
+    @property
+    def pool(self) -> Any:
+        return self._pool
+
+    @asynccontextmanager
+    async def acquire(self):
+        """Helper to acquire a connection from the pool."""
+        if not self._pool:
+            raise RuntimeError("PostgresClient connection pool is not initialized.")
+        async with self._pool.acquire() as conn:
+            yield conn
+
+    async def initialize(self, max_retries: int = 6, initial_backoff: float = 1.0) -> None:
+        """Create pool with retry backoff and execute schema initialization."""
         import asyncpg
 
         if not self.dsn:
-            raise ValueError("No PostgreSQL DSN configured.")
+            raise ValueError(
+                "No PostgreSQL DSN configured. Set NEXUS_POSTGRES_DSN or DATABASE_URL."
+            )
 
-        self._pool = await asyncpg.create_pool(
-            self.dsn,
-            min_size=2,
-            max_size=10,
-            command_timeout=30.0,
+        last_exc: Exception | None = None
+        backoff = initial_backoff
+        for attempt in range(1, max_retries + 1):
+            try:
+                self._pool = await asyncpg.create_pool(
+                    self.dsn,
+                    min_size=self.min_pool,
+                    max_size=self.max_pool,
+                    command_timeout=30.0,
+                )
+                schema_path = Path(__file__).parent / "schema.sql"
+                if schema_path.exists():
+                    ddl = schema_path.read_text(encoding="utf-8")
+                    async with self._pool.acquire() as conn:
+                        await conn.execute(ddl)
+                logger.info(
+                    "[PostgresClient] Initialized connection pool (min=%d, max=%d) and verified schema.",
+                    self.min_pool,
+                    self.max_pool,
+                )
+                return
+            except Exception as exc:
+                last_exc = exc
+                if self._pool:
+                    try:
+                        await self._pool.close()
+                    except Exception:
+                        pass
+                    self._pool = None
+                if attempt < max_retries:
+                    wait_time = min(backoff, 10.0)
+                    logger.warning(
+                        "[PostgresClient] Connection attempt %d/%d failed (%s) — retrying in %.1fs...",
+                        attempt,
+                        max_retries,
+                        exc,
+                        wait_time,
+                    )
+                    await asyncio.sleep(wait_time)
+                    backoff *= 2
+                else:
+                    logger.error(
+                        "[PostgresClient] All %d connection attempts failed: %s",
+                        max_retries,
+                        exc,
+                    )
+
+        raise RuntimeError(
+            f"Failed to initialize PostgreSQL pool after {max_retries} attempts: {last_exc}"
         )
-        schema_path = Path(__file__).parent / "schema.sql"
-        if schema_path.exists():
-            ddl = schema_path.read_text(encoding="utf-8")
-            async with self._pool.acquire() as conn:
-                await conn.execute(ddl)
-        logger.info("[PostgresClient] Initialized connection pool and verified schema.")
 
     async def close(self) -> None:
         if self._pool:
@@ -521,529 +576,27 @@ class PostgresClient:
             }
 
 
-class SQLiteFallbackClient:
-    """
-    In-memory / local SQLite equivalent implementing the same public interface
-    as PostgresClient for zero-dependency local testing and fallback.
-    """
-
-    def __init__(self, db_path: str = ":memory:"):
-        self.db_path = db_path
-        self._db: Any = None
-        self._lock = asyncio.Lock()
-
-    async def initialize(self) -> None:
-        import aiosqlite
-
-        if self.db_path != ":memory:":
-            Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._db = await aiosqlite.connect(self.db_path)
-        self._db.row_factory = aiosqlite.Row
-
-        async with self._lock:
-            await self._db.executescript("""
-            CREATE TABLE IF NOT EXISTS incidents (
-                incident_id TEXT PRIMARY KEY,
-                fingerprint TEXT NOT NULL,
-                environment TEXT NOT NULL,
-                target_resource TEXT NOT NULL,
-                severity TEXT NOT NULL DEFAULT 'error',
-                current_state TEXT NOT NULL DEFAULT 'detected',
-                trigger_source TEXT NOT NULL,
-                trigger_payload TEXT NOT NULL DEFAULT '{}',
-                root_cause_summary TEXT,
-                confidence_score REAL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                resolved_at TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS incident_state_transitions (
-                transition_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                incident_id TEXT NOT NULL,
-                from_state TEXT NOT NULL,
-                to_state TEXT NOT NULL,
-                reason TEXT,
-                metadata TEXT DEFAULT '{}',
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS agent_runs (
-                run_id TEXT PRIMARY KEY,
-                incident_id TEXT NOT NULL,
-                agent_type TEXT NOT NULL,
-                model_name TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'running',
-                prompt_tokens INTEGER DEFAULT 0,
-                completion_tokens INTEGER DEFAULT 0,
-                total_tokens INTEGER DEFAULT 0,
-                duration_ms INTEGER,
-                error_message TEXT,
-                created_at TEXT NOT NULL,
-                finished_at TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS agent_messages (
-                message_id TEXT PRIMARY KEY,
-                run_id TEXT NOT NULL,
-                sequence_num INTEGER NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT,
-                reasoning_content TEXT,
-                raw_payload TEXT,
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS tool_calls (
-                call_id TEXT PRIMARY KEY,
-                run_id TEXT NOT NULL,
-                message_id TEXT,
-                tool_name TEXT NOT NULL,
-                tool_category TEXT NOT NULL,
-                input_parameters TEXT NOT NULL DEFAULT '{}',
-                output_result TEXT,
-                status TEXT NOT NULL DEFAULT 'invoked',
-                error_details TEXT,
-                execution_duration_ms INTEGER,
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS remediation_actions (
-                action_id TEXT PRIMARY KEY,
-                incident_id TEXT NOT NULL,
-                run_id TEXT,
-                action_name TEXT NOT NULL,
-                action_level TEXT NOT NULL,
-                target_resource TEXT NOT NULL,
-                parameters TEXT NOT NULL DEFAULT '{}',
-                rollback_plan TEXT,
-                policy_check_passed INTEGER NOT NULL DEFAULT 0,
-                policy_evaluation TEXT,
-                human_approved_by TEXT,
-                approval_granted_at TEXT,
-                pre_check_snapshot TEXT,
-                post_check_snapshot TEXT,
-                outcome TEXT NOT NULL DEFAULT 'pending',
-                retry_attempt INTEGER DEFAULT 0,
-                created_at TEXT NOT NULL,
-                executed_at TEXT,
-                verified_at TEXT
-            );
-            """)
-            await self._db.commit()
-        logger.info("[SQLiteFallbackClient] Initialized SQLite database at %s", self.db_path)
-
-    async def close(self) -> None:
-        if self._db:
-            await self._db.close()
-            self._db = None
-
-    async def create_incident(
-        self,
-        *,
-        fingerprint: str,
-        environment: str,
-        target_resource: str,
-        severity: str = "error",
-        trigger_source: str = "unknown",
-        trigger_payload: dict | None = None,
-        incident_id: str | None = None,
-    ) -> str:
-        inc_id = incident_id or str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
-        sev = (severity or "error").lower()
-        if sev == "emergency":
-            sev = "critical"
-        env = (environment or "kubernetes").lower()
-        async with self._lock:
-            await self._db.execute(
-                """
-                INSERT OR IGNORE INTO incidents (
-                    incident_id, fingerprint, environment, target_resource,
-                    severity, current_state, trigger_source, trigger_payload,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'detected', ?, ?, ?, ?)
-                """,
-                (
-                    inc_id, fingerprint, env, target_resource,
-                    sev, trigger_source, json.dumps(trigger_payload or {}),
-                    now, now
-                ),
-            )
-            await self._db.execute(
-                """
-                INSERT INTO incident_state_transitions (
-                    incident_id, from_state, to_state, reason, created_at
-                ) VALUES (?, 'detected', 'detected', 'Initial detection', ?)
-                """,
-                (inc_id, now),
-            )
-            await self._db.commit()
-        return inc_id
-
-    async def transition_state(
-        self,
-        incident_id: str,
-        to_state: str,
-        reason: str | None = None,
-        metadata: dict | None = None,
-    ) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        async with self._lock:
-            async with self._db.execute(
-                "SELECT current_state FROM incidents WHERE incident_id = ?",
-                (incident_id,),
-            ) as cur:
-                row = await cur.fetchone()
-
-            if not row:
-                await self._db.execute(
-                    """
-                    INSERT OR IGNORE INTO incidents (
-                        incident_id, fingerprint, environment, target_resource,
-                        severity, current_state, trigger_source, trigger_payload,
-                        created_at, updated_at
-                    ) VALUES (?, ?, 'kubernetes', 'unknown', 'error', ?, 'fsm_auto', '{}', ?, ?)
-                    """,
-                    (incident_id, f"fp-{incident_id[:8]}", to_state.lower(), now, now),
-                )
-                from_state = "detected"
-            else:
-                from_state = row["current_state"]
-
-            resolved_at = now if to_state in ("resolved", "rolled_back", "failed") else None
-            await self._db.execute(
-                """
-                UPDATE incidents
-                SET current_state = ?, updated_at = ?, resolved_at = COALESCE(?, resolved_at)
-                WHERE incident_id = ?
-                """,
-                (to_state, now, resolved_at, incident_id),
-            )
-            await self._db.execute(
-                """
-                INSERT INTO incident_state_transitions (
-                    incident_id, from_state, to_state, reason, metadata, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (incident_id, from_state, to_state, reason or "", json.dumps(metadata or {}), now),
-            )
-            await self._db.commit()
-
-    async def get_incident(self, incident_id: str) -> dict[str, Any] | None:
-        async with self._db.execute(
-            "SELECT * FROM incidents WHERE incident_id = ?",
-            (incident_id,),
-        ) as cur:
-            row = await cur.fetchone()
-            if not row:
-                return None
-            res = dict(row)
-            if isinstance(res.get("trigger_payload"), str):
-                try:
-                    res["trigger_payload"] = json.loads(res["trigger_payload"])
-                except Exception:
-                    pass
-            return res
-
-    async def get_active_incident_by_target(
-        self, target_resource: str
-    ) -> dict[str, Any] | None:
-        async with self._lock:
-            async with self._db.execute(
-                """
-                SELECT * FROM incidents
-                WHERE target_resource = ?
-                  AND current_state NOT IN ('resolved', 'rolled_back', 'rejected', 'escalated', 'failed')
-                ORDER BY created_at DESC LIMIT 1
-                """,
-                (target_resource,),
-            ) as cur:
-                row = await cur.fetchone()
-                if not row:
-                    return None
-                res = dict(row)
-                if isinstance(res.get("trigger_payload"), str):
-                    try:
-                        res["trigger_payload"] = json.loads(res["trigger_payload"])
-                    except Exception:
-                        pass
-                return res
-
-    async def list_incidents(
-        self, limit: int = 50, state: str | None = None
-    ) -> list[dict[str, Any]]:
-        async with self._db.execute(
-            "SELECT * FROM incidents ORDER BY created_at DESC LIMIT ?",
-            (limit,),
-        ) as cur:
-            rows = await cur.fetchall()
-            return [dict(r) for r in rows]
-
-    async def update_root_cause(
-        self, incident_id: str, summary: str, confidence: float
-    ) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        async with self._lock:
-            await self._db.execute(
-                """
-                UPDATE incidents
-                SET root_cause_summary = ?, confidence_score = ?, updated_at = ?
-                WHERE incident_id = ?
-                """,
-                (summary, confidence, now, incident_id),
-            )
-            await self._db.commit()
-
-    async def start_agent_run(
-        self, incident_id: str, agent_type: str, model_name: str
-    ) -> str:
-        run_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
-        async with self._lock:
-            await self._db.execute(
-                """
-                INSERT INTO agent_runs (run_id, incident_id, agent_type, model_name, status, created_at)
-                VALUES (?, ?, ?, ?, 'running', ?)
-                """,
-                (run_id, incident_id, agent_type, model_name, now),
-            )
-            await self._db.commit()
-        return run_id
-
-    async def finish_agent_run(
-        self,
-        run_id: str,
-        status: str = "completed",
-        prompt_tokens: int = 0,
-        completion_tokens: int = 0,
-        duration_ms: int | None = None,
-        error_message: str | None = None,
-    ) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        async with self._lock:
-            await self._db.execute(
-                """
-                UPDATE agent_runs
-                SET status = ?, prompt_tokens = ?, completion_tokens = ?,
-                    total_tokens = ?, duration_ms = ?, error_message = ?, finished_at = ?
-                WHERE run_id = ?
-                """,
-                (
-                    status, prompt_tokens, completion_tokens,
-                    prompt_tokens + completion_tokens, duration_ms,
-                    error_message, now, run_id
-                ),
-            )
-            await self._db.commit()
-
-    async def log_message(
-        self,
-        run_id: str,
-        sequence_num: int,
-        role: str,
-        content: str,
-        reasoning_content: str | None = None,
-        raw_payload: dict | None = None,
-    ) -> str:
-        msg_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
-        async with self._lock:
-            await self._db.execute(
-                """
-                INSERT INTO agent_messages (
-                    message_id, run_id, sequence_num, role, content,
-                    reasoning_content, raw_payload, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    msg_id, run_id, sequence_num, role, content,
-                    reasoning_content, json.dumps(raw_payload or {}) if raw_payload else None, now
-                ),
-            )
-            await self._db.commit()
-        return msg_id
-
-    async def log_tool_call(
-        self,
-        run_id: str,
-        tool_name: str,
-        tool_category: str,
-        input_parameters: dict,
-        message_id: str | None = None,
-    ) -> str:
-        call_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
-        async with self._lock:
-            await self._db.execute(
-                """
-                INSERT INTO tool_calls (
-                    call_id, run_id, message_id, tool_name, tool_category,
-                    input_parameters, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'invoked', ?)
-                """,
-                (
-                    call_id, run_id, message_id, tool_name, tool_category,
-                    json.dumps(input_parameters or {}), now
-                ),
-            )
-            await self._db.commit()
-        return call_id
-
-    async def update_tool_call(
-        self,
-        call_id: str,
-        status: str,
-        output_result: dict | None = None,
-        error_details: str | None = None,
-        duration_ms: int | None = None,
-    ) -> None:
-        async with self._lock:
-            await self._db.execute(
-                """
-                UPDATE tool_calls
-                SET status = ?, output_result = ?, error_details = ?, execution_duration_ms = ?
-                WHERE call_id = ?
-                """,
-                (
-                    status, json.dumps(output_result or {}) if output_result else None,
-                    error_details, duration_ms, call_id
-                ),
-            )
-            await self._db.commit()
-
-    async def create_remediation_action(
-        self,
-        incident_id: str,
-        action_name: str,
-        action_level: str,
-        target_resource: str,
-        parameters: dict,
-        run_id: str | None = None,
-        rollback_plan: dict | None = None,
-        pre_check_snapshot: dict | None = None,
-    ) -> str:
-        action_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
-        async with self._lock:
-            await self._db.execute(
-                """
-                INSERT INTO remediation_actions (
-                    action_id, incident_id, run_id, action_name, action_level,
-                    target_resource, parameters, rollback_plan, pre_check_snapshot,
-                    outcome, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
-                """,
-                (
-                    action_id, incident_id, run_id, action_name, action_level,
-                    target_resource, json.dumps(parameters or {}),
-                    json.dumps(rollback_plan or {}) if rollback_plan else None,
-                    json.dumps(pre_check_snapshot or {}) if pre_check_snapshot else None,
-                    now,
-                ),
-            )
-            await self._db.commit()
-        return action_id
-
-    async def update_remediation_action(
-        self,
-        action_id: str,
-        outcome: str,
-        post_check_snapshot: dict | None = None,
-        policy_check_passed: bool | None = None,
-        human_approved_by: str | None = None,
-    ) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        async with self._lock:
-            await self._db.execute(
-                """
-                UPDATE remediation_actions
-                SET outcome = ?,
-                    post_check_snapshot = COALESCE(?, post_check_snapshot),
-                    policy_check_passed = COALESCE(?, policy_check_passed),
-                    human_approved_by = COALESCE(?, human_approved_by),
-                    verified_at = ?
-                WHERE action_id = ?
-                """,
-                (
-                    outcome,
-                    json.dumps(post_check_snapshot) if post_check_snapshot is not None else None,
-                    1 if policy_check_passed else (0 if policy_check_passed is not None else None),
-                    human_approved_by,
-                    now,
-                    action_id,
-                ),
-            )
-            await self._db.commit()
-
-    async def get_incident_trace(self, incident_id: str) -> dict[str, Any]:
-        inc = await self.get_incident(incident_id)
-        if not inc:
-            return {}
-        async with self._db.execute(
-            "SELECT * FROM incident_state_transitions WHERE incident_id = ? ORDER BY created_at ASC",
-            (incident_id,),
-        ) as cur:
-            transitions = [dict(r) for r in await cur.fetchall()]
-
-        async with self._db.execute(
-            "SELECT * FROM agent_runs WHERE incident_id = ? ORDER BY created_at ASC",
-            (incident_id,),
-        ) as cur:
-            runs = [dict(r) for r in await cur.fetchall()]
-
-        async with self._db.execute(
-            "SELECT * FROM remediation_actions WHERE incident_id = ? ORDER BY created_at ASC",
-            (incident_id,),
-        ) as cur:
-            actions = [dict(r) for r in await cur.fetchall()]
-
-        for r in runs:
-            r_id = r["run_id"]
-            async with self._db.execute(
-                "SELECT * FROM agent_messages WHERE run_id = ? ORDER BY sequence_num ASC",
-                (r_id,),
-            ) as cur:
-                r["messages"] = [dict(m) for m in await cur.fetchall()]
-            async with self._db.execute(
-                "SELECT * FROM tool_calls WHERE run_id = ? ORDER BY created_at ASC",
-                (r_id,),
-            ) as cur:
-                r["tool_calls"] = [dict(t) for t in await cur.fetchall()]
-
-        return {
-            "incident": inc,
-            "state_transitions": transitions,
-            "agent_runs": runs,
-            "remediation_actions": actions,
-        }
-
-
 # Global database factory
-_global_db_client: PostgresClient | SQLiteFallbackClient | None = None
+_global_db_client: PostgresClient | None = None
 
 
-async def get_database_client(dsn: str | None = None) -> PostgresClient | SQLiteFallbackClient:
+async def get_database_client(dsn: str | None = None) -> PostgresClient:
     """
-    Factory returning a PostgresClient if DSN is set and connects,
-    otherwise gracefully falling back to SQLiteFallbackClient.
+    Factory returning the global PostgresClient singleton.
+    Initializes with retry and backoff; raises RuntimeError on failure.
     """
     global _global_db_client
     if _global_db_client is not None:
         return _global_db_client
 
     configured_dsn = dsn or os.getenv("NEXUS_POSTGRES_DSN", os.getenv("DATABASE_URL", ""))
-    if configured_dsn:
-        try:
-            client = PostgresClient(dsn=configured_dsn)
-            await client.initialize()
-            _global_db_client = client
-            return client
-        except Exception as exc:
-            logger.warning("[Database] Failed to connect to Postgres (%s) — falling back to SQLite", exc)
+    if not configured_dsn:
+        raise RuntimeError(
+            "No PostgreSQL DSN configured. NEXUS requires PostgreSQL (set NEXUS_POSTGRES_DSN or DATABASE_URL)."
+        )
 
-    sqlite_path = os.getenv("NEXUS_SQLITE_DB_PATH", "/tmp/nexus_incidents.db")
-    fallback = SQLiteFallbackClient(db_path=sqlite_path)
-    await fallback.initialize()
-    _global_db_client = fallback
-    return fallback
+    client = PostgresClient(dsn=configured_dsn)
+    await client.initialize()
+    _global_db_client = client
+    return client
+

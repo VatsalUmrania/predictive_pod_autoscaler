@@ -43,8 +43,7 @@ nexus = [
     "opentelemetry-api>=1.24.0",
     "opentelemetry-sdk>=1.24.0",
     "opentelemetry-exporter-otlp-proto-http>=1.24.0",
-    # Async DB (audit trail + DBAgent)
-    "aiosqlite>=0.20.0",
+    # Async DB (audit trail, incidents + DBAgent)
     "asyncpg>=0.29.0",        # PostgreSQL async driver
     "aiomysql>=0.2.0",        # MySQL async driver
     "motor>=3.3.0",           # MongoDB async driver

@@ -50,7 +50,7 @@ async def escalate_node(state: IncidentGraphState) -> dict[str, Any]:
             import httpx
 
             payload = {
-                "text": f"🚨 *[NEXUS Alert]* Incident `{incident_id}` Escalated\n"
+                "text": f"*[NEXUS Alert]* Incident `{incident_id}` Escalated\n"
                 f"*Target:* `{target.get('name')}` ({platform})\n"
                 f"*Reason:* {err_msg}\n"
                 f"*Rollback Applied:* {rollback_executed}",

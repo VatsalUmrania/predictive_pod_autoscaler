@@ -451,7 +451,7 @@ class Prescaler:
 
         if self._tracker.ready_for_advisory():
             logger.warning(
-                f"[Prescaler] 🎓 Shadow-mode precision criteria MET — "
+                f"[Prescaler] Shadow-mode precision criteria MET — "
                 f"promote to ADVISORY with: nexus prescale set-mode advisory\n"
                 f"  Stats: {stats}"
             )
@@ -556,7 +556,7 @@ class Prescaler:
             decision.executed = True
             decision.outcome = "executed"
             logger.info(
-                f"[Prescaler] [AUTONOMOUS] ✅ Scaled "
+                f"[Prescaler] [AUTONOMOUS] Scaled "
                 f"{decision.namespace}/{decision.deployment_name} "
                 f"→ {decision.recommended_replicas} replicas"
             )

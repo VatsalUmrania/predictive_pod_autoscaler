@@ -72,9 +72,9 @@ async def _get_nats():
                     name="nexus-sdk-ingest",
                     max_reconnect_attempts=5,
                 )
-                print(f"[SDKIngest] ✅ NATS connected: {_url}", flush=True)
+                print(f"[SDKIngest] NATS connected: {_url}", flush=True)
             except Exception as _e:
-                print(f"[SDKIngest] ⚠️  NATS connection failed: {_e}", flush=True)
+                print(f"[SDKIngest] NATS connection failed: {_e}", flush=True)
                 _sdk_nats_nc = None
         return _sdk_nats_nc
 

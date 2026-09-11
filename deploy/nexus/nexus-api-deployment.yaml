@@ -114,10 +114,6 @@ spec:
               value: "nats://nats.nexus.svc.cluster.local:4222"
             - name: NEXUS_POSTGRES_DSN
               value: "postgresql://nexus:nexus@postgres.nexus.svc.cluster.local:5432/nexus"
-            - name: NEXUS_AUDIT_DB_PATH
-              value: /data/nexus_audit.db
-            - name: NEXUS_KNOWLEDGE_DB_PATH
-              value: /data/nexus_knowledge.db
             - name: NEXUS_LOG_LEVEL
               value: info
             # Prometheus — kube-prometheus-stack service in monitoring namespace
@@ -140,8 +136,6 @@ spec:
                   key: NEXUS_LLM_API_KEY
                   optional: true
           volumeMounts:
-            - name: nexus-data
-              mountPath: /data
             - name: shop-demo-policy
               mountPath: /app/selfheal.yaml
               subPath: selfheal.yaml
@@ -168,9 +162,6 @@ spec:
             periodSeconds: 10
             failureThreshold: 3
       volumes:
-        - name: nexus-data
-          persistentVolumeClaim:
-            claimName: nexus-api-data
         - name: shop-demo-policy
           configMap:
             name: selfheal-shop-demo
@@ -215,18 +206,6 @@ data:
       page_sre_after: 2
       notify_on_heal: true
       notify_on_prescale: true
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: nexus-api-data
-  namespace: nexus
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1Gi
 ---
 # ClusterIP — used by PPA operator and shop-demo inside the cluster.
 apiVersion: v1

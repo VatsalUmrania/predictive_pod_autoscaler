@@ -6,14 +6,14 @@ Scrapes Prometheus for system health metrics and detects threshold breaches.
 Key improvements over the current PPA operator's Prometheus scraping
 (see docs/ARCHITECTURE_REVIEW_CRITICAL.md):
 
-    ✅ Circuit breaker — stops hammering Prometheus when it's unreachable
+    - Circuit breaker — stops hammering Prometheus when it's unreachable
        (fixes §2: socket exhaustion on network partition)
-    ✅ Explicit NaN guard — raises rather than silently propagating NaN
+    - Explicit NaN guard — raises rather than silently propagating NaN
        (fixes §1.4: silent NaN in feature vector)
-    ✅ Feature bounds clamping — clamps out-of-distribution values
+    - Feature bounds clamping — clamps out-of-distribution values
        (fixes §6.2: extrapolation beyond training distribution)
-    ✅ Structured IncidentEvent output — not raw metrics
-    ✅ RPS baseline tracking — detects spikes vs rolling median
+    - Structured IncidentEvent output — not raw metrics
+    - RPS baseline tracking — detects spikes vs rolling median
 
 Phase 2: simple threshold-based detection
 Phase 5: GRU Autoencoder replaces thresholds with learned anomaly scores

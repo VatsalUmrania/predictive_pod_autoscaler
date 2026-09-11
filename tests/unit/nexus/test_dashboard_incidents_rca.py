@@ -37,10 +37,11 @@ async def test_serve_dashboard_html():
 
 
 @pytest.mark.asyncio
-async def test_dashboard_incidents_sqlite_rca_and_accept(tmp_path, monkeypatch):
-    """Verify SQLite persistence of rca, accepted_by, accepted_at in dashboard.py."""
-    db_file = str(tmp_path / "test_dashboard_incidents.db")
-    monkeypatch.setattr("nexus.integration.dashboard._INCIDENT_DB", db_file)
+async def test_dashboard_incidents_postgres_rca_and_accept():
+    """Verify PostgreSQL persistence of rca, accepted_by, accepted_at in dashboard.py."""
+    from tests.unit.nexus.test_db_helpers import MockPostgresClient
+
+    mock_client = MockPostgresClient()
 
     row = {
         "incident_id": "INC-TEST-001",
@@ -61,8 +62,8 @@ async def test_dashboard_incidents_sqlite_rca_and_accept(tmp_path, monkeypatch):
         "accepted_at": "2026-09-05T12:05:00",
     }
 
-    _write_incident(row)
-    read_back = _read_incidents(n=10, app=None)
+    await _write_incident(row, client=mock_client)
+    read_back = await _read_incidents(n=10, app=None, client=mock_client)
     assert len(read_back) == 1
     item = read_back[0]
     assert item["incident_id"] == "INC-TEST-001"
@@ -72,3 +73,4 @@ async def test_dashboard_incidents_sqlite_rca_and_accept(tmp_path, monkeypatch):
     assert isinstance(item["rca"], dict)
     assert item["rca"]["root_cause"] == "NPE in PaymentAdapter"
     assert item["rca"]["source"] == "gemini"
+

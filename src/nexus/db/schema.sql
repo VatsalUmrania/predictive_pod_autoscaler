@@ -154,3 +154,99 @@ CREATE TABLE IF NOT EXISTS remediation_actions (
 
 CREATE INDEX IF NOT EXISTS idx_remediation_incident ON remediation_actions(incident_id);
 CREATE INDEX IF NOT EXISTS idx_remediation_outcome ON remediation_actions(outcome);
+
+-- 7. Governance Audit Trail
+CREATE TABLE IF NOT EXISTS audit_trail (
+    action_id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    timestamp          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    triggered_by       VARCHAR(100) NOT NULL,
+    runbook_id         VARCHAR(100) NOT NULL,
+    healing_level      INTEGER NOT NULL DEFAULT 0,
+    target             VARCHAR(255),
+    pre_check_results  JSONB,
+    execution_outcome  VARCHAR(50) NOT NULL DEFAULT 'pending',
+    post_check_results JSONB,
+    rollback_triggered BOOLEAN NOT NULL DEFAULT FALSE,
+    incident_id        VARCHAR(255),
+    action_results     JSONB
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_incident ON audit_trail(incident_id);
+CREATE INDEX IF NOT EXISTS idx_audit_runbook  ON audit_trail(runbook_id);
+CREATE INDEX IF NOT EXISTS idx_audit_ts       ON audit_trail(timestamp DESC);
+
+-- 8. Governance Action Cooldowns
+CREATE TABLE IF NOT EXISTS cooldowns (
+    key          VARCHAR(255) PRIMARY KEY,
+    expires_at   DOUBLE PRECISION NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_cooldowns_expires ON cooldowns(expires_at);
+
+-- 9. Learning Plane: Knowledge Base
+CREATE TABLE IF NOT EXISTS confidence_adjustments (
+    runbook_id      VARCHAR(100) PRIMARY KEY,
+    delta           REAL NOT NULL DEFAULT 0.0,
+    evidence_count  INTEGER NOT NULL DEFAULT 0,
+    success_rate    REAL NOT NULL DEFAULT 0.0,
+    false_heal_rate REAL NOT NULL DEFAULT 0.0,
+    last_updated    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS signal_patterns (
+    pattern_key   VARCHAR(255) PRIMARY KEY,
+    signal_types  TEXT NOT NULL,
+    runbook_id    VARCHAR(100) NOT NULL,
+    success_count INTEGER NOT NULL DEFAULT 0,
+    total_count   INTEGER NOT NULL DEFAULT 0,
+    last_seen     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS incident_outcomes (
+    incident_id   VARCHAR(255) PRIMARY KEY,
+    runbook_id    VARCHAR(100) NOT NULL,
+    action_type   VARCHAR(100) NOT NULL,
+    resolved      BOOLEAN NOT NULL DEFAULT FALSE,
+    reason        VARCHAR(50) NOT NULL,
+    recorded_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS recommendations (
+    id                 BIGSERIAL PRIMARY KEY,
+    runbook_id         VARCHAR(100) NOT NULL,
+    context_hash       VARCHAR(64) NOT NULL,
+    recommended_action TEXT NOT NULL,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_recommendations_runbook ON recommendations(runbook_id);
+
+-- 10. Integration: App Tokens
+CREATE TABLE IF NOT EXISTS app_tokens (
+    app_name    VARCHAR(100) PRIMARY KEY,
+    token       VARCHAR(255) UNIQUE NOT NULL,
+    tier        VARCHAR(50) DEFAULT 'production',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_used   TIMESTAMPTZ,
+    event_count INTEGER NOT NULL DEFAULT 0,
+    revoked     BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+-- 11. Integration: Developer Incidents (Dashboard Feed)
+CREATE TABLE IF NOT EXISTS developer_incidents (
+    id          BIGSERIAL PRIMARY KEY,
+    incident_id VARCHAR(255),
+    runbook_id  VARCHAR(100),
+    target      VARCHAR(255),
+    level       INTEGER,
+    outcome     VARCHAR(50),
+    description TEXT,
+    confidence  REAL,
+    timestamp   VARCHAR(100),
+    rca         JSONB,
+    accepted_by VARCHAR(100),
+    accepted_at VARCHAR(100)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dev_incidents_id ON developer_incidents(id DESC);
+

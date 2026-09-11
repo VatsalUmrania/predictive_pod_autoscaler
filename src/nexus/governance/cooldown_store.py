@@ -1,48 +1,33 @@
 """
-NEXUS Cooldown Store
-====================
-Prevents rapid re-execution of the same healing action on the same target.
+NEXUS Action Cooldown Store
+============================
+PostgreSQL-backed action cooldown tracker with in-memory fallback cache.
 
-Backend options:
-    SQLite — primary backend. Persists cooldowns to the same ``nexus_audit.db``
-             SQLite file as AuditTrail / OutcomeStore, so cooldowns survive
-             process restarts (the DB lives on a PersistentVolume in-cluster).
-    Memory — fallback when SQLite is unavailable; resets on process restart.
-
-Key format:  nexus:cooldown:{runbook_id}::{target}
-
-Usage:
-    store = CooldownStore(db_path="/data/nexus_audit.db")
-    await store.connect()
-
-    key = store.make_key("runbook_pod_crashloop_v1", "default/my-pod")
-
-    if await store.is_in_cooldown(key):
-        remaining = await store.remaining_seconds(key)
-        logger.info(f"Cooldown active: {remaining:.0f}s remaining")
-        return
-
-    # ... execute action ...
-    await store.set_cooldown(key, seconds=runbook.cooldown_seconds)
+Design:
+    PostgreSQL — primary persistent backend for cooldowns across replicas.
+    Memory     — local fallback and fast hydration cache.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
-from pathlib import Path
 from typing import Any
+
+from nexus.db.postgres import PostgresClient, get_database_client
 
 logger = logging.getLogger(__name__)
 
+
 class CooldownStore:
     """
-    SQLite-backed action cooldown tracker with in-memory fallback.
+    PostgreSQL-backed action cooldown tracker with in-memory fallback.
 
     Args:
-        db_path: Path to the SQLite database file. Defaults to the same file as
-                 the audit trail (``NEXUS_AUDIT_DB_PATH`` env).
+        db_path: Deprecated argument kept for backwards compatibility.
+        db_client: Optional PostgresClient instance.
         key_prefix: Prefix for all stored keys (default "nexus:cooldown").
     """
 
@@ -51,68 +36,54 @@ class CooldownStore:
     def __init__(
         self,
         db_path: str | None = None,
+        db_client: PostgresClient | None = None,
         key_prefix: str = "nexus:cooldown",
     ) -> None:
-        if db_path is None:
-            db_path = os.getenv("NEXUS_AUDIT_DB_PATH", "/tmp/nexus_audit.db")
         self._db_path = db_path
+        self._db_client = db_client
         self._prefix = key_prefix
-        self._db: Any = None
-        # In-memory cache (hydrated from SQLite) — used if SQLite fails at runtime.
+        # In-memory cache (hydrated from PostgreSQL)
         self._memory: dict[str, float] = {}
+        self._lock = asyncio.Lock()
 
     # Connection
     async def connect(self) -> None:
         """
-        Open the SQLite database and create the cooldowns table.
-        Falls back to purely in-memory if SQLite is unavailable.
+        Connect to PostgreSQL and hydrate active cooldowns.
+        Falls back to purely in-memory if PostgreSQL is unavailable.
         """
-        import aiosqlite
-
         try:
-            path = Path(self._db_path)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            self._db = await aiosqlite.connect(self._db_path)
-            self._db.row_factory = aiosqlite.Row
-            await self._db.execute(
-                f"CREATE TABLE IF NOT EXISTS {self._TABLE} ("
-                "key TEXT PRIMARY KEY, "
-                "expires_at REAL NOT NULL"
-                ")"
-            )
-            await self._db.commit()
+            if self._db_client is None:
+                self._db_client = await get_database_client()
             await self._hydrate_memory()
-            logger.info(f"[CooldownStore] SQLite connected: {self._db_path}")
+            logger.info("[CooldownStore] PostgreSQL connected and cache hydrated")
         except Exception as exc:
-            self._db = None
+            self._db_client = None
             logger.warning(
-                f"[CooldownStore] SQLite unavailable ({exc}) — using in-memory fallback"
+                f"[CooldownStore] PostgreSQL unavailable ({exc}) — using in-memory fallback"
             )
 
     async def _hydrate_memory(self) -> None:
         """Preload unexpired cooldowns into the in-memory cache."""
-        if self._db is None:
+        if self._db_client is None:
             return
         try:
-            async with self._db.execute(
-                f"SELECT key, expires_at FROM {self._TABLE} WHERE expires_at > ?",
-                (time.time(),),
-            ) as cur:
-                rows = await cur.fetchall()
-            self._memory = {row["key"]: row["expires_at"] for row in rows}
+            async with self._db_client.acquire() as conn:
+                rows = await conn.fetch(
+                    f"SELECT key, expires_at FROM {self._TABLE} WHERE expires_at > $1",
+                    time.time(),
+                )
+            self._memory = {row["key"]: float(row["expires_at"]) for row in rows}
         except Exception as exc:
             logger.warning(f"[CooldownStore] Failed to hydrate cache: {exc}")
 
     async def close(self) -> None:
-        if self._db is not None:
-            await self._db.close()
-            self._db = None
+        self._db_client = None
 
     # Key construction
     @staticmethod
     def make_key(runbook_id: str, target: str) -> str:
         """Construct a canonical cooldown key for a runbook + target pair."""
-        # Sanitise target — replace chars that could cause key issues.
         safe_target = target.replace(" ", "_").replace("/", "::")
         return f"{runbook_id}::{safe_target}"
 
@@ -123,29 +94,31 @@ class CooldownStore:
     async def is_in_cooldown(self, key: str) -> bool:
         """Return True if this key is currently in cooldown."""
         full = self._full_key(key)
-        if self._db is not None:
+        now = time.time()
+        if self._db_client is not None:
             try:
-                async with self._db.execute(
-                    f"SELECT expires_at FROM {self._TABLE} WHERE key = ?",
-                    (full,),
-                ) as cur:
-                    row = await cur.fetchone()
+                async with self._db_client.acquire() as conn:
+                    row = await conn.fetchrow(
+                        f"SELECT expires_at FROM {self._TABLE} WHERE key = $1",
+                        full,
+                    )
                 if row is None:
                     return False
-                if row["expires_at"] <= time.time():
+                expires_at = float(row["expires_at"])
+                if expires_at <= now:
                     await self._delete_row(full)
                     return False
                 return True
             except Exception as exc:
                 logger.warning(
-                    f"[CooldownStore] SQLite read error: {exc} — using memory"
+                    f"[CooldownStore] PostgreSQL read error: {exc} — using memory"
                 )
 
         # In-memory fallback
         expiry = self._memory.get(full)
         if expiry is None:
             return False
-        if time.time() >= expiry:
+        if now >= expiry:
             self._memory.pop(full, None)
             return False
         return True
@@ -159,59 +132,61 @@ class CooldownStore:
         expires_at = time.time() + seconds
         self._memory[full] = expires_at
 
-        if self._db is not None:
+        if self._db_client is not None:
             try:
-                await self._db.execute(
-                    f"INSERT INTO {self._TABLE} (key, expires_at) VALUES (?, ?) "
-                    "ON CONFLICT(key) DO UPDATE SET expires_at = excluded.expires_at",
-                    (full, expires_at),
-                )
-                await self._db.commit()
+                sql = f"""
+                INSERT INTO {self._TABLE} (key, expires_at)
+                VALUES ($1, $2)
+                ON CONFLICT (key) DO UPDATE SET expires_at = EXCLUDED.expires_at
+                """
+                async with self._db_client.acquire() as conn:
+                    await conn.execute(sql, full, float(expires_at))
             except Exception as exc:
                 logger.warning(
-                    f"[CooldownStore] SQLite write error: {exc} — using memory"
+                    f"[CooldownStore] PostgreSQL write error: {exc} — using memory"
                 )
 
     async def clear_cooldown(self, key: str) -> None:
         """Manually clear a cooldown (for testing or admin override)."""
         full = self._full_key(key)
         self._memory.pop(full, None)
-        if self._db is not None:
+        if self._db_client is not None:
             await self._delete_row(full)
 
     async def _delete_row(self, full_key: str) -> None:
-        if self._db is None:
+        if self._db_client is None:
             return
         try:
-            await self._db.execute(
-                f"DELETE FROM {self._TABLE} WHERE key = ?", (full_key,)
-            )
-            await self._db.commit()
+            async with self._db_client.acquire() as conn:
+                await conn.execute(
+                    f"DELETE FROM {self._TABLE} WHERE key = $1", full_key
+                )
         except Exception as exc:
-            logger.warning(f"[CooldownStore] SQLite delete error: {exc}")
+            logger.warning(f"[CooldownStore] PostgreSQL delete error: {exc}")
 
     async def remaining_seconds(self, key: str) -> float:
         """Return the number of seconds remaining in the cooldown (0 if not in cooldown)."""
         full = self._full_key(key)
-        if self._db is not None:
+        now = time.time()
+        if self._db_client is not None:
             try:
-                async with self._db.execute(
-                    f"SELECT expires_at FROM {self._TABLE} WHERE key = ?",
-                    (full,),
-                ) as cur:
-                    row = await cur.fetchone()
+                async with self._db_client.acquire() as conn:
+                    row = await conn.fetchrow(
+                        f"SELECT expires_at FROM {self._TABLE} WHERE key = $1",
+                        full,
+                    )
                 if row is None:
                     return 0.0
-                return max(0.0, float(row["expires_at"]) - time.time())
+                return max(0.0, float(row["expires_at"]) - now)
             except Exception as exc:
                 logger.warning(
-                    f"[CooldownStore] SQLite read error: {exc} — using memory"
+                    f"[CooldownStore] PostgreSQL read error: {exc} — using memory"
                 )
 
         expiry = self._memory.get(full)
         if expiry is None:
             return 0.0
-        return max(0.0, expiry - time.time())
+        return max(0.0, expiry - now)
 
     # Context manager
     async def __aenter__(self) -> CooldownStore:
@@ -222,5 +197,5 @@ class CooldownStore:
         await self.close()
 
     def __repr__(self) -> str:
-        backend = "sqlite" if self._db is not None else "memory"
-        return f"CooldownStore(backend={backend}, path={self._db_path})"
+        backend = "postgres" if self._db_client is not None else "memory"
+        return f"CooldownStore(backend={backend})"

@@ -27,13 +27,15 @@ The language used in incident descriptions is intentionally non-technical.
 
 from __future__ import annotations
 
+import json as _json
 import logging
 import os as _os
-import sqlite3 as _sqlite3
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
+from nexus.db.postgres import PostgresClient, get_database_client
 
 logger = logging.getLogger(__name__)
 
@@ -90,100 +92,57 @@ def refresh_policy_cache() -> int:
     return loaded
 
 
-# ── SQLite-backed incident store (shared across uvicorn workers) ──────────────
-# Uses a DEDICATED file (/data/dashboard_incidents.db) so the nexus-api user
-# always owns and can write it, independent of nexus_audit.db (owned by orchestrator).
+# ── PostgreSQL-backed incident store (shared across uvicorn workers) ───────────
 
-_INCIDENT_DB = _os.environ.get(
-    "NEXUS_DASHBOARD_DB_PATH",
-    "/data/dashboard_incidents.db",  # separate from nexus_audit.db
-)
-
-_CREATE_SQL = """
-    CREATE TABLE IF NOT EXISTS developer_incidents (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        incident_id TEXT,
-        runbook_id  TEXT,
-        target      TEXT,
-        level       INTEGER,
-        outcome     TEXT,
-        description TEXT,
-        confidence  REAL,
-        timestamp   TEXT,
-        rca         TEXT,
-        accepted_by TEXT,
-        accepted_at TEXT
-    )
-"""
-
-def _migrate_db(con: _sqlite3.Connection) -> None:
-    """Ensure optional columns exist in existing SQLite databases."""
-    for col in ["rca TEXT", "accepted_by TEXT", "accepted_at TEXT"]:
-        try:
-            con.execute(f"ALTER TABLE developer_incidents ADD COLUMN {col}")
-        except Exception:
-            pass
-
-def _write_incident(row: dict[str, Any]) -> None:
-    """Write one incident to SQLite. Creates the table on first write."""
-    import json
+async def _write_incident(row: dict[str, Any], client: PostgresClient | None = None) -> None:
+    """Write one incident to PostgreSQL developer_incidents table."""
     rca_val = row.get("rca")
     if isinstance(rca_val, (dict, list)):
-        rca_val = json.dumps(rca_val)
+        rca_val = _json.dumps(rca_val)
     elif rca_val is not None:
         rca_val = str(rca_val)
 
     try:
-        con = _sqlite3.connect(_INCIDENT_DB, timeout=10)
-        con.execute(_CREATE_SQL)
-        _migrate_db(con)
-        con.execute(
-            """INSERT INTO developer_incidents
-               (incident_id, runbook_id, target, level, outcome, description, confidence, timestamp, rca, accepted_by, accepted_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-            (
+        db = client or await get_database_client()
+        sql = """
+        INSERT INTO developer_incidents
+            (incident_id, runbook_id, target, level, outcome, description, confidence, timestamp, rca, accepted_by, accepted_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)
+        """
+        async with db.acquire() as conn:
+            await conn.execute(
+                sql,
                 row.get("incident_id"),
                 row.get("runbook_id"),
                 row.get("target"),
                 row.get("level"),
                 row.get("outcome"),
                 row.get("description"),
-                row.get("confidence"),
-                row.get("timestamp"),
+                float(row.get("confidence", 0.0)) if row.get("confidence") is not None else None,
+                str(row.get("timestamp") or ""),
                 rca_val,
                 row.get("accepted_by"),
                 row.get("accepted_at"),
-            ),
-        )
-        con.execute("""
-            DELETE FROM developer_incidents WHERE id NOT IN (
-                SELECT id FROM developer_incidents ORDER BY id DESC LIMIT 200
             )
-        """)
-        con.commit()
-        con.close()
+            await conn.execute("""
+                DELETE FROM developer_incidents WHERE id NOT IN (
+                    SELECT id FROM developer_incidents ORDER BY id DESC LIMIT 200
+                )
+            """)
         logger.info(
-            f"[Dashboard] ✅ Incident stored: {row.get('incident_id')} outcome={row.get('outcome')}"
+            f"[Dashboard] Incident stored: {row.get('incident_id')} outcome={row.get('outcome')}"
         )
     except Exception as _e:
         logger.warning(f"[Dashboard] incident write failed: {_e}")
 
 
-def _read_incidents(n: int, app: str | None) -> list[dict[str, Any]]:
-    """Read recent incidents from SQLite. Returns [] if file/table don't exist yet."""
-    import json
-    if not _os.path.exists(_INCIDENT_DB):
-        return []  # no incidents written yet — file created on first write
+async def _read_incidents(n: int, app: str | None = None, client: PostgresClient | None = None) -> list[dict[str, Any]]:
+    """Read recent incidents from PostgreSQL developer_incidents table."""
     try:
-        con = _sqlite3.connect(_INCIDENT_DB, timeout=10)
-        _migrate_db(con)
-        con.row_factory = _sqlite3.Row
-        cur = con.execute(
-            "SELECT * FROM developer_incidents ORDER BY id DESC LIMIT ?",
-            (max(n, 200),),
-        )
-        rows = cur.fetchall()
-        con.close()
+        db = client or await get_database_client()
+        sql = "SELECT * FROM developer_incidents ORDER BY id DESC LIMIT $1"
+        async with db.acquire() as conn:
+            rows = await conn.fetch(sql, max(n, 200))
         results = []
         for r in rows:
             d = dict(r)
@@ -191,18 +150,13 @@ def _read_incidents(n: int, app: str | None) -> list[dict[str, Any]]:
                 continue
             if d.get("rca") and isinstance(d["rca"], str):
                 try:
-                    d["rca"] = json.loads(d["rca"])
+                    d["rca"] = _json.loads(d["rca"])
                 except Exception:
                     pass
             results.append(d)
             if len(results) >= n:
                 break
         return results
-    except _sqlite3.OperationalError as _e:
-        if "no such table" in str(_e):
-            return []
-        logger.warning(f"[Dashboard] incident read failed: {_e}")
-        return []
     except Exception as _e:
         logger.warning(f"[Dashboard] incident read failed: {_e}")
         return []
@@ -217,10 +171,10 @@ _RUNBOOK_DESCRIPTIONS = {
 }
 
 _OUTCOME_SUFFIX = {
-    "success": "✅ Successfully resolved.",
-    "failed": "❌ Healing attempt failed — may need manual review.",
-    "rolled_back": "↩️  Action was rolled back (post-check failed).",
-    "pending": "⏳ Action is in progress.",
+    "success": "Successfully resolved.",
+    "failed": "Healing attempt failed — may need manual review.",
+    "rolled_back": "Action was rolled back (post-check failed).",
+    "pending": "Action is in progress.",
 }
 
 
@@ -253,11 +207,11 @@ async def developer_incidents(
 ) -> list[dict[str, Any]]:
     """
     Plain-English healing incident feed.
-    Reads from the shared SQLite store written by POST /developer/incidents.
+    Reads from PostgreSQL developer_incidents table.
     Falls back to AuditTrail if the full NEXUS core is running.
     """
-    # Primary: SQLite store (written by demo orchestrator via POST)
-    results = _read_incidents(n=n, app=app)
+    # Primary: PostgreSQL store
+    results = await _read_incidents(n=n, app=app)
 
     # Secondary: AuditTrail (available when full NEXUS core is running)
     ctx = _context()

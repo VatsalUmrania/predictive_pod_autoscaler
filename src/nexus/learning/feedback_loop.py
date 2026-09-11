@@ -488,7 +488,7 @@ async def build_feedback_loop(
         knowledge_db_path:  Override for KnowledgeBase DB path (used only when
                             knowledge_base is not provided).
         outcome_store:      Provide to share an already-connected OutcomeStore.
-                            Avoids opening two SQLite handles to the same file when
+                            Avoids creating redundant instances when
                             the caller needs the store on NexusContext too.
         knowledge_base:     Provide to share an already-initialized KnowledgeBase.
         interval_s:         Polling interval (default 300s / 5 min).

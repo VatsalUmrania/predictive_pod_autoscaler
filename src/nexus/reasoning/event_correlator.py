@@ -220,7 +220,7 @@ class EventCorrelator:
             self._emitted.discard(oldest)
         self._total_emitted += 1
         logger.info(
-            f"[EventCorrelator] ✦ Cluster ready: {cluster.cluster_id} "
+            f"[EventCorrelator] Cluster ready: {cluster.cluster_id} "
             f"| {len(cluster.events)} events "
             f"| agents=[{', '.join(sorted(cluster.agent_types))}] "
             f"| signals=[{', '.join(sorted(cluster.signal_types))}] "

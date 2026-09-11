@@ -21,10 +21,10 @@ Auto-selection:
     • Otherwise → ZScoreDetector
 
 Key fixes over original PPA GRU (ARCHITECTURE_REVIEW_CRITICAL.md §1.4, §3.1):
-    ✅ §1.4  NaN guard before feeding to model (replaces raw tensor creation)
-    ✅ §3.1  Reconstruction error properly normalized (not raw MSE)
-    ✅ §9.1  State isolated per-instance (no module-level globals)
-    ✅ §3.2  Checkpoint loading with version check + graceful fallback
+    - §1.4  NaN guard before feeding to model (replaces raw tensor creation)
+    - §3.1  Reconstruction error properly normalized (not raw MSE)
+    - §9.1  State isolated per-instance (no module-level globals)
+    - §3.2  Checkpoint loading with version check + graceful fallback
 
 Training:
     GRUAutoencoder.train_from_prometheus(data: List[Dict[str, float]])

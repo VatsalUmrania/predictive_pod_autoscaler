@@ -2,7 +2,7 @@
 NEXUS Finite State Machine (FSM)
 ================================
 Deterministic incident lifecycle state machine.
-Enforces valid transitions, logs state history to PostgreSQL/SQLite,
+Enforces valid transitions, logs state history to PostgreSQL,
 and publishes real-time transition events to NATS JetStream.
 """
 

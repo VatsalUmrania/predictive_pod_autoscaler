@@ -1,56 +1,48 @@
-"""Unit tests for nexus.governance.cooldown_store — SQLite backend.
+"""Unit tests for nexus.governance.cooldown_store — PostgreSQL backend & memory fallback.
 
-Tests that cooldowns persist to the same ``nexus_audit.db`` SQLite file as
-AuditTrail / OutcomeStore, so they survive a NEXUS restart even without Redis:
-
-  - connect() creates the ``cooldowns`` table and hydrates the in-memory cache
+Tests that cooldowns persist to the PostgreSQL ``cooldowns`` table:
+  - connect() hydrates the in-memory cache from PostgreSQL
   - set_cooldown / is_in_cooldown / remaining_seconds / clear_cooldown round-trip
-  - persisted cooldowns survive a reconnect (new store instance, same db_path)
+  - persisted cooldowns survive a reconnect (new store instance, same DB client)
   - expired entries are dropped on read
-  - when SQLite is unavailable, the store degrades to purely in-memory
-
-The ``aiosqlite`` connector is patched to force the fallback path where noted.
+  - when PostgreSQL is unavailable, the store degrades to purely in-memory
 """
 
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
+import time
 from unittest.mock import patch
 
 import pytest
 
 from nexus.governance.cooldown_store import CooldownStore
+from tests.unit.nexus.test_db_helpers import MockPostgresClient
 
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> str:
-    return str(tmp_path / "nexus_audit.db")
+def mock_client() -> MockPostgresClient:
+    return MockPostgresClient()
 
 
 @pytest.mark.asyncio
-async def test_connect_creates_table(db_path: str):
-    """connect() opens the DB and creates the cooldowns table."""
-    store = CooldownStore(db_path=db_path)
+async def test_connect_and_hydrate(mock_client: MockPostgresClient):
+    """connect() connects to PostgreSQL and hydrates unexpired cooldowns."""
+    full_key = "nexus:cooldown:rb::target"
+    mock_client._cooldowns[full_key] = time.time() + 60.0
+
+    store = CooldownStore(db_client=mock_client)
     await store.connect()
-    assert store._db is not None
+    assert store._db_client is not None
+    assert full_key in store._memory
+    assert await store.is_in_cooldown("rb::target") is True
     await store.close()
 
-    # Table persisted on disk.
-    import aiosqlite
-
-    conn = await aiosqlite.connect(db_path)
-    cur = await conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='cooldowns'"
-    )
-    assert await cur.fetchone() is not None
-    await conn.close()
-
 
 @pytest.mark.asyncio
-async def test_set_is_in_cooldown_round_trip(db_path: str):
-    """set_cooldown → is_in_cooldown True, then false after expiry window cleared."""
-    store = CooldownStore(db_path=db_path)
+async def test_set_is_in_cooldown_round_trip(mock_client: MockPostgresClient):
+    """set_cooldown → is_in_cooldown True, then False after expiry window cleared."""
+    store = CooldownStore(db_client=mock_client)
     await store.connect()
 
     key = store.make_key("rb", "target")
@@ -66,16 +58,16 @@ async def test_set_is_in_cooldown_round_trip(db_path: str):
 
 
 @pytest.mark.asyncio
-async def test_cooldown_survives_reconnect(db_path: str):
-    """A cooldown set in one process survives a brand-new store/connection."""
-    store = CooldownStore(db_path=db_path)
+async def test_cooldown_survives_reconnect(mock_client: MockPostgresClient):
+    """A cooldown set in one process survives a brand-new store/connection against the same DB."""
+    store = CooldownStore(db_client=mock_client)
     await store.connect()
     key = store.make_key("rb", "target")
     await store.set_cooldown(key, seconds=120)
     await store.close()
 
     # New store instance against the same DB — cooldown must still hold.
-    store2 = CooldownStore(db_path=db_path)
+    store2 = CooldownStore(db_client=mock_client)
     await store2.connect()
     assert await store2.is_in_cooldown(key) is True
     assert await store2.remaining_seconds(key) > 0
@@ -83,9 +75,9 @@ async def test_cooldown_survives_reconnect(db_path: str):
 
 
 @pytest.mark.asyncio
-async def test_expired_entry_pruned_on_read(db_path: str):
+async def test_expired_entry_pruned_on_read(mock_client: MockPostgresClient):
     """A cooldown whose expiry has passed is treated as not-in-cooldown and removed."""
-    store = CooldownStore(db_path=db_path)
+    store = CooldownStore(db_client=mock_client)
     await store.connect()
     key = store.make_key("rb", "target")
     await store.set_cooldown(key, seconds=1)
@@ -98,9 +90,9 @@ async def test_expired_entry_pruned_on_read(db_path: str):
 
 
 @pytest.mark.asyncio
-async def test_zero_seconds_does_not_set(db_path: str):
+async def test_zero_seconds_does_not_set(mock_client: MockPostgresClient):
     """seconds <= 0 is a no-op — nothing is persisted."""
-    store = CooldownStore(db_path=db_path)
+    store = CooldownStore(db_client=mock_client)
     await store.connect()
     key = store.make_key("rb", "target")
     await store.set_cooldown(key, seconds=0)
@@ -109,27 +101,24 @@ async def test_zero_seconds_does_not_set(db_path: str):
 
 
 @pytest.mark.asyncio
-async def test_sqlite_unavailable_degrades_to_memory(db_path: str):
-    """If SQLite init fails, the store works purely in-memory."""
-    with patch("aiosqlite.connect", side_effect=RuntimeError("disk full")):
-        store = CooldownStore(db_path=db_path)
+async def test_postgres_unavailable_degrades_to_memory():
+    """If PostgreSQL init fails, the store works purely in-memory."""
+    with patch(
+        "nexus.governance.cooldown_store.get_database_client",
+        side_effect=RuntimeError("connection refused"),
+    ):
+        store = CooldownStore()
         await store.connect()
 
-    assert store._db is None
+    assert store._db_client is None
     key = store.make_key("rb", "target")
+    assert await store.is_in_cooldown(key) is False
+
     await store.set_cooldown(key, seconds=30)
     assert await store.is_in_cooldown(key) is True
     assert await store.remaining_seconds(key) > 0
+
+    await store.clear_cooldown(key)
+    assert await store.is_in_cooldown(key) is False
     await store.close()
 
-
-@pytest.mark.asyncio
-async def test_db_path_from_env(monkeypatch, tmp_path: Path):
-    """With no db_path arg, the store uses NEXUS_AUDIT_DB_PATH."""
-    p = str(tmp_path / "env.db")
-    monkeypatch.setenv("NEXUS_AUDIT_DB_PATH", p)
-    store = CooldownStore()
-    await store.connect()
-    assert store._db_path == p
-    assert store._db is not None
-    await store.close()

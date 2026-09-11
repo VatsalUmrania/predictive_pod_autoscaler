@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
-from nexus.db.postgres import SQLiteFallbackClient
+from tests.unit.nexus.test_db_helpers import MockPostgresClient
 from nexus.tools.base import ToolDomain, ToolRiskLevel
 from nexus.tools.registry import ToolRegistry
 
@@ -42,7 +42,7 @@ def test_tool_declarations_schema():
 
 @pytest.mark.asyncio
 async def test_tool_execution_with_db_logging():
-    db = SQLiteFallbackClient(db_path=":memory:")
+    db = MockPostgresClient()
     await db.initialize()
     inc_id = await db.create_incident(
         fingerprint="fp-test",

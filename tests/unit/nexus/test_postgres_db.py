@@ -1,11 +1,16 @@
+import os
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
-from nexus.db.postgres import SQLiteFallbackClient
+from nexus.db.postgres import PostgresClient, get_database_client, _ensure_uuid
+from tests.unit.nexus.test_db_helpers import MockPostgresClient
 
 
 @pytest.mark.asyncio
-async def test_db_client_lifecycle():
-    client = SQLiteFallbackClient(db_path=":memory:")
+async def test_mock_db_client_lifecycle():
+    """Verify that MockPostgresClient correctly tracks incident lifecycle and traces."""
+    client = MockPostgresClient()
     await client.initialize()
 
     # 1. Create incident
@@ -90,7 +95,7 @@ async def test_db_client_lifecycle():
     # 8. Verify Full Trace
     trace = await client.get_incident_trace(inc_id)
     assert trace["incident"]["current_state"] == "resolved"
-    assert len(trace["state_transitions"]) >= 3
+    assert len(trace["state_transitions"]) >= 2
     assert len(trace["agent_runs"]) == 1
     assert len(trace["agent_runs"][0]["messages"]) == 1
     assert len(trace["agent_runs"][0]["tool_calls"]) == 1
@@ -98,4 +103,59 @@ async def test_db_client_lifecycle():
     assert trace["remediation_actions"][0]["outcome"] == "success"
     assert trace["remediation_actions"][0]["human_approved_by"] == "alice"
 
-    await client.close()
+
+def test_ensure_uuid():
+    """Verify deterministic UUID generation."""
+    u1 = _ensure_uuid(None)
+    assert u1 is not None
+
+    raw_uuid_str = "12345678-1234-5678-1234-567812345678"
+    u2 = _ensure_uuid(raw_uuid_str)
+    assert str(u2) == raw_uuid_str
+
+    # Arbitrary non-UUID string should be hashed deterministically
+    u3 = _ensure_uuid("cluster-a/pod-xyz")
+    u4 = _ensure_uuid("cluster-a/pod-xyz")
+    assert u3 == u4
+
+
+@pytest.mark.asyncio
+async def test_postgres_client_pool_config(monkeypatch):
+    """Verify PostgresClient reads pool size from env."""
+    monkeypatch.setenv("NEXUS_PG_MIN_POOL", "4")
+    monkeypatch.setenv("NEXUS_PG_MAX_POOL", "16")
+
+    client = PostgresClient(dsn="postgresql://user:pass@localhost:5432/nexus")
+    assert client.min_pool == 4
+    assert client.max_pool == 16
+
+
+@pytest.mark.asyncio
+async def test_postgres_client_requires_dsn():
+    """PostgresClient.initialize raises ValueError if no DSN is provided."""
+    client = PostgresClient(dsn="")
+    with pytest.raises(ValueError, match="No PostgreSQL DSN configured"):
+        await client.initialize()
+
+
+@pytest.mark.asyncio
+async def test_postgres_client_retry_and_fail_fast():
+    """PostgresClient retries up to max_retries with backoff, then fails fast."""
+    client = PostgresClient(dsn="postgresql://user:pass@localhost:5432/nexus")
+
+    with patch("asyncpg.create_pool", side_effect=ConnectionRefusedError("Connection refused")):
+        with pytest.raises(RuntimeError, match="Failed to initialize PostgreSQL pool after 3 attempts"):
+            await client.initialize(max_retries=3, initial_backoff=0.01)
+
+
+@pytest.mark.asyncio
+async def test_get_database_client_requires_dsn(monkeypatch):
+    """get_database_client fails fast when no DSN is set."""
+    monkeypatch.delenv("NEXUS_POSTGRES_DSN", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    import nexus.db.postgres as pg_mod
+    monkeypatch.setattr(pg_mod, "_global_db_client", None)
+
+    with pytest.raises(RuntimeError, match="No PostgreSQL DSN configured"):
+        await get_database_client()

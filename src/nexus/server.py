@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 from nexus.agents.manager import AgentManager
 from nexus.bus.nats_client import NATSClient
+from nexus.db.postgres import get_database_client
 from nexus.governance.action_ladder import (
     ActionLadder,
     GovernanceCircuitBreaker,
@@ -124,20 +125,20 @@ class NexusServer:
                 f"[NexusServer] TokenStore init failed (non-fatal): {_ts_exc}"
             )
 
-        # ── AuditTrail — must be initialized so /audit/* endpoints work ──────
+        # ── PostgreSQL Database client (with retry backoff) ───────────────────
         import os as _os
 
-        audit_db_path = _os.getenv("NEXUS_AUDIT_DB_PATH", "/data/nexus_audit.db")
-        knowledge_db_path = _os.getenv(
-            "NEXUS_KNOWLEDGE_DB_PATH", "/data/nexus_knowledge.db"
-        )
-        audit_trail = AuditTrail(db_path=audit_db_path)
+        db_client = await get_database_client()
+        logger.info("[NexusServer] PostgreSQL client connected")
+
+        # ── AuditTrail & CooldownStore ────────────────────────────────────────
+        audit_trail = AuditTrail(db_client=db_client)
         await audit_trail.initialize()
 
         RollbackRegistry()
 
         opa_url = _os.getenv("NEXUS_OPA_URL", "http://localhost:8181")
-        cooldown_store = CooldownStore(db_path=audit_db_path)
+        cooldown_store = CooldownStore(db_client=db_client)
         await cooldown_store.connect()
 
         ladder = ActionLadder(
@@ -196,18 +197,10 @@ class NexusServer:
             stream_name="PPA_PREDICTIONS",
         )
 
-        # Database client (PostgreSQL with seamless SQLite fallback)
-        db_client = None
-        try:
-            from nexus.db.postgres import get_database_client
-            db_client = await get_database_client()
-        except Exception as _db_exc:
-            logger.warning(f"[NexusServer] Failed to initialize database client (non-fatal): {_db_exc}")
-
         # Learning plane stores (must be initialized before reasoning/feedback)
-        outcome_store = OutcomeStore(db_path=audit_db_path)
+        outcome_store = OutcomeStore(db_client=db_client)
         await outcome_store.connect()
-        knowledge_base = KnowledgeBase(db_path=knowledge_db_path)
+        knowledge_base = KnowledgeBase(db_client=db_client)
         await knowledge_base.initialize()
 
         confidence_scorer = ConfidenceScorer()
@@ -320,6 +313,9 @@ class NexusServer:
             await self.feedback_loop.stop()
         self.notifier.stop()  # cancels Notifier._nats_task — never skip this
         await self.nats_client.close()
+        if context.db_client is not None:
+            await context.db_client.close()
+            context.db_client = None
 
     async def run_forever(self) -> None:
         """Block until all server tasks complete (never returns normally)."""
