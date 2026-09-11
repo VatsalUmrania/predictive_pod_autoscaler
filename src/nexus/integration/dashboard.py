@@ -136,6 +136,61 @@ async def _write_incident(row: dict[str, Any], client: PostgresClient | None = N
         logger.warning(f"[Dashboard] incident write failed: {_e}")
 
 
+async def record_incident_resolution(
+    data: dict[str, Any],
+    client: PostgresClient | None = None,
+) -> None:
+    """Format and record an incident resolution or escalation into developer_incidents table."""
+    from datetime import datetime, timezone
+
+    inc_id = data.get("incident_id")
+    target = data.get("target") or data.get("target_name") or data.get("app") or "service"
+    plan = data.get("plan") or {}
+    rca = data.get("rca") or data.get("diagnosis") or {}
+    runbook_id = plan.get("failure_mode") or data.get("runbook_id") or "autonomous_remediation"
+    level = data.get("level", 3)
+    outcome = data.get("outcome", "success")
+
+    # Generate a readable plain-English sentence
+    failure_class = rca.get("failure_class") or "issue"
+    steps = plan.get("steps") or []
+    action_desc = (
+        steps[0].get("description")
+        if steps and steps[0].get("description")
+        else data.get("action_taken") or data.get("description") or f"Executed remediation for {failure_class}"
+    )
+
+    ts = (
+        data.get("resolved_at")
+        or data.get("timestamp")
+        or datetime.now(timezone.utc).isoformat()
+    )[:19].replace("T", " ")
+    if outcome == "success":
+        desc = f"At {ts} UTC — {action_desc} on {target}. Successfully resolved and verified healthy."
+    else:
+        reason = data.get("reason") or "Remediation failed or maximum retries exhausted."
+        desc = f"At {ts} UTC — Incident on {target} escalated: {reason}"
+
+    confidence = data.get("confidence")
+    if confidence is None and rca.get("confidence") is not None:
+        confidence = rca.get("confidence")
+
+    row = {
+        "incident_id": inc_id,
+        "runbook_id": runbook_id,
+        "target": target,
+        "level": level,
+        "outcome": outcome,
+        "description": desc,
+        "confidence": float(confidence) if confidence is not None else 1.0,
+        "timestamp": ts,
+        "rca": rca,
+        "accepted_by": data.get("accepted_by"),
+        "accepted_at": data.get("accepted_at"),
+    }
+    await _write_incident(row, client=client)
+
+
 async def _read_incidents(n: int, app: str | None = None, client: PostgresClient | None = None) -> list[dict[str, Any]]:
     """Read recent incidents from PostgreSQL developer_incidents table."""
     try:

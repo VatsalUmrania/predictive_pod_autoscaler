@@ -394,7 +394,9 @@ async def advisor_recommendations(days: int = 30) -> list[dict[str, Any]]:
 async def audit_tail(n: int = 20) -> list[dict[str, Any]]:
     """Return the N most recent audit trail records."""
     at = _require(context.audit_trail, "AuditTrail")
-    return cast(list[dict[str, Any]], await at.tail(n))
+    if hasattr(at, "tail"):
+        return cast(list[dict[str, Any]], await at.tail(n))
+    return cast(list[dict[str, Any]], await at.query_recent(limit=n))
 
 
 @app.get("/audit/incident/{incident_id}", tags=["governance"])

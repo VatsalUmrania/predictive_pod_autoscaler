@@ -339,7 +339,7 @@ class IncidentWorkflow:
                 fsm._current_state = IncidentState.REJECTED
         if self.nats and hasattr(self.nats, "publish_raw"):
             await self.nats.publish_raw(
-                "nexus.incidents.rejected",
+                "nexus.lifecycle.rejected",
                 {"incident_id": incident_id, "target": target_key, "reason": reason},
             )
 
@@ -489,8 +489,113 @@ class IncidentWorkflow:
         state_snapshot = self._compiled_graph.get_state(config)
         if (state_snapshot.next and "approval" in state_snapshot.next) or result.get("__interrupt__"):
             await self._record_pending_approval(result, inc_id=inc_id, thread_id=tid)
+        else:
+            await self._handle_workflow_completion(result, inc_id=inc_id, thread_id=tid)
 
         return cast(dict[str, Any], result)
+
+    async def _handle_workflow_completion(
+        self,
+        result: dict[str, Any],
+        inc_id: str,
+        thread_id: str,
+    ) -> None:
+        """Publish incident terminal events to NATS and persist to developer dashboard."""
+        from datetime import datetime, timezone
+        from nexus.engine.fsm import IncidentState
+
+        fsm_state = result.get("fsm_state")
+        is_resolved = bool(result.get("resolved") or fsm_state == IncidentState.RESOLVED.value)
+        is_escalated = bool(result.get("escalated") or fsm_state == IncidentState.ESCALATED.value)
+
+        if not (is_resolved or is_escalated):
+            return
+
+        target = result.get("target") or {}
+        if hasattr(target, "model_dump"):
+            target_dict = target.model_dump()
+        elif isinstance(target, dict):
+            target_dict = target
+        else:
+            target_dict = {}
+
+        target_ns = target_dict.get("namespace", "default")
+        target_name = target_dict.get("name", "unknown")
+
+        if not target_name or target_name == "unknown":
+            events = result.get("events") or []
+            if events and isinstance(events[0], dict):
+                target_name = events[0].get("resource_name", target_name)
+                target_ns = events[0].get("namespace", target_ns)
+
+        target_str = f"{target_ns}/{target_name}"
+
+        diagnosis = result.get("diagnosis") or {}
+        if hasattr(diagnosis, "model_dump"):
+            diag_dict = diagnosis.model_dump()
+        elif isinstance(diagnosis, dict):
+            diag_dict = diagnosis
+        else:
+            diag_dict = {}
+
+        plan = result.get("plan") or {}
+        if hasattr(plan, "model_dump"):
+            plan_dict = plan.model_dump()
+        elif isinstance(plan, dict):
+            plan_dict = plan
+        else:
+            plan_dict = {}
+
+        verification = result.get("verification") or {}
+        if hasattr(verification, "model_dump"):
+            verif_dict = verification.model_dump()
+        elif isinstance(verification, dict):
+            verif_dict = verification
+        else:
+            verif_dict = {}
+
+        confidence = float(diag_dict.get("confidence") or 1.0)
+        steps = plan_dict.get("steps", [])
+        action_taken_desc = (
+            steps[0].get("description")
+            if steps and steps[0].get("description")
+            else f"Remediation executed on {target_str}"
+        )
+
+        outcome_str = "success" if is_resolved else "failed"
+        payload = {
+            "incident_id": inc_id,
+            "thread_id": thread_id,
+            "app": target_ns,
+            "target": target_str,
+            "target_name": target_name,
+            "namespace": target_ns,
+            "outcome": outcome_str,
+            "rca": diag_dict,
+            "plan": plan_dict,
+            "verification": verif_dict,
+            "action_taken": action_taken_desc,
+            "confidence": confidence,
+            "reason": result.get("error_message") or ("Resolved successfully" if is_resolved else "Escalated"),
+            "resolved_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        # 1. Broadcast event via NATS
+        if self.nats and hasattr(self.nats, "publish_raw"):
+            subject = "nexus.lifecycle.resolved" if is_resolved else "nexus.lifecycle.escalated"
+            try:
+                await self.nats.publish_raw(subject, payload)
+                logger.info(f"[IncidentWorkflow] Published {subject} for incident {inc_id} ({target_str})")
+            except Exception as e_pub:
+                logger.warning(f"[IncidentWorkflow] Failed to publish {subject}: {e_pub}")
+
+        # 2. Persist to PostgreSQL developer_incidents
+        try:
+            from nexus.integration.dashboard import record_incident_resolution
+            await record_incident_resolution(payload)
+            logger.info(f"[IncidentWorkflow] Recorded incident {inc_id} ({outcome_str}) to developer_incidents")
+        except Exception as e_dash:
+            logger.warning(f"[IncidentWorkflow] Failed to record incident {inc_id} to dashboard store: {e_dash}")
 
     async def _record_pending_approval(
         self,
@@ -663,6 +768,11 @@ class IncidentWorkflow:
                     result.get("incident_id", actual_tid),
                     reason=f"Rejected by operator: {approval_decision}",
                 )
+            await self._handle_workflow_completion(
+                result,
+                inc_id=result.get("incident_id", actual_tid),
+                thread_id=actual_tid,
+            )
 
         if result.get("diagnosis"):
             self._rca_results.append(result["diagnosis"])

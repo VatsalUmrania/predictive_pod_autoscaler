@@ -137,3 +137,51 @@ async def test_record_rules_separately_queryable_by_runbook():
         assert len(rejected) == 1 and rejected[0]["execution_outcome"] == "rejected"
     finally:
         await audit.close()
+
+
+@pytest.mark.asyncio
+async def test_audit_trail_tail_alias():
+    """tail(n) must return the N most recent records."""
+    mock_client = MockPostgresClient()
+    audit = AuditTrail(db_client=mock_client)
+    await audit.initialize()
+    try:
+        await audit.record_approval("A1", "u1")
+        await audit.record_approval("A2", "u2")
+        await audit.record_rejection("A3", "u3")
+
+        rows = await audit.tail(2)
+        assert len(rows) == 2
+        # Mock returns reversed order (most recent first)
+        assert rows[0]["target"] == "A3"
+        assert rows[1]["target"] == "A2"
+    finally:
+        await audit.close()
+
+
+@pytest.mark.asyncio
+async def test_status_api_audit_tail_endpoint():
+    """GET /audit/tail?n=20 returns 200 OK with list of recent records."""
+    from httpx import ASGITransport, AsyncClient
+    from nexus.observability.status_api import app, context
+
+    mock_client = MockPostgresClient()
+    audit = AuditTrail(db_client=mock_client)
+    await audit.initialize()
+    await audit.record_approval("A1", "u1")
+
+    prev_audit = context.audit_trail
+    context.audit_trail = audit
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/audit/tail?n=10")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert isinstance(data, list)
+            assert len(data) == 1
+            assert data[0]["target"] == "A1"
+    finally:
+        context.audit_trail = prev_audit
+        await audit.close()
+

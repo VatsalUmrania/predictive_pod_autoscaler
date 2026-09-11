@@ -393,6 +393,20 @@ class NATSClient:
                 async for msg in sub.messages:
                     try:
                         event = IncidentEvent.from_nats_payload(msg.data)
+                    except Exception as parse_exc:
+                        logger.warning(
+                            f"[NATS] Dropping unparseable message on subject '{msg.subject}': {parse_exc}"
+                        )
+                        try:
+                            if hasattr(msg, "term"):
+                                await msg.term()
+                            else:
+                                await msg.ack()
+                        except Exception:
+                            await msg.ack()
+                        continue
+
+                    try:
                         await handler(event)
                         await msg.ack()
                     except Exception as exc:

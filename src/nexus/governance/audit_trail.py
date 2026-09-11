@@ -215,6 +215,10 @@ class AuditTrail:
             rows = await conn.fetch(sql, limit)
             return [_format_row(r) for r in rows]
 
+    async def tail(self, n: int = 20) -> list[dict[str, Any]]:
+        """Return the N most recent audit records (alias for query_recent)."""
+        return await self.query_recent(limit=n)
+
     async def query_by_runbook(self, runbook_id: str) -> list[dict[str, Any]]:
         """Return all records for a given runbook."""
         sql = "SELECT * FROM audit_trail WHERE runbook_id = $1 ORDER BY timestamp ASC"
