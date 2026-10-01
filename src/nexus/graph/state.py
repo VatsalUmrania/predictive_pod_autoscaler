@@ -51,6 +51,8 @@ class ExecutionRecord(BaseModel):
     snapshot_id: str | None = None
     executed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     duration_ms: float = 0.0
+    rollback_tool: str | None = Field(default=None, description="Captured pre-mutation inverse tool")
+    rollback_parameters: dict[str, Any] | None = Field(default=None, description="Captured inverse parameters")
 
 
 class GovernanceVerdict(BaseModel):

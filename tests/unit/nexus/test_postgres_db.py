@@ -1,9 +1,8 @@
-import os
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from nexus.db.postgres import PostgresClient, get_database_client, _ensure_uuid
+from nexus.db.postgres import PostgresClient, _ensure_uuid, get_database_client
 from tests.unit.nexus.test_db_helpers import MockPostgresClient
 
 

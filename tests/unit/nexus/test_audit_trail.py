@@ -10,6 +10,7 @@ Covers the write and query paths:
 """
 
 import json
+
 import pytest
 
 from nexus.governance.audit_trail import AuditTrail
@@ -163,6 +164,7 @@ async def test_audit_trail_tail_alias():
 async def test_status_api_audit_tail_endpoint():
     """GET /audit/tail?n=20 returns 200 OK with list of recent records."""
     from httpx import ASGITransport, AsyncClient
+
     from nexus.observability.status_api import app, context
 
     mock_client = MockPostgresClient()

@@ -12,9 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
-from typing import Any
 
 from nexus.db.postgres import PostgresClient, get_database_client
 

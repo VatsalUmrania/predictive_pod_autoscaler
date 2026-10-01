@@ -2,8 +2,9 @@
 NEXUS Governed Execution Node
 =============================
 Executes the approved remediation plan step-by-step through the platform adapter.
-Enforces pre-mutation snapshot capture into RollbackRegistry before any state changes,
-guaranteeing 100% deterministic undo capability without LLM improvisation.
+Captures a pre-mutation snapshot before any state change and carries its inverse
+(rollback_tool/parameters) in the execution record, guaranteeing deterministic
+undo capability without LLM improvisation.
 """
 
 from __future__ import annotations
@@ -14,7 +15,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 from nexus.engine.fsm import IncidentState
-from nexus.governance.rollback_registry import RollbackRegistry
 from nexus.graph.platform import TargetResource, get_platform_registry
 from nexus.graph.state import ExecutionRecord, IncidentGraphState
 
@@ -32,7 +32,6 @@ async def execute_node(state: IncidentGraphState) -> dict[str, Any]:
 
     registry = get_platform_registry()
     adapter = registry.get(platform_id) or registry.resolve_adapter(state.get("events", []))
-    rollback_registry = RollbackRegistry()
 
     records: list[dict[str, Any]] = []
     overall_success = True
@@ -50,25 +49,13 @@ async def execute_node(state: IncidentGraphState) -> dict[str, Any]:
         params = step.get("parameters", {})
         step_idx = step.get("step_index", 0)
 
-        # 1. Capture Pre-Mutation Snapshot
+        # 1. Capture Pre-Mutation Snapshot (carried in the execution record for rollback)
+        snapshot = None
         snapshot_id = None
         try:
             snapshot = await adapter.capture_snapshot(target, tool_name, params)
             if snapshot:
                 snapshot_id = snapshot.snapshot_id
-                # Register in RollbackRegistry if possible
-                if hasattr(rollback_registry, "register_snapshot"):
-                    try:
-                        await rollback_registry.register_snapshot(
-                            action_id=f"{incident_id}-step-{step_idx}",
-                            target_resource=target.name,
-                            action_type=tool_name,
-                            rollback_action=snapshot.rollback_tool,
-                            snapshot_data=snapshot.rollback_parameters,
-                            platform=platform_id,
-                        )
-                    except Exception as reg_exc:
-                        logger.debug("[Execute] RollbackRegistry registration note: %s", reg_exc)
         except Exception as snap_exc:
             logger.warning("[Execute] Failed to capture pre-state snapshot: %s", snap_exc)
 
@@ -85,6 +72,8 @@ async def execute_node(state: IncidentGraphState) -> dict[str, Any]:
             error=res.error,
             snapshot_id=snapshot_id,
             duration_ms=duration_ms,
+            rollback_tool=snapshot.rollback_tool if snapshot else None,
+            rollback_parameters=dict(snapshot.rollback_parameters) if snapshot else None,
         )
         records.append(rec.model_dump())
 

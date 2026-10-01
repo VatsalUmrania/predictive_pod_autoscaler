@@ -661,6 +661,8 @@ class Notifier:
                 await self._on_incident_resolved_message(data)
             elif "escalated" in subject:
                 await self._on_incident_escalated_message(data)
+            elif "report" in subject:
+                await self._on_report_ready_message(data)
 
         # Retry all subscriptions until all succeed, with capped backoff
         action_ok = False
@@ -816,6 +818,76 @@ class Notifier:
             )
         except Exception as exc:
             logger.debug(f"[Notifier] incident escalated message error: {exc}")
+
+    async def _on_report_ready_message(self, data: dict) -> None:
+        try:
+            app_name = data.get("app") or data.get("namespace") or "default"
+            await self.notify_report_ready(
+                app_name=app_name,
+                incident_id=data.get("incident_id", "unknown"),
+                target=str(data.get("target") or "unknown"),
+                outcome=data.get("outcome") or "resolved",
+                summary=data.get("summary") or "",
+                report_url=data.get("report_url") or "",
+            )
+        except Exception as exc:
+            logger.debug(f"[Notifier] report ready message error: {exc}")
+
+    async def notify_report_ready(
+        self,
+        app_name: str,
+        incident_id: str,
+        target: str,
+        outcome: str = "resolved",
+        summary: str = "",
+        report_url: str = "",
+    ) -> None:
+        """Post the post-incident report draft to the app's Slack channel."""
+        webhook = self._get_webhook(app_name)
+        if not webhook:
+            return
+
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"📄 *NEXUS Post-Incident Report — `{target}`*",
+                },
+            },
+        ]
+        if summary:
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Summary:*\n{summary[:600]}{'...' if len(summary) > 600 else ''}",
+                    },
+                }
+            )
+        if report_url:
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"<{report_url}|Open full report>"},
+                }
+            )
+
+        payload = {
+            "attachments": [
+                {
+                    "color": "#0891b2",  # neutral teal — informational, not an alarm
+                    "fallback": f"NEXUS post-incident report ready for {target} ({outcome})",
+                    "blocks": blocks,
+                }
+            ]
+        }
+
+        await self._send(webhook, payload, app_name)
+        logger.info(
+            f"[Notifier] Post-incident report posted for target='{target}' inc='{incident_id}'"
+        )
 
 if __name__ == "__main__":
     # Self-check: Slack signs with HMAC-SHA256 over "v0:ts:body" keyed by the

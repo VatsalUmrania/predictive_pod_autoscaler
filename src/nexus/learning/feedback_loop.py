@@ -173,6 +173,21 @@ class FeedbackLoop:
                     f"[FeedbackLoop] Incident subscription failed (non-fatal): {exc}"
                 )
 
+            # Terminal lifecycle events from the LangGraph workflow — clear
+            # verification tracking once an incident is reported resolved/escalated.
+            try:
+                await self._nats.subscribe_raw(
+                    subject_pattern="nexus.lifecycle.>",
+                    handler=self._on_lifecycle_event,
+                )
+                logger.info(
+                    "[FeedbackLoop] Subscribed to nexus.lifecycle.> for terminal-event cleanup"
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"[FeedbackLoop] Lifecycle subscription failed (non-fatal): {exc}"
+                )
+
         logger.info(
             f"[FeedbackLoop] Started — "
             f"interval={self._interval}s "
@@ -246,6 +261,25 @@ class FeedbackLoop:
 
         except Exception as exc:
             logger.debug(f"[FeedbackLoop] incident tracking error: {exc}")
+
+    async def _on_lifecycle_event(self, data: dict, subject: str) -> None:
+        """
+        Handle terminal lifecycle events (nexus.lifecycle.resolved/escalated/rejected)
+        from the LangGraph workflow. The workflow itself records learning outcomes
+        (audit trail + KnowledgeBase) — here we only stop tracking the incident so
+        a late P3b verify-window tick doesn't double-record a re-fire.
+        """
+        try:
+            incident_id = data.get("incident_id")
+            if not incident_id:
+                return
+            self._pending_verifications.pop(incident_id, None)
+            self._recent_incidents.pop(incident_id, None)
+            logger.debug(
+                f"[FeedbackLoop] Lifecycle {subject} for incident {incident_id} — tracking cleared"
+            )
+        except Exception as exc:
+            logger.debug(f"[FeedbackLoop] lifecycle event error: {exc}")
 
     async def stop(self) -> None:
         """Graceful shutdown."""

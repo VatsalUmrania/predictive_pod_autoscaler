@@ -2,8 +2,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from tests.unit.nexus.test_db_helpers import MockPostgresClient
 from nexus.engine.fsm import IncidentFSM, IncidentState
+from tests.unit.nexus.test_db_helpers import MockPostgresClient
 
 
 @pytest.mark.asyncio

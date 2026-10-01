@@ -9,10 +9,11 @@ Covers:
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
-from nexus.integration.notifier import Notifier
 from nexus.integration.dashboard import record_incident_resolution
+from nexus.integration.notifier import Notifier
 
 
 def _policy(app_name: str, webhook: str | None) -> dict:
@@ -245,10 +246,13 @@ async def test_workflow_handle_completion_publishes_nats_and_records():
             thread_id="thread-wf-1",
         )
 
-        # 1. Check NATS publication
-        workflow.nats.publish_raw.assert_awaited_once()
-        subject, payload = workflow.nats.publish_raw.await_args.args
-        assert subject == "nexus.lifecycle.resolved"
+        # 1. Check NATS publications: lifecycle event, then the post-incident report
+        calls = workflow.nats.publish_raw.await_args_list
+        assert [c.args[0] for c in calls] == [
+            "nexus.lifecycle.resolved",
+            "nexus.lifecycle.report_ready",
+        ]
+        payload = calls[0].args[1]
         assert payload["incident_id"] == "inc-wf-1"
         assert payload["target"] == "ecommerce/cart-service"
         assert payload["outcome"] == "success"
@@ -258,3 +262,9 @@ async def test_workflow_handle_completion_publishes_nats_and_records():
         db_payload = mock_rec.await_args.args[0]
         assert db_payload["incident_id"] == "inc-wf-1"
         assert db_payload["target"] == "ecommerce/cart-service"
+
+        # 3. Report-ready payload carries the report URL + summary
+        report_msg = calls[1].args[1]
+        assert report_msg["incident_id"] == "inc-wf-1"
+        assert report_msg["report_url"].endswith("/developer/incidents/inc-wf-1/report")
+        assert report_msg["summary"]  # template fallback still produces a summary

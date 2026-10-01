@@ -502,6 +502,7 @@ class IncidentWorkflow:
     ) -> None:
         """Publish incident terminal events to NATS and persist to developer dashboard."""
         from datetime import datetime, timezone
+
         from nexus.engine.fsm import IncidentState
 
         fsm_state = result.get("fsm_state")
@@ -522,11 +523,15 @@ class IncidentWorkflow:
         target_ns = target_dict.get("namespace", "default")
         target_name = target_dict.get("name", "unknown")
 
+        events = result.get("events") or []
         if not target_name or target_name == "unknown":
-            events = result.get("events") or []
             if events and isinstance(events[0], dict):
                 target_name = events[0].get("resource_name", target_name)
                 target_ns = events[0].get("namespace", target_ns)
+
+        signal_type = "unknown"
+        if events and isinstance(events[0], dict):
+            signal_type = events[0].get("signal_type") or "unknown"
 
         target_str = f"{target_ns}/{target_name}"
 
@@ -571,6 +576,7 @@ class IncidentWorkflow:
             "target_name": target_name,
             "namespace": target_ns,
             "outcome": outcome_str,
+            "signal_type": signal_type,
             "rca": diag_dict,
             "plan": plan_dict,
             "verification": verif_dict,
@@ -579,6 +585,55 @@ class IncidentWorkflow:
             "reason": result.get("error_message") or ("Resolved successfully" if is_resolved else "Escalated"),
             "resolved_at": datetime.now(timezone.utc).isoformat(),
         }
+
+        # 0. Learning plane — record the outcome so runbook stats, confidence
+        #    boosts, and signal patterns reflect LangGraph-resolved incidents.
+        #    Single writer: the FeedbackLoop only clears pending verifications
+        #    on lifecycle events (never records outcomes itself).
+        runbook_id = plan_dict.get("failure_mode") or "autonomous_remediation"
+        action_type = (steps[0].get("tool_name") if steps and isinstance(steps[0], dict) else None) or "none"
+        audit_outcome = "success" if is_resolved else ("rolled_back" if result.get("rollback_executed") else "failed")
+        try:
+            from nexus.observability.status_api import context
+
+            if context.audit_trail is not None:
+                await context.audit_trail.write(
+                    triggered_by="langgraph",
+                    runbook_id=runbook_id,
+                    healing_level=3,
+                    target=target_str,
+                    execution_outcome=audit_outcome,
+                    post_check_results=verif_dict or None,
+                    rollback_triggered=bool(result.get("rollback_executed")),
+                    incident_id=inc_id,
+                    action_results=result.get("execution_records") or [],
+                )
+            if context.knowledge_base is not None:
+                await context.knowledge_base.record_incident_outcome(
+                    incident_id=inc_id,
+                    runbook_id=runbook_id,
+                    action_type=action_type,
+                    resolved=is_resolved,
+                    reason=payload["reason"],
+                )
+                if signal_type != "unknown":
+                    await context.knowledge_base.record_pattern(
+                        signal_types={signal_type},
+                        runbook_id=runbook_id,
+                        success=is_resolved,
+                    )
+            if context.audit_trail is not None or context.knowledge_base is not None:
+                logger.info(
+                    "[IncidentWorkflow] Recorded learning outcome for %s (%s)",
+                    inc_id,
+                    audit_outcome,
+                )
+        except Exception as learn_exc:
+            logger.warning(
+                "[IncidentWorkflow] Learning-plane recording failed for %s: %s",
+                inc_id,
+                learn_exc,
+            )
 
         # 1. Broadcast event via NATS
         if self.nats and hasattr(self.nats, "publish_raw"):
@@ -596,6 +651,34 @@ class IncidentWorkflow:
             logger.info(f"[IncidentWorkflow] Recorded incident {inc_id} ({outcome_str}) to developer_incidents")
         except Exception as e_dash:
             logger.warning(f"[IncidentWorkflow] Failed to record incident {inc_id} to dashboard store: {e_dash}")
+
+        # 3. Post-incident report (LLM postmortem draft) — generated AFTER the
+        #    lifecycle publish so resolution notifications are never delayed by
+        #    the LLM call. Failures here must never break the completion path.
+        try:
+            from nexus.integration.incident_report import (
+                generate_post_incident_report,
+                report_url,
+            )
+
+            report = await generate_post_incident_report(result, payload=payload)
+            sections = report.get("report") or {}
+            summary = (sections.get("summary") or payload.get("action_taken") or "")[:700]
+            if self.nats and hasattr(self.nats, "publish_raw"):
+                await self.nats.publish_raw(
+                    "nexus.lifecycle.report_ready",
+                    {
+                        "incident_id": inc_id,
+                        "app": target_ns,
+                        "target": target_str,
+                        "outcome": payload.get("outcome"),
+                        "report_url": report_url(inc_id),
+                        "summary": summary,
+                    },
+                )
+                logger.info(f"[IncidentWorkflow] Published nexus.lifecycle.report_ready for {inc_id}")
+        except Exception as e_report:
+            logger.warning(f"[IncidentWorkflow] Post-incident report failed for {inc_id}: {e_report}")
 
     async def _record_pending_approval(
         self,

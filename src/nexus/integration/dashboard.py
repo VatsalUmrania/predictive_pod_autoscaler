@@ -29,10 +29,10 @@ from __future__ import annotations
 
 import json as _json
 import logging
-import os as _os
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from nexus.db.postgres import PostgresClient, get_database_client
@@ -326,6 +326,40 @@ async def developer_incidents(
     results.sort(key=lambda r: r.get("timestamp", ""), reverse=True)
     return results[:n]
 
+
+
+# Post-incident report (Resolve.ai-style postmortem draft)
+@router.get("/developer/incidents/{incident_id}/report", tags=["developer"])
+async def developer_incident_report(incident_id: str, request: Request) -> Response:
+    """
+    Full post-incident report for one incident:
+    summary, timeline, root cause, impact, remediation actions, verification,
+    recommendations — plus the raw evidence facts they were written from.
+
+    Content-negotiated: browsers (Accept: text/html) get the standalone
+    readable report page (the Slack "Open full report" target); API clients
+    get the raw JSON document.
+    """
+    from nexus.integration.incident_report import (
+        get_incident_report,
+        render_report_html,
+        render_report_missing_html,
+    )
+
+    wants_html = "text/html" in request.headers.get("accept", "")
+    report = await get_incident_report(incident_id)
+    if report is None:
+        if wants_html:
+            return HTMLResponse(
+                status_code=404, content=render_report_missing_html(incident_id)
+            )
+        raise HTTPException(
+            status_code=404,
+            detail=f"No post-incident report found for incident '{incident_id}'.",
+        )
+    if wants_html:
+        return HTMLResponse(content=render_report_html(report))
+    return JSONResponse(content=report)
 
 
 # Predictions

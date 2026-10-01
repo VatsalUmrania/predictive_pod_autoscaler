@@ -13,7 +13,6 @@ from ppa.domain.feature_validation import (
 from ppa.domain.scaling import (
     calculate_replicas,
     calculate_replicas_fixed,
-    calculate_replicas_old,
 )
 from ppa.domain.state import CRState
 
@@ -24,7 +23,6 @@ __all__ = [
     # Scaling domain logic
     "calculate_replicas",
     "calculate_replicas_fixed",
-    "calculate_replicas_old",
     # State management
     "CRState",
 ]

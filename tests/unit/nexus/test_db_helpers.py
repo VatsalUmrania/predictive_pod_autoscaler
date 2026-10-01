@@ -5,11 +5,9 @@ Provides MockPostgresClient for unit tests that need an offline database client.
 
 from __future__ import annotations
 
-import asyncio
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-import json
-import uuid
 from typing import Any
 
 

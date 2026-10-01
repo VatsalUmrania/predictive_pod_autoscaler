@@ -312,56 +312,56 @@ async def test_e2e_workflow_adaptive_ladder_pause_and_resume():
         },
     ]
 
-    # Attempt 0 restart will fail health check
-    # Attempt 1 rollback will succeed health check
-    health_check_calls = 0
-
+    # Attempt 0 (restart plan) fails health checks for the entire poll window;
+    # Attempt 1 (rollback plan) passes immediately.
     async def mock_health_check(target, plan):
-        nonlocal health_check_calls
-        health_check_calls += 1
-        if health_check_calls == 1:
+        steps = (plan or {}).get("steps") or []
+        tool = steps[0].get("tool_name", "") if steps else ""
+        if tool == "k8s_restart_deployment":
             return HealthCheckResult(healthy=False, slo_restored=False, failure_reason="CrashLoopBackOff exit code 137")
         return HealthCheckResult(healthy=True, slo_restored=True, details="Deployment healthy and ready")
 
     with patch("nexus.agents.k8s_tools.describe_resource", return_value="Replicas: 1\nState: CrashLoopBackOff"):
         with patch("nexus.agents.k8s_tools.restart_deployment", return_value="restarted"):
             with patch("nexus.agents.k8s_tools.rollback_deployment", return_value="rolled_back"):
-                with patch.object(adapter, "verify_health", side_effect=mock_health_check):
-                    # Initial run: Attempt 0 plans restart -> pauses at approval (all actions require approval)
-                    initial_run = await workflow.run_incident(
-                        {
-                            "incident_id": "inc-adaptive-e2e",
-                            "platform": "kubernetes",
-                            "events": events,
-                            "max_retries": 2,
-                        },
-                        thread_id="thread-adaptive-e2e",
-                    )
+                with patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05), \
+                     patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01):
+                    with patch.object(adapter, "verify_health", side_effect=mock_health_check):
+                        # Initial run: Attempt 0 plans restart -> pauses at approval (all actions require approval)
+                        initial_run = await workflow.run_incident(
+                            {
+                                "incident_id": "inc-adaptive-e2e",
+                                "platform": "kubernetes",
+                                "events": events,
+                                "max_retries": 2,
+                            },
+                            thread_id="thread-adaptive-e2e",
+                        )
 
-                    assert initial_run["fsm_state"] == "approval_pending"
-                    assert initial_run["resolved"] is False
-                    assert initial_run["plan"]["steps"][0]["tool_name"] == "k8s_restart_deployment"
+                        assert initial_run["fsm_state"] == "approval_pending"
+                        assert initial_run["resolved"] is False
+                        assert initial_run["plan"]["steps"][0]["tool_name"] == "k8s_restart_deployment"
 
-                    # 1st resume with operator approval: Attempt 0 executes restart -> fails verify -> Attempt 1 escalates to rollback -> pauses for approval
-                    escalated_run = await workflow.resume_incident(
-                        thread_id="thread-adaptive-e2e",
-                        approval_decision="approved",
-                    )
+                        # 1st resume with operator approval: Attempt 0 executes restart -> fails verify -> Attempt 1 escalates to rollback -> pauses for approval
+                        escalated_run = await workflow.resume_incident(
+                            thread_id="thread-adaptive-e2e",
+                            approval_decision="approved",
+                        )
 
-                    assert escalated_run["fsm_state"] == "approval_pending"
-                    assert escalated_run["resolved"] is False
-                    assert escalated_run["plan"]["steps"][0]["tool_name"] == "k8s_rollback_deployment"
+                        assert escalated_run["fsm_state"] == "approval_pending"
+                        assert escalated_run["resolved"] is False
+                        assert escalated_run["plan"]["steps"][0]["tool_name"] == "k8s_rollback_deployment"
 
-                    # 2nd resume with operator approval: Attempt 1 executes rollback -> passes verify -> resolved
-                    resumed_run = await workflow.resume_incident(
-                        thread_id="thread-adaptive-e2e",
-                        approval_decision="approved",
-                    )
+                        # 2nd resume with operator approval: Attempt 1 executes rollback -> passes verify -> resolved
+                        resumed_run = await workflow.resume_incident(
+                            thread_id="thread-adaptive-e2e",
+                            approval_decision="approved",
+                        )
 
-                    assert resumed_run["fsm_state"] == "resolved"
-                    assert resumed_run["resolved"] is True
-                    assert resumed_run["escalated"] is False
-                    # Both tools were executed across the two ladder attempts
-                    executed_tools = [rec["tool_name"] for rec in resumed_run["execution_records"]]
-                    assert "k8s_restart_deployment" in executed_tools
-                    assert "k8s_rollback_deployment" in executed_tools
+                        assert resumed_run["fsm_state"] == "resolved"
+                        assert resumed_run["resolved"] is True
+                        assert resumed_run["escalated"] is False
+                        # Both tools were executed across the two ladder attempts
+                        executed_tools = [rec["tool_name"] for rec in resumed_run["execution_records"]]
+                        assert "k8s_restart_deployment" in executed_tools
+                        assert "k8s_rollback_deployment" in executed_tools

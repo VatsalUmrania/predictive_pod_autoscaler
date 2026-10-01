@@ -16,11 +16,22 @@ from datetime import datetime, timezone
 from typing import Any
 
 from nexus.engine.fsm import IncidentState
+from nexus.governance.cooldown_store import CooldownStore
 from nexus.governance.live_state_validator import check_live_state
 from nexus.graph.platform import TargetResource
 from nexus.graph.state import GovernanceVerdict, IncidentGraphState
 
 logger = logging.getLogger(__name__)
+
+
+def _get_ladder() -> Any:
+    """Fetch the ActionLadder from the runtime context (None outside the server)."""
+    try:
+        from nexus.observability.status_api import context
+
+        return context.action_ladder
+    except Exception:
+        return None
 
 
 async def govern_node(state: IncidentGraphState) -> dict[str, Any]:
@@ -39,6 +50,8 @@ async def govern_node(state: IncidentGraphState) -> dict[str, Any]:
         reasons.append(plan["approval_reason"])
 
     is_self_healed = False
+    cb_open = False
+    cooldown_active = False
 
     # 1. Live State Validation (Kill-switch if target already self-healed)
     if platform_id == "kubernetes":
@@ -70,6 +83,34 @@ async def govern_node(state: IncidentGraphState) -> dict[str, Any]:
         except Exception as lsv_err:
             logger.debug("[Govern] check_live_state check skipped/errored: %s", lsv_err)
 
+    # 1b. Governance Circuit Breaker + Cooldown (wired from ActionLadder via NexusContext)
+    if allowed and steps and not is_self_healed:
+        ladder = _get_ladder()
+        if ladder is not None:
+            action_id = str(steps[0].get("tool_name", "unknown"))
+            target_str = f"{target.namespace}/{target.name}"
+            if ladder.governance_cb.is_open:
+                cb_open = True
+                allowed = False
+                reasons.append(
+                    "governance circuit breaker open "
+                    f"({ladder.governance_cb.consecutive_failures} consecutive post-check failures) "
+                    "— autonomous healing suspended"
+                )
+            else:
+                try:
+                    cooldown_key = CooldownStore.make_key(action_id, target_str)
+                    if await ladder.cooldown_store.is_in_cooldown(cooldown_key):
+                        cooldown_active = True
+                        allowed = False
+                        remaining = await ladder.cooldown_store.remaining_seconds(cooldown_key)
+                        reasons.append(
+                            f"target in cooldown for {action_id} ({remaining:.0f}s remaining) "
+                            "— rapid re-execution blocked"
+                        )
+                except Exception as cd_err:
+                    logger.warning("[Govern] Cooldown check failed (fail-open): %s", cd_err)
+
     # 2. Universal Human Approval Requirement
     # All mutating actions proposed by LLM require human authorization.
     if steps and not is_self_healed:
@@ -87,8 +128,8 @@ async def govern_node(state: IncidentGraphState) -> dict[str, Any]:
     verdict = GovernanceVerdict(
         allowed=allowed,
         requires_human_approval=requires_approval,
-        circuit_breaker_open=False,
-        cooldown_active=False,
+        circuit_breaker_open=cb_open,
+        cooldown_active=cooldown_active,
         live_state_valid=not is_self_healed,
         self_healed=is_self_healed,
         reasons=reasons,

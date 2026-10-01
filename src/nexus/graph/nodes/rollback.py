@@ -26,6 +26,9 @@ async def rollback_node(state: IncidentGraphState) -> dict[str, Any]:
     target_dict = state.get("target") or {}
     target = TargetResource(**target_dict) if isinstance(target_dict, dict) else target_dict
     platform_id = state.get("platform", "kubernetes")
+    plan = state.get("plan") or {}
+    plan_steps = plan.get("steps", []) if isinstance(plan, dict) else []
+    steps_by_index = {s.get("step_index", i): s for i, s in enumerate(plan_steps)}
 
     registry = get_platform_registry()
     adapter = registry.get(platform_id) or registry.resolve_adapter(state.get("events", []))
@@ -41,19 +44,33 @@ async def rollback_node(state: IncidentGraphState) -> dict[str, Any]:
     for rec in reversed(execution_records):
         snap_id = rec.get("snapshot_id")
         tool_name = rec.get("tool_name", "")
+        step_idx = rec.get("step_index", 0)
 
-        # Attempt to synthesize snapshot or execute inverse
         logger.info("[Rollback] Rolling back step %s (snap_id=%s)", tool_name, snap_id)
 
-        # Build fallback snapshot if specific snapshot not serialized
-        snap = RollbackSnapshot(
-            snapshot_id=snap_id or f"rollback-{tool_name}",
-            target=target,
-            action_name=tool_name,
-            rollback_tool="k8s_restart_deployment" if platform_id == "kubernetes" else "aws_update_lambda_memory",
-            rollback_parameters={"namespace": target.namespace, "deployment_name": target.name} if platform_id == "kubernetes" else {"function_name": target.name, "memory_mb": 256},
-            description="Reverting action to prior stable state",
-        )
+        # Inverse preference: captured pre-mutation snapshot → plan step fields → synthesized default
+        step = steps_by_index.get(step_idx, {})
+        rb_tool = rec.get("rollback_tool") or step.get("rollback_tool")
+        rb_params = rec.get("rollback_parameters") or step.get("rollback_parameters")
+
+        if rb_tool:
+            snap = RollbackSnapshot(
+                snapshot_id=snap_id or f"rollback-{tool_name}",
+                target=target,
+                action_name=tool_name,
+                rollback_tool=rb_tool,
+                rollback_parameters=dict(rb_params or {}),
+                description="Restoring captured pre-mutation state",
+            )
+        else:
+            snap = RollbackSnapshot(
+                snapshot_id=snap_id or f"rollback-{tool_name}",
+                target=target,
+                action_name=tool_name,
+                rollback_tool="k8s_restart_deployment" if platform_id == "kubernetes" else "aws_update_lambda_memory",
+                rollback_parameters={"namespace": target.namespace, "deployment_name": target.name} if platform_id == "kubernetes" else {"function_name": target.name, "memory_mb": 256},
+                description="Reverting action to prior stable state (synthesized fallback)",
+            )
 
         try:
             rb_res = await adapter.execute_rollback(snap)

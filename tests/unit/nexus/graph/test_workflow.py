@@ -211,25 +211,27 @@ async def test_verification_failure_and_deterministic_rollback():
 
     with patch("nexus.agents.k8s_tools.describe_resource", return_value="Replicas: 2\nState: CrashLoopBackOff"):
         with patch("nexus.agents.k8s_tools.restart_deployment", return_value="restarted"):
-            with patch.object(
-                adapter,
-                "verify_health",
-                AsyncMock(return_value=HealthCheckResult(healthy=False, slo_restored=False, failure_reason="OOM persists")),
-            ):
+            with patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05), \
+                 patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01):
                 with patch.object(
                     adapter,
-                    "execute_rollback",
-                    AsyncMock(return_value=NexusToolResult(success=True, data={"status": "rolled_back"})),
-                ) as mock_rb:
-                    result = await workflow.run_incident(
-                        {
-                            "incident_id": "inc-rollback-01",
-                            "platform": "kubernetes",
-                            "events": events,
-                            "max_retries": 0,
-                            "approval_decision": "approved",
-                        }
-                    )
+                    "verify_health",
+                    AsyncMock(return_value=HealthCheckResult(healthy=False, slo_restored=False, failure_reason="OOM persists")),
+                ):
+                    with patch.object(
+                        adapter,
+                        "execute_rollback",
+                        AsyncMock(return_value=NexusToolResult(success=True, data={"status": "rolled_back"})),
+                    ) as mock_rb:
+                        result = await workflow.run_incident(
+                            {
+                                "incident_id": "inc-rollback-01",
+                                "platform": "kubernetes",
+                                "events": events,
+                                "max_retries": 0,
+                                "approval_decision": "approved",
+                            }
+                        )
 
                     assert result["resolved"] is False
                     assert result["escalated"] is True

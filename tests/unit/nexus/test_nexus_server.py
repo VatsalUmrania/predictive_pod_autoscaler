@@ -91,10 +91,6 @@ async def test_create_wires_all_components():
                                     return_value=_awaitable_magicmock(),
                                 ):
                                     with patch(
-                                        "nexus.server.RollbackRegistry",
-                                        return_value=MagicMock(),
-                                    ):
-                                        with patch(
                                             "nexus.server.PolicyEngine",
                                             return_value=_awaitable_magicmock(),
                                         ):
@@ -179,10 +175,6 @@ async def test_create_does_not_call_outcome_tracker_start():
                                     return_value=_awaitable_magicmock(),
                                 ):
                                     with patch(
-                                        "nexus.server.RollbackRegistry",
-                                        return_value=MagicMock(),
-                                    ):
-                                        with patch(
                                             "nexus.server.PolicyEngine",
                                             return_value=_awaitable_magicmock(),
                                         ):
@@ -270,10 +262,6 @@ async def test_start_calls_agent_manager_and_outcome_tracker():
                                     return_value=_awaitable_magicmock(),
                                 ):
                                     with patch(
-                                        "nexus.server.RollbackRegistry",
-                                        return_value=MagicMock(),
-                                    ):
-                                        with patch(
                                             "nexus.server.PolicyEngine",
                                             return_value=_awaitable_magicmock(),
                                         ):
@@ -366,10 +354,6 @@ async def test_stop_cleans_up_all_subsystems():
                                     return_value=_awaitable_magicmock(),
                                 ):
                                     with patch(
-                                        "nexus.server.RollbackRegistry",
-                                        return_value=MagicMock(),
-                                    ):
-                                        with patch(
                                             "nexus.server.PolicyEngine",
                                             return_value=_awaitable_magicmock(),
                                         ):

@@ -1,8 +1,10 @@
 """
 NEXUS Closed-Loop Learning Node
 ===============================
-Runs after successful incident resolution to update the KnowledgeBase
-and record incident outcomes for continuous learning and calibration.
+Terminal learning stage of the graph: marks the incident resolved and records
+the audit entry. Persistence (audit trail row, KnowledgeBase outcome + signal
+pattern) happens in IncidentWorkflow._handle_workflow_completion — the single
+choke point that sees ALL terminal outcomes, including failed/escalated ones.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 async def learn_node(state: IncidentGraphState) -> dict[str, Any]:
-    """Record incident resolution into KnowledgeBase for closed-loop learning."""
+    """Mark incident resolved and emit the learn-stage audit entry."""
     incident_id = state["incident_id"]
     diagnosis = state.get("diagnosis", {})
     target = state.get("target", {})

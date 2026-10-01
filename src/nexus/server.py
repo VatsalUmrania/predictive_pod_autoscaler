@@ -23,7 +23,6 @@ from nexus.governance.action_ladder import (
 from nexus.governance.audit_trail import AuditTrail
 from nexus.governance.cooldown_store import CooldownStore
 from nexus.governance.policy_engine import PolicyEngine
-from nexus.governance.rollback_registry import RollbackRegistry
 from nexus.graph.workflow import IncidentWorkflow
 from nexus.integration.notifier import Notifier
 from nexus.learning.feedback_loop import build_feedback_loop
@@ -134,8 +133,6 @@ class NexusServer:
         # ── AuditTrail & CooldownStore ────────────────────────────────────────
         audit_trail = AuditTrail(db_client=db_client)
         await audit_trail.initialize()
-
-        RollbackRegistry()
 
         opa_url = _os.getenv("NEXUS_OPA_URL", "http://localhost:8181")
         cooldown_store = CooldownStore(db_client=db_client)
@@ -252,6 +249,7 @@ class NexusServer:
         context.outcome_store = outcome_store
         context.knowledge_base = knowledge_base
         context.db_client = db_client
+        context.action_ladder = ladder
 
         return cls(
             nats_client=nats,

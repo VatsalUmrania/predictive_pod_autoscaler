@@ -2,9 +2,9 @@ from unittest.mock import patch
 
 import pytest
 
-from tests.unit.nexus.test_db_helpers import MockPostgresClient
 from nexus.tools.base import ToolDomain, ToolRiskLevel
 from nexus.tools.registry import ToolRegistry
+from tests.unit.nexus.test_db_helpers import MockPostgresClient
 
 
 def test_tool_registry_registration_and_filtering():

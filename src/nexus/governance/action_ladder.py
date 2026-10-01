@@ -480,5 +480,9 @@ class ActionLadder:
         return self._cb
 
     @property
+    def cooldown_store(self) -> CooldownStore:
+        return self._cooldown
+
+    @property
     def approval_queue(self) -> HumanApprovalQueue:
         return self._approval

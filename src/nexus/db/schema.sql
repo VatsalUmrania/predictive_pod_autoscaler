@@ -250,3 +250,12 @@ CREATE TABLE IF NOT EXISTS developer_incidents (
 
 CREATE INDEX IF NOT EXISTS idx_dev_incidents_id ON developer_incidents(id DESC);
 
+-- 12. Integration: Post-Incident Reports (Resolve.ai-style postmortem drafts)
+CREATE TABLE IF NOT EXISTS post_incident_reports (
+    incident_id  VARCHAR(255) PRIMARY KEY,
+    target       VARCHAR(255),
+    outcome      VARCHAR(50),
+    report       JSONB NOT NULL,
+    generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+

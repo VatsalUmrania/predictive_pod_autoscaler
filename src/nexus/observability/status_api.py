@@ -103,6 +103,7 @@ class NexusContext:
     audit_trail: Any = None  # AuditTrail
     runbook_library: Any = None  # RunbookLibrary (deprecated)
     db_client: Any = None  # PostgresClient
+    action_ladder: Any = None  # ActionLadder (governance CB + cooldown for LangGraph nodes)
     started_at: float = field(default_factory=time.monotonic)
 
     def uptime_seconds(self) -> float:
