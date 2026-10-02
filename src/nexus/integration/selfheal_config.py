@@ -2,156 +2,36 @@
 NEXUS selfheal.yaml Config Schema
 ===================================
 Pydantic schema for the developer-facing selfheal.yaml contract file.
-
-Developers commit this file to their repo root. On every push, GitAgent
-reads it, validates against this schema, auto-issues a SELFHEAL_TOKEN for
-new apps, and propagates settings into the relevant NEXUS planes:
-
-    RunbookExecutor  ← max_auto_actions_per_hour, require_approval_for
-    DBTrafficCorrelator ← traffic_spike_tables, pre_scale_threshold
-    Prescaler        ← pre_scale_threshold (per-app override)
-    Notifier         ← slack_webhook, page_sre_after
-
-${ENV_VAR} references in string fields are resolved from os.environ at
-load time. Unresolved vars produce a warning and are left as empty strings.
-
-Example selfheal.yaml:
-    app: checkout-service
-    tier: production
-
-    critical_routes:
-      - /api/checkout
-      - /api/payment
-      - /api/orders
-
-    healing_policy:
-      auto_rollback: true
-      max_auto_actions_per_hour: 10
-      require_approval_for:
-        - database_migrations
-        - environment_variable_changes
-        - scaling_above: 10x
-
-    predictive:
-      traffic_spike_tables:
-        - orders
-        - products
-        - inventory
-      pre_scale_threshold: 2.5
-
-    notifications:
-      slack_webhook: ${SLACK_WEBHOOK}
-      page_sre_after: 3
 """
 
 from __future__ import annotations
 
 import logging
-import os
-import re
 from pathlib import Path
 from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
+from nexus.integration.selfheal_models import (
+    HealingPolicy,
+    NotificationsConfig,
+    PredictiveConfig,
+    _resolve_env,
+)
+
 logger = logging.getLogger(__name__)
 
-_ENV_VAR_RE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
+__all__ = [
+    "HealingPolicy",
+    "PredictiveConfig",
+    "NotificationsConfig",
+    "SelfhealConfig",
+    "load_selfheal_config",
+    "_resolve_env",
+]
 
 
-def _resolve_env(value: str) -> str:
-    """Replace ${VAR} tokens with os.environ values."""
-
-    def _sub(m: re.Match) -> str:
-        key = m.group(1)
-        resolved = os.environ.get(key, "")
-        if not resolved:
-            logger.warning(f"[SelfhealConfig] Unresolved env var: ${{{key}}}")
-        return resolved
-
-    return _ENV_VAR_RE.sub(_sub, value)
-
-# Sub-models
-class HealingPolicy(BaseModel):
-    """Governance constraints declared by the developer."""
-
-    auto_rollback: bool = True
-    max_auto_actions_per_hour: int = Field(default=10, ge=0, le=100)
-    require_approval_for: list[str | dict[str, str]] = Field(
-        default_factory=list,
-        description=(
-            "List of scenario names that require human approval. "
-            "Strings like 'database_migrations', or dicts like {'scaling_above': '10x'}."
-        ),
-    )
-    never_shed_routes: list[str] = Field(
-        default_factory=list,
-        description="Routes that should never be load-shed, even under extreme pressure.",
-    )
-
-    def requires_approval(self, scenario: str) -> bool:
-        """Check whether a scenario requires human approval."""
-        for item in self.require_approval_for:
-            if isinstance(item, str) and item == scenario:
-                return True
-            if isinstance(item, dict) and scenario in item:
-                return True
-        return False
-
-    def scaling_approval_threshold(self) -> float | None:
-        """
-        Return the replica-multiple above which scaling requires approval.
-        e.g. {'scaling_above': '10x'} → 10.0
-        """
-        for item in self.require_approval_for:
-            if isinstance(item, dict) and "scaling_above" in item:
-                val = item["scaling_above"]
-                try:
-                    return float(str(val).rstrip("xX"))
-                except ValueError:
-                    pass
-        return None
-
-
-class PredictiveConfig(BaseModel):
-    """Per-app predictive layer configuration."""
-
-    traffic_spike_tables: list[str] = Field(
-        default_factory=list,
-        description="DB table names to watch for traffic spike prediction.",
-    )
-    pre_scale_threshold: float = Field(
-        default=2.5,
-        ge=1.1,
-        le=20.0,
-        description="Replica multiplier at which pre-scaling is triggered (e.g. 2.5 = 2.5x RPS).",
-    )
-    spike_indicator_queries: list[str] = Field(
-        default_factory=list,
-        description="SQL fragments that, when detected, indicate an imminent traffic spike.",
-    )
-
-
-class NotificationsConfig(BaseModel):
-    """Slack and paging configuration."""
-
-    slack_webhook: str = Field(default="", description="Slack incoming webhook URL.")
-    page_sre_after: int = Field(
-        default=3,
-        ge=1,
-        le=20,
-        description="Number of failed healing attempts before SRE paging.",
-    )
-    notify_on_heal: bool = True
-    notify_on_prescale: bool = True
-
-    @field_validator("slack_webhook", mode="before")
-    @classmethod
-    def resolve_slack_webhook(cls, v: str) -> str:
-        return _resolve_env(str(v)) if v else ""
-
-# Root schema
 class SelfhealConfig(BaseModel):
     """
     Root schema for selfheal.yaml.
@@ -195,22 +75,17 @@ class SelfhealConfig(BaseModel):
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump()
 
-# Loader
+
 def load_selfheal_config(repo_path: str | Path) -> SelfhealConfig | None:
     """
     Load and validate selfheal.yaml from the given repo root.
 
     Returns None if the file doesn't exist (app hasn't opted in yet).
     Raises pydantic.ValidationError if the YAML is malformed.
-
-    Usage:
-        cfg = load_selfheal_config("/path/to/my-app")
-        if cfg:
-            print(cfg.app, cfg.predictive.traffic_spike_tables)
     """
     path = Path(repo_path) / "selfheal.yaml"
     if not path.exists():
-        path = Path(repo_path) / "selfheal.yml"  # also accept .yml
+        path = Path(repo_path) / "selfheal.yml"
     if not path.exists():
         return None
 

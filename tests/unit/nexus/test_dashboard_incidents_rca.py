@@ -74,3 +74,95 @@ async def test_dashboard_incidents_postgres_rca_and_accept():
     assert item["rca"]["root_cause"] == "NPE in PaymentAdapter"
     assert item["rca"]["source"] == "gemini"
 
+
+@pytest.mark.asyncio
+async def test_developer_post_incident_and_accept_endpoints(monkeypatch):
+    """Verify POST /developer/incidents and POST /developer/incidents/{id}/accept endpoints."""
+    from tests.unit.nexus.test_db_helpers import MockPostgresClient
+
+    mock_client = MockPostgresClient()
+
+    async def _mock_get_db():
+        return mock_client
+
+    monkeypatch.setattr("nexus.integration.dashboard.get_database_client", _mock_get_db)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. POST a new incident (simulating demo_orchestrator)
+        payload = {
+            "incident_id": "INC-DEMO-999",
+            "runbook_id": "runbook_pod_crashloop_v1",
+            "target": "shop-demo",
+            "level": 1,
+            "outcome": "success",
+            "description": "Restarted shop-demo which was crash-looping. Successfully resolved.",
+            "confidence": 0.98,
+        }
+        res_post = await client.post("/developer/incidents", json=payload)
+        assert res_post.status_code == 200
+        data_post = res_post.json()
+        assert data_post["status"] == "ok"
+        assert data_post["incident_id"] == "INC-DEMO-999"
+
+        # 2. GET /developer/incidents should contain the newly posted incident
+        res_get = await client.get("/developer/incidents?n=10")
+        assert res_get.status_code == 200
+        items = res_get.json()
+        match = next((i for i in items if i.get("incident_id") == "INC-DEMO-999"), None)
+        assert match is not None
+        assert match["target"] == "shop-demo"
+        assert match["outcome"] == "success"
+        assert match["level"] == 1
+        assert "Restarted shop-demo" in match["description"]
+
+        # 3. POST /developer/incidents/{incident_id}/accept claims ownership
+        res_accept = await client.post(
+            "/developer/incidents/INC-DEMO-999/accept",
+            json={"user": "sre-alice"},
+        )
+        assert res_accept.status_code == 200
+        data_accept = res_accept.json()
+        assert data_accept["status"] == "ok"
+        assert data_accept["accepted_by"] == "sre-alice"
+
+        # 4. Verify updated accepted_by in GET /developer/incidents
+        res_get_after = await client.get("/developer/incidents?n=10")
+        items_after = res_get_after.json()
+        match_after = next((i for i in items_after if i.get("incident_id") == "INC-DEMO-999"), None)
+        assert match_after is not None
+        assert match_after["accepted_by"] == "sre-alice"
+        assert match_after.get("accepted_at") is not None
+
+
+@pytest.mark.asyncio
+async def test_developer_post_incident_offline_fallback(monkeypatch):
+    """Verify POST /developer/incidents works even when PostgreSQL is not configured."""
+    async def _failing_db():
+        raise RuntimeError("No PostgreSQL DSN configured")
+
+    monkeypatch.setattr("nexus.integration.dashboard.get_database_client", _failing_db)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        payload = {
+            "incident_id": "INC-OFFLINE-123",
+            "runbook_id": "runbook_missing_env_key_v1",
+            "target": "checkout-offline",
+            "level": 2,
+            "outcome": "failed",
+            "description": "Blocked deployment of checkout-offline — missing ENV.",
+            "confidence": 0.85,
+        }
+        res_post = await client.post("/developer/incidents", json=payload)
+        assert res_post.status_code == 200
+        assert res_post.json()["incident_id"] == "INC-OFFLINE-123"
+
+        res_get = await client.get("/developer/incidents?n=10&app=checkout-offline")
+        assert res_get.status_code == 200
+        items = res_get.json()
+        assert len(items) >= 1
+        assert items[0]["incident_id"] == "INC-OFFLINE-123"
+        assert items[0]["outcome"] == "failed"
+
+

@@ -12,40 +12,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import uuid
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from nexus.learning.ppa_models import PendingPrediction
+from nexus.learning.ppa_models import compute_smape as _compute_smape
+
 logger = logging.getLogger(__name__)
-
-
-def _compute_smape(predicted: float, actual: float) -> float:
-    """Symmetric Mean Absolute Percentage Error — safe for zero values."""
-    denominator = (abs(predicted) + abs(actual)) / 2.0
-    if denominator == 0.0:
-        return 0.0
-    return 100.0 * abs(predicted - actual) / denominator
-
-
-@dataclass
-class PendingPrediction:
-    decision_id: str
-    deployment: str
-    namespace: str
-    predicted_rps: float
-    current_rps: float
-    confidence: float
-    horizon_minutes: int
-    model_version: str
-    raw_features: dict[str, float]
-    expected_resolution_time: datetime
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-
-    @property
-    def is_expired(self) -> bool:
-        return datetime.now(timezone.utc) >= self.expected_resolution_time
 
 
 class PpaOutcomeTracker:
@@ -126,39 +100,9 @@ class PpaOutcomeTracker:
         )
 
     async def _fetch_actual_rps(self, deployment: str) -> float:
-        """
-        Fetch current RPS for a deployment from Prometheus.
-        Returns 0.0 on error (safe fallback).
-
-        Resolution order:
-            1. The URL explicitly injected at construction (NexusServer.create)
-            2. $PROMETHEUS_URL env var
-            3. ppa.config.get_prometheus_url() (legacy fallback)
-        """
-        url = self._prom_url or os.environ.get("PROMETHEUS_URL")
-        if url is None:
-            try:
-                from ppa.config import get_prometheus_url
-
-                url = get_prometheus_url()
-            except Exception:
-                url = "http://prometheus:9090"
-        try:
-            from prometheus_api_client import PrometheusConnect
-
-            prom = PrometheusConnect(url=url)
-            query = (
-                f"sum(rate(nginx_ingress_requests_total"
-                f'{{backend=~"{deployment}.*"}}[1m])) * 60'
-            )
-            result = prom.custom_query(query=query)
-            if result and result[0]["value"][1] != "NaN":
-                return float(result[0]["value"][1])
-        except Exception as exc:
-            logger.warning(
-                f"[PpaOutcomeTracker] Failed to fetch actual RPS for {deployment}: {exc}"
-            )
-        return 0.0
+        """Fetch current RPS for a deployment from Prometheus."""
+        from nexus.learning.ppa_models import fetch_actual_rps
+        return fetch_actual_rps(deployment, self._prom_url)
 
     def _compute_verdict(self, pred: PendingPrediction, actual_rps: float) -> str:
         """Classify a prediction as spike_hit / spike_missed / correct_no_spike."""

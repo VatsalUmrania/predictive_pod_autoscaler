@@ -2,344 +2,133 @@
 NEXUS Developer Dashboard API
 ===============================
 Three developer-facing views backed by existing NEXUS data stores.
-
-Mounted at /developer/* on the Status API.
-
-Endpoints:
-    GET /developer/incidents?n=20&app=checkout-service
-        Plain-English healing incident feed from AuditTrail.
-        Each entry is a human-readable sentence: what happened, when, why.
-
-    GET /developer/predictions?app=checkout-service
-        Current traffic forecasts from Prescaler + DBTrafficCorrelator.
-        Format: { endpoint, current_rps, predicted_rps, horizon_min, confidence, tables }
-
-    GET /developer/policy/{app}
-        Resolved selfheal.yaml policy (from NATS KV or in-memory cache).
-
-    PUT /developer/policy/{app}
-        Runtime override of a specific policy field without a git push.
-        Useful for incident response: temporarily disable auto_rollback, etc.
-
-These endpoints are designed for developer dashboards, not ops tooling.
-The language used in incident descriptions is intentionally non-technical.
 """
 
 from __future__ import annotations
 
-import json as _json
 import logging
+import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel
 
-from nexus.db.postgres import PostgresClient, get_database_client
+from nexus.db.postgres import get_database_client
+from nexus.integration.dashboard_incidents import (
+    _in_memory_incidents,
+    make_plain_english,
+    read_incidents,
+    record_in_memory_incident,
+    record_incident_resolution,
+    write_incident,
+)
+from nexus.integration.dashboard_policy import (
+    PolicyOverride,
+    _policy_cache,
+    _policy_overrides,
+    apply_policy_override,
+    cache_policy,
+    clear_policy_overrides,
+    get_resolved_policy,
+    refresh_policy_cache,
+)
+from nexus.integration.dashboard_predictions import (
+    get_predictions,
+    make_prediction_sentence,
+)
+from nexus.integration.dashboard_queries import (
+    accept_incident_claim,
+    fetch_developer_incidents,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# In-memory policy override store (runtime patches on top of selfheal.yaml)
+# Re-exports for backwards compatibility
+_record_in_memory_incident = record_in_memory_incident
+_write_incident = write_incident
+_read_incidents = read_incidents
+_make_plain_english = make_plain_english
+_make_prediction_sentence = make_prediction_sentence
 
-_policy_overrides: dict[str, dict[str, Any]] = {}
-_policy_cache: dict[str, dict[str, Any]] = {}  # app_name → resolved SelfhealConfig dict
-
-def cache_policy(app_name: str, policy_dict: dict[str, Any]) -> None:
-    """Called by GitAgent when a new selfheal.yaml is processed."""
-    _policy_cache[app_name] = policy_dict
-    logger.info(f"[Dashboard] Policy cached for app='{app_name}'")
-
-def refresh_policy_cache() -> int:
-    """Eagerly scan filesystem for selfheal.yaml files and populate _policy_cache.
-
-    Without this, downstream consumers (e.g. Notifier) read an empty cache because
-    `_policy_cache` is only populated lazily on the first dashboard HTTP request.
-    """
-    import os
-    from pathlib import Path
-
-    import yaml as _yaml
-
-    candidates = [
-        os.environ.get("NEXUS_SELFHEAL_YAML_PATH", ""),
-        "/app/selfheal.yaml",
-        "/data/selfheal.yaml",
-    ]
-
-    loaded = 0
-    for path_str in candidates:
-        if not path_str:
-            continue
-        p = Path(path_str)
-        if not p.exists():
-            continue
-        try:
-            data = _yaml.safe_load(p.read_text())
-        except Exception as exc:
-            logger.debug(f"[Dashboard] policy refresh read error at {p}: {exc}")
-            continue
-        if not isinstance(data, dict):
-            continue
-        app_name = data.get("app") or p.stem
-        _policy_cache[app_name] = data
-        loaded += 1
-        logger.info(f"[Dashboard] Pre-cached policy for app='{app_name}' from {p}")
-
-    if loaded == 0:
-        logger.debug("[Dashboard] refresh_policy_cache found no selfheal.yaml files")
-    return loaded
+__all__ = [
+    "router",
+    "cache_policy",
+    "refresh_policy_cache",
+    "record_incident_resolution",
+    "get_database_client",
+    "PolicyOverride",
+    "_policy_cache",
+    "_policy_overrides",
+    "_in_memory_incidents",
+    "_write_incident",
+    "_read_incidents",
+    "_make_plain_english",
+    "_make_prediction_sentence",
+]
 
 
-# ── PostgreSQL-backed incident store (shared across uvicorn workers) ───────────
-
-async def _write_incident(row: dict[str, Any], client: PostgresClient | None = None) -> None:
-    """Write one incident to PostgreSQL developer_incidents table."""
-    rca_val = row.get("rca")
-    if isinstance(rca_val, (dict, list)):
-        rca_val = _json.dumps(rca_val)
-    elif rca_val is not None:
-        rca_val = str(rca_val)
-
-    try:
-        db = client or await get_database_client()
-        sql = """
-        INSERT INTO developer_incidents
-            (incident_id, runbook_id, target, level, outcome, description, confidence, timestamp, rca, accepted_by, accepted_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)
-        """
-        async with db.acquire() as conn:
-            await conn.execute(
-                sql,
-                row.get("incident_id"),
-                row.get("runbook_id"),
-                row.get("target"),
-                row.get("level"),
-                row.get("outcome"),
-                row.get("description"),
-                float(row.get("confidence", 0.0)) if row.get("confidence") is not None else None,
-                str(row.get("timestamp") or ""),
-                rca_val,
-                row.get("accepted_by"),
-                row.get("accepted_at"),
-            )
-            await conn.execute("""
-                DELETE FROM developer_incidents WHERE id NOT IN (
-                    SELECT id FROM developer_incidents ORDER BY id DESC LIMIT 200
-                )
-            """)
-        logger.info(
-            f"[Dashboard] Incident stored: {row.get('incident_id')} outcome={row.get('outcome')}"
-        )
-    except Exception as _e:
-        logger.warning(f"[Dashboard] incident write failed: {_e}")
-
-
-async def record_incident_resolution(
-    data: dict[str, Any],
-    client: PostgresClient | None = None,
-) -> None:
-    """Format and record an incident resolution or escalation into developer_incidents table."""
-    from datetime import datetime, timezone
-
-    inc_id = data.get("incident_id")
-    target = data.get("target") or data.get("target_name") or data.get("app") or "service"
-    plan = data.get("plan") or {}
-    rca = data.get("rca") or data.get("diagnosis") or {}
-    runbook_id = plan.get("failure_mode") or data.get("runbook_id") or "autonomous_remediation"
-    level = data.get("level", 3)
-    outcome = data.get("outcome", "success")
-
-    # Generate a readable plain-English sentence
-    failure_class = rca.get("failure_class") or "issue"
-    steps = plan.get("steps") or []
-    action_desc = (
-        steps[0].get("description")
-        if steps and steps[0].get("description")
-        else data.get("action_taken") or data.get("description") or f"Executed remediation for {failure_class}"
-    )
-
-    ts = (
-        data.get("resolved_at")
-        or data.get("timestamp")
-        or datetime.now(timezone.utc).isoformat()
-    )[:19].replace("T", " ")
-    if outcome == "success":
-        desc = f"At {ts} UTC — {action_desc} on {target}. Successfully resolved and verified healthy."
-    else:
-        reason = data.get("reason") or "Remediation failed or maximum retries exhausted."
-        desc = f"At {ts} UTC — Incident on {target} escalated: {reason}"
-
-    confidence = data.get("confidence")
-    if confidence is None and rca.get("confidence") is not None:
-        confidence = rca.get("confidence")
-
-    row = {
-        "incident_id": inc_id,
-        "runbook_id": runbook_id,
-        "target": target,
-        "level": level,
-        "outcome": outcome,
-        "description": desc,
-        "confidence": float(confidence) if confidence is not None else 1.0,
-        "timestamp": ts,
-        "rca": rca,
-        "accepted_by": data.get("accepted_by"),
-        "accepted_at": data.get("accepted_at"),
-    }
-    await _write_incident(row, client=client)
-
-
-async def _read_incidents(n: int, app: str | None = None, client: PostgresClient | None = None) -> list[dict[str, Any]]:
-    """Read recent incidents from PostgreSQL developer_incidents table."""
-    try:
-        db = client or await get_database_client()
-        sql = "SELECT * FROM developer_incidents ORDER BY id DESC LIMIT $1"
-        async with db.acquire() as conn:
-            rows = await conn.fetch(sql, max(n, 200))
-        results = []
-        for r in rows:
-            d = dict(r)
-            if app and app.lower() not in (d.get("target") or "").lower():
-                continue
-            if d.get("rca") and isinstance(d["rca"], str):
-                try:
-                    d["rca"] = _json.loads(d["rca"])
-                except Exception:
-                    pass
-            results.append(d)
-            if len(results) >= n:
-                break
-        return results
-    except Exception as _e:
-        logger.warning(f"[Dashboard] incident read failed: {_e}")
-        return []
-
-# Plain-English incident description builder
-_RUNBOOK_DESCRIPTIONS = {
-    "runbook_pod_crashloop_v1": "Restarted {target} which was crash-looping",
-    "runbook_high_error_rate_post_deploy_v1": "Rolled back deployment {target} — error rate spiked after a code push",
-    "runbook_missing_env_key_v1": "Blocked deployment of {target} — required environment variables were missing",
-    "runbook_dns_resolution_failure_v1": "Triggered DNS refresh for {target} — DNS resolution was failing",
-    "runbook_db_connection_exhaustion_v1": "Reset the database connection pool for {target} — connections were exhausted",
-}
-
-_OUTCOME_SUFFIX = {
-    "success": "Successfully resolved.",
-    "failed": "Healing attempt failed — may need manual review.",
-    "rolled_back": "Action was rolled back (post-check failed).",
-    "pending": "Action is in progress.",
-}
-
-
-def _make_plain_english(row: dict[str, Any]) -> str:
-    """Turn an AuditTrail row into a plain-English incident description."""
-    runbook_id = row.get("runbook_id", "")
-    target = row.get("target") or row.get("resource_name") or "the service"
-    outcome = row.get("execution_outcome", "pending")
-    ts = (row.get("timestamp") or "")[:19].replace("T", " ")
-
-    template = _RUNBOOK_DESCRIPTIONS.get(
-        runbook_id, f"Performed healing action '{runbook_id}' on {{target}}"
-    )
-    action = template.format(target=target)
-    suffix = _OUTCOME_SUFFIX.get(outcome, "")
-
-    return f"At {ts} UTC — {action}. {suffix}".strip()
-
-# Context proxy (avoids circular import with status_api)
 def _context():
     from nexus.observability.status_api import context
 
     return context
 
-# Incidents
+
 @router.get("/developer/incidents", tags=["developer"])
 async def developer_incidents(
     n: int = 20,
     app: str | None = None,
 ) -> list[dict[str, Any]]:
-    """
-    Plain-English healing incident feed.
-    Reads from PostgreSQL developer_incidents table.
-    Falls back to AuditTrail if the full NEXUS core is running.
-    """
-    # Primary: PostgreSQL store
-    results = await _read_incidents(n=n, app=app)
-
-    # Secondary: AuditTrail (available when full NEXUS core is running)
-    ctx = _context()
-    if ctx.audit_trail is not None and len(results) < n:
-        try:
-            rows = await ctx.audit_trail.query_recent(limit=max(n * 3, 60))
-            for row in rows:
-                if app:
-                    target = (
-                        row.get("target") or row.get("resource_name") or ""
-                    ).lower()
-                    if app.lower() not in target:
-                        continue
-                results.append(
-                    {
-                        "timestamp": (row.get("timestamp") or "")[:19],
-                        "runbook_id": row.get("runbook_id"),
-                        "target": row.get("target") or row.get("resource_name"),
-                        "level": row.get("healing_level"),
-                        "outcome": row.get("execution_outcome", "pending"),
-                        "description": _make_plain_english(row),
-                        "incident_id": row.get("incident_id")
-                        or row.get("correlation_id"),
-                    }
-                )
-                if len(results) >= n:
-                    break
-        except Exception as _e:
-            logger.debug(f"[Dashboard] AuditTrail read skipped: {_e}")
-
-    # Enrich with RCA from orchestrator if available
-    if ctx.orchestrator is not None:
-        try:
-            recent_rca = ctx.orchestrator.last_rca_results(n=50)
-            rca_by_inc = {
-                r.get("incident_id"): r.get("rca")
-                for r in recent_rca
-                if r.get("incident_id") and r.get("rca")
-            }
-            rca_by_target = {
-                r.get("validation", {}).get("target", ""): r.get("rca")
-                for r in recent_rca
-                if r.get("validation", {}).get("target") and r.get("rca")
-            }
-            for item in results:
-                if not item.get("rca"):
-                    inc_id = item.get("incident_id")
-                    target = item.get("target")
-                    if inc_id in rca_by_inc:
-                        item["rca"] = rca_by_inc[inc_id]
-                    elif target and target in rca_by_target:
-                        item["rca"] = rca_by_target[target]
-        except Exception as _e:
-            logger.debug(f"[Dashboard] RCA enrichment skipped: {_e}")
-
-    # Sort newest first
-    results.sort(key=lambda r: r.get("timestamp", ""), reverse=True)
-    return results[:n]
+    """Plain-English healing incident feed."""
+    return await fetch_developer_incidents(
+        n=n,
+        app=app,
+        ctx=_context(),
+        read_incidents_fn=read_incidents,
+        in_memory_incidents=_in_memory_incidents,
+        make_plain_english_fn=_make_plain_english,
+    )
 
 
+@router.post("/developer/incidents", tags=["developer"])
+async def developer_post_incident(payload: dict[str, Any]) -> dict[str, str]:
+    """Accept an incident directly from demo orchestrator or external caller."""
+    payload.setdefault("incident_id", str(uuid.uuid4())[:8])
+    payload.setdefault(
+        "timestamp",
+        datetime.now(timezone.utc).isoformat()[:19].replace("T", " "),
+    )
+    if not payload.get("description") and payload.get("runbook_id"):
+        payload["description"] = _make_plain_english(payload)
 
-# Post-incident report (Resolve.ai-style postmortem draft)
+    await _write_incident(payload)
+    logger.info(
+        f"[Dashboard] Incident stored: {payload.get('incident_id')} outcome={payload.get('outcome')}"
+    )
+    return {"status": "ok", "incident_id": payload["incident_id"]}
+
+
+@router.post("/developer/incidents/{incident_id}/accept", tags=["developer"])
+async def developer_accept_incident(
+    incident_id: str,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Claim ownership of an incident from the developer dashboard."""
+    import nexus.integration.dashboard as dash_mod
+
+    return await accept_incident_claim(
+        incident_id=incident_id,
+        payload=payload,
+        in_memory_incidents=_in_memory_incidents,
+        get_db_fn=dash_mod.get_database_client,
+    )
+
+
 @router.get("/developer/incidents/{incident_id}/report", tags=["developer"])
 async def developer_incident_report(incident_id: str, request: Request) -> Response:
-    """
-    Full post-incident report for one incident:
-    summary, timeline, root cause, impact, remediation actions, verification,
-    recommendations — plus the raw evidence facts they were written from.
-
-    Content-negotiated: browsers (Accept: text/html) get the standalone
-    readable report page (the Slack "Open full report" target); API clients
-    get the raw JSON document.
-    """
+    """Full post-incident report for one incident."""
     from nexus.integration.incident_report import (
         get_incident_report,
         render_report_html,
@@ -362,144 +151,21 @@ async def developer_incident_report(incident_id: str, request: Request) -> Respo
     return JSONResponse(content=report)
 
 
-# Predictions
 @router.get("/developer/predictions", tags=["developer"])
 def developer_predictions(app: str | None = None) -> list[dict[str, Any]]:
-    """
-    Current traffic predictions from the Prescaler.
-
-    Shows what NEXUS is predicting for the next N minutes, including:
-    - Which endpoint is expected to spike
-    - How much traffic is predicted (current vs predicted RPS)
-    - Which DB tables are driving the prediction
-    - Whether NEXUS is pre-scaling and in which mode
-
-    The language mirrors the Integration.md example:
-    "Based on the spike in reads to `orders` in the last 12 minutes,
-     /api/orders is predicted to receive 3.2x normal traffic in 14 minutes."
-    """
-    ctx = _context()
-    if ctx.prescaler is None:
-        return []
-
-    predictions = []
-    for d in reversed(ctx.prescaler._all_decisions[-20:]):
-        # Filter by app name if requested (match against deployment_name)
-        if app and app.lower() not in (d.deployment_name or "").lower():
-            continue
-
-        multiplier = (d.predicted_rps / d.current_rps) if d.current_rps > 0 else 1.0
-
-        predictions.append(
-            {
-                "deployment": d.deployment_name,
-                "namespace": d.namespace,
-                "current_rps": round(d.current_rps, 1),
-                "predicted_rps": round(d.predicted_rps, 1),
-                "multiplier": round(multiplier, 2),
-                "confidence": round(d.confidence, 3),
-                "mode": ctx.prescaler.stats.get("mode", "shadow"),
-                "outcome": d.outcome or "pending",
-                "decided_at": d.decided_at,
-                "description": _make_prediction_sentence(d),
-            }
-        )
-
-    return predictions
+    """Current traffic predictions from the Prescaler."""
+    return get_predictions(_context().prescaler, app=app)
 
 
-def _make_prediction_sentence(d: Any) -> str:
-    """Build a plain-English prediction sentence from a PrescaleDecision."""
-    try:
-        mult = d.predicted_rps / d.current_rps if d.current_rps > 0 else 1.0
-        tables = getattr(d, "trigger_tables", []) or []
-        table_clause = (
-            f" — driven by reads to {', '.join(f'`{t}`' for t in tables[:3])}"
-            if tables
-            else ""
-        )
-        return (
-            f"{d.deployment_name} is predicted to receive "
-            f"{mult:.1f}x normal traffic "
-            f"({d.current_rps:.0f} → {d.predicted_rps:.0f} RPS)"
-            f"{table_clause}."
-        )
-    except Exception:
-        return "Traffic spike predicted."
-
-# Policy
 @router.get("/developer/policy/{app}", tags=["developer"])
 def developer_get_policy(app: str) -> dict[str, Any]:
-    """
-    Return the resolved selfheal.yaml policy for an app.
-    Includes any runtime overrides applied via PUT.
-
-    Falls back to reading from a mounted selfheal.yaml file at:
-      $NEXUS_SELFHEAL_YAML_PATH  (env var override)
-      /app/selfheal.yaml          (default — mounted via docker-compose volume)
-    """
-    import os
-    from pathlib import Path
-
-    base = _policy_cache.get(app)
-    override = _policy_overrides.get(app, {})
-
-    # ── Filesystem fallback ──────────────────────────────────────────────────
-    # Try to read from a mounted selfheal.yaml if cache is empty.
-    # This means the policy is always available as long as the file is mounted,
-    # without requiring the backend to POST the policy on startup.
-    if base is None:
-        _candidates = [
-            os.environ.get("NEXUS_SELFHEAL_YAML_PATH", ""),
-            "/app/selfheal.yaml",  # mounted by docker-compose
-            "/data/selfheal.yaml",  # alternate mount point
-        ]
-        for _path_str in _candidates:
-            if not _path_str:
-                continue
-            _p = Path(_path_str)
-            if _p.exists():
-                try:
-                    import yaml as _yaml
-
-                    _data = _yaml.safe_load(_p.read_text())
-                    if isinstance(_data, dict):
-                        # If app matches OR no app filter given, cache and use it
-                        _file_app = _data.get("app", app)
-                        if _file_app == app or app not in _policy_cache:
-                            cache_policy(_file_app, _data)
-                            if _file_app == app:
-                                base = _data
-                                break
-                except Exception as _e:
-                    logger.debug(f"[Dashboard] selfheal.yaml read error: {_e}")
-
-    if base is None and not override:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"No selfheal.yaml found for app '{app}'. "
-                "Commit a selfheal.yaml to your repo root and push to register."
-            ),
-        )
-
-    result = {**(base or {}), **override}
-    result["_overrides_active"] = bool(override)
-    result["_app"] = app
-    return result
+    """Return the resolved selfheal.yaml policy for an app."""
+    return get_resolved_policy(app)
 
 
 @router.post("/developer/policy/{app}", tags=["developer"])
 def developer_upload_policy(app: str, policy: dict[str, Any]) -> dict[str, Any]:
-    """
-    Upload and cache a selfheal.yaml policy for an app.
-
-    Called by the SDK on app startup — the app reads its selfheal.yaml from disk
-    and POSTs the content here so the dashboard can display and edit it.
-
-    This is the HTTP-safe alternative to calling cache_policy() directly
-    (which only works in-process).
-    """
+    """Upload and cache a selfheal.yaml policy for an app."""
     cache_policy(app, policy)
     return {
         "app": app,
@@ -508,44 +174,13 @@ def developer_upload_policy(app: str, policy: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-class PolicyOverride(BaseModel):
-    field: str  # dot-path e.g. "healing_policy.auto_rollback"
-    value: Any
-
-
 @router.put("/developer/policy/{app}", tags=["developer"])
 def developer_put_policy(app: str, override: PolicyOverride) -> dict[str, Any]:
-    """
-    Apply a runtime override to an app's selfheal.yaml policy.
-
-    Changes take effect immediately for new healing decisions.
-    Overrides are NOT persisted — they reset on NEXUS restart.
-    To make permanent changes, update selfheal.yaml in the repo.
-
-    Example:
-        PUT /developer/policy/checkout-service
-        { "field": "healing_policy.auto_rollback", "value": false }
-    """
-    if app not in _policy_overrides:
-        _policy_overrides[app] = {}
-
-    _policy_overrides[app][override.field] = override.value
-    logger.info(
-        f"[Dashboard] Policy override: app={app} "
-        f"field={override.field} value={override.value}"
-    )
-    return {
-        "app": app,
-        "overrides": _policy_overrides[app],
-        "message": (
-            f"Override applied: {override.field} = {override.value}. "
-            "This is temporary — commit selfheal.yaml to make it permanent."
-        ),
-    }
+    """Apply a runtime override to an app's selfheal.yaml policy."""
+    return apply_policy_override(app, override)
 
 
 @router.delete("/developer/policy/{app}/overrides", tags=["developer"])
 def developer_clear_overrides(app: str) -> dict[str, str]:
-    """Clear all runtime overrides for an app, reverting to selfheal.yaml defaults."""
-    _policy_overrides.pop(app, None)
-    return {"app": app, "message": "All overrides cleared."}
+    """Clear all runtime overrides for an app."""
+    return clear_policy_overrides(app)

@@ -1,295 +1,32 @@
-"""
-NEXUS Action Ladder
-====================
+"""NEXUS Action Ladder.
+
 Routes healing actions through the 4-level Governance Plane.
-
-Level taxonomy:
-    L0 — detect + alert only (emit_alert, patch_annotation)
-         Always allowed; zero blast radius
-    L1 — no-regret actions (restart_pod, flush_coredns_cache)
-         Allowed unless cooldown or governance CB open
-    L2 — bounded mitigation (scale_deployment, canary halt)
-         L1 conditions + blast-radius check
-    L3 — significant change (rollout undo, config revert)
-         L2 conditions + confidence >= 0.85 OR explicit human approval
-
-Key safety component — GovernanceCircuitBreaker:
-    Tracks consecutive post-check SLO failures across all runbooks.
-    If N consecutive healings fail their post-checks, the circuit trips OPEN
-    and ALL autonomous healing is blocked until manually reset.
-    This prevents "healing loops" from making a degraded system worse.
-
-HumanApprovalQueue:
-    L3 actions with confidence < 0.85 are staged here.
-    A human operator calls approve(approval_id) via the CLI or API.
-    Once approved, the runbook executor retries the action.
 """
-
 from __future__ import annotations
 
 import logging
-import uuid
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from typing import Any
 
+from nexus.governance.approval_queue import (
+    HumanApprovalQueue,
+    PendingApproval,
+)
+from nexus.governance.circuit_breaker import GovernanceCircuitBreaker
 from nexus.governance.cooldown_store import CooldownStore
 from nexus.governance.policy_engine import PolicyDecision, PolicyEngine
 
+__all__ = [
+    "ActionLadder",
+    "LadderDecision",
+    "HumanApprovalQueue",
+    "PendingApproval",
+]
+
+
 logger = logging.getLogger(__name__)
 
-def _json_safe(obj: Any) -> Any:
-    """Recursively convert datetime objects to ISO strings for JSON serialization."""
-    if isinstance(obj, datetime):
-        return obj.isoformat()
-    if isinstance(obj, dict):
-        return {k: _json_safe(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_json_safe(v) for v in obj]
-    if isinstance(obj, tuple):
-        return tuple(_json_safe(v) for v in obj)
-    return obj
 
-# Governance Circuit Breaker
-class GovernanceCircuitBreaker:
-    """
-    Stops autonomous healing when consecutive post-check failures indicate
-    the healing system itself may be misconfigured or causing harm.
-
-    States:
-        CLOSED:    Normal — healing actions are permitted.
-        OPEN:      Too many failures — autonomous healing blocked.
-                   L0 (emit_alert, patch_annotation) still allowed.
-
-    Args:
-        failure_threshold:  Consecutive post-check failures to trip OPEN (default 3).
-        nats_client:        Optional — if provided, emits a CIRCUIT_BREAKER_TRIPPED event.
-    """
-
-    CLOSED = "CLOSED"
-    OPEN = "OPEN"
-
-    def __init__(self, failure_threshold: int = 3, nats_client=None):
-        self._threshold = failure_threshold
-        self._failures = 0
-        self._state = self.CLOSED
-        self._nats = nats_client
-        self._tripped_at: str | None = None
-
-    @property
-    def state(self) -> str:
-        return self._state
-
-    @property
-    def is_open(self) -> bool:
-        return self._state == self.OPEN
-
-    @property
-    def consecutive_failures(self) -> int:
-        return self._failures
-
-    def record_post_check_success(self) -> None:
-        """Call after a runbook's post-checks pass."""
-        prev = self._failures
-        self._failures = 0
-        self._state = self.CLOSED
-        if prev > 0:
-            logger.info(f"[GovernanceCB] RESET after {prev} consecutive failure(s)")
-
-    def record_post_check_failure(self) -> None:
-        """Call when a runbook's post-checks fail (healing didn't work)."""
-        self._failures += 1
-        if self._failures >= self._threshold:
-            if self._state != self.OPEN:
-                self._tripped_at = datetime.now(timezone.utc).isoformat()
-                self._state = self.OPEN
-                logger.critical(
-                    f"[GovernanceCB] TRIPPED OPEN — {self._failures} consecutive "
-                    f"post-check failures. Autonomous healing SUSPENDED."
-                )
-
-    def reset(self) -> None:
-        """Manually reset the circuit breaker (human operator action)."""
-        self._failures = 0
-        self._state = self.CLOSED
-        self._tripped_at = None
-        logger.warning("[GovernanceCB] Manually RESET by operator")
-
-    def status_dict(self) -> dict:
-        return {
-            "state": self._state,
-            "consecutive_failures": self._failures,
-            "threshold": self._threshold,
-            "tripped_at": self._tripped_at,
-        }
-
-
-# Human Approval Queue
-@dataclass
-class PendingApproval:
-    approval_id: str
-    runbook_id: str
-    action_type: str
-    target: str
-    incident_id: str
-    healing_level: int
-    confidence: float
-    enqueued_at: str
-    context: dict = field(default_factory=dict)
-
-    def to_dict(self) -> dict:
-        return {
-            "approval_id": self.approval_id,
-            "runbook_id": self.runbook_id,
-            "action_type": self.action_type,
-            "target": self.target,
-            "incident_id": self.incident_id,
-            "healing_level": self.healing_level,
-            "confidence": round(self.confidence, 3),
-            "enqueued_at": self.enqueued_at,
-            "context": self.context,
-        }
-
-class HumanApprovalQueue:
-    """
-    Staging queue for L3 actions awaiting human approval.
-
-    In Phase 3 this is in-memory.
-    Phase 7 will wire this to the CLI (`nexus approve <id>`), Slack bot,
-    and PagerDuty webhook so approvals can arrive from any channel.
-    """
-
-    def __init__(self, nats_client=None):
-        self._pending: dict[str, PendingApproval] = {}
-        self._approved: set[str] = set()
-        self._rejected: set[str] = set()
-        self._nats = nats_client
-
-    def enqueue(
-        self,
-        runbook_id: str,
-        action_type: str,
-        target: str,
-        incident_id: str,
-        healing_level: int,
-        confidence: float,
-        context: dict | None = None,
-    ) -> str:
-        """
-        Stage an action for human approval.
-        Returns an approval_id the operator passes to approve() or reject().
-        """
-        # Deduplication: check if an approval is already pending for this target or incident
-        for existing_id, existing in list(self._pending.items()):
-            if existing_id in self._approved or existing_id in self._rejected:
-                continue
-            if existing.target == target or (incident_id and existing.incident_id == incident_id):
-                existing.confidence = max(existing.confidence, confidence)
-                if context:
-                    existing.context.update(context)
-                logger.info(
-                    f"[HumanApprovalQueue] Target '{target}' (incident={incident_id}) already has pending approval "
-                    f"id={existing_id} (runbook={existing.runbook_id}) — suppressing duplicate"
-                )
-                return existing_id
-
-        approval_id = str(uuid.uuid4())[:8].upper()
-        self._pending[approval_id] = PendingApproval(
-            approval_id=approval_id,
-            runbook_id=runbook_id,
-            action_type=action_type,
-            target=target,
-            incident_id=incident_id,
-            healing_level=healing_level,
-            confidence=confidence,
-            enqueued_at=datetime.now(timezone.utc).isoformat(),
-            context=context or {},
-        )
-        logger.warning(
-            f"[HumanApprovalQueue] L3 action staged — approval_id={approval_id} "
-            f"runbook={runbook_id} target={target} confidence={confidence:.2f}\n"
-            f"  → Run: nexus approve {approval_id}  OR  nexus reject {approval_id}"
-        )
-
-        if self._nats:
-            import asyncio
-
-            try:
-                # Fire and forget event to trigger Slack webhook
-                asyncio.get_running_loop().create_task(
-                    self._nats.publish_raw(
-                        "nexus.approvals.required",
-                        _json_safe({
-                            "approval_id": approval_id,
-                            "runbook_id": runbook_id,
-                            "action_type": action_type,
-                            "target": target,
-                            "incident_id": incident_id,
-                            "healing_level": healing_level,
-                            "confidence": confidence,
-                            "app": (context or {}).get("namespace", "unknown"),
-                            "context": context or {},
-                        }),
-                    )
-                )
-            except RuntimeError:
-                pass
-
-        return approval_id
-
-    def get_pending_by_target(self, target: str) -> PendingApproval | None:
-        """Find an active pending approval for a given target resource."""
-        for p in self.pending_list():
-            if p.target == target:
-                return p
-        return None
-
-    def approve(self, approval_id: str) -> bool:
-        """Operator approves a pending action."""
-        if approval_id in self._approved or approval_id in self._rejected:
-            return False
-        pending = self._pending.pop(approval_id, None)
-        if pending is not None:
-            self._approved.add(approval_id)
-            logger.info(f"[HumanApprovalQueue] APPROVED: {approval_id}")
-            return True
-        return False
-
-    def get(self, approval_id: str) -> PendingApproval | None:
-        return self._pending.get(approval_id)
-
-    def reject(self, approval_id: str) -> bool:
-        """Operator rejects a pending action."""
-        if approval_id in self._approved or approval_id in self._rejected:
-            return False
-        pending = self._pending.pop(approval_id, None)
-        if pending is not None:
-            self._rejected.add(approval_id)
-            logger.info(f"[HumanApprovalQueue] REJECTED: {approval_id}")
-            return True
-        return False
-
-    def is_approved(self, approval_id: str) -> bool:
-        return approval_id in self._approved
-
-    def is_rejected(self, approval_id: str) -> bool:
-        return approval_id in self._rejected
-
-    def pending_list(self) -> list[PendingApproval]:
-        return [
-            p
-            for approval_id, p in self._pending.items()
-            if approval_id not in self._approved and approval_id not in self._rejected
-        ]
-
-    def clear_resolved(self) -> None:
-        """Remove approved/rejected items from the pending dict."""
-        resolved = self._approved | self._rejected
-        for rid in resolved:
-            self._pending.pop(rid, None)
-
-
-# Ladder Decision
 @dataclass
 class LadderDecision:
     can_proceed: bool
@@ -300,24 +37,8 @@ class LadderDecision:
     cooldown_remaining_s: float = 0.0
 
 
-# Action Ladder
 class ActionLadder:
-    """
-    Governance router for all NEXUS healing actions.
-
-    Evaluates L0–L3 actions against:
-        1. Governance circuit breaker (consecutive post-check failures)
-        2. OPA policy (action type allowlist, blast radius, confidence)
-        3. Cooldown store (prevent rapid re-execution)
-        4. Human approval queue (L3 with confidence < 0.85)
-
-    Args:
-        policy_engine:        PolicyEngine (OPA — hard dependency).
-        cooldown_store:       CooldownStore (PostgreSQL + memory fallback).
-        approval_queue:       HumanApprovalQueue for L3 staging.
-        governance_cb:        GovernanceCircuitBreaker.
-        l3_confidence_gate:   Minimum confidence to auto-approve L3 (default 0.85).
-    """
+    """Governance router for all NEXUS healing actions."""
 
     def __init__(
         self,
@@ -346,31 +67,18 @@ class ActionLadder:
         healing_level: int | None = None,
         blast_radius: str | None = None,
     ) -> LadderDecision:
-        """
-        Evaluate whether an action may proceed.
-
-        Returns:
-            LadderDecision(can_proceed=True)         — execute immediately
-            LadderDecision(requires_approval=True)   — stage for human approval
-            LadderDecision(can_proceed=False)         — blocked (reason included)
-        """
         level = healing_level if healing_level is not None else (getattr(runbook, "healing_level", 1) if runbook else 1)
         action_type_val: str = str(action_type or (getattr(action, "type", str(action)) if action else "unknown"))
         blast_radius_val: str = str(blast_radius or (getattr(runbook, "blast_radius", "single_pod") if runbook else "single_pod"))
         action_id_val: str = str(getattr(runbook, "id", action_type_val) if runbook else action_type_val)
 
-        # L0 fast path
-        # L0 actions (emit_alert, patch_annotation) bypass CB + cooldown checks.
-        # They are always allowed — blocking alerts would defeat the purpose.
+        # L0 actions (emit_alert, patch_annotation) always allowed
         if level == 0:
             return LadderDecision(can_proceed=True)
 
         # Governance circuit breaker
         if self._cb.is_open:
-            logger.warning(
-                f"[ActionLadder] BLOCKED by governance CB: "
-                f"{action_type_val} for {target} (L{level})"
-            )
+            logger.warning(f"[ActionLadder] BLOCKED by governance CB: {action_type_val} for {target} (L{level})")
             return LadderDecision(
                 can_proceed=False,
                 denial_reason=(
@@ -382,15 +90,10 @@ class ActionLadder:
         # Cooldown check
         cooldown_key = CooldownStore.make_key(action_id_val, target)
         in_cooldown = await self._cooldown.is_in_cooldown(cooldown_key)
-        remaining = (
-            await self._cooldown.remaining_seconds(cooldown_key) if in_cooldown else 0.0
-        )
+        remaining = await self._cooldown.remaining_seconds(cooldown_key) if in_cooldown else 0.0
 
         if in_cooldown:
-            logger.info(
-                f"[ActionLadder] COOLDOWN: {action_id_val} on {target} "
-                f"({remaining:.0f}s remaining)"
-            )
+            logger.info(f"[ActionLadder] COOLDOWN: {action_id_val} on {target} ({remaining:.0f}s remaining)")
             return LadderDecision(
                 can_proceed=False,
                 denial_reason=f"in_cooldown ({remaining:.0f}s remaining)",
@@ -406,11 +109,10 @@ class ActionLadder:
             governance_cb_open=self._cb.is_open,
             confidence=confidence,
             human_approved=human_approved,
-            override_blast_radius=override_blast_radius
-            or getattr(event, "override_blast_radius", False),
+            override_blast_radius=override_blast_radius or getattr(event, "override_blast_radius", False),
         )
 
-        # Universal Human Approval: all mutating actions require approval unless pre-approved
+        # Universal Human Approval requirement
         if (policy.requires_approval or not human_approved) and action_type_val not in ("emit_alert", "patch_annotation"):
             inc_id: str = str(getattr(event, "correlation_id", None) or getattr(event, "event_id", "incident-unknown"))
             evt_id = getattr(event, "event_id", inc_id)
@@ -428,8 +130,7 @@ class ActionLadder:
                     "resource": getattr(event, "resource_name", target),
                     "action": (action.model_dump() if hasattr(action, "model_dump")
                                else {"type": action_type_val, "params": getattr(action, "params", {})}),
-                    "event": (event.model_dump()
-                              if hasattr(event, "model_dump") else None),
+                    "event": (event.model_dump() if hasattr(event, "model_dump") else None),
                     "blast_radius": blast_radius,
                 },
             )
@@ -441,35 +142,20 @@ class ActionLadder:
                 denial_reason="requires_human_approval",
             )
 
-        # Policy denied
         if not policy.allowed:
-            logger.info(
-                f"[ActionLadder] POLICY DENIED: {action_type} L{level} "
-                f"— {policy.deny_reasons}"
-            )
-            return LadderDecision(
-                can_proceed=False,
-                denial_reason="; ".join(policy.deny_reasons),
-                policy_decision=policy,
-            )
+            logger.info(f"[ActionLadder] POLICY DENIED: {action_type} L{level} — {policy.deny_reasons}")
+            return LadderDecision(can_proceed=False, denial_reason="; ".join(policy.deny_reasons), policy_decision=policy)
 
-        logger.info(
-            f"[ActionLadder] APPROVED: {action_type} L{level} "
-            f"blast={blast_radius} confidence={confidence:.2f} "
-            f"policy_source={policy.source}"
-        )
+        logger.info(f"[ActionLadder] APPROVED: {action_type} L{level} blast={blast_radius} confidence={confidence:.2f}")
         return LadderDecision(can_proceed=True, policy_decision=policy)
 
     def record_post_check_success(self) -> None:
-        """Call after successful post-checks to reset governance CB."""
         self._cb.record_post_check_success()
 
     def record_post_check_failure(self) -> None:
-        """Call after failed post-checks — may trip governance CB."""
         self._cb.record_post_check_failure()
 
     async def set_cooldown(self, runbook_or_id: Any, target: str, cooldown_seconds: int = 300) -> None:
-        """Set the cooldown for this action+target after successful execution."""
         key_id = getattr(runbook_or_id, "id", str(runbook_or_id))
         secs = getattr(runbook_or_id, "cooldown_seconds", cooldown_seconds)
         key = CooldownStore.make_key(key_id, target)

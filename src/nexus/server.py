@@ -1,10 +1,10 @@
-# src/nexus/server.py
 """NexusServer — owns all NEXUS components and manages their asyncio task lifecycle."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from typing import TYPE_CHECKING, Any
 
 import uvicorn
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 from nexus.agents.manager import AgentManager
 from nexus.bus.nats_client import NATSClient
-from nexus.db.postgres import get_database_client
+from nexus.db.client import get_database_client
 from nexus.governance.action_ladder import (
     ActionLadder,
     GovernanceCircuitBreaker,
@@ -23,6 +23,7 @@ from nexus.governance.action_ladder import (
 from nexus.governance.audit_trail import AuditTrail
 from nexus.governance.cooldown_store import CooldownStore
 from nexus.governance.policy_engine import PolicyEngine
+from nexus.governance.rollback_registry import RollbackRegistry
 from nexus.graph.workflow import IncidentWorkflow
 from nexus.integration.notifier import Notifier
 from nexus.learning.feedback_loop import build_feedback_loop
@@ -33,6 +34,7 @@ from nexus.observability.status_api import app as status_api
 from nexus.observability.status_api import context
 from nexus.predictive.prescaler import Prescaler
 from nexus.reasoning.confidence_scorer import ConfidenceScorer
+from nexus.server_bootstrap import bootstrap_components
 
 logger = logging.getLogger(__name__)
 
@@ -51,22 +53,9 @@ class RCAEngine:
 
 NexusOrchestrator = IncidentWorkflow
 
+
 class NexusServer:
-    """Owns all NEXUS components and manages their asyncio task lifecycle.
-
-    Create via ``await NexusServer.create(...)`` — never instantiate directly.
-
-    On start():
-      - AgentManager starts 7 domain agents (sense loops, NATS publishes)
-      - PpaOutcomeTracker starts its polling loop (prediction outcome resolution)
-      - IncidentWorkflow starts its LangGraph event-consumption loop
-      - uvicorn serves the FastAPI status API on port 8080
-
-    On shutdown (stop()):
-      - All tasks are cancelled and gathered
-      - AgentManager, Notifier, outcome_tracker, workflow shut down gracefully
-      - NATS connection is closed
-    """
+    """Owns all NEXUS components and manages their asyncio task lifecycle."""
 
     def __init__(
         self,
@@ -82,7 +71,7 @@ class NexusServer:
     ) -> None:
         self.nats_client = nats_client
         self.workflow = workflow
-        self.orchestrator = orchestrator or workflow  # Backwards-compatibility alias
+        self.orchestrator = orchestrator or workflow
         self.prescaler = prescaler
         self.outcome_tracker = outcome_tracker
         self.notifier = notifier
@@ -91,7 +80,6 @@ class NexusServer:
         self.status_api = status_api
         self._tasks: list[asyncio.Task] = []
 
-    # Factory
     @classmethod
     async def create(
         cls,
@@ -101,185 +89,23 @@ class NexusServer:
         gemini_api_key: str | None = None,
         status_port: int = 8080,
     ) -> NexusServer:
-        """
-        Async factory: connects to NATS, creates and wires all components.
-
-        Does NOT start any background tasks — that happens in start().
-
-        NOTE: outcome_tracker.start() is intentionally NOT called here.
-        Calling it here AND in start() would create two polling loops.
-        It is started only in start().
-        """
-        nats = NATSClient(nats_url=nats_url)
-        await nats.connect()
-
-        # TokenStore — must be initialised before any /apps or /sdk request
-        try:
-            from nexus.integration.token_store import get_token_store
-
-            _ts = get_token_store()
-            await _ts.init()
-        except Exception as _ts_exc:
-            logger.warning(
-                f"[NexusServer] TokenStore init failed (non-fatal): {_ts_exc}"
-            )
-
-        # ── PostgreSQL Database client (with retry backoff) ───────────────────
-        import os as _os
-
-        db_client = await get_database_client()
-        logger.info("[NexusServer] PostgreSQL client connected")
-
-        # ── AuditTrail & CooldownStore ────────────────────────────────────────
-        audit_trail = AuditTrail(db_client=db_client)
-        await audit_trail.initialize()
-
-        opa_url = _os.getenv("NEXUS_OPA_URL", "http://localhost:8181")
-        cooldown_store = CooldownStore(db_client=db_client)
-        await cooldown_store.connect()
-
-        ladder = ActionLadder(
-            policy_engine=PolicyEngine(opa_url=opa_url),
-            cooldown_store=cooldown_store,
-            approval_queue=HumanApprovalQueue(nats_client=nats),
-            governance_cb=GovernanceCircuitBreaker(
-                failure_threshold=3,
-                nats_client=nats,
-            ),
+        """Async factory: connects to NATS, creates and wires all components."""
+        srv_mod = sys.modules[__name__]
+        components = await bootstrap_components(
+            srv_mod=srv_mod,
+            nats_url=nats_url,
+            runbook_dir=runbook_dir,
+            prometheus_url=prometheus_url,
+            gemini_api_key=gemini_api_key,
+            status_port=status_port,
         )
-
-        # Prescaler — built AFTER the action_ladder so AUTONOMOUS mode can call into it
-        prescaler = Prescaler(nats_client=nats, action_ladder=ladder)
-        await prescaler.subscribe_to_ppa_predictions()
-
-        # Outcome tracker — subscribe to ppa.predictions.* to close the loop
-        outcome_tracker = PpaOutcomeTracker(
-            nats_client=nats, prometheus_url=prometheus_url
-        )
-
-        async def _outcome_tracker_handler(data: dict, subject: str) -> None:
-            """Route raw ppa.predictions.* events into the OutcomeTracker."""
-            import re
-
-            def _parse_horizon(raw) -> int:
-                if isinstance(raw, int):
-                    return raw
-                m = re.search(r"(\d+)m$", str(raw))
-                return int(m.group(1)) if m else 10
-
-            try:
-                parts = subject.split(".")
-                deployment = parts[-1] if len(parts) > 2 else "unknown"
-                await outcome_tracker.on_prediction(
-                    deployment=data.get("deployment", deployment),
-                    namespace=data.get("namespace", "default"),
-                    predicted_rps=float(data.get("predicted_rps", 0)),
-                    current_rps=float(data.get("current_rps", 0)),
-                    confidence=float(data.get("confidence", 0)),
-                    horizon_minutes=_parse_horizon(data.get("horizon_minutes", 10)),
-                    model_version=data.get("model_version", "unknown"),
-                    raw_features=data.get("raw_features", {}),
-                    event_timestamp=data.get("timestamp", ""),
-                )
-            except Exception as exc:
-                import logging as _log
-
-                _log.getLogger(__name__).warning(
-                    f"[OutcomeTracker] handler error: {exc}"
-                )
-
-        await nats.subscribe_raw(
-            "ppa.predictions.>",
-            handler=_outcome_tracker_handler,
-            stream_name="PPA_PREDICTIONS",
-        )
-
-        # Learning plane stores (must be initialized before reasoning/feedback)
-        outcome_store = OutcomeStore(db_client=db_client)
-        await outcome_store.connect()
-        knowledge_base = KnowledgeBase(db_client=db_client)
-        await knowledge_base.initialize()
-
-        confidence_scorer = ConfidenceScorer()
-
-        # Core LangGraph Incident Workflow (aliased as orchestrator for backwards compatibility)
-        workflow = IncidentWorkflow(nats_client=nats)
-        try:
-            orchestrator = NexusOrchestrator(nats_client=nats)
-            if orchestrator is not None and orchestrator is not workflow:
-                workflow = orchestrator
-        except Exception:
-            orchestrator = workflow
-
-        # Notifier (sync — manages its own background task internally)
-        try:
-            from nexus.integration.dashboard import refresh_policy_cache
-
-            _loaded = refresh_policy_cache()
-            logger.info(
-                f"[NexusServer] Pre-cached {_loaded} selfheal.yaml policies for Notifier"
-            )
-        except Exception as _pc_exc:
-            logger.warning(
-                f"[NexusServer] Policy cache refresh failed (non-fatal): {_pc_exc}"
-            )
-
-        notifier = Notifier()
-        notifier.start_background(nats)  # returns None; _listen loop is internal
-
-        # ── Learning plane: FeedbackLoop ──────
-        feedback_loop = await build_feedback_loop(
-            confidence_scorer=confidence_scorer,
-            nats_client=nats,
-            ppa_outcome_tracker=outcome_tracker,
-            outcome_store=outcome_store,
-            knowledge_base=knowledge_base,
-        )
-
-        # Agent manager
-        agent_manager = AgentManager(nats_client=nats, prometheus_url=prometheus_url)
-
-        # Pre-populate NexusContext so status_api lifespan skips self-init
-        context.workflow = workflow
-        context.orchestrator = workflow
-        context.prescaler = prescaler
-        context.ppa_outcome_tracker = outcome_tracker
-        context.audit_trail = audit_trail
-        context.feedback_loop = feedback_loop
-        context.outcome_store = outcome_store
-        context.knowledge_base = knowledge_base
-        context.db_client = db_client
-        context.action_ladder = ladder
-
-        return cls(
-            nats_client=nats,
-            workflow=workflow,
-            prescaler=prescaler,
-            outcome_tracker=outcome_tracker,
-            notifier=notifier,
-            agent_manager=agent_manager,
-            feedback_loop=feedback_loop,
-            status_api=status_api,
-            orchestrator=orchestrator,
-        )
-
-    # Lifecycle
+        return cls(**components)
 
     async def start(self) -> None:
-        """
-        Start all background tasks.
-
-        - agent_manager.start() spawns 7 agent run-loop Tasks and captures their handles
-        - outcome_tracker.start() creates the polling Task
-        - workflow.start() opens NATS subscriptions and begins LangGraph processing
-        - uvicorn serves the FastAPI status API on port 8080
-        """
+        """Start all background tasks."""
         await self.agent_manager.start()
-
-        # outcome_tracker.start() must be here, NOT in create(), to avoid a double loop.
         await self.outcome_tracker.start()
 
-        # Start feedback loop (learning plane)
         if self.feedback_loop is not None:
             await self.feedback_loop.start()
 
@@ -296,9 +122,7 @@ class NexusServer:
             self._tasks.append(self.agent_manager._monitor_task)
 
     async def stop(self) -> None:
-        """
-        Graceful shutdown: cancel all tasks, stop subsystems, close NATS.
-        """
+        """Graceful shutdown: cancel all tasks, stop subsystems, close NATS."""
         for task in self._tasks:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
@@ -309,7 +133,7 @@ class NexusServer:
         await self.workflow.stop()
         if self.feedback_loop is not None:
             await self.feedback_loop.stop()
-        self.notifier.stop()  # cancels Notifier._nats_task — never skip this
+        self.notifier.stop()
         await self.nats_client.close()
         if context.db_client is not None:
             await context.db_client.close()
@@ -318,3 +142,25 @@ class NexusServer:
     async def run_forever(self) -> None:
         """Block until all server tasks complete (never returns normally)."""
         await asyncio.gather(*self._tasks)
+
+
+__all__ = [
+    "NexusServer",
+    "NexusOrchestrator",
+    "RCAEngine",
+    "RunbookExecutor",
+    "get_database_client",
+    "ActionLadder",
+    "GovernanceCircuitBreaker",
+    "HumanApprovalQueue",
+    "AuditTrail",
+    "CooldownStore",
+    "PolicyEngine",
+    "RollbackRegistry",
+    "build_feedback_loop",
+    "KnowledgeBase",
+    "OutcomeStore",
+    "status_api",
+    "ConfidenceScorer",
+]
+

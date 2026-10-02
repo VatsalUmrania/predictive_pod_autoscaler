@@ -2,31 +2,21 @@
 NEXUS SDK App Token Registry
 =============================
 Maintains authentication tokens for SDK-instrumented applications.
-
-When a developer drops `selfheal.yaml` into their repo, GitAgent calls
-`TokenStore.register_app()` to issue a `SELFHEAL_TOKEN`. That token is
-embedded into the deployment manifest as an environment variable and
-verified by NEXUS on every incoming SDK payload.
-
-Tokens are stored in PostgreSQL.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import secrets
 from datetime import datetime, timezone
 from typing import Any
 
 from nexus.db.postgres import PostgresClient, get_database_client
+from nexus.integration.token_utils import format_app_row, generate_token
 
 logger = logging.getLogger(__name__)
 
-
-def _generate_token() -> str:
-    """Generate a cryptographically secure SELFHEAL_TOKEN."""
-    return "sh_" + secrets.token_urlsafe(32)
+_generate_token = generate_token
 
 
 class TokenStore:
@@ -39,10 +29,8 @@ class TokenStore:
     ) -> None:
         self._db_path = db_path
         self._db_client = db_client
-        self._cache: dict[str, str] = {}  # token → app_name (in-memory fast-path)
+        self._cache: dict[str, str] = {}
         self._ready = False
-
-    # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     async def init(self) -> None:
         """Initialize connection and preload cache from PostgreSQL."""
@@ -61,17 +49,12 @@ class TokenStore:
         except Exception as exc:
             logger.warning(f"[TokenStore] Cache preload failed: {exc}")
 
-    # ── Registration ──────────────────────────────────────────────────────────
-
     async def register_app(
         self,
         app_name: str,
         tier: str = "production",
     ) -> str:
-        """
-        Register a new app and return its SELFHEAL_TOKEN.
-        If the app is already registered, returns the existing token.
-        """
+        """Register a new app and return its SELFHEAL_TOKEN."""
         existing = await self.get_token(app_name)
         if existing:
             logger.info(
@@ -79,7 +62,7 @@ class TokenStore:
             )
             return existing
 
-        token = _generate_token()
+        token = generate_token()
         now = datetime.now(timezone.utc)
 
         if self._db_client is not None:
@@ -98,20 +81,13 @@ class TokenStore:
         )
         return token
 
-    # ── Validation ────────────────────────────────────────────────────────────
-
     async def validate_token(self, token: str) -> str | None:
-        """
-        Validate an incoming SDK token.
-        Returns the app_name if valid, None if not found.
-        """
-        # Fast path — in-memory cache
+        """Validate an incoming SDK token."""
         app_name = self._cache.get(token)
         if app_name:
             asyncio.create_task(self._touch(token))
             return app_name
 
-        # Slow path — DB lookup (handles cache miss)
         if self._db_client is not None:
             sql = "SELECT app_name FROM app_tokens WHERE token = $1 AND revoked = FALSE"
             async with self._db_client.acquire() as conn:
@@ -140,8 +116,6 @@ class TokenStore:
         except Exception as exc:
             logger.debug(f"[TokenStore] touch failed: {exc}")
 
-    # ── Lookup ────────────────────────────────────────────────────────────────
-
     async def get_token(self, app_name: str) -> str | None:
         """Return the current token for an app."""
         if self._db_client is None:
@@ -168,29 +142,11 @@ class TokenStore:
         async with self._db_client.acquire() as conn:
             rows = await conn.fetch(sql)
 
-        result = []
-        for r in rows:
-            ca = r["created_at"].isoformat() if isinstance(r["created_at"], datetime) else str(r["created_at"])
-            lu = r["last_used"].isoformat() if isinstance(r["last_used"], datetime) else (str(r["last_used"]) if r["last_used"] else None)
-            tok = str(r["token"])
-            result.append({
-                "app_name": str(r["app_name"]),
-                "tier": str(r["tier"]),
-                "created_at": ca,
-                "last_used": lu,
-                "event_count": int(r["event_count"]),
-                "token_prefix": tok[:8] + "…",
-            })
-        return result
-
-    # ── Token rotation ────────────────────────────────────────────────────────
+        return [format_app_row(r) for r in rows]
 
     async def rotate_token(self, app_name: str) -> str:
-        """
-        Generate a new token for an app and invalidate the old one.
-        Returns the new token.
-        """
-        new_token = _generate_token()
+        """Generate a new token for an app and invalidate the old one."""
+        new_token = generate_token()
         now = datetime.now(timezone.utc)
 
         if self._db_client is not None:
@@ -207,7 +163,6 @@ class TokenStore:
         return new_token
 
 
-# Module-level singleton
 _token_store: TokenStore | None = None
 
 

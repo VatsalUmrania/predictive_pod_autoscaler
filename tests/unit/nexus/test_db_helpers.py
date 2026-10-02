@@ -85,6 +85,17 @@ class MockAsyncpgConnection:
         elif "DELETE FROM DEVELOPER_INCIDENTS" in q:
             return "DELETE"
 
+        elif "UPDATE DEVELOPER_INCIDENTS" in q:
+            if "SET ACCEPTED_BY" in q:
+                user = args[0]
+                now_ts = args[1]
+                inc_id = str(args[2])
+                for r in self.client._developer_incidents:
+                    if r.get("incident_id") == inc_id:
+                        r["accepted_by"] = user
+                        r["accepted_at"] = now_ts
+            return "UPDATE 1"
+
         return "EXECUTE 1"
 
     async def fetch(self, query: str, *args):

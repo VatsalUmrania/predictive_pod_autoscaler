@@ -1,64 +1,23 @@
 """
 NEXUS Confidence Scorer
 ========================
-Calibrates the raw confidence value from the RCA result into a final
-score that governs the healing action level permitted by the ActionLadder.
-
-Score bands (align with ActionLadder healing levels):
-    < 0.50   → L0 only (emit_alert, patch_annotation)
-    0.50-0.70 → L1 allowed (restart_pod, flush_coredns_cache)
-    0.70-0.85 → L2 allowed (scale_deployment)
-    ≥ 0.85    → L3 allowed (kubectl_rollout_undo, webhook) — or human approval
-
-Calibration factors (Phase 4):
-    1. LLM raw confidence       (weight 0.55)
-    2. Signal agreement score   (weight 0.35)
-    3. Failure class adjustment (additive ± 0.05—0.20)
-    4. Deploy-proximity bonus   (+ 0.05 if deploy correlated with bad_deploy)
-
-Phase 6 (Learning Plane) — now integrated:
-    5. Historical runbook success rate from AuditTrail
-       Applied as an additive delta AFTER all other factors, capped at ±0.05.
-       Runbooks with consistently high success rates get a positive boost;
-       unreliable runbooks get a penalty.
-       Updated by FeedbackLoop.set_historical_boosts() every N minutes.
-
-Design decision:
-    We bias toward conservative scores. It is better to under-heal and escalate
-    to a human than to over-heal and cause a cascading failure.
-    The LLM's own confidence estimate is treated as an input signal,
-    not taken at face value — Gemini can be overconfident.
+Calibrates raw RCA confidence into a final score governing ActionLadder levels:
+    < 0.50 -> L0 only | 0.50-0.70 -> L1 | 0.70-0.85 -> L2 | >= 0.85 -> L3
 """
+
 
 from __future__ import annotations
 
 import logging
 
 from nexus.graph.rca import RCAResult
+from nexus.reasoning.confidence_constants import (
+    _CLASS_ADJUSTMENTS,
+)
 from nexus.reasoning.incident_cluster import IncidentCluster
 
 logger = logging.getLogger(__name__)
 
-# ── Additive adjustments by failure class ─────────────────────────────────────
-# Positive: class is inherently clearer / easier to confirm
-# Negative: class is ambiguous or has wider blast radius
-
-_CLASS_ADJUSTMENTS = {
-    "config_error": +0.05,  # ENV violations are deterministic — boost
-    "bad_deploy": 0.00,  # Clear signal when deploy is correlated
-    "resource_exhaustion": 0.00,  # Metrics are usually reliable
-    "dependency_failure": -0.05,  # DNS/network failures can be transient
-    "cascading_failure": -0.10,  # Complex — risky to intervene autonomously
-    "unknown": -0.20,  # No idea — extremely conservative
-}
-
-# Healing level caps — don't let a class automatically grant L3 without signal strength
-_MAX_CONFIDENCE_WITHOUT_QUORUM = {
-    0: 1.0,  # L0 — alerts always fine
-    1: 0.90,
-    2: 0.80,
-    3: 0.75,  # L3 requires agent diversity too
-}
 
 
 class ConfidenceScorer:

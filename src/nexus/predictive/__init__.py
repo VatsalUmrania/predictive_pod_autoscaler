@@ -1,11 +1,11 @@
-# nexus.predictive — Pre-scaling and traffic anomaly handling
-from nexus.predictive.prescaler import (
+"""NEXUS Predictive Pod Autoscaler package."""
+from nexus.predictive.models import (
     PrecisionStats,
-    PrecisionTracker,
     PrescaleDecision,
     PrescaleMode,
-    Prescaler,
 )
+from nexus.predictive.prescaler import Prescaler
+from nexus.predictive.tracker import PrecisionTracker
 
 __all__ = [
     "PrecisionStats",
@@ -14,4 +14,3 @@ __all__ = [
     "PrescaleMode",
     "Prescaler",
 ]
-

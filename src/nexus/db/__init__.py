@@ -1,15 +1,4 @@
-"""
-NEXUS Database Module
-=====================
-Relational persistence layer for incidents, agent traces, tool calls, and governance audits.
-"""
+"""NEXUS Database package."""
+from nexus.db.client import PostgresClient, get_database_client
 
-from nexus.db.postgres import (
-    PostgresClient,
-    get_database_client,
-)
-
-__all__ = [
-    "PostgresClient",
-    "get_database_client",
-]
+__all__ = ["PostgresClient", "get_database_client"]

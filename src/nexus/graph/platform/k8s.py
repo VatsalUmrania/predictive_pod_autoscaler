@@ -8,9 +8,7 @@ and LiveStateValidator.
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import uuid
 from typing import Any
 
 from nexus.graph.platform.base import (
@@ -20,6 +18,13 @@ from nexus.graph.platform.base import (
     PlatformTelemetry,
     RollbackSnapshot,
     TargetResource,
+)
+from nexus.graph.platform.k8s_snapshot import capture_k8s_snapshot
+from nexus.graph.platform.k8s_target import can_handle_k8s, detect_k8s_target
+from nexus.graph.platform.k8s_telemetry import (
+    collect_k8s_telemetry,
+    inspect_k8s_live_state,
+    verify_k8s_health,
 )
 from nexus.tools.base import NexusTool, NexusToolResult
 from nexus.tools.k8s_adapter import (
@@ -50,7 +55,6 @@ class K8sPlatformAdapter(BasePlatformAdapter):
             K8sPatchResourceLimitsTool.name: K8sPatchResourceLimitsTool(),
             K8sRemoveContainerCommandTool.name: K8sRemoveContainerCommandTool(),
         }
-        # Standard aliases
         self._tools["k8s_scale_deployment"] = self._tools[K8sScaleResourceTool.name]
         self._tools["scale_deployment"] = self._tools[K8sScaleResourceTool.name]
         self._tools["restart_deployment"] = self._tools[K8sRestartDeploymentTool.name]
@@ -66,171 +70,16 @@ class K8sPlatformAdapter(BasePlatformAdapter):
         return "kubernetes"
 
     def can_handle(self, event_or_target: dict[str, Any] | TargetResource) -> bool:
-        if isinstance(event_or_target, TargetResource):
-            return event_or_target.platform.lower() in ("kubernetes", "k8s")
-
-        if isinstance(event_or_target, dict):
-            plat = str(event_or_target.get("platform", "")).lower()
-            if plat in ("kubernetes", "k8s"):
-                return True
-            agent = str(event_or_target.get("agent", "")).lower()
-            if agent in ("k8s", "metrics", "nginx", "git", "config", "db", "network"):
-                return True
-            res_name = str(event_or_target.get("resource_name", ""))
-            if res_name.startswith("arn:aws:"):
-                return False
-            if "aws" in str(event_or_target.get("namespace", "")).lower():
-                return False
-            # Default to true if not explicitly AWS/GCP
-            if agent not in ("lambda", "apigw", "sqs", "dynamodb", "cloudwatch"):
-                return True
-
-        return False
+        return can_handle_k8s(event_or_target)
 
     def detect_target(self, events: list[dict[str, Any]]) -> TargetResource:
-        if not events:
-            return TargetResource(platform="kubernetes", namespace="default", name="unknown", kind="deployment")
-
-        # Pick the most severe event or the first
-        primary_evt = events[0]
-        for evt in events:
-            if str(evt.get("severity", "")).lower() == "critical":
-                primary_evt = evt
-                break
-
-        ctx = primary_evt.get("context", {}) if isinstance(primary_evt.get("context"), dict) else {}
-        namespace = str(primary_evt.get("namespace", "default"))
-        raw_kind = str(primary_evt.get("resource_kind") or "").lower()
-        deployment_name = ctx.get("deployment_name") or primary_evt.get("deployment")
-        pod_name = ctx.get("pod_name")
-
-        raw_name = str(primary_evt.get("resource_name", "unknown"))
-        if "/" in raw_name and not raw_name.startswith("arn:"):
-            parts = raw_name.split("/", 1)
-            namespace = parts[0]
-            raw_name = parts[1]
-
-        # Prioritize explicit deployment target
-        if raw_kind in ("deployment", "deploy"):
-            kind = "deployment"
-            name = deployment_name or raw_name
-        elif raw_kind == "pod":
-            kind = "pod"
-            name = pod_name or raw_name
-        elif deployment_name and raw_name == deployment_name:
-            kind = "deployment"
-            name = deployment_name
-        elif pod_name and raw_name == pod_name:
-            kind = "pod"
-            name = pod_name
-        elif "pod" in str(primary_evt.get("signal_type", "")).lower() or (raw_name and len(raw_name.split("-")) >= 3 and not raw_kind):
-            kind = "pod"
-            name = pod_name or raw_name
-        elif raw_name and raw_name != "unknown":
-            kind = "deployment"
-            name = raw_name
-        elif pod_name:
-            kind = "pod"
-            name = pod_name
-        else:
-            kind = "deployment"
-            name = raw_name
-
-        labels: dict[str, str] = {}
-        if pod_name:
-            labels["pod_name"] = str(pod_name)
-        if deployment_name:
-            labels["deployment_name"] = str(deployment_name)
-
-        return TargetResource(
-            platform="kubernetes",
-            namespace=namespace or "default",
-            name=name,
-            kind=kind,
-            labels=labels,
-        )
+        return detect_k8s_target(events)
 
     async def collect_telemetry(self, target: TargetResource) -> PlatformTelemetry:
-        """Deterministically collect logs, describe info, and live config without ReAct."""
-        from nexus.agents import k8s_tools
-
-        recent_logs: list[str] = []
-        live_config: dict[str, Any] = {}
-        health_status = "degraded"
-
-        try:
-            # 1. Gather describe information
-            desc_res = await asyncio.to_thread(
-                k8s_tools.describe_resource,
-                namespace=target.namespace,
-                resource_kind=target.kind,
-                resource_name=target.name,
-            )
-            live_config["describe"] = desc_res
-
-            # 2. Gather logs if target is a pod or deployment
-            pod_for_logs = target.labels.get("pod_name") or target.name
-            log_res = await asyncio.to_thread(
-                k8s_tools.get_pod_logs,
-                namespace=target.namespace,
-                pod_name=pod_for_logs,
-                tail_lines=50,
-            )
-            if "Error fetching logs" not in log_res:
-                recent_logs.extend(log_res.splitlines()[-30:])
-            else:
-                recent_logs.append(log_res)
-
-            # 3. Analyze health status from describe
-            lower_desc = desc_res.lower()
-            if "crashloopbackoff" in lower_desc:
-                health_status = "crashloopbackoff"
-            elif "oomkilled" in lower_desc:
-                health_status = "oomkilled"
-            elif "pending" in lower_desc:
-                health_status = "pending"
-            elif "running" in lower_desc:
-                health_status = "running"
-        except Exception as exc:
-            logger.warning("[K8sPlatformAdapter] Telemetry gathering error for %s: %s", target, exc)
-            live_config["error"] = str(exc)
-
-        return PlatformTelemetry(
-            target=target,
-            metrics={"health": health_status},
-            recent_logs=recent_logs,
-            live_config=live_config,
-            health_status=health_status,
-        )
+        return await collect_k8s_telemetry(target)
 
     async def inspect_live_state(self, target: TargetResource) -> LiveStateSnapshot:
-        """Inspect live state before applying mutations."""
-        from nexus.agents import k8s_tools
-
-        try:
-            desc = await asyncio.to_thread(
-                k8s_tools.describe_resource,
-                namespace=target.namespace,
-                resource_kind=target.kind,
-                resource_name=target.name,
-            )
-            not_found = "not found" in desc.lower() or "error" in desc.lower()
-            is_failing = any(m in desc.lower() for m in ("crashloopbackoff", "oomkilled", "error", "unhealthy"))
-
-            return LiveStateSnapshot(
-                target=target,
-                exists=not not_found,
-                is_failing=is_failing,
-                failure_details=desc[:300] if is_failing else None,
-                state_attributes={"describe_preview": desc[:500]},
-            )
-        except Exception as exc:
-            return LiveStateSnapshot(
-                target=target,
-                exists=False,
-                is_failing=True,
-                failure_details=str(exc),
-            )
+        return await inspect_k8s_live_state(target)
 
     def get_tools(self) -> list[NexusTool]:
         return list(self._tools.values())
@@ -249,53 +98,7 @@ class K8sPlatformAdapter(BasePlatformAdapter):
     async def capture_snapshot(
         self, target: TargetResource, tool_name: str, parameters: dict[str, Any]
     ) -> RollbackSnapshot | None:
-        """Capture rollback snapshot before mutation."""
-        from nexus.agents import k8s_tools
-
-        snap_id = str(uuid.uuid4())[:8]
-        if tool_name == "k8s_scale_resource":
-            desc = await asyncio.to_thread(
-                k8s_tools.describe_resource,
-                namespace=target.namespace,
-                resource_kind=parameters.get("resource_kind", "deployment"),
-                resource_name=parameters.get("resource_name", target.name),
-            )
-            # Default prior replicas to 1 if unknown
-            old_replicas = 1
-            import re
-            m = re.search(r"Replicas:\s*(\d+)", desc)
-            if m:
-                old_replicas = int(m.group(1))
-
-            return RollbackSnapshot(
-                snapshot_id=f"k8s-scale-{snap_id}",
-                target=target,
-                action_name=tool_name,
-                rollback_tool="k8s_scale_resource",
-                rollback_parameters={
-                    "namespace": target.namespace,
-                    "resource_kind": parameters.get("resource_kind", "deployment"),
-                    "resource_name": parameters.get("resource_name", target.name),
-                    "replicas": old_replicas,
-                },
-                pre_mutation_state={"replicas": old_replicas},
-                description=f"Rollback scale to {old_replicas} replicas",
-            )
-
-        if tool_name in ("k8s_restart_deployment", "k8s_rollback_deployment"):
-            return RollbackSnapshot(
-                snapshot_id=f"k8s-undo-{snap_id}",
-                target=target,
-                action_name=tool_name,
-                rollback_tool="k8s_rollback_deployment",
-                rollback_parameters={
-                    "namespace": target.namespace,
-                    "deployment_name": parameters.get("deployment_name", target.name),
-                },
-                description=f"Rollback deployment revision for {target.name}",
-            )
-
-        return None
+        return await capture_k8s_snapshot(target, tool_name, parameters)
 
     async def execute_rollback(self, snapshot: RollbackSnapshot) -> NexusToolResult:
         logger.info("[K8sPlatformAdapter] Executing rollback snapshot %s", snapshot.snapshot_id)
@@ -306,32 +109,4 @@ class K8sPlatformAdapter(BasePlatformAdapter):
     async def verify_health(
         self, target: TargetResource, plan_step: dict[str, Any]
     ) -> HealthCheckResult:
-        """Verify that the target deployment/pod recovered post-remediation."""
-        from nexus.agents import k8s_tools
-
-        try:
-            desc = await asyncio.to_thread(
-                k8s_tools.describe_resource,
-                namespace=target.namespace,
-                resource_kind=target.kind,
-                resource_name=target.name,
-            )
-            lower_desc = desc.lower()
-            is_unhealthy = any(
-                bad in lower_desc
-                for bad in ("crashloopbackoff", "oomkilled", "error", "evicted", "failed")
-            )
-            # In test environments or when mock is used
-            healthy = not is_unhealthy
-            return HealthCheckResult(
-                healthy=healthy,
-                slo_restored=healthy,
-                failure_reason=None if healthy else "Unhealthy container status detected in describe",
-                details=desc[:200],
-            )
-        except Exception as exc:
-            return HealthCheckResult(
-                healthy=False,
-                slo_restored=False,
-                failure_reason=str(exc),
-            )
+        return await verify_k8s_health(target, plan_step)

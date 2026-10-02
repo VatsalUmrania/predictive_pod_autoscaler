@@ -2,20 +2,9 @@
 NEXUS Base Agent
 ================
 Abstract foundation that every domain agent extends.
-
-Every agent follows the same lifecycle:
-    on_start()  →  run loop: [sense() → publish events]  →  on_stop()
-
-The base class provides:
-    • Periodic polling with configurable interval
-    • Exponential backoff on consecutive sense() failures
-    • Agent-level circuit breaker (emits CIRCUIT_BREAKER_TRIPPED after N failures)
-    • Graceful shutdown via stop()
-    • Uptime and event count tracking
-
-Subclasses implement only sense() — returning a list of IncidentEvents.
-They must NOT call nats.publish() directly from sense().
+Lifecycle: on_start() -> run loop: [sense() -> publish events] -> on_stop()
 """
+
 
 from __future__ import annotations
 
@@ -28,7 +17,6 @@ from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalT
 from nexus.bus.nats_client import NATSClient
 
 logger = logging.getLogger(__name__)
-
 
 class BaseAgent(ABC):
     """

@@ -3,55 +3,23 @@ NEXUS Event Correlator
 =======================
 Groups individual IncidentEvents into IncidentClusters based on
 namespace and time-window proximity.
-
-Correlation algorithm (Phase 4 — time-window heuristic):
-    • Each namespace has one open cluster at a time
-    • A new event extends the open cluster if it arrived within window_s
-      of the last event in that cluster
-    • If the cluster's window has expired, it is closed and a new one seeded
-    • A cluster becomes "ready" when either:
-        a) quorum_events events have arrived  →  emitted immediately
-        b) flush_timeout_s seconds have elapsed  →  emitted by flush loop
-
-Phase 7 upgrade: Replace time-window heuristic with causal graph analysis
-over the telemetry plane (OTel traces provide causal links between events).
-
-Signal types excluded from clustering (purely informational):
-    • db_query_spike          — pattern snapshot for DBTrafficCorrelator, not an incident
-    • metric_unavailable      — infrastructure health, not a service incident
-    • circuit_breaker_tripped — agent health, not a service incident
 """
 
 from __future__ import annotations
 
 import logging
+from collections import deque
 from datetime import datetime, timezone
 
 from nexus.bus.incident_event import IncidentEvent, SignalType
+from nexus.reasoning.correlator_rules import IMMEDIATE_EMIT, SKIP_CLUSTERING
 from nexus.reasoning.incident_cluster import IncidentCluster
 
 logger = logging.getLogger(__name__)
 
-# Events that carry information but should not trigger RCA on their own
-_SKIP_CLUSTERING = frozenset(
-    {
-        "db_query_spike",
-        "metric_unavailable",
-        "circuit_breaker_tripped",
-        "deploy_event",  # Informational — but will be merged if co-clustered
-    }
-)
+_SKIP_CLUSTERING = SKIP_CLUSTERING
+_IMMEDIATE_EMIT = IMMEDIATE_EMIT
 
-# Single-event signals severe enough to emit a cluster immediately without quorum
-_IMMEDIATE_EMIT = frozenset(
-    {
-        "env_contract_violation",  # Deterministic — always critical, no wait
-        "secret_committed",  # Security — always critical, no wait
-        "pod_crashloop",  # Clear actionable signal on its own
-        "pod_oomkilled",  # Clear actionable signal on its own
-        "dns_resolution_failure",  # Dependency failure — time-sensitive
-    }
-)
 
 class EventCorrelator:
     """
@@ -88,14 +56,8 @@ class EventCorrelator:
 
     # Public API
     def ingest(self, event: IncidentEvent) -> IncidentCluster | None:
-        """
-        Ingest a single event synchronously.
+        """Ingest an event synchronously. Returns IncidentCluster if ready."""
 
-        Returns an IncidentCluster when clustering is complete (quorum reached,
-        single high-priority signal, or window timeout), otherwise returns None.
-
-        Called from an async NATS handler — must not block.
-        """
         signal_type = str(event.signal_type).lower()
 
         # Skip purely informational events
@@ -129,13 +91,7 @@ class EventCorrelator:
             logger.debug(
                 f"[EventCorrelator] New cluster {cluster.cluster_id} for ns={key}"
             )
-            # Propagate ppa_raw_features from TRAFFIC_SPIKE_PREDICTED events
-            if (
-                isinstance(event.context, dict)
-                and "raw_features" in event.context
-                and event.signal_type == SignalType.TRAFFIC_SPIKE_PREDICTED
-            ):
-                cluster.ppa_raw_features = event.context["raw_features"]
+            self._propagate_ppa(cluster, event)
             return None
 
         # Check if the window has expired (time since last event)
@@ -145,13 +101,7 @@ class EventCorrelator:
             old_cluster = self._open.pop(key, None)
             cluster = IncidentCluster.new(event)
             self._open[key] = cluster
-            # Propagate ppa_raw_features from TRAFFIC_SPIKE_PREDICTED events
-            if (
-                isinstance(event.context, dict)
-                and "raw_features" in event.context
-                and event.signal_type == SignalType.TRAFFIC_SPIKE_PREDICTED
-            ):
-                cluster.ppa_raw_features = event.context["raw_features"]
+            self._propagate_ppa(cluster, event)
             logger.debug(
                 f"[EventCorrelator] Window expired ({gap_s:.0f}s) — "
                 f"old={old_cluster and old_cluster.cluster_id} new={cluster.cluster_id}"
@@ -160,6 +110,7 @@ class EventCorrelator:
             if old_cluster and old_cluster.cluster_id not in self._emitted:
                 return self._emit(old_cluster)
             return None
+
 
         # Extend the existing cluster
         cluster.add_event(event)
@@ -204,9 +155,18 @@ class EventCorrelator:
             )
         return ready
 
-    # Internal helpers
+    @staticmethod
+    def _propagate_ppa(cluster: IncidentCluster, event: IncidentEvent) -> None:
+        if (
+            isinstance(event.context, dict)
+            and "raw_features" in event.context
+            and event.signal_type == SignalType.TRAFFIC_SPIKE_PREDICTED
+        ):
+            cluster.ppa_raw_features = event.context["raw_features"]
+
     @staticmethod
     def _cluster_key(event: IncidentEvent) -> str:
+
         """Correlation key — events in the same namespace are clustered together."""
         if event.namespace:
             return event.namespace
@@ -220,13 +180,11 @@ class EventCorrelator:
             self._emitted.discard(oldest)
         self._total_emitted += 1
         logger.info(
-            f"[EventCorrelator] Cluster ready: {cluster.cluster_id} "
-            f"| {len(cluster.events)} events "
-            f"| agents=[{', '.join(sorted(cluster.agent_types))}] "
-            f"| signals=[{', '.join(sorted(cluster.signal_types))}] "
-            f"| severity={cluster.highest_severity}"
+            f"[EventCorrelator] Cluster ready: {cluster.cluster_id} | {len(cluster.events)} events "
+            f"| agents=[{', '.join(sorted(cluster.agent_types))}] | severity={cluster.highest_severity}"
         )
         return cluster
+
 
     # Stats
     @property

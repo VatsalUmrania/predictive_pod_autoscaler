@@ -13,9 +13,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from nexus.engine.fsm import IncidentState
+from nexus.graph.nodes.diagnose_cluster import build_diagnose_cluster
+from nexus.graph.nodes.diagnose_reflexion import run_diagnose_reflexion
 from nexus.graph.rca import RCALeadSynthesizer, RCAResult
 from nexus.graph.state import IncidentGraphState
-from nexus.reasoning.incident_cluster import IncidentCluster
 from nexus.reasoning.rca_validator import RCAValidator, ValidationVerdict, downgrade_rca
 
 logger = logging.getLogger(__name__)
@@ -29,75 +30,14 @@ async def diagnose_node(state: IncidentGraphState) -> dict[str, Any]:
     events = state.get("events", [])
     telemetry = state.get("telemetry", {})
     target = state.get("target", {})
-    target_name = target.get("name", "unknown")
 
     # 1. Synthesize cluster for RCA engine
-    from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
-
-    now = datetime.now(timezone.utc)
-    cluster = IncidentCluster(
-        cluster_id=f"cluster-{state['incident_id'][:8]}",
-        created_at=now,
-        last_event_at=now,
-        events=[],
+    cluster = build_diagnose_cluster(
+        incident_id=state["incident_id"],
+        events=events,
+        telemetry=telemetry,
+        target=target,
     )
-
-    for raw_evt in events:
-        try:
-            if isinstance(raw_evt, IncidentEvent):
-                cluster.events.append(raw_evt)
-            elif isinstance(raw_evt, dict):
-                agent_val = str(raw_evt.get("agent", "k8s")).lower()
-                agent_enum = AgentType.K8S
-                try:
-                    agent_enum = AgentType(agent_val)
-                except Exception:
-                    agent_enum = AgentType.ORCHESTRATOR
-
-                sev_val = str(raw_evt.get("severity", "warning")).lower()
-                sev_enum = Severity.CRITICAL if sev_val == "critical" else Severity.WARNING
-
-                sig_raw = str(raw_evt.get("signal_type", "threshold_breach")).lower().replace("-", "_")
-                sig_enum: SignalType | str
-                if sig_raw in ("crashloopbackoff", "crashloop", "crash_loop", "pod_crash_loop"):
-                    sig_enum = SignalType.POD_CRASHLOOP
-                elif sig_raw in ("oomkilled", "oom_killed", "pod_oom"):
-                    sig_enum = SignalType.POD_OOMKILLED
-                else:
-                    try:
-                        sig_enum = SignalType(sig_raw)
-                    except ValueError:
-                        sig_enum = sig_raw
-
-                evt = IncidentEvent(
-                    agent=agent_enum.value if hasattr(agent_enum, "value") else str(agent_enum),
-                    signal_type=sig_enum.value if hasattr(sig_enum, "value") else str(sig_enum),
-                    severity=sev_enum.value if hasattr(sev_enum, "value") else str(sev_enum),
-                    namespace=str(raw_evt.get("namespace") or target.get("namespace", "default")),
-                    resource_name=str(raw_evt.get("resource_name") or target_name),
-                )
-                cluster.events.append(evt)
-        except Exception as evt_exc:
-            logger.debug("[Diagnose] Note processing event: %s", evt_exc)
-
-    desc = str(telemetry.get("live_config", {}).get("describe", "")).lower()
-    has_deploy = (
-        "active rollout=true" in desc
-        or "replicasets: 2" in desc
-        or "scalingreplicaset" in desc
-        or "command:" in desc
-        or "command override" in desc
-    )
-    if has_deploy and "deploy_event" not in cluster.signal_types:
-        cluster.events.append(
-            IncidentEvent(
-                agent=AgentType.K8S,
-                signal_type=SignalType.DEPLOY_EVENT,
-                severity=Severity.WARNING,
-                namespace=str(target.get("namespace", "default")),
-                resource_name=str(target_name),
-            )
-        )
 
     # 2. Execute Multi-Agent RCA analysis
     rca_engine = RCAEngine()
@@ -122,77 +62,30 @@ async def diagnose_node(state: IncidentGraphState) -> dict[str, Any]:
         )
         rca_result = await res if inspect.isawaitable(res) else res
 
-    # 3. Neuro-symbolic validation via RCAValidator (Evaluator-Optimizer Harness)
+    # 3. Neuro-symbolic validation via RCAValidator
     validator = RCAValidator()
     verdict: ValidationVerdict = validator.validate(cluster, rca_result)
 
     diagnostic_reflections: list[dict[str, Any]] = []
     final_rca = rca_result
 
-    # Evaluator-Optimizer (Reflexion) Loop:
-    # If the initial hypothesis was blocked, and an LLM is active,
-    # critique the hypothesis back to the LLM to self-correct against real cluster signals.
-    is_engine_available = getattr(getattr(rca_engine, "_provider", None), "is_available", lambda: False)()
-    if not verdict.passed and is_engine_available and rca_result.source != "rule_based" and hasattr(rca_engine, "refine"):
-        logger.info(
-            "[Diagnose Reflexion] Validator BLOCKED initial RCA (%s: %s). Prompting LLM critic reflection.",
-            rca_result.failure_class,
-            verdict.block_reason,
-        )
-        reflection_entry = {
-            "iteration": 1,
-            "initial_hypothesis": {
-                "failure_class": rca_result.failure_class,
-                "root_cause": rca_result.root_cause,
-                "suggested_action": rca_result.suggested_action,
-            },
-            "critique": verdict.block_reason,
-            "evidence_gaps": verdict.evidence_gaps,
-        }
-
-        refined_result = await rca_engine.refine(
+    # Evaluator-Optimizer (Reflexion) Loop
+    is_engine_available = getattr(
+        getattr(rca_engine, "_provider", None), "is_available", lambda: False
+    )()
+    if (
+        not verdict.passed
+        and is_engine_available
+        and rca_result.source != "rule_based"
+        and hasattr(rca_engine, "refine")
+    ):
+        final_rca, verdict, diagnostic_reflections = await run_diagnose_reflexion(
             cluster=cluster,
-            previous_rca=rca_result,
-            critique=verdict.block_reason or "Evidence gap in proposed failure class or action",
-            evidence_gaps=verdict.evidence_gaps,
+            rca_engine=rca_engine,
+            rca_result=rca_result,
+            validator=validator,
+            verdict=verdict,
         )
-
-        if refined_result:
-            refined_verdict = validator.validate(cluster, refined_result)
-            if refined_verdict.passed:
-                logger.info(
-                    "[Diagnose Reflexion] Refined hypothesis PASSED validation: %s (conf=%.2f)",
-                    refined_result.failure_class,
-                    refined_result.confidence,
-                )
-                final_rca = refined_result
-                verdict = refined_verdict
-                reflection_entry["outcome"] = "refined_accepted"
-                reflection_entry["refined_hypothesis"] = {
-                    "failure_class": refined_result.failure_class,
-                    "root_cause": refined_result.root_cause,
-                    "suggested_action": refined_result.suggested_action,
-                }
-            else:
-                logger.warning(
-                    "[Diagnose Reflexion] Refined hypothesis failed validation (%s). Falling back to conservative downgrade.",
-                    refined_verdict.block_reason,
-                )
-                reflection_entry["outcome"] = "refinement_rejected_fallback"
-                final_rca = downgrade_rca(
-                    refined_result,
-                    reason=f"Refined hypothesis blocked: {refined_verdict.block_reason}",
-                    cluster=cluster,
-                )
-        else:
-            reflection_entry["outcome"] = "refinement_unavailable_fallback"
-            final_rca = downgrade_rca(
-                rca_result,
-                reason=f"Blocked by RCAValidator: {verdict.block_reason}",
-                cluster=cluster,
-            )
-        diagnostic_reflections.append(reflection_entry)
-
     elif not verdict.passed:
         logger.warning(
             "[Diagnose] RCAValidator BLOCKED RCA '%s' (reason: %s). Demoting unproven causal claims.",
@@ -217,7 +110,10 @@ async def diagnose_node(state: IncidentGraphState) -> dict[str, Any]:
     # Enrich with logs context if available
     recent_logs = telemetry.get("recent_logs", [])
     log_snippet = " | ".join(recent_logs[-3:]) if recent_logs else "None"
-    log_errors = any("error" in line.lower() or "exception" in line.lower() or "crash" in line.lower() for line in recent_logs)
+    log_errors = any(
+        "error" in line.lower() or "exception" in line.lower() or "crash" in line.lower()
+        for line in recent_logs
+    )
     if log_errors and final_rca.confidence < 0.90:
         final_rca.confidence = min(0.95, final_rca.confidence + 0.05)
 
@@ -258,4 +154,3 @@ async def diagnose_node(state: IncidentGraphState) -> dict[str, Any]:
         "fsm_state": IncidentState.PLANNING.value,
         "audit_log": [audit_entry],
     }
-

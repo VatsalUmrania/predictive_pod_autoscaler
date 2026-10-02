@@ -147,38 +147,9 @@ class IncidentCluster:
     # ── Scoring helpers ───────────────────────────────────────────────────────
 
     def signal_agreement_score(self) -> float:
-        """
-        Measures how strongly independent signals agree on a root cause (0.0–1.0).
-
-        Factors:
-          - Agent diversity:  events from different agents = stronger evidence
-          - Event count:      more events = higher confidence
-          - Average anomaly score from event contexts (when available)
-        """
-        if not self.events:
-            return 0.0
-        if len(self.events) == 1:
-            return 0.35  # Single signal — conservative
-
-        agent_count = len(self.agent_types)
-        event_count = len(self.events)
-
-        # Agent diversity: 5+ independent agents = full score
-        diversity = min(agent_count / 5.0, 1.0)
-        # Event volume: 5+ events = full score
-        volume = min(event_count / 5.0, 1.0)
-
-        # Pull anomaly_score from event context if set
-        anomaly_scores = [
-            float(e.context.get("anomaly_score", 0.5))
-            for e in self.events
-            if isinstance(e.context, dict) and "anomaly_score" in e.context
-        ]
-        avg_anomaly = (
-            (sum(anomaly_scores) / len(anomaly_scores)) if anomaly_scores else 0.5
-        )
-
-        return diversity * 0.40 + volume * 0.30 + avg_anomaly * 0.30
+        """Measures how strongly independent signals agree on a root cause (0.0–1.0)."""
+        from nexus.reasoning.cluster_formatter import compute_signal_agreement
+        return compute_signal_agreement(self)
 
     # ── Context rendering for LLM ─────────────────────────────────────────────
 
@@ -187,94 +158,12 @@ class IncidentCluster:
         Render a compact incident report suitable for inclusion in an LLM prompt.
         Keeps token usage tight — no redundant fields.
         """
-        lines = [
-            f"INCIDENT CLUSTER: {self.cluster_id}",
-            f"Detected: {self.created_at.strftime('%Y-%m-%d %H:%M:%S UTC')}",
-            f"Open for: {self.age_seconds:.0f}s",
-            f"Namespace: {self.namespace or 'unknown'}",
-            f"Primary resource: {self.primary_resource or 'unknown'}",
-            f"Highest severity: {self.highest_severity.upper()}",
-            f"Total signals: {len(self.events)} from {len(self.agent_types)} agent(s)",
-            "",
-            "SIGNALS:",
-        ]
-
-        for i, event in enumerate(self.events, 1):
-            ctx_kv = ""
-            if isinstance(event.context, dict):
-                _key_order = [
-                    "current_rps",
-                    "error_rate",
-                    "threshold",
-                    "anomaly_score",
-                    "latency_p95_ms",
-                    "restart_count",
-                    "missing_keys",
-                    "sha",
-                    "author",
-                    "reason",
-                    "utilization_pct",
-                    "active_connections",
-                    "predicted_rps",
-                    "confidence",
-                    "raw_features",
-                ]
-                relevant = {
-                    k: event.context[k] for k in _key_order if k in event.context
-                }
-                if relevant:
-                    parts = []
-                    for k, v in relevant.items():
-                        if isinstance(v, float):
-                            parts.append(f"{k}={v:.3f}")
-                        elif isinstance(v, list):
-                            parts.append(f"{k}=[{','.join(str(x) for x in v[:3])}]")
-                        else:
-                            parts.append(f"{k}={v}")
-                    ctx_kv = "  |  " + "  ".join(parts)
-
-            lines.append(
-                f"  {i:2d}. [{str(event.agent).upper():<14s}] "
-                f"{str(event.signal_type).upper():<30s} "
-                f"sev={str(event.severity).lower()}"
-                f"{ctx_kv}"
-            )
-
-            if isinstance(event.context, dict) and "raw_features" in event.context:
-                rf = event.context["raw_features"]
-                lines.append(
-                    f"         raw: rps/rep={rf.get('rps_per_replica', 'N/A'):>7}  "
-                    f"cpu={rf.get('cpu_utilization_pct', 'N/A'):>6}  "
-                    f"rps={rf.get('requests_per_second', 'N/A'):>7}"
-                )
-
-        # Deploy event detail block
-        if self.has_deploy_event:
-            for e in self.events:
-                if "deploy" in str(e.signal_type).lower() and isinstance(
-                    e.context, dict
-                ):
-                    sha = e.context.get("sha", "unknown")
-                    author = e.context.get("author", "unknown")
-                    lines.append(f"\nRECENT DEPLOY: sha={str(sha)[:12]}  by={author}")
-                    break
-
-        return "\n".join(lines)
+        from nexus.reasoning.cluster_formatter import format_llm_context
+        return format_llm_context(self)
 
     def to_summary(self) -> dict[str, Any]:
-        return {
-            "cluster_id": self.cluster_id,
-            "created_at": self.created_at.isoformat(),
-            "age_seconds": round(self.age_seconds, 1),
-            "event_count": len(self.events),
-            "agent_types": sorted(self.agent_types),
-            "signal_types": sorted(self.signal_types),
-            "namespace": self.namespace,
-            "primary_resource": self.primary_resource,
-            "highest_severity": self.highest_severity,
-            "has_deploy_event": self.has_deploy_event,
-            "signal_agreement": round(self.signal_agreement_score(), 3),
-        }
+        from nexus.reasoning.cluster_formatter import format_cluster_summary
+        return format_cluster_summary(self)
 
     # ── Factory ───────────────────────────────────────────────────────────────
 

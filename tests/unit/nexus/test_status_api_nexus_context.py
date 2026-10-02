@@ -27,7 +27,6 @@ def test_lifespan_skips_all_self_init_when_context_orchestrator_pre_populated():
     status_api_module.context.feedback_loop = MagicMock()
     status_api_module.context.outcome_store = MagicMock()
     status_api_module.context.knowledge_base = MagicMock()
-    status_api_module.context.runbook_library = MagicMock()
 
     nats_instantiated: list = []
     tracker_started: list = []
@@ -90,4 +89,3 @@ def test_lifespan_skips_all_self_init_when_context_orchestrator_pre_populated():
         status_api_module.context.feedback_loop = None
         status_api_module.context.outcome_store = None
         status_api_module.context.knowledge_base = None
-        status_api_module.context.runbook_library = None

@@ -365,3 +365,125 @@ async def test_e2e_workflow_adaptive_ladder_pause_and_resume():
                         executed_tools = [rec["tool_name"] for rec in resumed_run["execution_records"]]
                         assert "k8s_restart_deployment" in executed_tools
                         assert "k8s_rollback_deployment" in executed_tools
+
+
+# ── 4. Dynamic Context-Driven Scenario Unit Tests ─────────────────────────────
+
+def test_dynamic_k8s_scaling_plan_from_traffic_spike():
+    """Verify that a traffic surge dynamically computes scale replicas from current replicas."""
+    state = {
+        "incident_id": "inc-dynamic-scale-01",
+        "platform": "kubernetes",
+        "target": {"name": "payments-svc", "namespace": "prod"},
+        "diagnosis": {
+            "failure_class": "cascading_failure",
+            "root_cause": "Traffic spike in payments-svc exceeding workload capacity",
+            "confidence": 0.85,
+        },
+        "telemetry": {
+            "live_config": {"replicas": 2},
+            "metrics": {"current_replicas": 2, "traffic_ratio": 2.5},
+        },
+        "events": [
+            {"signal_type": "traffic_spike", "resource_name": "payments-svc", "severity": "warning"}
+        ],
+    }
+
+    result = plan_remediation_node(state)
+    plan = result["plan"]
+    assert len(plan["steps"]) == 1
+    step = plan["steps"][0]
+    assert step["tool_name"] == "k8s_scale_resource"
+    assert step["parameters"]["replicas"] == 5  # 2 * 2.5 = 5
+    assert step["rollback_tool"] == "k8s_scale_resource"
+    assert step["rollback_parameters"]["replicas"] == 2
+
+
+def test_dynamic_k8s_patch_limits_from_oom_and_spec():
+    """Verify that an OOMKilled incident dynamically scales container memory limit."""
+    state = {
+        "incident_id": "inc-dynamic-oom-01",
+        "platform": "kubernetes",
+        "target": {"name": "data-indexer", "namespace": "prod"},
+        "diagnosis": {
+            "failure_class": "resource_exhaustion",
+            "root_cause": "Resource memory limit exceeded for data-indexer (exit code 137).",
+            "confidence": 0.90,
+        },
+        "telemetry": {
+            "health_status": "oomkilled",
+            "live_config": {"memory_limit": "256Mi", "exit_code": 137},
+            "recent_logs": ["Terminated with exit code 137", "oomkilled"],
+        },
+    }
+
+    result = plan_remediation_node(state)
+    plan = result["plan"]
+    assert len(plan["steps"]) == 1
+    step = plan["steps"][0]
+    assert step["tool_name"] == "k8s_patch_resource_limits"
+    assert step["parameters"]["memory_limit"] == "512Mi"
+    assert step["rollback_tool"] == "k8s_patch_resource_limits"
+    assert step["rollback_parameters"]["memory_limit"] == "256Mi"
+
+
+def test_dynamic_k8s_remove_command_override_on_command_failure():
+    """Verify that a broken entrypoint/command override dynamically plans command removal."""
+    state = {
+        "incident_id": "inc-dynamic-cmd-01",
+        "platform": "kubernetes",
+        "target": {"name": "auth-service", "namespace": "default"},
+        "diagnosis": {
+            "failure_class": "bad_deploy",
+            "root_cause": "Broken startup script or invalid command override in auth-service.",
+            "confidence": 0.88,
+        },
+        "telemetry": {
+            "live_config": {"has_command_override": True, "exit_code": 127},
+            "recent_logs": ["/bin/sh: invalid_entrypoint: command not found"],
+        },
+    }
+
+    result = plan_remediation_node(state)
+    plan = result["plan"]
+    assert len(plan["steps"]) == 1
+    step = plan["steps"][0]
+    assert step["tool_name"] == "k8s_remove_container_command"
+    assert step["rollback_tool"] == "k8s_restart_deployment"
+
+
+@pytest.mark.asyncio
+async def test_k8s_telemetry_extraction_of_live_spec():
+    """Verify that collect_k8s_telemetry parses structured replicas, limits, and exit codes."""
+    from nexus.graph.platform.base import TargetResource
+    from nexus.graph.platform.k8s_telemetry import collect_k8s_telemetry
+
+    target = TargetResource(platform="kubernetes", namespace="default", name="worker-app", kind="deployment")
+    raw_describe = """
+    Name:                   worker-app
+    Namespace:              default
+    Replicas:               4 desired | 4 updated | 4 total | 4 available
+    Containers:
+      worker-app:
+        Limits:
+          cpu:     1000m
+          memory:  512Mi
+        Requests:
+          cpu:     200m
+          memory:  128Mi
+        Last State:     Terminated
+          Reason:       OOMKilled
+          Exit Code:    137
+    """
+
+    with patch("nexus.agents.k8s_tools.describe_resource", return_value=raw_describe), \
+         patch("nexus.agents.k8s_tools.get_pod_logs", return_value="worker started\nOOMKilled exit code 137"):
+        telemetry = await collect_k8s_telemetry(target)
+
+        assert telemetry.live_config["replicas"] == 4
+        assert telemetry.live_config["memory_limit"] == "512Mi"
+        assert telemetry.live_config["cpu_limit"] == "1000m"
+        assert telemetry.live_config["exit_code"] == 137
+        assert telemetry.metrics["current_replicas"] == 4
+        assert telemetry.metrics["memory_limit"] == "512Mi"
+
