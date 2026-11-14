@@ -22,22 +22,38 @@ def create_pending_approval_entry(
 ) -> dict[str, Any]:
     """Format pending approval entry from state or result."""
     plan = state_or_result.get("plan") or {}
-    plan_dict = plan.model_dump() if hasattr(plan, "model_dump") else (plan if isinstance(plan, dict) else {})
+    plan_dict = (
+        plan.model_dump()
+        if hasattr(plan, "model_dump")
+        else (plan if isinstance(plan, dict) else {})
+    )
 
     steps = plan_dict.get("steps", [])
-    action_type = steps[0].get("tool_name", "k8s_remediation") if steps else "k8s_remediation"
+    action_type = (
+        steps[0].get("tool_name", "k8s_remediation") if steps else "k8s_remediation"
+    )
     runbook_id = plan_dict.get("failure_mode") or "autonomous_remediation"
     confidence = float(state_or_result.get("diagnosis", {}).get("confidence", 0.8))
 
     target = state_or_result.get("target") or {}
-    target_dict = target.model_dump() if hasattr(target, "model_dump") else (target if isinstance(target, dict) else {})
+    target_dict = (
+        target.model_dump()
+        if hasattr(target, "model_dump")
+        else (target if isinstance(target, dict) else {})
+    )
     target_ns = target_dict.get("namespace", "default")
     target_name = target_dict.get("name", "unknown")
     target_str = f"{target_ns}/{target_name}"
 
     gov = state_or_result.get("governance") or {}
-    gov_dict = gov.model_dump() if hasattr(gov, "model_dump") else (gov if isinstance(gov, dict) else {})
-    reasons = gov_dict.get("reasons", ["L2/L3 mutating action requires operator authorization"])
+    gov_dict = (
+        gov.model_dump()
+        if hasattr(gov, "model_dump")
+        else (gov if isinstance(gov, dict) else {})
+    )
+    reasons = gov_dict.get(
+        "reasons", ["L2/L3 mutating action requires operator authorization"]
+    )
 
     diagnosis = state_or_result.get("diagnosis") or {}
     if hasattr(diagnosis, "model_dump"):
@@ -100,9 +116,15 @@ async def publish_pending_approval(nats: Any, entry: dict[str, Any]) -> None:
                     "context": entry["context"],
                 },
             )
-            logger.info("[IncidentWorkflow] Published nexus.approvals.required for %s", entry["approval_id"])
+            logger.info(
+                "[IncidentWorkflow] Published nexus.approvals.required for %s",
+                entry["approval_id"],
+            )
         except Exception as e_pub:
-            logger.warning("[IncidentWorkflow] Failed publishing nexus.approvals.required: %s", e_pub)
+            logger.warning(
+                "[IncidentWorkflow] Failed publishing nexus.approvals.required: %s",
+                e_pub,
+            )
 
 
 async def notify_incident_rejected_helper(
@@ -136,33 +158,62 @@ async def resume_incident_execution(
     entry = workflow._pending_approvals.get(thread_id)
     if not entry:
         for val in list(workflow._pending_approvals.values()):
-            if val.get("approval_id") == thread_id or val.get("incident_id") == thread_id:
+            if (
+                val.get("approval_id") == thread_id
+                or val.get("incident_id") == thread_id
+            ):
                 entry = val
                 break
 
     actual_tid = entry.get("thread_id", thread_id) if entry else thread_id
     if entry:
-        for k in [entry.get("approval_id"), entry.get("thread_id"), entry.get("incident_id")]:
+        for k in [
+            entry.get("approval_id"),
+            entry.get("thread_id"),
+            entry.get("incident_id"),
+        ]:
             if k and k in workflow._pending_approvals:
                 workflow._pending_approvals.pop(k, None)
     else:
         workflow._pending_approvals.pop(thread_id, None)
 
     config = {"configurable": {"thread_id": actual_tid}}
-    logger.info("[IncidentWorkflow] Resuming incident on thread %s with '%s'", actual_tid, approval_decision)
+    logger.info(
+        "[IncidentWorkflow] Resuming incident on thread %s with '%s'",
+        actual_tid,
+        approval_decision,
+    )
 
-    result = await workflow._compiled_graph.ainvoke(Command(resume=approval_decision), config=config)
+    result = await workflow._compiled_graph.ainvoke(
+        Command(resume=approval_decision), config=config
+    )
 
     state_snapshot = workflow._compiled_graph.get_state(config)
-    if (state_snapshot.next and "approval" in state_snapshot.next) or result.get("__interrupt__"):
+    if (state_snapshot.next and "approval" in state_snapshot.next) or result.get(
+        "__interrupt__"
+    ):
         inc_id = result.get("incident_id", actual_tid)
-        await workflow._record_pending_approval(result, inc_id=inc_id, thread_id=actual_tid)
+        await workflow._record_pending_approval(
+            result, inc_id=inc_id, thread_id=actual_tid
+        )
     else:
-        if approval_decision.lower() in ("rejected", "no", "false"):
-            target_obj = result.get("target") or (entry.get("context", {}).get("target") if entry else {})
-            target_str = target_obj.get("name", "unknown") if isinstance(target_obj, dict) else str(target_obj)
+        dec_str = (
+            approval_decision.get("action") or approval_decision.get("decision") or ""
+            if isinstance(approval_decision, dict)
+            else str(approval_decision)
+        )
+        if dec_str.lower() in ("rejected", "no", "false"):
+            target_obj = result.get("target") or (
+                entry.get("context", {}).get("target") if entry else {}
+            )
+            target_str = (
+                target_obj.get("name", "unknown")
+                if isinstance(target_obj, dict)
+                else str(target_obj)
+            )
             await workflow.notify_incident_rejected(
-                target_str, result.get("incident_id", actual_tid),
+                target_str,
+                result.get("incident_id", actual_tid),
                 reason=f"Rejected by operator: {approval_decision}",
             )
         await workflow._handle_workflow_completion(
