@@ -26,7 +26,9 @@ class AnthropicProvider(LLMProvider):
             or os.getenv("NEXUS_LLM_API_KEY")
             or os.getenv("ANTHROPIC_API_KEY", "")
         )
-        self._model_name: str = model or os.getenv("NEXUS_LLM_MODEL") or self.DEFAULT_MODEL
+        self._model_name: str = (
+            model or os.getenv("NEXUS_LLM_MODEL") or self.DEFAULT_MODEL
+        )
         self._client: Any = None
         self._lock = threading.Lock()
 

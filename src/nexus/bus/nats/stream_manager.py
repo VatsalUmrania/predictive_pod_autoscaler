@@ -1,4 +1,5 @@
 """Stream creation and subject overlap resolution for JetStream."""
+
 from __future__ import annotations
 
 import logging
@@ -10,7 +11,9 @@ from nats.js.errors import BadRequestError
 logger = logging.getLogger(__name__)
 
 
-async def ensure_stream(js: JetStreamContext | None, config: StreamConfig, name: str) -> None:
+async def ensure_stream(
+    js: JetStreamContext | None, config: StreamConfig, name: str
+) -> None:
     """Ensure a JetStream stream exists with the correct configuration."""
     if js is None:
         raise RuntimeError("[NATS] JetStream is not connected")
@@ -56,16 +59,22 @@ async def ensure_stream(js: JetStreamContext | None, config: StreamConfig, name:
 
         raise RuntimeError(f"[NATS] Stream '{name}' creation failed: {exc}") from exc
     except Exception as exc:
-        raise RuntimeError(f"[NATS] Stream '{name}' creation failed unexpectedly: {exc}") from exc
+        raise RuntimeError(
+            f"[NATS] Stream '{name}' creation failed unexpectedly: {exc}"
+        ) from exc
 
 
-async def resolve_subject_overlap(js: JetStreamContext | None, config: StreamConfig, name: str) -> None:
+async def resolve_subject_overlap(
+    js: JetStreamContext | None, config: StreamConfig, name: str
+) -> None:
     """Evict overlapping subjects from competing stream and retry creation."""
     if js is None:
         raise RuntimeError("[NATS] JetStream is not connected")
 
     desired_subjects = list(config.subjects or [])
-    assert desired_subjects, f"[NATS] Config for '{name}' has no subjects — cannot resolve overlap"
+    assert (
+        desired_subjects
+    ), f"[NATS] Config for '{name}' has no subjects — cannot resolve overlap"
 
     for subject in desired_subjects:
         try:

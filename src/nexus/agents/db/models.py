@@ -16,12 +16,14 @@ class DBConnectionStats:
     utilization_pct: float
     blocking_query: str | None = None
 
+
 @dataclass
 class SlowQuery:
     query_digest: str
     avg_latency_ms: float
     calls: int
     database: str | None = None
+
 
 @dataclass
 class QuerySnapshot:

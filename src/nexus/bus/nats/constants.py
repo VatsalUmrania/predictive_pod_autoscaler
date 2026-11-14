@@ -1,4 +1,5 @@
 """Stream configurations and subject constants for NATS JetStream."""
+
 from __future__ import annotations
 
 from nats.js.api import RetentionPolicy, StorageType, StreamConfig

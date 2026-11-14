@@ -28,7 +28,11 @@ def build_pluggable_platform_steps(
     chosen_tool = None
     for t in available_tools:
         name_lower = getattr(t, "name", "").lower()
-        if "get" not in name_lower and "describe" not in name_lower and "list" not in name_lower:
+        if (
+            "get" not in name_lower
+            and "describe" not in name_lower
+            and "list" not in name_lower
+        ):
             chosen_tool = t
             break
     if not chosen_tool and available_tools:

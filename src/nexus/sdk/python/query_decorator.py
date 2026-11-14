@@ -76,7 +76,9 @@ def query(
                     _cache["last"] = result
 
                 asyncio.create_task(
-                    _emit_query_async(query_name, duration_ms, spike_indicator, token, nexus_url)
+                    _emit_query_async(
+                        query_name, duration_ms, spike_indicator, token, nexus_url
+                    )
                 )
                 return result
 

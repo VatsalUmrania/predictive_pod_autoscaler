@@ -22,7 +22,9 @@ class GeminiProvider(LLMProvider):
 
     def __init__(self, api_key: str | None = None, model: str | None = None):
         self._api_key = api_key or os.getenv("NEXUS_LLM_API_KEY", "")
-        self._model_name: str = model or os.getenv("NEXUS_LLM_MODEL") or self.DEFAULT_MODEL
+        self._model_name: str = (
+            model or os.getenv("NEXUS_LLM_MODEL") or self.DEFAULT_MODEL
+        )
         self._client: Any = None
         self._lock = threading.Lock()
 
@@ -52,7 +54,9 @@ class GeminiProvider(LLMProvider):
                 logger.info("[LLM] Gemini client ready — model=%s", self._model_name)
                 return True
             except ImportError:
-                logger.warning("[LLM] google-genai not installed: pip install google-genai")
+                logger.warning(
+                    "[LLM] google-genai not installed: pip install google-genai"
+                )
                 return False
             except Exception as exc:
                 logger.warning(f"[LLM] Gemini init failed: {exc}")
@@ -68,7 +72,9 @@ class GeminiProvider(LLMProvider):
             temperature=0.2,
             max_output_tokens=512,
             response_mime_type="application/json",
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                disable=True
+            ),
         )
         response = self._client.models.generate_content(
             model=self._model_name,

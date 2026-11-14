@@ -23,7 +23,9 @@ async def test_fsm_happy_path_with_db_and_nats():
     assert fsm.current_state == IncidentState.DETECTED
 
     # 1. Correlate
-    ok = await fsm.transition_to(IncidentState.CORRELATED, reason="Clustered 3 error signals")
+    ok = await fsm.transition_to(
+        IncidentState.CORRELATED, reason="Clustered 3 error signals"
+    )
     assert ok is True
     assert fsm.current_state == IncidentState.CORRELATED
     assert mock_nats.publish_raw.called
@@ -33,23 +35,33 @@ async def test_fsm_happy_path_with_db_and_nats():
     assert ok is True
 
     # 3. Planning
-    ok = await fsm.transition_to(IncidentState.PLANNING, reason="RCA complete, selecting runbook")
+    ok = await fsm.transition_to(
+        IncidentState.PLANNING, reason="RCA complete, selecting runbook"
+    )
     assert ok is True
 
     # 4. Policy Check
-    ok = await fsm.transition_to(IncidentState.POLICY_CHECK, reason="Evaluating OPA policies")
+    ok = await fsm.transition_to(
+        IncidentState.POLICY_CHECK, reason="Evaluating OPA policies"
+    )
     assert ok is True
 
     # 5. Executing
-    ok = await fsm.transition_to(IncidentState.EXECUTING, reason="Approved L1 automated action")
+    ok = await fsm.transition_to(
+        IncidentState.EXECUTING, reason="Approved L1 automated action"
+    )
     assert ok is True
 
     # 6. Verifying
-    ok = await fsm.transition_to(IncidentState.VERIFYING, reason="Awaiting post-restart metrics")
+    ok = await fsm.transition_to(
+        IncidentState.VERIFYING, reason="Awaiting post-restart metrics"
+    )
     assert ok is True
 
     # 7. Resolved
-    ok = await fsm.transition_to(IncidentState.RESOLVED, reason="Error rate returned to 0%")
+    ok = await fsm.transition_to(
+        IncidentState.RESOLVED, reason="Error rate returned to 0%"
+    )
     assert ok is True
     assert fsm.is_terminal() is True
 
@@ -58,8 +70,14 @@ async def test_fsm_happy_path_with_db_and_nats():
     assert trace["incident"]["current_state"] == "resolved"
     transitions = [t["to_state"] for t in trace["state_transitions"]]
     assert transitions == [
-        "detected", "correlated", "diagnosing", "planning",
-        "policy_check", "executing", "verifying", "resolved"
+        "detected",
+        "correlated",
+        "diagnosing",
+        "planning",
+        "policy_check",
+        "executing",
+        "verifying",
+        "resolved",
     ]
 
     await db.close()
@@ -103,14 +121,20 @@ async def test_fsm_rollback_and_escalation():
     await fsm.transition_to(IncidentState.EXECUTING)
 
     # Action caused error -> trigger rollback
-    ok = await fsm.transition_to(IncidentState.ROLLING_BACK, reason="Post-checks degraded")
+    ok = await fsm.transition_to(
+        IncidentState.ROLLING_BACK, reason="Post-checks degraded"
+    )
     assert ok is True
 
-    ok = await fsm.transition_to(IncidentState.ROLLED_BACK, reason="Restored previous ReplicaSet")
+    ok = await fsm.transition_to(
+        IncidentState.ROLLED_BACK, reason="Restored previous ReplicaSet"
+    )
     assert ok is True
 
     # Rollback still requires human attention
-    ok = await fsm.transition_to(IncidentState.ESCALATED, reason="Escalated to on-call engineer")
+    ok = await fsm.transition_to(
+        IncidentState.ESCALATED, reason="Escalated to on-call engineer"
+    )
     assert ok is True
     assert fsm.current_state == IncidentState.ESCALATED
 

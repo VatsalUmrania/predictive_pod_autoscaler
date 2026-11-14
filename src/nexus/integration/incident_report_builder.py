@@ -30,8 +30,14 @@ def build_report_facts(
 
     events = result.get("events") or []
     signal_type = (
-        events[0].get("signal_type") if events and isinstance(events[0], dict) else None
-    ) or payload.get("signal_type") or "unknown"
+        (
+            events[0].get("signal_type")
+            if events and isinstance(events[0], dict)
+            else None
+        )
+        or payload.get("signal_type")
+        or "unknown"
+    )
 
     timeline = [
         {
@@ -110,14 +116,16 @@ def template_report(facts: dict[str, Any]) -> dict[str, str]:
     ] or ["No stage timeline recorded."]
 
     executed = facts["executed_actions"]
-    action_lines = [
-        f"{i + 1}. {a['tool']} — {'succeeded' if a['success'] else 'failed'}"
-        + (f" in {a['duration_ms']:.0f}ms" if a["duration_ms"] else "")
-        + (f" (error: {a['error']})" if a["error"] else "")
-        for i, a in enumerate(executed)
-    ] or [f"Planned: {p}" for p in facts["planned_actions"]] or [
-        "No remediation executed."
-    ]
+    action_lines = (
+        [
+            f"{i + 1}. {a['tool']} — {'succeeded' if a['success'] else 'failed'}"
+            + (f" in {a['duration_ms']:.0f}ms" if a["duration_ms"] else "")
+            + (f" (error: {a['error']})" if a["error"] else "")
+            for i, a in enumerate(executed)
+        ]
+        or [f"Planned: {p}" for p in facts["planned_actions"]]
+        or ["No remediation executed."]
+    )
 
     verif = facts["verification"]
     verification_text = verif["details"] or (

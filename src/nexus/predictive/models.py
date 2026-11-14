@@ -1,4 +1,5 @@
 """Data models and enums for Predictive Pod Autoscaling."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

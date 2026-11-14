@@ -102,6 +102,7 @@ class PpaOutcomeTracker:
     async def _fetch_actual_rps(self, deployment: str) -> float:
         """Fetch current RPS for a deployment from Prometheus."""
         from nexus.learning.ppa_models import fetch_actual_rps
+
         return fetch_actual_rps(deployment, self._prom_url)
 
     def _compute_verdict(self, pred: PendingPrediction, actual_rps: float) -> str:

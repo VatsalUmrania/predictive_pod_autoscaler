@@ -5,7 +5,6 @@ Calibrates raw RCA confidence into a final score governing ActionLadder levels:
     < 0.50 -> L0 only | 0.50-0.70 -> L1 | 0.70-0.85 -> L2 | >= 0.85 -> L3
 """
 
-
 from __future__ import annotations
 
 import logging
@@ -17,7 +16,6 @@ from nexus.reasoning.confidence_constants import (
 from nexus.reasoning.incident_cluster import IncidentCluster
 
 logger = logging.getLogger(__name__)
-
 
 
 class ConfidenceScorer:

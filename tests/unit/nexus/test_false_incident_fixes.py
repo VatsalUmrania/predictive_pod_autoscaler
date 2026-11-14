@@ -48,7 +48,9 @@ async def test_orchestrator_drops_stale_events():
         nats_client=mock_nats,
         correlator=mock_correlator,
         rca_engine=MagicMock(),
-        confidence_scorer=MagicMock(score=MagicMock(return_value=0.0), gate=MagicMock(return_value=0)),
+        confidence_scorer=MagicMock(
+            score=MagicMock(return_value=0.0), gate=MagicMock(return_value=0)
+        ),
         executor=MagicMock(),
     )
 
@@ -112,7 +114,9 @@ async def test_blocked_rca_validation_never_queues_approval():
         nats_client=MagicMock(),
         correlator=MagicMock(),
         rca_engine=mock_rca,
-        confidence_scorer=MagicMock(score=MagicMock(return_value=0.0), gate=MagicMock(return_value=0)),
+        confidence_scorer=MagicMock(
+            score=MagicMock(return_value=0.0), gate=MagicMock(return_value=0)
+        ),
         executor=mock_executor,
         rca_validator=mock_validator,
     )
@@ -143,11 +147,15 @@ async def test_notify_incident_rejected_clears_active_incident():
         nats_client=mock_nats,
         correlator=MagicMock(),
         rca_engine=MagicMock(),
-        confidence_scorer=MagicMock(score=MagicMock(return_value=0.0), gate=MagicMock(return_value=0)),
+        confidence_scorer=MagicMock(
+            score=MagicMock(return_value=0.0), gate=MagicMock(return_value=0)
+        ),
         executor=MagicMock(),
     )
 
-    fsm = IncidentFSM(incident_id="inc-123", current_state=IncidentState.APPROVAL_PENDING)
+    fsm = IncidentFSM(
+        incident_id="inc-123", current_state=IncidentState.APPROVAL_PENDING
+    )
     orc._active_incidents["default/shop-demo"] = {
         "incident_id": "inc-123",
         "fsm": fsm,
@@ -157,7 +165,9 @@ async def test_notify_incident_rejected_clears_active_incident():
     assert "default/shop-demo" in orc._active_incidents
     assert fsm.current_state == IncidentState.APPROVAL_PENDING
 
-    await orc.notify_incident_rejected("default/shop-demo", "inc-123", reason="Manual operator reject")
+    await orc.notify_incident_rejected(
+        "default/shop-demo", "inc-123", reason="Manual operator reject"
+    )
 
     # Target must be removed from active incidents
     assert "default/shop-demo" not in orc._active_incidents

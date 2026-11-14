@@ -16,7 +16,9 @@ from langchain_core.language_models import FakeListChatModel
 logger = logging.getLogger(__name__)
 
 
-def get_llm(provider: str | None = None, model: str | None = None, temperature: float = 0.0) -> Any:
+def get_llm(
+    provider: str | None = None, model: str | None = None, temperature: float = 0.0
+) -> Any:
     """Return configured LangChain chat model."""
     selected_provider = (
         provider or os.getenv("NEXUS_LLM_PROVIDER") or "gemini"
@@ -37,7 +39,11 @@ def get_llm(provider: str | None = None, model: str | None = None, temperature: 
 
         try:
             from langchain_google_genai import ChatGoogleGenerativeAI
-            logger.info("[LLM Factory] Initialized ChatGoogleGenerativeAI with model=%s", gemini_model)
+
+            logger.info(
+                "[LLM Factory] Initialized ChatGoogleGenerativeAI with model=%s",
+                gemini_model,
+            )
             return ChatGoogleGenerativeAI(
                 model=gemini_model,
                 google_api_key=api_key,
@@ -54,7 +60,9 @@ def get_llm(provider: str | None = None, model: str | None = None, temperature: 
                 class GoogleGenAIChatBridge:
                     """LangChain-compatible chat model bridge using the official google.genai SDK."""
 
-                    def __init__(self, client: genai.Client, model_name: str, temp: float):
+                    def __init__(
+                        self, client: genai.Client, model_name: str, temp: float
+                    ):
                         self._client = client
                         self._model = model_name
                         self._temp = temp
@@ -92,15 +100,21 @@ def get_llm(provider: str | None = None, model: str | None = None, temperature: 
                         return _BridgeResponse((resp.text or "").strip())
 
                 client = genai.Client(api_key=api_key)
-                logger.info("[LLM Factory] Initialized google.genai bridge with model=%s", gemini_model)
+                logger.info(
+                    "[LLM Factory] Initialized google.genai bridge with model=%s",
+                    gemini_model,
+                )
                 return GoogleGenAIChatBridge(client, gemini_model, temperature)
             except Exception as exc:
-                logger.warning("[LLM Factory] Failed to initialize google.genai bridge: %s", exc)
+                logger.warning(
+                    "[LLM Factory] Failed to initialize google.genai bridge: %s", exc
+                )
                 return FakeListChatModel(responses=["{}"])
 
     if selected_provider == "openai":
         try:
             from langchain_openai import ChatOpenAI
+
             return ChatOpenAI(
                 model=selected_model or "gpt-4o-mini",
                 temperature=temperature,

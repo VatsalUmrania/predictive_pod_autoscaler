@@ -45,9 +45,17 @@ async def test_update_outcome_updates_pending_record():
         row = rows[0]
         assert row["action_id"] == action_id
         assert row["execution_outcome"] == "success"
-        action_res = json.loads(row["action_results"]) if isinstance(row["action_results"], str) else row["action_results"]
+        action_res = (
+            json.loads(row["action_results"])
+            if isinstance(row["action_results"], str)
+            else row["action_results"]
+        )
         assert action_res == [{"pod": "payments-api-xyz", "action": "restart"}]
-        post_res = json.loads(row["post_check_results"]) if isinstance(row["post_check_results"], str) else row["post_check_results"]
+        post_res = (
+            json.loads(row["post_check_results"])
+            if isinstance(row["post_check_results"], str)
+            else row["post_check_results"]
+        )
         assert post_res == {"healthy": True}
         assert row["rollback_triggered"] is False
     finally:
@@ -186,4 +194,3 @@ async def test_status_api_audit_tail_endpoint():
     finally:
         context.audit_trail = prev_audit
         await audit.close()
-

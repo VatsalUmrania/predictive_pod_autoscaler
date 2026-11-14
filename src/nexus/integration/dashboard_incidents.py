@@ -74,7 +74,11 @@ async def write_incident(
             "description, confidence, timestamp, rca, accepted_by, accepted_at) "
             "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)"
         )
-        conf = float(row.get("confidence", 0.0)) if row.get("confidence") is not None else None
+        conf = (
+            float(row.get("confidence", 0.0))
+            if row.get("confidence") is not None
+            else None
+        )
         async with db.acquire() as conn:
             await conn.execute(
                 sql,
@@ -94,7 +98,9 @@ async def write_incident(
                 "DELETE FROM developer_incidents WHERE id NOT IN "
                 "(SELECT id FROM developer_incidents ORDER BY id DESC LIMIT 200)"
             )
-        logger.info(f"[Dashboard] Incident stored: {row.get('incident_id')} outcome={row.get('outcome')}")
+        logger.info(
+            f"[Dashboard] Incident stored: {row.get('incident_id')} outcome={row.get('outcome')}"
+        )
     except Exception as _e:
         logger.warning(f"[Dashboard] incident write failed: {_e}")
 
@@ -107,10 +113,14 @@ async def record_incident_resolution(
     import nexus.integration.dashboard as dash_mod
 
     inc_id = data.get("incident_id")
-    target = data.get("target") or data.get("target_name") or data.get("app") or "service"
+    target = (
+        data.get("target") or data.get("target_name") or data.get("app") or "service"
+    )
     plan = data.get("plan") or {}
     rca = data.get("rca") or data.get("diagnosis") or {}
-    runbook_id = plan.get("failure_mode") or data.get("runbook_id") or "autonomous_remediation"
+    runbook_id = (
+        plan.get("failure_mode") or data.get("runbook_id") or "autonomous_remediation"
+    )
     level = data.get("level", 3)
     outcome = data.get("outcome", "success")
 
@@ -119,14 +129,22 @@ async def record_incident_resolution(
     action_desc = (
         steps[0].get("description")
         if steps and steps[0].get("description")
-        else data.get("action_taken") or data.get("description") or f"Executed remediation for {failure_class}"
+        else data.get("action_taken")
+        or data.get("description")
+        or f"Executed remediation for {failure_class}"
     )
 
-    ts = (data.get("resolved_at") or data.get("timestamp") or datetime.now(timezone.utc).isoformat())[:19].replace("T", " ")
+    ts = (
+        data.get("resolved_at")
+        or data.get("timestamp")
+        or datetime.now(timezone.utc).isoformat()
+    )[:19].replace("T", " ")
     if outcome == "success":
         desc = f"At {ts} UTC — {action_desc} on {target}. Successfully resolved and verified healthy."
     else:
-        reason = data.get("reason") or "Remediation failed or maximum retries exhausted."
+        reason = (
+            data.get("reason") or "Remediation failed or maximum retries exhausted."
+        )
         desc = f"At {ts} UTC — Incident on {target} escalated: {reason}"
 
     confidence = data.get("confidence")

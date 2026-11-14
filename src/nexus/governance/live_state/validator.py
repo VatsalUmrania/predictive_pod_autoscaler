@@ -1,4 +1,5 @@
 """Main dispatch for live Kubernetes state validation."""
+
 from __future__ import annotations
 
 import logging
@@ -38,6 +39,7 @@ async def check_live_state(
         try:
             from kubernetes import client as _k8s_c
             from kubernetes import config as _k8s_cfg
+
             try:
                 _k8s_cfg.load_incluster_config()
             except Exception:
@@ -47,18 +49,32 @@ async def check_live_state(
             if k8s_apps is None:
                 k8s_apps = _k8s_c.AppsV1Api()
         except Exception as _k_exc:
-            logger.debug(f"[LiveStateValidator] Could not auto-init K8s clients: {_k_exc}")
+            logger.debug(
+                f"[LiveStateValidator] Could not auto-init K8s clients: {_k_exc}"
+            )
 
     if action_type in ("restart_pod", "restart_deployment", "k8s_restart_deployment"):
-        return await check_pod_failure_condition(action_type, namespace, resource_name, k8s_core, k8s_apps)
+        return await check_pod_failure_condition(
+            action_type, namespace, resource_name, k8s_core, k8s_apps
+        )
 
-    if action_type in ("kubectl_rollout_undo", "rollback_deployment", "k8s_rollback_deployment"):
-        return await check_deployment_degraded(action_type, namespace, resource_name, k8s_apps, k8s_core)
+    if action_type in (
+        "kubectl_rollout_undo",
+        "rollback_deployment",
+        "k8s_rollback_deployment",
+    ):
+        return await check_deployment_degraded(
+            action_type, namespace, resource_name, k8s_apps, k8s_core
+        )
 
     if action_type in ("scale_deployment", "scale_resource", "k8s_scale_deployment"):
-        return await check_scale_condition(action_type, namespace, resource_name, k8s_apps)
+        return await check_scale_condition(
+            action_type, namespace, resource_name, k8s_apps
+        )
 
-    logger.debug(f"[LiveStateValidator] No live check defined for action {action_type!r}")
+    logger.debug(
+        f"[LiveStateValidator] No live check defined for action {action_type!r}"
+    )
     return LiveStateReport(
         condition_still_active=True,
         verdict="proceed",

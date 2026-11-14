@@ -28,7 +28,9 @@ def _include_integration_routers(app: FastAPI) -> None:
         from nexus.integration.dashboard import router as dev_router
         from nexus.integration.sdk_ingest import router as sdk_router
 
-        if not any(getattr(r, "path", None) == "/developer/incidents" for r in app.routes):
+        if not any(
+            getattr(r, "path", None) == "/developer/incidents" for r in app.routes
+        ):
             app.include_router(sdk_router)
             app.include_router(dev_router)
         _routers_included = True

@@ -84,7 +84,9 @@ class SelfHealMiddleware:
                 path = scope.get("path", "/unknown")
                 method = scope.get("method", "GET")
                 err_msg = (
-                    traceback.format_exception_only(type(caught_exc), caught_exc)[-1].strip()
+                    traceback.format_exception_only(type(caught_exc), caught_exc)[
+                        -1
+                    ].strip()
                     if caught_exc
                     else None
                 )

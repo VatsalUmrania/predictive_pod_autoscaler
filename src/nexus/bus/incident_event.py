@@ -2,6 +2,7 @@
 
 Backward-compatible entry point re-exporting event models and types.
 """
+
 from nexus.bus.events import (
     AgentType,
     ConfigDriftContext,

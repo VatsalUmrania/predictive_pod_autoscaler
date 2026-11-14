@@ -16,7 +16,7 @@ _LOW_PERFORMER_RATE = 0.50
 _MAX_POSITIVE_DELTA = +0.05
 _MAX_NEGATIVE_DELTA = -0.10
 _POSITIVE_TARGET_N = 10  # Evidence required for full positive boost
-_NEGATIVE_TARGET_N = 5   # Evidence required for full negative penalty
+_NEGATIVE_TARGET_N = 5  # Evidence required for full negative penalty
 
 
 def compute_delta(stats: RunbookStats) -> float:

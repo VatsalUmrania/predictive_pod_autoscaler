@@ -6,14 +6,16 @@ from __future__ import annotations
 
 from typing import Any
 
-SYSTEM_NAMESPACES = frozenset({
-    "kube-system",
-    "kube-public",
-    "kube-node-lease",
-    "monitoring",
-    "nexus",
-    "ingress-nginx",
-})
+SYSTEM_NAMESPACES = frozenset(
+    {
+        "kube-system",
+        "kube-public",
+        "kube-node-lease",
+        "monitoring",
+        "nexus",
+        "ingress-nginx",
+    }
+)
 
 
 def parse_memory_mi(mem_str: str) -> float:
@@ -29,7 +31,11 @@ def get_container_memory_limit(pod: Any, container_name: str) -> float | None:
     """Extract memory limit for a specific container from the pod spec."""
     try:
         for cspec in pod.spec.containers:
-            if cspec.name == container_name and cspec.resources and cspec.resources.limits:
+            if (
+                cspec.name == container_name
+                and cspec.resources
+                and cspec.resources.limits
+            ):
                 lim = cspec.resources.limits.get("memory")
                 if lim:
                     return parse_memory_mi(lim)

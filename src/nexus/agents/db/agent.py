@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 _AdapterType = PostgresAdapter | MySQLAdapter | MongoDBAdapter
 
+
 class DBAgent(BaseAgent):
     """
     Multi-database monitoring agent.
@@ -166,4 +167,3 @@ class DBAgent(BaseAgent):
 
 
 __all__ = ["DBAgent", "db_agent_from_env"]
-

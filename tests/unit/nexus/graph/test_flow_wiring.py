@@ -85,15 +85,24 @@ async def test_verify_polls_until_healthy():
     adapter = MagicMock()
     adapter.verify_health = AsyncMock(
         side_effect=[
-            HealthCheckResult(healthy=False, slo_restored=False, failure_reason="restarting"),
-            HealthCheckResult(healthy=False, slo_restored=False, failure_reason="restarting"),
+            HealthCheckResult(
+                healthy=False, slo_restored=False, failure_reason="restarting"
+            ),
+            HealthCheckResult(
+                healthy=False, slo_restored=False, failure_reason="restarting"
+            ),
             HealthCheckResult(healthy=True, slo_restored=True, details="Ready 1/1"),
         ]
     )
 
-    with patch("nexus.graph.nodes.verify.get_platform_registry", return_value=_fake_registry(adapter)), \
-         patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 2.0), \
-         patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01):
+    with (
+        patch(
+            "nexus.graph.nodes.verify.get_platform_registry",
+            return_value=_fake_registry(adapter),
+        ),
+        patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 2.0),
+        patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01),
+    ):
         result = await verify_node(_state())
 
     assert result["resolved"] is True
@@ -106,7 +115,9 @@ async def test_verify_failure_after_timeout_records_circuit_breaker():
     """Perpetually unhealthy target exhausts the poll window, records a CB failure, rolls back."""
     adapter = MagicMock()
     adapter.verify_health = AsyncMock(
-        return_value=HealthCheckResult(healthy=False, slo_restored=False, failure_reason="OOM persists")
+        return_value=HealthCheckResult(
+            healthy=False, slo_restored=False, failure_reason="OOM persists"
+        )
     )
     ladder = MagicMock()
     ladder.record_post_check_failure = MagicMock()
@@ -116,9 +127,14 @@ async def test_verify_failure_after_timeout_records_circuit_breaker():
 
     context.action_ladder = ladder
     try:
-        with patch("nexus.graph.nodes.verify.get_platform_registry", return_value=_fake_registry(adapter)), \
-             patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05), \
-             patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.02):
+        with (
+            patch(
+                "nexus.graph.nodes.verify.get_platform_registry",
+                return_value=_fake_registry(adapter),
+            ),
+            patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05),
+            patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.02),
+        ):
             result = await verify_node(_state(max_retries=0))
     finally:
         context.action_ladder = None
@@ -144,14 +160,19 @@ async def test_verify_success_records_cb_and_sets_cooldown():
 
     context.action_ladder = ladder
     try:
-        with patch("nexus.graph.nodes.verify.get_platform_registry", return_value=_fake_registry(adapter)):
+        with patch(
+            "nexus.graph.nodes.verify.get_platform_registry",
+            return_value=_fake_registry(adapter),
+        ):
             result = await verify_node(_state())
     finally:
         context.action_ladder = None
 
     assert result["resolved"] is True
     ladder.record_post_check_success.assert_called_once()
-    ladder.set_cooldown.assert_awaited_once_with("k8s_restart_deployment", "default/svc-a")
+    ladder.set_cooldown.assert_awaited_once_with(
+        "k8s_restart_deployment", "default/svc-a"
+    )
 
 
 # ── 2. Governance circuit breaker + cooldown ─────────────────────────────────
@@ -214,12 +235,21 @@ async def test_execute_stores_snapshot_rollback_fields():
             target=_target(),
             action_name="k8s_scale_deployment",
             rollback_tool="k8s_scale_deployment",
-            rollback_parameters={"namespace": "default", "deployment_name": "svc-a", "replicas": 3},
+            rollback_parameters={
+                "namespace": "default",
+                "deployment_name": "svc-a",
+                "replicas": 3,
+            },
         )
     )
-    adapter.execute_action = AsyncMock(return_value=MagicMock(success=True, data={}, error=None))
+    adapter.execute_action = AsyncMock(
+        return_value=MagicMock(success=True, data={}, error=None)
+    )
 
-    with patch("nexus.graph.nodes.execute.get_platform_registry", return_value=_fake_registry(adapter)):
+    with patch(
+        "nexus.graph.nodes.execute.get_platform_registry",
+        return_value=_fake_registry(adapter),
+    ):
         result = await execute_node(_state())
 
     rec = result["execution_records"][0]
@@ -243,12 +273,19 @@ async def test_rollback_prefers_captured_snapshot_over_hardcoded_inverse():
                 "success": True,
                 "snapshot_id": "snap-1",
                 "rollback_tool": "k8s_scale_deployment",
-                "rollback_parameters": {"namespace": "default", "deployment_name": "svc-a", "replicas": 3},
+                "rollback_parameters": {
+                    "namespace": "default",
+                    "deployment_name": "svc-a",
+                    "replicas": 3,
+                },
             }
         ]
     )
 
-    with patch("nexus.graph.nodes.rollback.get_platform_registry", return_value=_fake_registry(adapter)):
+    with patch(
+        "nexus.graph.nodes.rollback.get_platform_registry",
+        return_value=_fake_registry(adapter),
+    ):
         await rollback_node(state)
 
     snap = adapter.execute_rollback.await_args.args[0]
@@ -271,14 +308,23 @@ async def test_rollback_falls_back_to_plan_step_fields():
                     "step_index": 0,
                     "tool_name": "k8s_scale_deployment",
                     "rollback_tool": "k8s_scale_deployment",
-                    "rollback_parameters": {"namespace": "default", "deployment_name": "svc-a", "replicas": 2},
+                    "rollback_parameters": {
+                        "namespace": "default",
+                        "deployment_name": "svc-a",
+                        "replicas": 2,
+                    },
                 }
             ]
         },
-        execution_records=[{"step_index": 0, "tool_name": "k8s_scale_deployment", "success": True}],
+        execution_records=[
+            {"step_index": 0, "tool_name": "k8s_scale_deployment", "success": True}
+        ],
     )
 
-    with patch("nexus.graph.nodes.rollback.get_platform_registry", return_value=_fake_registry(adapter)):
+    with patch(
+        "nexus.graph.nodes.rollback.get_platform_registry",
+        return_value=_fake_registry(adapter),
+    ):
         await rollback_node(state)
 
     snap = adapter.execute_rollback.await_args.args[0]
@@ -297,11 +343,28 @@ def _completion_result(resolved: bool, rolled_back: bool = False) -> dict:
         "escalated": not resolved,
         "rollback_executed": rolled_back,
         "target": {"name": "svc-a", "namespace": "default", "platform": "kubernetes"},
-        "events": [{"signal_type": "pod_oomkilled", "resource_name": "svc-a", "namespace": "default"}],
+        "events": [
+            {
+                "signal_type": "pod_oomkilled",
+                "resource_name": "svc-a",
+                "namespace": "default",
+            }
+        ],
         "diagnosis": {"failure_class": "resource_exhaustion", "confidence": 0.9},
-        "plan": {"failure_mode": "resource_exhaustion", "steps": [{"tool_name": "k8s_restart_deployment", "description": "restart"}]},
-        "verification": {"healthy": resolved, "slo_restored": resolved, "details": "ok"},
-        "execution_records": [{"step_index": 0, "tool_name": "k8s_restart_deployment", "success": True}],
+        "plan": {
+            "failure_mode": "resource_exhaustion",
+            "steps": [
+                {"tool_name": "k8s_restart_deployment", "description": "restart"}
+            ],
+        },
+        "verification": {
+            "healthy": resolved,
+            "slo_restored": resolved,
+            "details": "ok",
+        },
+        "execution_records": [
+            {"step_index": 0, "tool_name": "k8s_restart_deployment", "success": True}
+        ],
         "error_message": None if resolved else "unhealthy after retries",
     }
 
@@ -315,7 +378,9 @@ async def test_completion_records_success_outcome_to_learning_plane(status_conte
     status_context.knowledge_base.record_incident_outcome = AsyncMock()
     status_context.knowledge_base.record_pattern = AsyncMock()
 
-    await workflow._handle_workflow_completion(_completion_result(resolved=True), inc_id="inc-learn-01", thread_id="t1")
+    await workflow._handle_workflow_completion(
+        _completion_result(resolved=True), inc_id="inc-learn-01", thread_id="t1"
+    )
 
     status_context.audit_trail.write.assert_awaited_once()
     kwargs = status_context.audit_trail.write.await_args.kwargs
@@ -344,11 +409,16 @@ async def test_completion_records_rolled_back_outcome(status_context):
     status_context.knowledge_base.record_pattern = AsyncMock()
 
     await workflow._handle_workflow_completion(
-        _completion_result(resolved=False, rolled_back=True), inc_id="inc-learn-02", thread_id="t2"
+        _completion_result(resolved=False, rolled_back=True),
+        inc_id="inc-learn-02",
+        thread_id="t2",
     )
 
     kwargs = status_context.audit_trail.write.await_args.kwargs
     assert kwargs["execution_outcome"] == "rolled_back"
     assert kwargs["rollback_triggered"] is True
     status_context.knowledge_base.record_pattern.assert_awaited_once()
-    assert status_context.knowledge_base.record_pattern.await_args.kwargs["success"] is False
+    assert (
+        status_context.knowledge_base.record_pattern.await_args.kwargs["success"]
+        is False
+    )

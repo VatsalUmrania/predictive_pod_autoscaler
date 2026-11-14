@@ -70,7 +70,10 @@ async def test_notify_incident_resolved_skips_when_no_webhook():
     notifier._send = AsyncMock()
 
     policy = _policy("silent-app", None)
-    with patch("nexus.integration.dashboard._policy_cache", policy), patch.dict("os.environ", {}, clear=True):
+    with (
+        patch("nexus.integration.dashboard._policy_cache", policy),
+        patch.dict("os.environ", {}, clear=True),
+    ):
         await notifier.notify_incident_resolved(
             app_name="silent-app",
             incident_id="inc-999",
@@ -123,7 +126,9 @@ async def test_on_incident_resolved_message_maps_nats_payload():
             "confidence": 0.88,
         },
         "plan": {
-            "steps": [{"description": "Reloaded Nginx configuration and refreshed endpoints"}],
+            "steps": [
+                {"description": "Reloaded Nginx configuration and refreshed endpoints"}
+            ],
             "failure_mode": "runbook_nginx_reload_v1",
         },
         "verification": {
@@ -180,7 +185,9 @@ async def test_on_incident_escalated_message_maps_nats_payload():
 @pytest.mark.asyncio
 async def test_record_incident_resolution_persists_to_db():
     """record_incident_resolution formats row and invokes _write_incident."""
-    with patch("nexus.integration.dashboard._write_incident", new_callable=AsyncMock) as mock_write:
+    with patch(
+        "nexus.integration.dashboard._write_incident", new_callable=AsyncMock
+    ) as mock_write:
         data = {
             "incident_id": "inc-db-1",
             "target": "default/payment-api",
@@ -239,7 +246,9 @@ async def test_workflow_handle_completion_publishes_nats_and_records():
         },
     }
 
-    with patch("nexus.integration.dashboard.record_incident_resolution", new_callable=AsyncMock) as mock_rec:
+    with patch(
+        "nexus.integration.dashboard.record_incident_resolution", new_callable=AsyncMock
+    ) as mock_rec:
         await workflow._handle_workflow_completion(
             result=result_state,
             inc_id="inc-wf-1",

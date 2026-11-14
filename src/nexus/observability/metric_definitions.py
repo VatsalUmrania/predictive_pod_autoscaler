@@ -89,7 +89,19 @@ def create_metrics(registry: Any) -> tuple[dict[str, Any], bool, str]:
                 "nexus_confidence_score",
                 "Distribution of confidence scores at decision time",
                 ["failure_class", "rca_source"],
-                buckets=[0.30, 0.40, 0.50, 0.60, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.0],
+                buckets=[
+                    0.30,
+                    0.40,
+                    0.50,
+                    0.60,
+                    0.70,
+                    0.75,
+                    0.80,
+                    0.85,
+                    0.90,
+                    0.95,
+                    1.0,
+                ],
                 registry=registry,
             ),
             "rca_duration_seconds": Histogram(
@@ -150,4 +162,8 @@ def create_metrics(registry: Any) -> tuple[dict[str, Any], bool, str]:
             "[NexusMetrics] prometheus_client not installed — metrics disabled."
         )
         noop = _Noop()
-        return {name: noop for name in METRIC_NAMES}, False, "text/plain; version=0.0.4; charset=utf-8"
+        return (
+            {name: noop for name in METRIC_NAMES},
+            False,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )

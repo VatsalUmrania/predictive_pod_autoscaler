@@ -38,7 +38,9 @@ async def record_signal_pattern(
         last_seen     = EXCLUDED.last_seen
     """
     async with client.acquire() as conn:
-        await conn.execute(sql, key, json.dumps(sorted(signal_types)), runbook_id, succ, now)
+        await conn.execute(
+            sql, key, json.dumps(sorted(signal_types)), runbook_id, succ, now
+        )
 
 
 async def query_best_runbook_for_pattern(

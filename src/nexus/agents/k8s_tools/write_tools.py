@@ -23,37 +23,45 @@ def restart_deployment(namespace: str, deployment_name: str) -> str:
             "spec": {
                 "template": {
                     "metadata": {
-                        "annotations": {
-                            "kubectl.kubernetes.io/restartedAt": now
-                        }
+                        "annotations": {"kubectl.kubernetes.io/restartedAt": now}
                     }
                 }
             }
         }
-        api.patch_namespaced_deployment(name=deployment_name, namespace=namespace, body=body)
+        api.patch_namespaced_deployment(
+            name=deployment_name, namespace=namespace, body=body
+        )
         return f"Successfully initiated restart for deployment {deployment_name}."
     except Exception as e:
         return f"Error restarting deployment: {str(e)}"
 
 
-def patch_configmap(namespace: str, configmap_name: str, patch_data: dict[str, str]) -> str:
+def patch_configmap(
+    namespace: str, configmap_name: str, patch_data: dict[str, str]
+) -> str:
     """Patch a ConfigMap with new key/value pairs."""
     api = _get_api()
     try:
         body = {"data": patch_data}
-        api.patch_namespaced_config_map(name=configmap_name, namespace=namespace, body=body)
+        api.patch_namespaced_config_map(
+            name=configmap_name, namespace=namespace, body=body
+        )
         return f"Successfully patched configmap {configmap_name}."
     except Exception as e:
         return f"Error patching configmap: {str(e)}"
 
 
-def scale_resource(namespace: str, resource_kind: str, resource_name: str, replicas: int) -> str:
+def scale_resource(
+    namespace: str, resource_kind: str, resource_name: str, replicas: int
+) -> str:
     """Scale a Deployment, StatefulSet, or ReplicaSet to the specified replicas."""
     if resource_kind.lower() == "deployment":
         api = _get_apps_api()
         try:
             body = {"spec": {"replicas": replicas}}
-            api.patch_namespaced_deployment_scale(name=resource_name, namespace=namespace, body=body)
+            api.patch_namespaced_deployment_scale(
+                name=resource_name, namespace=namespace, body=body
+            )
             return f"Scaled deployment {resource_name} to {replicas}."
         except Exception as e:
             return f"Error scaling deployment: {str(e)}"
@@ -95,7 +103,9 @@ def drain_node(node_name: str) -> str:
                 delete_options=k8s_client.V1DeleteOptions(),
             )
             try:
-                api.create_namespaced_pod_eviction(name=pname, namespace=ns, body=eviction)
+                api.create_namespaced_pod_eviction(
+                    name=pname, namespace=ns, body=eviction
+                )
                 evicted += 1
             except Exception as e:
                 failed += 1

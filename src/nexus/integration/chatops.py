@@ -18,6 +18,7 @@ from nexus.integration.notifier import (
 
 logger = logging.getLogger(__name__)
 
+
 async def send_approval_request(
     diagnosis: str,
     context: dict[str, Any],
@@ -45,22 +46,19 @@ async def send_approval_request(
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": "NEXUS Self-Healing: Approval Required"
-                }
+                    "text": "NEXUS Self-Healing: Approval Required",
+                },
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*Context:*\n```{context}```"},
             },
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*Context:*\n```{context}```"
-                }
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"*Diagnosis & Proposal:*\n{diagnosis}"
-                }
+                    "text": f"*Diagnosis & Proposal:*\n{diagnosis}",
+                },
             },
         ]
 
@@ -73,7 +71,7 @@ async def send_approval_request(
                         "text": {
                             "type": "mrkdwn",
                             "text": f"To approve this action, run:\n`nexus approve {approval_id}`",
-                        }
+                        },
                     }
                 )
 

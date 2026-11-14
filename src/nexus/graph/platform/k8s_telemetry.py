@@ -26,15 +26,25 @@ def _parse_k8s_describe(desc: str, live_config: dict[str, Any]) -> None:
     if m_rep:
         live_config["replicas"] = int(m_rep.group(1))
 
-    m_mem = re.search(r"(?:Limits:.*?|Requests:.*?)?memory:\s*([0-9]+(?:Mi|Gi|Ki|M|G|K))", desc, re.DOTALL | re.IGNORECASE)
+    m_mem = re.search(
+        r"(?:Limits:.*?|Requests:.*?)?memory:\s*([0-9]+(?:Mi|Gi|Ki|M|G|K))",
+        desc,
+        re.DOTALL | re.IGNORECASE,
+    )
     if m_mem:
         live_config["memory_limit"] = m_mem.group(1)
 
-    m_cpu = re.search(r"(?:Limits:.*?|Requests:.*?)?cpu:\s*([0-9]+m|[0-9.]+)", desc, re.DOTALL | re.IGNORECASE)
+    m_cpu = re.search(
+        r"(?:Limits:.*?|Requests:.*?)?cpu:\s*([0-9]+m|[0-9.]+)",
+        desc,
+        re.DOTALL | re.IGNORECASE,
+    )
     if m_cpu:
         live_config["cpu_limit"] = m_cpu.group(1)
 
-    m_exit = re.search(r"(?:Exit Code:\s*|\(exit code\s*|exit code\s*)(\d+)", desc, re.IGNORECASE)
+    m_exit = re.search(
+        r"(?:Exit Code:\s*|\(exit code\s*|exit code\s*)(\d+)", desc, re.IGNORECASE
+    )
     if m_exit:
         live_config["exit_code"] = int(m_exit.group(1))
 
@@ -42,7 +52,10 @@ def _parse_k8s_describe(desc: str, live_config: dict[str, Any]) -> None:
     if m_container:
         live_config["container_name"] = m_container.group(1)
 
-    if re.search(r"Command:\s*\n\s+-[^\n]+", desc) or "exec format error" in desc.lower():
+    if (
+        re.search(r"Command:\s*\n\s+-[^\n]+", desc)
+        or "exec format error" in desc.lower()
+    ):
         live_config["has_command_override"] = True
 
 
@@ -86,7 +99,9 @@ async def collect_k8s_telemetry(target: TargetResource) -> PlatformTelemetry:
         elif "running" in lower_desc:
             health_status = "running"
     except Exception as exc:
-        logger.warning("[K8sPlatformAdapter] Telemetry gathering error for %s: %s", target, exc)
+        logger.warning(
+            "[K8sPlatformAdapter] Telemetry gathering error for %s: %s", target, exc
+        )
         live_config["error"] = str(exc)
 
     metrics: dict[str, Any] = {"health": health_status}
@@ -116,7 +131,10 @@ async def inspect_k8s_live_state(target: TargetResource) -> LiveStateSnapshot:
             resource_name=target.name,
         )
         not_found = "not found" in desc.lower() or "error" in desc.lower()
-        is_failing = any(m in desc.lower() for m in ("crashloopbackoff", "oomkilled", "error", "unhealthy"))
+        is_failing = any(
+            m in desc.lower()
+            for m in ("crashloopbackoff", "oomkilled", "error", "unhealthy")
+        )
 
         return LiveStateSnapshot(
             target=target,
@@ -156,7 +174,9 @@ async def verify_k8s_health(
         return HealthCheckResult(
             healthy=healthy,
             slo_restored=healthy,
-            failure_reason=None if healthy else "Unhealthy container status detected in describe",
+            failure_reason=(
+                None if healthy else "Unhealthy container status detected in describe"
+            ),
             details=desc[:200],
         )
     except Exception as exc:

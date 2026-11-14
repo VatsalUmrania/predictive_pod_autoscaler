@@ -37,7 +37,10 @@ def build_suggested_action_steps(
         approval_reason = suggested_fix
     elif "rollback" in suggested_action or "undo" in suggested_action:
         approval_reason = f"Rollback action: {suggested_action}"
-    elif any(k in suggested_action for k in ("scale", "memory", "timeout", "limit", "command")):
+    elif any(
+        k in suggested_action
+        for k in ("scale", "memory", "timeout", "limit", "command")
+    ):
         approval_reason = f"Mutating action: {suggested_action}"
 
     tool_full_name = suggested_action
@@ -90,23 +93,38 @@ def build_suggested_action_steps(
             rollback_params = {"namespace": target_ns, "deployment_name": target_name}
     else:
         if "memory" in suggested_action:
-            current_mem = state.get("telemetry", {}).get("live_config", {}).get("MemorySize", 256)
+            current_mem = (
+                state.get("telemetry", {}).get("live_config", {}).get("MemorySize", 256)
+            )
             new_mem = min(10240, int(current_mem * 2) if current_mem else 512)
             params.setdefault("memory_mb", new_mem)
             rollback_tool = "aws_update_lambda_memory"
-            rollback_params = {"function_name": target_name, "memory_mb": current_mem, "region": target_ns}
+            rollback_params = {
+                "function_name": target_name,
+                "memory_mb": current_mem,
+                "region": target_ns,
+            }
         elif "timeout" in suggested_action:
-            current_timeout = state.get("telemetry", {}).get("live_config", {}).get("Timeout", 30)
+            current_timeout = (
+                state.get("telemetry", {}).get("live_config", {}).get("Timeout", 30)
+            )
             new_timeout = min(900, int(current_timeout * 2) if current_timeout else 60)
             params.setdefault("timeout_seconds", new_timeout)
             rollback_tool = "aws_update_lambda_timeout"
-            rollback_params = {"function_name": target_name, "timeout_seconds": current_timeout, "region": target_ns}
+            rollback_params = {
+                "function_name": target_name,
+                "timeout_seconds": current_timeout,
+                "region": target_ns,
+            }
         elif "dlq" in suggested_action:
             params.setdefault("dlq_name", f"{target_name}-dlq")
             params.setdefault("max_messages", 20)
 
     params.update(action_params)
-    step_description = suggested_fix or f"Execute dynamic remediation {tool_full_name} on {target_name}"
+    step_description = (
+        suggested_fix
+        or f"Execute dynamic remediation {tool_full_name} on {target_name}"
+    )
 
     step = PlanStep(
         step_index=0,

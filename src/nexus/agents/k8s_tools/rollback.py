@@ -32,7 +32,9 @@ def rollback_deployment(
     try:
         dep = api.read_namespaced_deployment(name=deployment_name, namespace=namespace)
 
-        match_labels = dep.spec.selector.match_labels if dep.spec and dep.spec.selector else None
+        match_labels = (
+            dep.spec.selector.match_labels if dep.spec and dep.spec.selector else None
+        )
         if match_labels:
             selector = ",".join(f"{k}={v}" for k, v in match_labels.items())
         else:
@@ -102,7 +104,9 @@ def rollback_deployment(
         dep.spec.template = target_template
 
         try:
-            api.replace_namespaced_deployment(name=deployment_name, namespace=namespace, body=dep)
+            api.replace_namespaced_deployment(
+                name=deployment_name, namespace=namespace, body=dep
+            )
         except Exception as repl_err:
             logger.warning(
                 "replace_namespaced_deployment failed (%s); falling back to sanitized OpenAPI patch",
@@ -151,9 +155,13 @@ def remove_container_command(
             dep.spec.template.metadata = k8s_client.V1ObjectMeta()
         if not dep.spec.template.metadata.annotations:
             dep.spec.template.metadata.annotations = {}
-        dep.spec.template.metadata.annotations["kubectl.kubernetes.io/restartedAt"] = now
+        dep.spec.template.metadata.annotations["kubectl.kubernetes.io/restartedAt"] = (
+            now
+        )
 
-        api.replace_namespaced_deployment(name=deployment_name, namespace=namespace, body=dep)
+        api.replace_namespaced_deployment(
+            name=deployment_name, namespace=namespace, body=dep
+        )
         return (
             f"Successfully removed command override for container '{target_container}' in "
             f"{namespace}/{deployment_name}; deployment rolled out with default entrypoint."

@@ -1,4 +1,5 @@
 """NEXUS Predictive Pod Autoscaler package."""
+
 from nexus.predictive.models import (
     PrecisionStats,
     PrescaleDecision,

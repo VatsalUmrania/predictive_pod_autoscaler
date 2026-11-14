@@ -21,7 +21,10 @@ from nexus.reasoning.rca_validator import (
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _event(signal_type: str, agent: str = "k8s", namespace: str = "default") -> IncidentEvent:
+
+def _event(
+    signal_type: str, agent: str = "k8s", namespace: str = "default"
+) -> IncidentEvent:
     return IncidentEvent(
         agent=agent,
         signal_type=signal_type,
@@ -67,6 +70,7 @@ validator = RCAValidator()
 
 # ── Rule-based RCA: always PASS ───────────────────────────────────────────────
 
+
 class TestRuleBasedBypass:
     def test_rule_based_rca_always_passes(self):
         cluster = _cluster("pod_crashloop")
@@ -79,6 +83,7 @@ class TestRuleBasedBypass:
 
 
 # ── ConsistencyCheck ──────────────────────────────────────────────────────────
+
 
 class TestConsistencyCheck:
     def test_llm_unknown_always_passes(self):
@@ -96,9 +101,9 @@ class TestConsistencyCheck:
         verdict = validator.validate(cluster, rca)
         assert verdict.passed
         # Should have near-zero penalty (only potential evidence gate noise)
-        assert verdict.confidence_delta >= -0.20, (
-            f"Expected small penalty for agreeing RCA, got {verdict.confidence_delta}"
-        )
+        assert (
+            verdict.confidence_delta >= -0.20
+        ), f"Expected small penalty for agreeing RCA, got {verdict.confidence_delta}"
 
     def test_llm_disagrees_with_definite_rule(self):
         """
@@ -122,6 +127,7 @@ class TestConsistencyCheck:
 
 
 # ── EvidenceGate ──────────────────────────────────────────────────────────────
+
 
 class TestEvidenceGate:
     def test_bad_deploy_with_both_signals_passes(self):
@@ -184,18 +190,23 @@ class TestEvidenceGate:
 
 # ── ActionEvidenceGate ────────────────────────────────────────────────────────
 
+
 class TestActionEvidenceGate:
     def test_restart_pod_requires_pod_failure_signal(self):
         """restart_pod without any pod-failure signal → blocked."""
         cluster = _cluster("high_error_rate")
-        rca = _rca(failure_class="bad_deploy", healing_level=1, suggested_action="restart_pod")
+        rca = _rca(
+            failure_class="bad_deploy", healing_level=1, suggested_action="restart_pod"
+        )
         verdict = validator.validate(cluster, rca)
         assert verdict.block_reason is not None
         assert "restart_pod" in verdict.block_reason
 
     def test_restart_pod_with_crashloop_passes(self):
         cluster = _cluster("pod_crashloop", "deploy_event")
-        rca = _rca(failure_class="bad_deploy", healing_level=1, suggested_action="restart_pod")
+        rca = _rca(
+            failure_class="bad_deploy", healing_level=1, suggested_action="restart_pod"
+        )
         verdict = validator.validate(cluster, rca)
         assert verdict.block_reason is None
 
@@ -214,7 +225,9 @@ class TestActionEvidenceGate:
     def test_emit_alert_never_blocked(self):
         """emit_alert has no signal requirement — always passes action gate."""
         cluster = _cluster("deployment_degraded")
-        rca = _rca(failure_class="unknown", healing_level=0, suggested_action="emit_alert")
+        rca = _rca(
+            failure_class="unknown", healing_level=0, suggested_action="emit_alert"
+        )
         verdict = validator.validate(cluster, rca)
         # emit_alert action gate always passes; may still have class evidence penalty
         # but should not be BLOCKED due to the action
@@ -225,6 +238,7 @@ class TestActionEvidenceGate:
 
 # ── CascadingDiversityCheck ───────────────────────────────────────────────────
 
+
 class TestCascadingDiversityCheck:
     def test_cascading_single_agent_blocked(self):
         """cascading_failure from 1 agent → blocked."""
@@ -232,23 +246,29 @@ class TestCascadingDiversityCheck:
         rca = _rca(failure_class="cascading_failure", healing_level=2)
         verdict = validator.validate(cluster, rca)
         assert verdict.block_reason is not None
-        assert "diversity" in verdict.block_reason or "cascading" in verdict.block_reason
+        assert (
+            "diversity" in verdict.block_reason or "cascading" in verdict.block_reason
+        )
 
     def test_cascading_multi_agent_passes_check(self):
         """cascading_failure from 2+ agents → diversity check passes."""
         cluster = _cluster(
-            "high_error_rate", "pod_crashloop",
+            "high_error_rate",
+            "pod_crashloop",
             agents=["metrics", "k8s"],
         )
         rca = _rca(failure_class="cascading_failure", healing_level=2)
         verdict = validator.validate(cluster, rca)
         # Diversity check passes; may still have other penalties from evidence gate
-        assert "cascading_failure has agent diversity" in verdict.consistency_note or \
-               verdict.block_reason is None or \
-               "cascading" not in (verdict.block_reason or "")
+        assert (
+            "cascading_failure has agent diversity" in verdict.consistency_note
+            or verdict.block_reason is None
+            or "cascading" not in (verdict.block_reason or "")
+        )
 
 
 # ── downgrade_rca ─────────────────────────────────────────────────────────────
+
 
 class TestDowngradeRca:
     def test_downgrade_sets_unknown_l0(self):
@@ -274,14 +294,18 @@ class TestDowngradeRca:
 
 # ── Total penalty cap ─────────────────────────────────────────────────────────
 
+
 class TestPenaltyCap:
     def test_penalty_capped_at_040(self):
         """Multiple failing checks cannot push delta below -0.40."""
         # Worst case: wrong class, missing primary signal, cascading single-agent
         cluster = _cluster("deployment_degraded")
-        rca = _rca(failure_class="cascading_failure", healing_level=3,
-                   suggested_action="kubectl_rollout_undo")
-        verdict = validator.validate(cluster, rca)
-        assert verdict.confidence_delta >= -0.40, (
-            f"Penalty exceeded cap: {verdict.confidence_delta}"
+        rca = _rca(
+            failure_class="cascading_failure",
+            healing_level=3,
+            suggested_action="kubectl_rollout_undo",
         )
+        verdict = validator.validate(cluster, rca)
+        assert (
+            verdict.confidence_delta >= -0.40
+        ), f"Penalty exceeded cap: {verdict.confidence_delta}"

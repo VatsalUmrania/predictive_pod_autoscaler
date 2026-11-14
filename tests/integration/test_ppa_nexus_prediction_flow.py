@@ -85,9 +85,7 @@ class MockNATS:
             "stream_name": stream_name,
         }
 
-    async def publish(
-        self, arg1: IncidentEvent | str, arg2: Any = None
-    ) -> None:
+    async def publish(self, arg1: IncidentEvent | str, arg2: Any = None) -> None:
         if isinstance(arg1, IncidentEvent):
             subject = arg1.nats_subject()
             payload = arg1

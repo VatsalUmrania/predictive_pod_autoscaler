@@ -3,6 +3,7 @@
 Stops autonomous healing when consecutive post-check failures indicate
 the healing system itself may be misconfigured or causing harm.
 """
+
 from __future__ import annotations
 
 import logging

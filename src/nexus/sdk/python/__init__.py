@@ -117,7 +117,9 @@ class _SelfHeal:
             nexus_url=self._nexus_url,
         )
 
-    async def send_event(self, event_type: str, data: dict[str, Any] | None = None) -> None:
+    async def send_event(
+        self, event_type: str, data: dict[str, Any] | None = None
+    ) -> None:
         """Manually emit a custom event to NEXUS."""
         try:
             import httpx

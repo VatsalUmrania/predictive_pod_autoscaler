@@ -3,6 +3,7 @@
 Captures resource state BEFORE a healing action executes and provides
 undo operations in case post-checks fail.
 """
+
 from __future__ import annotations
 
 import logging
@@ -40,13 +41,17 @@ class RollbackRegistry:
                 state.state_data["previous_replicas"] = dep.spec.replicas or 1
             elif action_type == "patch_annotation" and k8s_apps:
                 dep = k8s_apps.read_namespaced_deployment(name, namespace)
-                state.state_data["annotations_before"] = dict(dep.metadata.annotations or {})
+                state.state_data["annotations_before"] = dict(
+                    dep.metadata.annotations or {}
+                )
         except Exception as exc:
             logger.warning(
                 f"[RollbackRegistry] Could not capture state for {action_type} on {namespace}/{name}: {exc}"
             )
 
-        logger.debug(f"[RollbackRegistry] Captured state for {action_type} on {namespace}/{name}: {state.state_data}")
+        logger.debug(
+            f"[RollbackRegistry] Captured state for {action_type} on {namespace}/{name}: {state.state_data}"
+        )
         return state
 
     async def rollback(
@@ -70,14 +75,20 @@ class RollbackRegistry:
                 return result
 
             if self.dry_run:
-                result.update(status="dry_run", message=f"Would scale {ns}/{name} → {prev_replicas}")
+                result.update(
+                    status="dry_run",
+                    message=f"Would scale {ns}/{name} → {prev_replicas}",
+                )
                 return result
 
             if k8s_apps:
                 try:
                     patch = {"spec": {"replicas": prev_replicas}}
                     k8s_apps.patch_namespaced_deployment_scale(name, ns, patch)
-                    result.update(status="executed", message=f"Restored {ns}/{name} → {prev_replicas} replicas")
+                    result.update(
+                        status="executed",
+                        message=f"Restored {ns}/{name} → {prev_replicas} replicas",
+                    )
                 except Exception as exc:
                     result.update(status="failed", error=str(exc))
             else:
@@ -85,7 +96,10 @@ class RollbackRegistry:
 
         elif action_type == "patch_annotation":
             if self.dry_run:
-                result.update(status="dry_run", message=f"Would remove nexus annotations from {ns}/{name}")
+                result.update(
+                    status="dry_run",
+                    message=f"Would remove nexus annotations from {ns}/{name}",
+                )
                 return result
 
             if k8s_apps:
@@ -97,16 +111,30 @@ class RollbackRegistry:
                         anns[k] = None
                     patch = {"metadata": {"annotations": anns}}
                     k8s_apps.patch_namespaced_deployment(name, ns, patch)
-                    result.update(status="executed", message=f"Removed {len(nexus_keys)} nexus.io/* annotations from {ns}/{name}")
+                    result.update(
+                        status="executed",
+                        message=f"Removed {len(nexus_keys)} nexus.io/* annotations from {ns}/{name}",
+                    )
                 except Exception as exc:
                     result.update(status="failed", error=str(exc))
             else:
                 result.update(status="skipped", reason="k8s_apps client not provided")
 
-        elif action_type in ("restart_pod", "kubectl_rollout_undo", "flush_coredns_cache", "emit_alert"):
-            result.update(status="noop", message=f"No rollback defined for action type: {action_type}")
+        elif action_type in (
+            "restart_pod",
+            "kubectl_rollout_undo",
+            "flush_coredns_cache",
+            "emit_alert",
+        ):
+            result.update(
+                status="noop",
+                message=f"No rollback defined for action type: {action_type}",
+            )
         else:
-            result.update(status="unknown", message=f"Unknown action type for rollback: {action_type}")
+            result.update(
+                status="unknown",
+                message=f"Unknown action type for rollback: {action_type}",
+            )
 
         logger.info(f"[RollbackRegistry] Rollback result: {result['status']}")
         return result

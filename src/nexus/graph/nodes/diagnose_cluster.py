@@ -43,11 +43,22 @@ def build_diagnose_cluster(
                     agent_enum = AgentType.ORCHESTRATOR
 
                 sev_val = str(raw_evt.get("severity", "warning")).lower()
-                sev_enum = Severity.CRITICAL if sev_val == "critical" else Severity.WARNING
+                sev_enum = (
+                    Severity.CRITICAL if sev_val == "critical" else Severity.WARNING
+                )
 
-                sig_raw = str(raw_evt.get("signal_type", "threshold_breach")).lower().replace("-", "_")
+                sig_raw = (
+                    str(raw_evt.get("signal_type", "threshold_breach"))
+                    .lower()
+                    .replace("-", "_")
+                )
                 sig_enum: SignalType | str
-                if sig_raw in ("crashloopbackoff", "crashloop", "crash_loop", "pod_crash_loop"):
+                if sig_raw in (
+                    "crashloopbackoff",
+                    "crashloop",
+                    "crash_loop",
+                    "pod_crash_loop",
+                ):
                     sig_enum = SignalType.POD_CRASHLOOP
                 elif sig_raw in ("oomkilled", "oom_killed", "pod_oom"):
                     sig_enum = SignalType.POD_OOMKILLED
@@ -58,10 +69,20 @@ def build_diagnose_cluster(
                         sig_enum = sig_raw
 
                 evt = IncidentEvent(
-                    agent=agent_enum.value if hasattr(agent_enum, "value") else str(agent_enum),
-                    signal_type=sig_enum.value if hasattr(sig_enum, "value") else str(sig_enum),
-                    severity=sev_enum.value if hasattr(sev_enum, "value") else str(sev_enum),
-                    namespace=str(raw_evt.get("namespace") or target.get("namespace", "default")),
+                    agent=(
+                        agent_enum.value
+                        if hasattr(agent_enum, "value")
+                        else str(agent_enum)
+                    ),
+                    signal_type=(
+                        sig_enum.value if hasattr(sig_enum, "value") else str(sig_enum)
+                    ),
+                    severity=(
+                        sev_enum.value if hasattr(sev_enum, "value") else str(sev_enum)
+                    ),
+                    namespace=str(
+                        raw_evt.get("namespace") or target.get("namespace", "default")
+                    ),
                     resource_name=str(raw_evt.get("resource_name") or target_name),
                 )
                 cluster.events.append(evt)

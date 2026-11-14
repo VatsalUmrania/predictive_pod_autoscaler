@@ -103,4 +103,3 @@ def calculate_replicas(
 
 
 calculate_replicas_fixed = calculate_replicas
-

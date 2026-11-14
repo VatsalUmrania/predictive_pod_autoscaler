@@ -1,4 +1,5 @@
 """Agent runs, messages, and tool calls database repository."""
+
 from __future__ import annotations
 
 import json
@@ -14,7 +15,9 @@ class AgentRepository:
     def __init__(self, pool: PostgresPool):
         self._pool = pool
 
-    async def start_agent_run(self, incident_id: str, agent_type: str, model_name: str) -> str:
+    async def start_agent_run(
+        self, incident_id: str, agent_type: str, model_name: str
+    ) -> str:
         run_id = str(uuid.uuid4())
         async with self._pool.acquire() as conn:
             await conn.execute(

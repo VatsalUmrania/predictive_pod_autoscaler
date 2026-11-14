@@ -33,7 +33,9 @@ def can_handle_aws(event_or_target: dict[str, Any] | TargetResource) -> bool:
 def detect_aws_target(events: list[dict[str, Any]]) -> TargetResource:
     """Detect the AWS target resource from trigger events."""
     if not events:
-        return TargetResource(platform="aws", namespace="us-east-1", name="unknown", kind="lambda")
+        return TargetResource(
+            platform="aws", namespace="us-east-1", name="unknown", kind="lambda"
+        )
 
     primary_evt = events[0]
     for evt in events:
@@ -65,5 +67,9 @@ def detect_aws_target(events: list[dict[str, Any]]) -> TargetResource:
         namespace=region or "us-east-1",
         name=res_name,
         kind=kind,
-        arn_or_uri=primary_evt.get("resource_name") if str(primary_evt.get("resource_name", "")).startswith("arn:aws:") else None,
+        arn_or_uri=(
+            primary_evt.get("resource_name")
+            if str(primary_evt.get("resource_name", "")).startswith("arn:aws:")
+            else None
+        ),
     )

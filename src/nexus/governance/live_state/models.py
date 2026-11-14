@@ -1,21 +1,26 @@
 """Models, constants, and fallback report factories for live state validation."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-_ALWAYS_PROCEED: frozenset[str] = frozenset({
-    "emit_alert",
-    "patch_annotation",
-})
+_ALWAYS_PROCEED: frozenset[str] = frozenset(
+    {
+        "emit_alert",
+        "patch_annotation",
+    }
+)
 
-_ALWAYS_PROCEED_UNVERIFIABLE: frozenset[str] = frozenset({
-    "patch_configmap",
-    "flush_coredns_cache",
-    "cordon_node",
-    "drain_node",
-})
+_ALWAYS_PROCEED_UNVERIFIABLE: frozenset[str] = frozenset(
+    {
+        "patch_configmap",
+        "flush_coredns_cache",
+        "cordon_node",
+        "drain_node",
+    }
+)
 
 
 @dataclass
@@ -36,7 +41,9 @@ def proceed_unverifiable(action_type: str) -> LiveStateReport:
     return LiveStateReport(
         condition_still_active=True,
         verdict="proceed",
-        evidence={"reason": "action condition not verifiable from K8s state — proceeding"},
+        evidence={
+            "reason": "action condition not verifiable from K8s state — proceeding"
+        },
         action_type=action_type,
     )
 
@@ -54,14 +61,19 @@ def unknown_report(action_type: str, exc: Exception) -> LiveStateReport:
     return LiveStateReport(
         condition_still_active=True,
         verdict="unknown",
-        evidence={"error": str(exc), "reason": "live check failed — proceeding cautiously"},
+        evidence={
+            "error": str(exc),
+            "reason": "live check failed — proceeding cautiously",
+        },
         action_type=action_type,
     )
 
 
 def pod_belongs_to_deployment(pod: Any, deployment_name: str) -> bool:
     for ref in getattr(getattr(pod, "metadata", None), "owner_references", None) or []:
-        if getattr(ref, "kind", None) == "ReplicaSet" and str(getattr(ref, "name", "")).startswith(deployment_name):
+        if getattr(ref, "kind", None) == "ReplicaSet" and str(
+            getattr(ref, "name", "")
+        ).startswith(deployment_name):
             return True
     pod_name = str(getattr(getattr(pod, "metadata", None), "name", ""))
     return bool(pod_name.startswith(deployment_name))

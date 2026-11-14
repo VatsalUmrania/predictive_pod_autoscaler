@@ -21,14 +21,22 @@ async def handle_workflow_completion(
 ) -> None:
     """Publish incident terminal events to NATS, persist to dashboard and learning plane."""
     fsm_state = result.get("fsm_state")
-    is_resolved = bool(result.get("resolved") or fsm_state == IncidentState.RESOLVED.value)
-    is_escalated = bool(result.get("escalated") or fsm_state == IncidentState.ESCALATED.value)
+    is_resolved = bool(
+        result.get("resolved") or fsm_state == IncidentState.RESOLVED.value
+    )
+    is_escalated = bool(
+        result.get("escalated") or fsm_state == IncidentState.ESCALATED.value
+    )
 
     if not (is_resolved or is_escalated):
         return
 
     target = result.get("target") or {}
-    target_dict = target.model_dump() if hasattr(target, "model_dump") else (target if isinstance(target, dict) else {})
+    target_dict = (
+        target.model_dump()
+        if hasattr(target, "model_dump")
+        else (target if isinstance(target, dict) else {})
+    )
     target_ns = target_dict.get("namespace", "default")
     target_name = target_dict.get("name", "unknown")
 
@@ -45,13 +53,25 @@ async def handle_workflow_completion(
     target_str = f"{target_ns}/{target_name}"
 
     diagnosis = result.get("diagnosis") or {}
-    diag_dict = diagnosis.model_dump() if hasattr(diagnosis, "model_dump") else (diagnosis if isinstance(diagnosis, dict) else {})
+    diag_dict = (
+        diagnosis.model_dump()
+        if hasattr(diagnosis, "model_dump")
+        else (diagnosis if isinstance(diagnosis, dict) else {})
+    )
 
     plan = result.get("plan") or {}
-    plan_dict = plan.model_dump() if hasattr(plan, "model_dump") else (plan if isinstance(plan, dict) else {})
+    plan_dict = (
+        plan.model_dump()
+        if hasattr(plan, "model_dump")
+        else (plan if isinstance(plan, dict) else {})
+    )
 
     verification = result.get("verification") or {}
-    verif_dict = verification.model_dump() if hasattr(verification, "model_dump") else (verification if isinstance(verification, dict) else {})
+    verif_dict = (
+        verification.model_dump()
+        if hasattr(verification, "model_dump")
+        else (verification if isinstance(verification, dict) else {})
+    )
 
     confidence = float(diag_dict.get("confidence") or 1.0)
     steps = plan_dict.get("steps", [])
@@ -76,14 +96,21 @@ async def handle_workflow_completion(
         "verification": verif_dict,
         "action_taken": action_taken_desc,
         "confidence": confidence,
-        "reason": result.get("error_message") or ("Resolved successfully" if is_resolved else "Escalated"),
+        "reason": result.get("error_message")
+        or ("Resolved successfully" if is_resolved else "Escalated"),
         "resolved_at": datetime.now(timezone.utc).isoformat(),
     }
 
     # 0. Learning plane recording
     runbook_id = plan_dict.get("failure_mode") or "autonomous_remediation"
-    action_type = (steps[0].get("tool_name") if steps and isinstance(steps[0], dict) else None) or "none"
-    audit_outcome = "success" if is_resolved else ("rolled_back" if result.get("rollback_executed") else "failed")
+    action_type = (
+        steps[0].get("tool_name") if steps and isinstance(steps[0], dict) else None
+    ) or "none"
+    audit_outcome = (
+        "success"
+        if is_resolved
+        else ("rolled_back" if result.get("rollback_executed") else "failed")
+    )
     try:
         from nexus.observability.status_api import context
 
@@ -114,30 +141,50 @@ async def handle_workflow_completion(
                     success=is_resolved,
                 )
         if context.audit_trail is not None or context.knowledge_base is not None:
-            logger.info("[IncidentWorkflow] Recorded learning outcome for %s (%s)", inc_id, audit_outcome)
+            logger.info(
+                "[IncidentWorkflow] Recorded learning outcome for %s (%s)",
+                inc_id,
+                audit_outcome,
+            )
     except Exception as learn_exc:
-        logger.warning("[IncidentWorkflow] Learning-plane recording failed for %s: %s", inc_id, learn_exc)
+        logger.warning(
+            "[IncidentWorkflow] Learning-plane recording failed for %s: %s",
+            inc_id,
+            learn_exc,
+        )
 
     # 1. Broadcast event via NATS
     if nats and hasattr(nats, "publish_raw"):
-        subject = "nexus.lifecycle.resolved" if is_resolved else "nexus.lifecycle.escalated"
+        subject = (
+            "nexus.lifecycle.resolved" if is_resolved else "nexus.lifecycle.escalated"
+        )
         try:
             await nats.publish_raw(subject, payload)
-            logger.info(f"[IncidentWorkflow] Published {subject} for incident {inc_id} ({target_str})")
+            logger.info(
+                f"[IncidentWorkflow] Published {subject} for incident {inc_id} ({target_str})"
+            )
         except Exception as e_pub:
             logger.warning(f"[IncidentWorkflow] Failed to publish {subject}: {e_pub}")
 
     # 2. Persist to PostgreSQL developer_incidents
     try:
         from nexus.integration.dashboard import record_incident_resolution
+
         await record_incident_resolution(payload)
-        logger.info(f"[IncidentWorkflow] Recorded incident {inc_id} ({outcome_str}) to developer_incidents")
+        logger.info(
+            f"[IncidentWorkflow] Recorded incident {inc_id} ({outcome_str}) to developer_incidents"
+        )
     except Exception as e_dash:
-        logger.warning(f"[IncidentWorkflow] Failed to record incident {inc_id} to dashboard store: {e_dash}")
+        logger.warning(
+            f"[IncidentWorkflow] Failed to record incident {inc_id} to dashboard store: {e_dash}"
+        )
 
     # 3. Post-incident report
     try:
-        from nexus.integration.incident_report import generate_post_incident_report, report_url
+        from nexus.integration.incident_report import (
+            generate_post_incident_report,
+            report_url,
+        )
 
         report = await generate_post_incident_report(result, payload=payload)
         sections = report.get("report") or {}
@@ -154,6 +201,10 @@ async def handle_workflow_completion(
                     "summary": summary,
                 },
             )
-            logger.info(f"[IncidentWorkflow] Published nexus.lifecycle.report_ready for {inc_id}")
+            logger.info(
+                f"[IncidentWorkflow] Published nexus.lifecycle.report_ready for {inc_id}"
+            )
     except Exception as e_report:
-        logger.warning(f"[IncidentWorkflow] Post-incident report failed for {inc_id}: {e_report}")
+        logger.warning(
+            f"[IncidentWorkflow] Post-incident report failed for {inc_id}: {e_report}"
+        )

@@ -13,6 +13,7 @@ from nexus.graph.platform.base import RollbackSnapshot, TargetResource
 
 def _get_client(service: str, region: str) -> Any:
     import nexus.graph.platform.aws as aws_plat
+
     return aws_plat._get_boto3_client(service, region)
 
 
@@ -26,7 +27,9 @@ async def capture_aws_snapshot(
         prior_memory = 128
         try:
             client = await asyncio.to_thread(_get_client, "lambda", target.namespace)
-            cfg = await asyncio.to_thread(client.get_function_configuration, FunctionName=target.name)
+            cfg = await asyncio.to_thread(
+                client.get_function_configuration, FunctionName=target.name
+            )
             prior_memory = cfg.get("MemorySize", 128)
         except Exception:
             pass
@@ -49,7 +52,9 @@ async def capture_aws_snapshot(
         prior_timeout = 30
         try:
             client = await asyncio.to_thread(_get_client, "lambda", target.namespace)
-            cfg = await asyncio.to_thread(client.get_function_configuration, FunctionName=target.name)
+            cfg = await asyncio.to_thread(
+                client.get_function_configuration, FunctionName=target.name
+            )
             prior_timeout = cfg.get("Timeout", 30)
         except Exception:
             pass

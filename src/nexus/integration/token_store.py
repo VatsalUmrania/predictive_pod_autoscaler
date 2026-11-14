@@ -45,7 +45,9 @@ class TokenStore:
                 for r in rows:
                     self._cache[str(r["token"])] = str(r["app_name"])
             self._ready = True
-            logger.info(f"[TokenStore] Initialized — {len(self._cache)} app(s) registered")
+            logger.info(
+                f"[TokenStore] Initialized — {len(self._cache)} app(s) registered"
+            )
         except Exception as exc:
             logger.warning(f"[TokenStore] Cache preload failed: {exc}")
 

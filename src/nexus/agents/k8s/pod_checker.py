@@ -82,9 +82,7 @@ def check_pod(
                     agent=AgentType.K8S,
                     signal_type=SignalType.POD_CRASHLOOP,
                     severity=(
-                        Severity.CRITICAL
-                        if restart_count >= 5
-                        else Severity.WARNING
+                        Severity.CRITICAL if restart_count >= 5 else Severity.WARNING
                     ),
                     namespace=ns,
                     resource_name=deployment_name,

@@ -114,8 +114,15 @@ def _make_app():
     return app
 
 
-async def _post(client, action_id: str, approval_id: str, *, ts: str | None = None,
-                sig: str | None = "$sentinel$", bad_sig: bool = False) -> httpx.Response:
+async def _post(
+    client,
+    action_id: str,
+    approval_id: str,
+    *,
+    ts: str | None = None,
+    sig: str | None = "$sentinel$",
+    bad_sig: bool = False,
+) -> httpx.Response:
     import json
     from urllib.parse import urlencode
 
@@ -128,7 +135,9 @@ async def _post(client, action_id: str, approval_id: str, *, ts: str | None = No
     )
     body = urlencode({"payload": payload}).encode()
     ts = str(ts if ts is not None else int(time.time()))
-    signature = "v0=invalid" if bad_sig else (sig if sig != "$sentinel$" else _sign(body, ts))
+    signature = (
+        "v0=invalid" if bad_sig else (sig if sig != "$sentinel$" else _sign(body, ts))
+    )
     return await client.post(
         "/slack/interactive",
         content=body,
@@ -342,6 +351,7 @@ def test_signature_scheme_matches_slack_doc():
     headers.get = lambda k, default=None: (
         {"X-Slack-Request-Timestamp": ts, "X-Slack-Signature": sig}.get(k, default)
     )
-    assert notifier_module.verify_slack_request(
-        raw, headers, signing_secret=_SECRET
-    ) is True
+    assert (
+        notifier_module.verify_slack_request(raw, headers, signing_secret=_SECRET)
+        is True
+    )

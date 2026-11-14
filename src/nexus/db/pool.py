@@ -1,4 +1,5 @@
 """Connection pool management and schema verification for PostgreSQL."""
+
 from __future__ import annotations
 
 import asyncio
@@ -33,7 +34,9 @@ class PostgresPool:
         async with self._pool.acquire() as conn:
             yield conn
 
-    async def initialize(self, max_retries: int = 6, initial_backoff: float = 1.0) -> None:
+    async def initialize(
+        self, max_retries: int = 6, initial_backoff: float = 1.0
+    ) -> None:
         """Create pool with retry backoff and execute schema initialization."""
         import asyncpg
 

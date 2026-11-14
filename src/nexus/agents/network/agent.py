@@ -81,10 +81,7 @@ class NetworkAgent(BaseAgent):
 
         # 1. DNS checks
         dns_results = await asyncio.gather(
-            *[
-                check_dns(h, self.dns_timeout_s, self._dns_failures)
-                for h in all_hosts
-            ],
+            *[check_dns(h, self.dns_timeout_s, self._dns_failures) for h in all_hosts],
             return_exceptions=True,
         )
         for r in dns_results:

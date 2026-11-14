@@ -48,7 +48,11 @@ async def approve_action(action_id: str) -> dict[str, Any]:
                 )
                 if context.audit_trail:
                     await context.audit_trail.record_approval(action_id, "api_user")
-                return {"status": "approved", "action_id": action_id, "outcome": outcome}
+                return {
+                    "status": "approved",
+                    "action_id": action_id,
+                    "outcome": outcome,
+                }
             except Exception as exc:
                 logger.warning(f"Workflow approve failed for {action_id}: {exc}")
                 return {"status": "approved", "action_id": action_id, "error": str(exc)}
@@ -91,7 +95,9 @@ async def reject_action(action_id: str) -> dict[str, str]:
                     await context.audit_trail.record_rejection(action_id, "api_user")
                 return {"status": "rejected", "action_id": action_id}
             except Exception as wf_exc:
-                logger.info(f"[StatusAPI] Workflow reject attempted for {action_id}: {wf_exc}")
+                logger.info(
+                    f"[StatusAPI] Workflow reject attempted for {action_id}: {wf_exc}"
+                )
 
     orc = context.orchestrator
     if not orc:
@@ -134,7 +140,9 @@ async def pending_approvals() -> list[dict[str, Any]]:
             if wf_pending:
                 results.extend(wf_pending)
         except Exception as exc:
-            logger.warning(f"[StatusAPI] Failed querying workflow pending approvals: {exc}")
+            logger.warning(
+                f"[StatusAPI] Failed querying workflow pending approvals: {exc}"
+            )
 
     if context.orchestrator:
         try:

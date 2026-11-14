@@ -99,6 +99,7 @@ def format_cluster_summary(cluster: IncidentCluster) -> dict[str, Any]:
         "signal_agreement": round(cluster.signal_agreement_score(), 3),
     }
 
+
 def compute_signal_agreement(cluster: IncidentCluster) -> float:
     """Measures how strongly independent signals agree on a root cause (0.0–1.0)."""
     if not cluster.events:
@@ -117,8 +118,6 @@ def compute_signal_agreement(cluster: IncidentCluster) -> float:
         for e in cluster.events
         if isinstance(e.context, dict) and "anomaly_score" in e.context
     ]
-    avg_anomaly = (
-        (sum(anomaly_scores) / len(anomaly_scores)) if anomaly_scores else 0.5
-    )
+    avg_anomaly = (sum(anomaly_scores) / len(anomaly_scores)) if anomaly_scores else 0.5
 
     return diversity * 0.40 + volume * 0.30 + avg_anomaly * 0.30

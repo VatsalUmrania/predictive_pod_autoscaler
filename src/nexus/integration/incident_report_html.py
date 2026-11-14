@@ -76,7 +76,7 @@ footer a:hover{text-decoration:underline}
 def _section_html(title: str, body: str) -> str:
     """One prose section; caller skips empty bodies."""
     return (
-        f'<section><h2>{html.escape(title)}</h2>'
+        f"<section><h2>{html.escape(title)}</h2>"
         f'<div class="body">{html.escape(body)}</div></section>'
     )
 

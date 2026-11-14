@@ -29,7 +29,12 @@ def downgrade_rca(
 
     if any(
         s in signals
-        for s in ("pod_crashloop", "pod_oomkilled", "deployment_degraded", "rollout_stuck")
+        for s in (
+            "pod_crashloop",
+            "pod_oomkilled",
+            "deployment_degraded",
+            "rollout_stuck",
+        )
     ):
         symptom_conf = 0.85
         healing_level = 1

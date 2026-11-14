@@ -2,6 +2,7 @@
 
 Immutable, append-only log of every healing action taken by NEXUS.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -89,10 +90,14 @@ class AuditTrail:
                 json.dumps(action_results or []),
             )
 
-        logger.info(f"[AuditTrail] {action_id_str} | {runbook_id} | {execution_outcome} | level={healing_level} | target={target}")
+        logger.info(
+            f"[AuditTrail] {action_id_str} | {runbook_id} | {execution_outcome} | level={healing_level} | target={target}"
+        )
         return action_id_str
 
-    async def write_pending(self, *, triggered_by: str, runbook_id: str, **kwargs) -> str:
+    async def write_pending(
+        self, *, triggered_by: str, runbook_id: str, **kwargs
+    ) -> str:
         return await self.write(
             triggered_by=triggered_by,
             runbook_id=runbook_id,

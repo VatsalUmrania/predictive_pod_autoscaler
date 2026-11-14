@@ -66,7 +66,11 @@ def extract_live_memory_limit(state: dict[str, Any]) -> str | None:
 
     desc = live_cfg.get("describe", "")
     if desc:
-        m = re.search(r"(?:Limits:.*?|Requests:.*?)?memory:\s*([0-9]+(?:Mi|Gi|Ki|M|G|K))", desc, re.DOTALL | re.IGNORECASE)
+        m = re.search(
+            r"(?:Limits:.*?|Requests:.*?)?memory:\s*([0-9]+(?:Mi|Gi|Ki|M|G|K))",
+            desc,
+            re.DOTALL | re.IGNORECASE,
+        )
         if m:
             return m.group(1)
 
@@ -104,8 +108,15 @@ def detect_faulty_command(state: dict[str, Any]) -> tuple[bool, str | None]:
     recent_logs = " ".join(state.get("telemetry", {}).get("recent_logs", [])).lower()
     desc = live_cfg.get("describe", "").lower()
 
-    err_signals = ("exec format error", "command not found", "executable file not found")
-    if any(sig in recent_logs or sig in desc for sig in err_signals) or live_cfg.get("exit_code") == 127:
+    err_signals = (
+        "exec format error",
+        "command not found",
+        "executable file not found",
+    )
+    if (
+        any(sig in recent_logs or sig in desc for sig in err_signals)
+        or live_cfg.get("exit_code") == 127
+    ):
         container = live_cfg.get("container_name")
         return True, container
 
@@ -115,7 +126,9 @@ def detect_faulty_command(state: dict[str, Any]) -> tuple[bool, str | None]:
 def detect_oom_issue(state: dict[str, Any], diagnosis: dict[str, Any]) -> bool:
     """Detect if incident is caused by OOMKilled / memory exhaustion."""
     root_cause = diagnosis.get("root_cause", "").lower()
-    if any(sig in root_cause for sig in ("oom", "memory limit", "out of memory", "137")):
+    if any(
+        sig in root_cause for sig in ("oom", "memory limit", "out of memory", "137")
+    ):
         return True
 
     telemetry = state.get("telemetry", {})
@@ -128,11 +141,17 @@ def detect_oom_issue(state: dict[str, Any], diagnosis: dict[str, Any]) -> bool:
 
     recent_logs = " ".join(telemetry.get("recent_logs", [])).lower()
     desc = live_cfg.get("describe", "").lower()
-    if any(sig in recent_logs or sig in desc for sig in ("oomkilled", "exit code 137", "killed process")):
+    if any(
+        sig in recent_logs or sig in desc
+        for sig in ("oomkilled", "exit code 137", "killed process")
+    ):
         return True
 
     events = state.get("events", [])
-    return any(e.get("signal_type") in ("pod_oomkilled", "oom_event", "oom_signal") for e in events)
+    return any(
+        e.get("signal_type") in ("pod_oomkilled", "oom_event", "oom_signal")
+        for e in events
+    )
 
 
 def detect_traffic_spike(state: dict[str, Any], diagnosis: dict[str, Any]) -> bool:
@@ -141,12 +160,22 @@ def detect_traffic_spike(state: dict[str, Any], diagnosis: dict[str, Any]) -> bo
         return True
 
     root_cause = diagnosis.get("root_cause", "").lower()
-    if any(sig in root_cause for sig in ("traffic", "spike", "surge", "high error rate", "overload")):
+    if any(
+        sig in root_cause
+        for sig in ("traffic", "spike", "surge", "high error rate", "overload")
+    ):
         return True
 
     events = state.get("events", [])
-    if any(e.get("signal_type") in ("traffic_spike", "load_surge", "elevated_error_rate", "high_error_rate") for e in events):
+    if any(
+        e.get("signal_type")
+        in ("traffic_spike", "load_surge", "elevated_error_rate", "high_error_rate")
+        for e in events
+    ):
         return True
 
     metrics = state.get("telemetry", {}).get("metrics", {})
-    return float(metrics.get("traffic_ratio", 0.0) or 0.0) > 1.2 or float(metrics.get("error_rate", 0.0) or 0.0) > 0.05
+    return (
+        float(metrics.get("traffic_ratio", 0.0) or 0.0) > 1.2
+        or float(metrics.get("error_rate", 0.0) or 0.0) > 0.05
+    )

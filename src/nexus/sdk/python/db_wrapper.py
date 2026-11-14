@@ -135,6 +135,7 @@ class _DBWrapper:
         label = object.__getattribute__(self, "_label")
 
         if inspect.iscoroutinefunction(attr):
+
             async def async_wrapper(*args, **kwargs):
                 sql = _sql_from_args(args)
                 start = time.monotonic()
@@ -156,6 +157,7 @@ class _DBWrapper:
 
             return async_wrapper
         else:
+
             def sync_wrapper(*args, **kwargs):
                 sql = _sql_from_args(args)
                 start = time.monotonic()

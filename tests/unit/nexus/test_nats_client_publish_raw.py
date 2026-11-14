@@ -101,4 +101,3 @@ async def test_subscribe_drops_unparseable_incident_events():
     # Message should be termed or acked to avoid infinite nak loops
     assert mock_msg.term.await_count == 1 or mock_msg.ack.await_count == 1
     mock_msg.nak.assert_not_awaited()
-

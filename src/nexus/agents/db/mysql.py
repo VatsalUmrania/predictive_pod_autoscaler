@@ -10,6 +10,7 @@ from nexus.agents.db.models import DBConnectionStats, QuerySnapshot, SlowQuery
 
 logger = logging.getLogger(__name__)
 
+
 class MySQLAdapter:
     """
     Monitors MySQL/MariaDB via performance_schema.

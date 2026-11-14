@@ -22,7 +22,10 @@ def build_incident_resolved_payload(
     blocks = [
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"✅ *NEXUS Incident Resolved — `{target}`*{dur_str}"},
+            "text": {
+                "type": "mrkdwn",
+                "text": f"✅ *NEXUS Incident Resolved — `{target}`*{dur_str}",
+            },
         },
         {
             "type": "section",
@@ -35,15 +38,24 @@ def build_incident_resolved_payload(
         },
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*Root Cause Analysis:*\n{root_cause[:350]}{'...' if len(root_cause) > 350 else ''}"},
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Root Cause Analysis:*\n{root_cause[:350]}{'...' if len(root_cause) > 350 else ''}",
+            },
         },
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*Action Executed:*\n{action_taken[:350]}{'...' if len(action_taken) > 350 else ''}"},
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Action Executed:*\n{action_taken[:350]}{'...' if len(action_taken) > 350 else ''}",
+            },
         },
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*Health & SLO Verification:*\n`{verification_details[:350]}`"},
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Health & SLO Verification:*\n`{verification_details[:350]}`",
+            },
         },
     ]
 
@@ -69,7 +81,10 @@ def build_incident_escalated_payload(
     blocks = [
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"🚨 *NEXUS Incident Escalation — `{target}` requires human intervention*"},
+            "text": {
+                "type": "mrkdwn",
+                "text": f"🚨 *NEXUS Incident Escalation — `{target}` requires human intervention*",
+            },
         },
         {
             "type": "section",
@@ -89,7 +104,10 @@ def build_incident_escalated_payload(
         blocks.append(
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": f"*Suspected Cause:*\n{root_cause[:350]}{'...' if len(root_cause) > 350 else ''}"},
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Suspected Cause:*\n{root_cause[:350]}{'...' if len(root_cause) > 350 else ''}",
+                },
             }
         )
     return {
@@ -113,14 +131,20 @@ def build_report_ready_payload(
     blocks = [
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"📄 *NEXUS Post-Incident Report — `{target}`*"},
+            "text": {
+                "type": "mrkdwn",
+                "text": f"📄 *NEXUS Post-Incident Report — `{target}`*",
+            },
         },
     ]
     if summary:
         blocks.append(
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": f"*Summary:*\n{summary[:600]}{'...' if len(summary) > 600 else ''}"},
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Summary:*\n{summary[:600]}{'...' if len(summary) > 600 else ''}",
+                },
             }
         )
     if report_url:

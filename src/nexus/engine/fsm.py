@@ -44,7 +44,11 @@ class IncidentFSM:
         return len(VALID_TRANSITIONS.get(self._current_state, set())) == 0
 
     def can_transition_to(self, target_state: IncidentState | str) -> bool:
-        target = IncidentState(target_state) if isinstance(target_state, str) else target_state
+        target = (
+            IncidentState(target_state)
+            if isinstance(target_state, str)
+            else target_state
+        )
         allowed = VALID_TRANSITIONS.get(self._current_state, set())
         return target in allowed
 
@@ -58,7 +62,11 @@ class IncidentFSM:
         Transition the incident to target_state.
         Validates the transition, logs to the database, and broadcasts to NATS.
         """
-        target = IncidentState(target_state) if isinstance(target_state, str) else target_state
+        target = (
+            IncidentState(target_state)
+            if isinstance(target_state, str)
+            else target_state
+        )
 
         if not self.can_transition_to(target):
             logger.error(
@@ -115,8 +123,12 @@ class IncidentFSM:
                     call = self.nats.publish_raw(subject, payload)
                 elif hasattr(self.nats, "publish"):
                     import json
-                    call = self.nats.publish(subject, json.dumps(payload).encode("utf-8"))
+
+                    call = self.nats.publish(
+                        subject, json.dumps(payload).encode("utf-8")
+                    )
                 import asyncio
+
                 if asyncio.iscoroutine(call):
                     await call
             except Exception as nats_exc:

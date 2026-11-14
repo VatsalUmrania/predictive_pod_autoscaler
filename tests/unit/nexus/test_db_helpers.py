@@ -103,10 +103,14 @@ class MockAsyncpgConnection:
         if "FROM AUDIT_TRAIL" in q:
             if "WHERE INCIDENT_ID = $1" in q:
                 inc_id = str(args[0])
-                return [r for r in self.client._audit_records if r["incident_id"] == inc_id]
+                return [
+                    r for r in self.client._audit_records if r["incident_id"] == inc_id
+                ]
             elif "WHERE RUNBOOK_ID = $1" in q:
                 rb_id = str(args[0])
-                return [r for r in self.client._audit_records if r["runbook_id"] == rb_id]
+                return [
+                    r for r in self.client._audit_records if r["runbook_id"] == rb_id
+                ]
             elif "LIMIT $1" in q:
                 limit = args[0]
                 return list(reversed(self.client._audit_records))[:limit]
@@ -198,14 +202,16 @@ class MockPostgresClient:
             "root_cause_summary": None,
             "confidence_score": None,
         }
-        self._transitions.append({
-            "incident_id": inc_id,
-            "from_state": "detected",
-            "to_state": "detected",
-            "reason": "Initial detection",
-            "metadata": {},
-            "created_at": now,
-        })
+        self._transitions.append(
+            {
+                "incident_id": inc_id,
+                "from_state": "detected",
+                "to_state": "detected",
+                "reason": "Initial detection",
+                "metadata": {},
+                "created_at": now,
+            }
+        )
         return inc_id
 
     async def transition_state(
@@ -225,39 +231,51 @@ class MockPostgresClient:
             if to_state in ("resolved", "failed", "rolled_back"):
                 inc["resolved_at"] = now
 
-        self._transitions.append({
-            "incident_id": incident_id,
-            "from_state": from_state,
-            "to_state": to_state,
-            "reason": reason or "",
-            "metadata": metadata or {},
-            "created_at": now,
-        })
+        self._transitions.append(
+            {
+                "incident_id": incident_id,
+                "from_state": from_state,
+                "to_state": to_state,
+                "reason": reason or "",
+                "metadata": metadata or {},
+                "created_at": now,
+            }
+        )
 
     async def get_incident(self, incident_id: str) -> dict[str, Any] | None:
         return self._incidents.get(incident_id)
 
-    async def get_active_incident_by_target(self, target_resource: str) -> dict[str, Any] | None:
+    async def get_active_incident_by_target(
+        self, target_resource: str
+    ) -> dict[str, Any] | None:
         for inc in reversed(list(self._incidents.values())):
-            if inc["target_resource"] == target_resource and inc["current_state"] not in (
-                "resolved", "rolled_back", "rejected", "escalated", "failed"
-            ):
+            if inc["target_resource"] == target_resource and inc[
+                "current_state"
+            ] not in ("resolved", "rolled_back", "rejected", "escalated", "failed"):
                 return inc
         return None
 
-    async def list_incidents(self, limit: int = 50, state: str | None = None) -> list[dict[str, Any]]:
+    async def list_incidents(
+        self, limit: int = 50, state: str | None = None
+    ) -> list[dict[str, Any]]:
         res = list(self._incidents.values())
         if state:
             res = [i for i in res if i["current_state"] == state]
         return res[:limit]
 
-    async def update_root_cause(self, incident_id: str, summary: str, confidence: float) -> None:
+    async def update_root_cause(
+        self, incident_id: str, summary: str, confidence: float
+    ) -> None:
         if incident_id in self._incidents:
             self._incidents[incident_id]["root_cause_summary"] = summary
             self._incidents[incident_id]["confidence_score"] = confidence
 
     async def start_agent_run(
-        self, incident_id: str, agent_type: str, model_name: str, run_id: str | None = None
+        self,
+        incident_id: str,
+        agent_type: str,
+        model_name: str,
+        run_id: str | None = None,
     ) -> str:
         r_id = run_id or str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
@@ -300,16 +318,18 @@ class MockPostgresClient:
         raw_payload: dict | None = None,
     ) -> str:
         msg_id = str(uuid.uuid4())
-        self._messages.append({
-            "message_id": msg_id,
-            "run_id": run_id,
-            "sequence_num": sequence_num,
-            "role": role,
-            "content": content,
-            "reasoning_content": reasoning_content,
-            "raw_payload": raw_payload,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
+        self._messages.append(
+            {
+                "message_id": msg_id,
+                "run_id": run_id,
+                "sequence_num": sequence_num,
+                "role": role,
+                "content": content,
+                "reasoning_content": reasoning_content,
+                "raw_payload": raw_payload,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
         return msg_id
 
     async def log_tool_call(
@@ -405,7 +425,9 @@ class MockPostgresClient:
         actions = [a for a in self._actions.values() if a["incident_id"] == incident_id]
         for r in runs:
             r["messages"] = [m for m in self._messages if m["run_id"] == r["run_id"]]
-            r["tool_calls"] = [t for t in self._tool_calls.values() if t["run_id"] == r["run_id"]]
+            r["tool_calls"] = [
+                t for t in self._tool_calls.values() if t["run_id"] == r["run_id"]
+            ]
         return {
             "incident": inc,
             "state_transitions": transitions,

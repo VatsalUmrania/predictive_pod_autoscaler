@@ -22,9 +22,7 @@ def _slack_replace(text: str) -> dict[str, Any]:
     return {"replace_original": True, "text": text}
 
 
-async def _slack_replace_via_response_url(
-    response_url: str | None, text: str
-) -> None:
+async def _slack_replace_via_response_url(response_url: str | None, text: str) -> None:
     if not response_url:
         return
     try:
@@ -67,13 +65,17 @@ async def slack_interactive(
 
     ts = request.headers.get("X-Slack-Request-Timestamp", "missing")
     sig = request.headers.get("X-Slack-Signature", "missing")
-    logger.info(f"Slack interactivity: ts={ts}, sig_prefix={sig[:20] if sig != 'missing' else 'missing'}...")
+    logger.info(
+        f"Slack interactivity: ts={ts}, sig_prefix={sig[:20] if sig != 'missing' else 'missing'}..."
+    )
 
     verify_fn = getattr(notifier_mod, "verify_slack_request", None)
     if not verify_fn or not verify_fn(raw, request.headers):
         signing_secret = getattr(notifier_mod, "SLACK_SIGNING_SECRET", None)
         logger.warning("Slack interactivity: INVALID SIGNATURE - rejecting (401)")
-        logger.warning(f"  Expected sig check: SLACK_SIGNING_SECRET={'set' if signing_secret else 'MISSING!'}")
+        logger.warning(
+            f"  Expected sig check: SLACK_SIGNING_SECRET={'set' if signing_secret else 'MISSING!'}"
+        )
         raise HTTPException(status_code=401, detail="invalid_signature")
 
     parsed = parse_qs(raw.decode("utf-8")).get("payload")
@@ -93,23 +95,33 @@ async def slack_interactive(
     action = actions[0]
     action_id = action.get("action_id")
     approval_id = action.get("value")
-    user = (
-        data.get("user", {}).get("username")
-        or data.get("user", {}).get("id", "unknown")
+    user = data.get("user", {}).get("username") or data.get("user", {}).get(
+        "id", "unknown"
     )
     response_url = data.get("response_url")
 
     if not approval_id or action_id not in ("nexus_approve", "nexus_reject"):
         raise HTTPException(status_code=400, detail="malformed action")
 
-    if context.workflow and hasattr(context.workflow, "resume_incident") and hasattr(context.workflow, "has_pending") and context.workflow.has_pending(approval_id):
+    if (
+        context.workflow
+        and hasattr(context.workflow, "resume_incident")
+        and hasattr(context.workflow, "has_pending")
+        and context.workflow.has_pending(approval_id)
+    ):
         if action_id == "nexus_approve":
-            background_tasks.add_task(context.workflow.resume_incident, approval_id, "approved")
+            background_tasks.add_task(
+                context.workflow.resume_incident, approval_id, "approved"
+            )
             if context.audit_trail:
                 await context.audit_trail.record_approval(approval_id, f"slack:{user}")
-            return _slack_replace(f"Approved `{approval_id}` by @{user} — executing remediation…")
+            return _slack_replace(
+                f"Approved `{approval_id}` by @{user} — executing remediation…"
+            )
         elif action_id == "nexus_reject":
-            background_tasks.add_task(context.workflow.resume_incident, approval_id, "rejected")
+            background_tasks.add_task(
+                context.workflow.resume_incident, approval_id, "rejected"
+            )
             if context.audit_trail:
                 await context.audit_trail.record_rejection(approval_id, f"slack:{user}")
             return _slack_replace(f"Rejected `{approval_id}` by @{user}.")
@@ -136,7 +148,11 @@ async def slack_interactive(
             )
         background_tasks.add_task(
             _slack_dispatch_approved,
-            orc, pending_item, approval_id, user, response_url,
+            orc,
+            pending_item,
+            approval_id,
+            user,
+            response_url,
         )
         return _slack_replace(f"Approved `{approval_id}` by @{user} — executing…")
 

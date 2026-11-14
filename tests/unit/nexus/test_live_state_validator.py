@@ -30,6 +30,7 @@ pytestmark = pytest.mark.asyncio
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _make_pod(
     name: str,
     phase: str = "Running",
@@ -103,6 +104,7 @@ def _k8s_apps(deployment=None) -> MagicMock:
 
 # ── Always-proceed actions ────────────────────────────────────────────────────
 
+
 class TestAlwaysProceedActions:
     async def test_emit_alert_always_proceeds(self):
         report = await check_live_state(
@@ -137,6 +139,7 @@ class TestAlwaysProceedActions:
 
 
 # ── restart_pod / restart_deployment ─────────────────────────────────────────
+
 
 class TestRestartPodCondition:
     async def test_all_pods_healthy_returns_self_healed(self):
@@ -181,9 +184,7 @@ class TestRestartPodCondition:
 
     async def test_pod_oomkilled_returns_proceed(self):
         """Pod with OOMKilled last state → proceed."""
-        pods = _pod_list(
-            _make_pod("shop-demo-abc-1", oomkilled=True, restart_count=2)
-        )
+        pods = _pod_list(_make_pod("shop-demo-abc-1", oomkilled=True, restart_count=2))
         report = await check_live_state(
             action_type="restart_pod",
             namespace="default",
@@ -195,9 +196,7 @@ class TestRestartPodCondition:
 
     async def test_pod_pending_returns_proceed(self):
         """Pod stuck in Pending → proceed."""
-        pods = _pod_list(
-            _make_pod("shop-demo-abc-1", phase="Pending", ready=False)
-        )
+        pods = _pod_list(_make_pod("shop-demo-abc-1", phase="Pending", ready=False))
         report = await check_live_state(
             action_type="restart_pod",
             namespace="default",
@@ -225,7 +224,9 @@ class TestRestartPodCondition:
         """Even one failing pod → proceed (not all healthy)."""
         pods = _pod_list(
             _make_pod("shop-demo-abc-1", phase="Running", ready=True, restart_count=0),
-            _make_pod("shop-demo-abc-2", waiting_reason="CrashLoopBackOff", restart_count=3),
+            _make_pod(
+                "shop-demo-abc-2", waiting_reason="CrashLoopBackOff", restart_count=3
+            ),
         )
         report = await check_live_state(
             action_type="restart_pod",
@@ -263,6 +264,7 @@ class TestRestartPodCondition:
 
 
 # ── rollback / kubectl_rollout_undo ───────────────────────────────────────────
+
 
 class TestRollbackCondition:
     async def test_deployment_healthy_returns_self_healed(self):
@@ -307,6 +309,7 @@ class TestRollbackCondition:
 
 # ── scale_deployment ──────────────────────────────────────────────────────────
 
+
 class TestScaleCondition:
     async def test_all_replicas_up_returns_self_healed(self):
         dep = _deployment(desired=2, available=2)
@@ -333,6 +336,7 @@ class TestScaleCondition:
 
 # ── Unknown action type ───────────────────────────────────────────────────────
 
+
 class TestUnknownActionType:
     async def test_unknown_action_type_proceeds(self):
         report = await check_live_state(
@@ -346,6 +350,7 @@ class TestUnknownActionType:
 
 
 # ── LiveStateReport fields ────────────────────────────────────────────────────
+
 
 class TestLiveStateReport:
     async def test_report_has_checked_at(self):

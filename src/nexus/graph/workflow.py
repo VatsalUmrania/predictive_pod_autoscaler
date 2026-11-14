@@ -17,6 +17,7 @@ from nexus.graph.builder import build_incident_graph
 from nexus.graph.checkpointer import GraphCheckpointStore
 from nexus.graph.routes import (
     route_after_approval,
+    route_after_diagnose,
     route_after_execute,
     route_after_govern,
     route_after_verify,
@@ -42,6 +43,7 @@ __all__ = [
     "IncidentWorkflow",
     "build_incident_graph",
     "route_after_approval",
+    "route_after_diagnose",
     "route_after_execute",
     "route_after_govern",
     "route_after_verify",
@@ -64,9 +66,13 @@ class IncidentWorkflow:
         if correlator is None:
             try:
                 from nexus.reasoning.event_correlator import EventCorrelator
+
                 correlator = EventCorrelator()
             except Exception as _corr_exc:
-                logger.warning("[IncidentWorkflow] Could not default EventCorrelator: %s", _corr_exc)
+                logger.warning(
+                    "[IncidentWorkflow] Could not default EventCorrelator: %s",
+                    _corr_exc,
+                )
         self.correlator = correlator
         self._flush_interval = kwargs.get("flush_interval_s", 15.0)
         self._flush_task: asyncio.Task[Any] | None = None
@@ -88,19 +94,33 @@ class IncidentWorkflow:
             inc_id = getattr(cluster, "cluster_id", str(uuid.uuid4()))
             logger.info(
                 "[IncidentWorkflow] Processing cluster %s with %d event(s) (ns=%s, resource=%s)",
-                inc_id, len(events_dicts), getattr(cluster, "namespace", "default"),
+                inc_id,
+                len(events_dicts),
+                getattr(cluster, "namespace", "default"),
                 getattr(cluster, "primary_resource", "unknown"),
             )
-            await self.run_incident({
-                "incident_id": inc_id,
-                "events": events_dicts,
-                "severity": getattr(cluster, "highest_severity", "warning"),
-            }, thread_id=inc_id)
+            await self.run_incident(
+                {
+                    "incident_id": inc_id,
+                    "events": events_dicts,
+                    "severity": getattr(cluster, "highest_severity", "warning"),
+                },
+                thread_id=inc_id,
+            )
         except Exception as exc:
-            logger.error("[IncidentWorkflow] Error processing cluster %s: %s", getattr(cluster, "cluster_id", "unknown"), exc, exc_info=True)
+            logger.error(
+                "[IncidentWorkflow] Error processing cluster %s: %s",
+                getattr(cluster, "cluster_id", "unknown"),
+                exc,
+                exc_info=True,
+            )
 
-    async def notify_incident_rejected(self, target_key: str, incident_id: str, reason: str = "") -> None:
-        await notify_incident_rejected_helper(self._active_incidents, self.nats, target_key, incident_id, reason)
+    async def notify_incident_rejected(
+        self, target_key: str, incident_id: str, reason: str = ""
+    ) -> None:
+        await notify_incident_rejected_helper(
+            self._active_incidents, self.nats, target_key, incident_id, reason
+        )
 
     @property
     def status(self) -> dict[str, Any]:
@@ -114,12 +134,20 @@ class IncidentWorkflow:
 
     def pending_approvals(self) -> list[dict[str, Any]]:
         seen: set[str] = set()
-        return [v for v in self._pending_approvals.values() if v.get("approval_id") and not (v["approval_id"] in seen or seen.add(v["approval_id"]))]
+        return [
+            v
+            for v in self._pending_approvals.values()
+            if v.get("approval_id")
+            and not (v["approval_id"] in seen or seen.add(v["approval_id"]))
+        ]
 
     def has_pending(self, action_id: str) -> bool:
         if action_id in self._pending_approvals:
             return True
-        return any(val.get("approval_id") == action_id or val.get("incident_id") == action_id for val in self._pending_approvals.values())
+        return any(
+            val.get("approval_id") == action_id or val.get("incident_id") == action_id
+            for val in self._pending_approvals.values()
+        )
 
     def last_rca_results(self, n: int = 10) -> list[dict[str, Any]]:
         return self._rca_results[-n:]
@@ -132,10 +160,16 @@ class IncidentWorkflow:
         if not self.correlator:
             try:
                 from nexus.reasoning.event_correlator import EventCorrelator
+
                 self.correlator = EventCorrelator()
             except Exception as e_corr:
-                logger.warning("[IncidentWorkflow] Could not instantiate EventCorrelator: %s", e_corr)
-        self._flush_task = asyncio.create_task(self._flush_loop(), name="workflow-flush")
+                logger.warning(
+                    "[IncidentWorkflow] Could not instantiate EventCorrelator: %s",
+                    e_corr,
+                )
+        self._flush_task = asyncio.create_task(
+            self._flush_loop(), name="workflow-flush"
+        )
         self._sub_tasks.append(self._flush_task)
         await setup_event_subscriptions(self)
 
@@ -155,15 +189,23 @@ class IncidentWorkflow:
         inc_id = incident_data.get("incident_id") or str(uuid.uuid4())
         tid = thread_id or inc_id
         config = {"configurable": {"thread_id": tid}}
-        logger.info("[IncidentWorkflow] Starting workflow for incident %s (thread=%s)", inc_id, tid)
+        logger.info(
+            "[IncidentWorkflow] Starting workflow for incident %s (thread=%s)",
+            inc_id,
+            tid,
+        )
 
-        result = await self._compiled_graph.ainvoke(build_initial_state(incident_data, inc_id), config=config)
+        result = await self._compiled_graph.ainvoke(
+            build_initial_state(incident_data, inc_id), config=config
+        )
         if result.get("diagnosis"):
             self._rca_results.append(result["diagnosis"])
             self._rca_results = self._rca_results[-100:]
 
         state_snapshot = self._compiled_graph.get_state(config)
-        if (state_snapshot.next and "approval" in state_snapshot.next) or result.get("__interrupt__"):
+        if (state_snapshot.next and "approval" in state_snapshot.next) or result.get(
+            "__interrupt__"
+        ):
             await self._record_pending_approval(result, inc_id=inc_id, thread_id=tid)
         else:
             await self._handle_workflow_completion(result, inc_id=inc_id, thread_id=tid)
@@ -181,7 +223,11 @@ class IncidentWorkflow:
         entry = create_pending_approval_entry(state_or_result, inc_id, thread_id)
         for k in (entry["approval_id"], inc_id, thread_id):
             self._pending_approvals[k] = entry
-        logger.info("[IncidentWorkflow] Staged pending approval %s for incident %s", entry["approval_id"], inc_id)
+        logger.info(
+            "[IncidentWorkflow] Staged pending approval %s for incident %s",
+            entry["approval_id"],
+            inc_id,
+        )
         await publish_pending_approval(self.nats, entry)
         return entry
 

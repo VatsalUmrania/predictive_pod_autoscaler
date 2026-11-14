@@ -1,4 +1,5 @@
 """Human Approval Queue for L3 and high-risk healing actions."""
+
 from __future__ import annotations
 
 import logging
@@ -71,7 +72,9 @@ class HumanApprovalQueue:
         for existing_id, existing in list(self._pending.items()):
             if existing_id in self._approved or existing_id in self._rejected:
                 continue
-            if existing.target == target or (incident_id and existing.incident_id == incident_id):
+            if existing.target == target or (
+                incident_id and existing.incident_id == incident_id
+            ):
                 existing.confidence = max(existing.confidence, confidence)
                 if context:
                     existing.context.update(context)
@@ -109,17 +112,19 @@ class HumanApprovalQueue:
                 asyncio.get_running_loop().create_task(
                     self._nats.publish_raw(
                         "nexus.approvals.required",
-                        _json_safe({
-                            "approval_id": approval_id,
-                            "runbook_id": runbook_id,
-                            "action_type": action_type,
-                            "target": target,
-                            "incident_id": incident_id,
-                            "healing_level": healing_level,
-                            "confidence": confidence,
-                            "app": (context or {}).get("namespace", "unknown"),
-                            "context": context or {},
-                        }),
+                        _json_safe(
+                            {
+                                "approval_id": approval_id,
+                                "runbook_id": runbook_id,
+                                "action_type": action_type,
+                                "target": target,
+                                "incident_id": incident_id,
+                                "healing_level": healing_level,
+                                "confidence": confidence,
+                                "app": (context or {}).get("namespace", "unknown"),
+                                "context": context or {},
+                            }
+                        ),
                     )
                 )
             except RuntimeError:

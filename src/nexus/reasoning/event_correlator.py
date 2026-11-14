@@ -46,6 +46,7 @@ class EventCorrelator:
 
         # De-duplication set (cluster_id → already emitted)
         from collections import deque
+
         self._emitted: set[str] = set()
         self._emitted_order: deque[str] = deque()
         self._max_emitted = 500
@@ -111,7 +112,6 @@ class EventCorrelator:
                 return self._emit(old_cluster)
             return None
 
-
         # Extend the existing cluster
         cluster.add_event(event)
         logger.debug(
@@ -166,7 +166,6 @@ class EventCorrelator:
 
     @staticmethod
     def _cluster_key(event: IncidentEvent) -> str:
-
         """Correlation key — events in the same namespace are clustered together."""
         if event.namespace:
             return event.namespace
@@ -184,7 +183,6 @@ class EventCorrelator:
             f"| agents=[{', '.join(sorted(cluster.agent_types))}] | severity={cluster.highest_severity}"
         )
         return cluster
-
 
     # Stats
     @property

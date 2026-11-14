@@ -44,7 +44,8 @@ async def run_diagnose_reflexion(
     refined_result = await rca_engine.refine(
         cluster=cluster,
         previous_rca=rca_result,
-        critique=verdict.block_reason or "Evidence gap in proposed failure class or action",
+        critique=verdict.block_reason
+        or "Evidence gap in proposed failure class or action",
         evidence_gaps=verdict.evidence_gaps,
     )
 

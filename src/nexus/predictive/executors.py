@@ -1,4 +1,5 @@
 """Execution strategies for Prescaler modes (Shadow, Advisory, Autonomous)."""
+
 from __future__ import annotations
 
 import json
@@ -12,7 +13,9 @@ from nexus.predictive.models import PrescaleDecision
 logger = logging.getLogger(__name__)
 
 
-async def execute_advisory(decision: PrescaleDecision, source_event: IncidentEvent, nats_client: Any) -> None:
+async def execute_advisory(
+    decision: PrescaleDecision, source_event: IncidentEvent, nats_client: Any
+) -> None:
     """Publish a NATS advisory event for human operator approval."""
     advisory_event = IncidentEvent(
         agent=AgentType.ORCHESTRATOR,
@@ -48,7 +51,9 @@ async def execute_autonomous(
 ) -> None:
     """Scale deployment directly via ActionLadder (L2 action)."""
     if ladder is None:
-        logger.error("[Prescaler] AUTONOMOUS mode requires ActionLadder — not configured")
+        logger.error(
+            "[Prescaler] AUTONOMOUS mode requires ActionLadder — not configured"
+        )
         return
 
     scale_action = {
@@ -83,7 +88,9 @@ async def execute_autonomous(
 
         apps_v1 = k8s_client.AppsV1Api()
         patch = {"spec": {"replicas": decision.recommended_replicas}}
-        apps_v1.patch_namespaced_deployment_scale(decision.deployment_name, decision.namespace, patch)
+        apps_v1.patch_namespaced_deployment_scale(
+            decision.deployment_name, decision.namespace, patch
+        )
         await ladder.set_cooldown(
             "scale_deployment",
             f"{decision.namespace}/{decision.deployment_name}",
@@ -96,7 +103,9 @@ async def execute_autonomous(
         logger.error(f"[Prescaler] [AUTONOMOUS] Scale failed: {exc}")
 
 
-async def publish_prescale_decision(decision: PrescaleDecision, source_event: IncidentEvent, nats_client: Any) -> None:
+async def publish_prescale_decision(
+    decision: PrescaleDecision, source_event: IncidentEvent, nats_client: Any
+) -> None:
     """Publish decision to nexus.prescale.* for Notifier/dashboard."""
     subject = f"nexus.prescale.{decision.deployment_name}.{decision.mode.value}"
     payload = {

@@ -60,7 +60,9 @@ class RCALeadSynthesizer:
         if hasattr(llm, "ainvoke") and type(llm).__name__ != "FakeListChatModel":
             try:
                 describe_sample = str(live_config.get("describe", ""))[:2500]
-                logs_sample = "\n".join(logs[-40:]) if logs else "No container logs captured"
+                logs_sample = (
+                    "\n".join(logs[-40:]) if logs else "No container logs captured"
+                )
                 system_prompt = SRE_SYSTEM_PROMPT
 
                 user_prompt = (
@@ -73,7 +75,11 @@ class RCALeadSynthesizer:
                     f"Live Resource State & Events (Describe):\n{describe_sample}"
                 )
 
-                model_desc = getattr(llm, "model_name", getattr(llm, "model", getattr(llm, "_model", type(llm).__name__)))
+                model_desc = getattr(
+                    llm,
+                    "model_name",
+                    getattr(llm, "model", getattr(llm, "_model", type(llm).__name__)),
+                )
                 logger.info(
                     "[MultiAgentRCA] Invoking LLM (%s) for root cause analysis on %s/%s",
                     model_desc,
@@ -83,23 +89,38 @@ class RCALeadSynthesizer:
 
                 from langchain_core.messages import HumanMessage, SystemMessage
 
-                resp = await llm.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+                resp = await llm.ainvoke(
+                    [
+                        SystemMessage(content=system_prompt),
+                        HumanMessage(content=user_prompt),
+                    ]
+                )
                 raw_text = resp.content if hasattr(resp, "content") else str(resp)
                 parsed = self._parse_llm_json(raw_text)
                 if parsed:
                     return RCAResult(
-                        root_cause=parsed.get("root_cause", f"Incident diagnosed via LLM on {target_name}"),
+                        root_cause=parsed.get(
+                            "root_cause", f"Incident diagnosed via LLM on {target_name}"
+                        ),
                         failure_class=parsed.get("failure_class", "unknown"),
                         healing_level=int(parsed.get("healing_level", 1)),
                         confidence=float(parsed.get("confidence", 0.85)),
-                        reasoning=parsed.get("reasoning", "LLM multi-domain evidence synthesis"),
+                        reasoning=parsed.get(
+                            "reasoning", "LLM multi-domain evidence synthesis"
+                        ),
                         source="langgraph_multi_agent_llm",
                         domain=platform,
                         suggested_action=parsed.get("suggested_action"),
                         suggested_fix=parsed.get("suggested_fix"),
-                        action_params=parsed.get("action_params", {"namespace": target_ns, "deployment_name": target_name}),
+                        action_params=parsed.get(
+                            "action_params",
+                            {"namespace": target_ns, "deployment_name": target_name},
+                        ),
                         actions_to_avoid=parsed.get("actions_to_avoid", []),
-                        evidence_citations=parsed.get("evidence_citations", log_report["findings"] + metrics_report["findings"]),
+                        evidence_citations=parsed.get(
+                            "evidence_citations",
+                            log_report["findings"] + metrics_report["findings"],
+                        ),
                     )
             except Exception as llm_exc:
                 logger.error(

@@ -118,7 +118,10 @@ class K8sAgent(BaseAgent):
     ) -> list[Any]:
         if self.namespaces:
             lists = await asyncio.gather(
-                *[loop.run_in_executor(None, namespaced_fn, ns) for ns in self.namespaces],
+                *[
+                    loop.run_in_executor(None, namespaced_fn, ns)
+                    for ns in self.namespaces
+                ],
                 return_exceptions=True,
             )
             items = []
@@ -141,7 +144,9 @@ class K8sAgent(BaseAgent):
 
         # 1. Pods
         pods = await self._fetch_resources(
-            loop, self._k8s_core.list_namespaced_pod, self._k8s_core.list_pod_for_all_namespaces
+            loop,
+            self._k8s_core.list_namespaced_pod,
+            self._k8s_core.list_pod_for_all_namespaces,
         )
         for pod in pods:
             if not self.namespaces and pod.metadata.namespace in SYSTEM_NAMESPACES:
@@ -150,7 +155,9 @@ class K8sAgent(BaseAgent):
 
         # 2. Deployments
         deps = await self._fetch_resources(
-            loop, self._k8s_apps.list_namespaced_deployment, self._k8s_apps.list_deployment_for_all_namespaces
+            loop,
+            self._k8s_apps.list_namespaced_deployment,
+            self._k8s_apps.list_deployment_for_all_namespaces,
         )
         for dep in deps:
             if not self.namespaces and dep.metadata.namespace in SYSTEM_NAMESPACES:

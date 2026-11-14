@@ -68,7 +68,9 @@ def test_per_app_override_wins_over_env(env_webhook, empty_policy_cache):
     assert resolve_slack_webhook("nexus") == env_webhook
 
 
-def test_pinned_app_with_null_webhook_stays_silent_over_env(env_webhook, empty_policy_cache):
+def test_pinned_app_with_null_webhook_stays_silent_over_env(
+    env_webhook, empty_policy_cache
+):
     """An app loaded in cache but with slack_webhook absent/empty → None.
 
     The cache entry is authoritative: a policy-pinned app that configured no

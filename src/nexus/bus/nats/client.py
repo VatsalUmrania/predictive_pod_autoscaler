@@ -1,4 +1,5 @@
 """NEXUS NATS JetStream Client."""
+
 from __future__ import annotations
 
 import asyncio
@@ -82,8 +83,12 @@ class NATSClient:
             raise RuntimeError("NATSClient not connected. Call connect() first.")
         subject = event.nats_subject()
         payload = event.to_nats_payload()
-        ack = await self._js.publish(subject, payload, headers={"Nats-Msg-Id": event.event_id})
-        logger.debug(f"[NATS] Published {subject} seq={ack.seq} event_id={event.event_id}")
+        ack = await self._js.publish(
+            subject, payload, headers={"Nats-Msg-Id": event.event_id}
+        )
+        logger.debug(
+            f"[NATS] Published {subject} seq={ack.seq} event_id={event.event_id}"
+        )
 
     async def publish_incident(self, event: IncidentEvent) -> None:
         await self.publish(event)
@@ -108,7 +113,13 @@ class NATSClient:
         if not self._js:
             raise RuntimeError("NATSClient not connected.")
         task = await create_incident_subscription(
-            self._js, handler, agent_filter, signal_filter, durable_name, queue_group, deliver_policy
+            self._js,
+            handler,
+            agent_filter,
+            signal_filter,
+            durable_name,
+            queue_group,
+            deliver_policy,
         )
         self._subscribers.append(task)
 
@@ -123,7 +134,12 @@ class NATSClient:
         if not self._js:
             raise RuntimeError("NATSClient not connected.")
         task = await create_raw_subscription(
-            self._js, subject_pattern, handler, durable_name, stream_name, deliver_policy
+            self._js,
+            subject_pattern,
+            handler,
+            durable_name,
+            stream_name,
+            deliver_policy,
         )
         self._subscribers.append(task)
 

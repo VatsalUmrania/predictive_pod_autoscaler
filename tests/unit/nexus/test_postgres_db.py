@@ -31,12 +31,16 @@ async def test_mock_db_client_lifecycle():
     assert inc["trigger_payload"]["cpu"] == 95
 
     # 2. Transition state
-    await client.transition_state(inc_id, "diagnosing", reason="Correlated with high latency")
+    await client.transition_state(
+        inc_id, "diagnosing", reason="Correlated with high latency"
+    )
     inc = await client.get_incident(inc_id)
     assert inc["current_state"] == "diagnosing"
 
     # 3. Start Agent Run
-    run_id = await client.start_agent_run(inc_id, "orchestrator", "gemini-3.1-flash-lite")
+    run_id = await client.start_agent_run(
+        inc_id, "orchestrator", "gemini-3.1-flash-lite"
+    )
     assert run_id is not None
 
     # 4. Log Message
@@ -74,7 +78,10 @@ async def test_mock_db_client_lifecycle():
         action_level="L2_MUTATING_APPROVAL",
         target_resource="default/payment-api",
         parameters={"memory": "1Gi"},
-        rollback_plan={"action": "k8s_patch_resource_limits", "parameters": {"memory": "512Mi"}},
+        rollback_plan={
+            "action": "k8s_patch_resource_limits",
+            "parameters": {"memory": "512Mi"},
+        },
         pre_check_snapshot={"status": "CrashLoopBackOff"},
     )
     assert action_id is not None
@@ -88,8 +95,16 @@ async def test_mock_db_client_lifecycle():
     )
 
     # 7. Finish Agent Run & Resolve Incident
-    await client.finish_agent_run(run_id, status="completed", prompt_tokens=150, completion_tokens=80, duration_ms=620)
-    await client.transition_state(inc_id, "resolved", reason="Action succeeded and pod running")
+    await client.finish_agent_run(
+        run_id,
+        status="completed",
+        prompt_tokens=150,
+        completion_tokens=80,
+        duration_ms=620,
+    )
+    await client.transition_state(
+        inc_id, "resolved", reason="Action succeeded and pod running"
+    )
 
     # 8. Verify Full Trace
     trace = await client.get_incident_trace(inc_id)
@@ -142,8 +157,12 @@ async def test_postgres_client_retry_and_fail_fast():
     """PostgresClient retries up to max_retries with backoff, then fails fast."""
     client = PostgresClient(dsn="postgresql://user:pass@localhost:5432/nexus")
 
-    with patch("asyncpg.create_pool", side_effect=ConnectionRefusedError("Connection refused")):
-        with pytest.raises(RuntimeError, match="Failed to initialize PostgreSQL pool after 3 attempts"):
+    with patch(
+        "asyncpg.create_pool", side_effect=ConnectionRefusedError("Connection refused")
+    ):
+        with pytest.raises(
+            RuntimeError, match="Failed to initialize PostgreSQL pool after 3 attempts"
+        ):
             await client.initialize(max_retries=3, initial_backoff=0.01)
 
 
@@ -154,6 +173,7 @@ async def test_get_database_client_requires_dsn(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
 
     import nexus.db.postgres as pg_mod
+
     monkeypatch.setattr(pg_mod, "_global_db_client", None)
 
     with pytest.raises(RuntimeError, match="No PostgreSQL DSN configured"):

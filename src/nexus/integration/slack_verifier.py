@@ -52,7 +52,9 @@ def verify_slack_request(
         return False
 
     base = b"v0:" + str(ts).encode() + b":" + raw_body
-    expected = "v0=" + hmac.new(secret.encode("utf-8"), base, hashlib.sha256).hexdigest()
+    expected = (
+        "v0=" + hmac.new(secret.encode("utf-8"), base, hashlib.sha256).hexdigest()
+    )
     return hmac.compare_digest(expected, str(sig))
 
 

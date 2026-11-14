@@ -1,4 +1,5 @@
 """Subscription loops and message deserialization for NATS JetStream."""
+
 from __future__ import annotations
 
 import asyncio
@@ -47,7 +48,9 @@ async def create_incident_subscription(
                 try:
                     event = IncidentEvent.from_nats_payload(msg.data)
                 except Exception as parse_exc:
-                    logger.warning(f"[NATS] Dropping unparseable message on '{msg.subject}': {parse_exc}")
+                    logger.warning(
+                        f"[NATS] Dropping unparseable message on '{msg.subject}': {parse_exc}"
+                    )
                     try:
                         if hasattr(msg, "term"):
                             await msg.term()
@@ -61,7 +64,9 @@ async def create_incident_subscription(
                     await handler(event)
                     await msg.ack()
                 except Exception as exc:
-                    logger.error(f"[NATS] Handler error on '{msg.subject}': {exc}", exc_info=True)
+                    logger.error(
+                        f"[NATS] Handler error on '{msg.subject}': {exc}", exc_info=True
+                    )
                     await msg.nak()
         except asyncio.CancelledError:
             await sub.unsubscribe()
@@ -79,7 +84,9 @@ async def create_raw_subscription(
 ) -> asyncio.Task:
     """Create background task subscribing to raw JSON payloads."""
     resolved_stream = stream_name or NEXUS_STREAM
-    logger.info(f"[NATS] Subscribing to raw pattern '{subject_pattern}' durable={durable_name} stream={resolved_stream}")
+    logger.info(
+        f"[NATS] Subscribing to raw pattern '{subject_pattern}' durable={durable_name} stream={resolved_stream}"
+    )
 
     sub_kwargs: dict = {"stream": resolved_stream, "deliver_policy": deliver_policy}
     if durable_name:
@@ -95,7 +102,10 @@ async def create_raw_subscription(
                     await handler(data, msg.subject)
                     await msg.ack()
                 except Exception as exc:
-                    logger.error(f"[NATS] Raw handler error on {msg.subject}: {exc}", exc_info=True)
+                    logger.error(
+                        f"[NATS] Raw handler error on {msg.subject}: {exc}",
+                        exc_info=True,
+                    )
                     await msg.nak()
         except asyncio.CancelledError:
             await sub.unsubscribe()

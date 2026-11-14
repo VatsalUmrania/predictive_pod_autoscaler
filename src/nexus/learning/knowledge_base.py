@@ -46,7 +46,9 @@ class KnowledgeBase:
         if self._db_client is None:
             self._db_client = await get_database_client()
         await self._refresh_cache()
-        logger.info(f"[KnowledgeBase] Initialized with PostgreSQL — {len(self._cache)} adjustment(s) loaded")
+        logger.info(
+            f"[KnowledgeBase] Initialized with PostgreSQL — {len(self._cache)} adjustment(s) loaded"
+        )
 
     async def close(self) -> None:
         self._db_client = None
@@ -83,14 +85,21 @@ class KnowledgeBase:
         """
         async with self._db_client.acquire() as conn:
             await conn.execute(
-                sql, stats.runbook_id, float(delta), int(stats.completed),
-                float(stats.success_rate), float(stats.false_heal_rate), now,
+                sql,
+                stats.runbook_id,
+                float(delta),
+                int(stats.completed),
+                float(stats.success_rate),
+                float(stats.false_heal_rate),
+                now,
             )
 
         self._cache[stats.runbook_id] = delta
         if delta != 0.0:
             direction = "↑" if delta > 0 else "↓"
-            logger.info(f"[KnowledgeBase] {direction} {stats.runbook_id}: delta={delta:+.3f} rate={stats.success_rate:.0%} n={stats.completed}")
+            logger.info(
+                f"[KnowledgeBase] {direction} {stats.runbook_id}: delta={delta:+.3f} rate={stats.success_rate:.0%} n={stats.completed}"
+            )
         return delta
 
     async def bulk_update(self, all_stats: dict[str, RunbookStats]) -> dict[str, float]:
@@ -104,7 +113,9 @@ class KnowledgeBase:
         if not self._db_client:
             return []
         async with self._db_client.acquire() as conn:
-            rows = await conn.fetch("SELECT * FROM confidence_adjustments ORDER BY delta DESC")
+            rows = await conn.fetch(
+                "SELECT * FROM confidence_adjustments ORDER BY delta DESC"
+            )
             records = []
             for r in rows:
                 lu = r["last_updated"]
@@ -122,13 +133,17 @@ class KnowledgeBase:
                 )
             return records
 
-    async def record_pattern(self, signal_types: set[str], runbook_id: str, success: bool) -> None:
+    async def record_pattern(
+        self, signal_types: set[str], runbook_id: str, success: bool
+    ) -> None:
         await record_signal_pattern(self._db_client, signal_types, runbook_id, success)
 
     async def get_best_runbook_for_pattern(self, signal_types: set[str]) -> str | None:
         return await query_best_runbook_for_pattern(self._db_client, signal_types)
 
-    async def get_working_patterns(self, min_success_rate: float = 0.80) -> list[dict[str, Any]]:
+    async def get_working_patterns(
+        self, min_success_rate: float = 0.80
+    ) -> list[dict[str, Any]]:
         return await query_working_patterns(self._db_client, min_success_rate)
 
     async def _refresh_cache(self) -> None:
@@ -136,12 +151,21 @@ class KnowledgeBase:
             return
         try:
             async with self._db_client.acquire() as conn:
-                rows = await conn.fetch("SELECT runbook_id, delta FROM confidence_adjustments")
+                rows = await conn.fetch(
+                    "SELECT runbook_id, delta FROM confidence_adjustments"
+                )
                 self._cache = {str(r["runbook_id"]): float(r["delta"]) for r in rows}
         except Exception as exc:
             logger.warning(f"[KnowledgeBase] Cache refresh failed: {exc}")
 
     async def record_incident_outcome(
-        self, incident_id: str, runbook_id: str, action_type: str, resolved: bool, reason: str
+        self,
+        incident_id: str,
+        runbook_id: str,
+        action_type: str,
+        resolved: bool,
+        reason: str,
     ) -> None:
-        await record_db_incident_outcome(self._db_client, incident_id, runbook_id, action_type, resolved, reason)
+        await record_db_incident_outcome(
+            self._db_client, incident_id, runbook_id, action_type, resolved, reason
+        )

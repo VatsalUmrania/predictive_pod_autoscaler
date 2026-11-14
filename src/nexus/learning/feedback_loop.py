@@ -77,7 +77,9 @@ class FeedbackLoop:
                     await self._nats.subscribe_raw(pattern, handler)
                     logger.info(f"[FeedbackLoop] Subscribed to {pattern}")
                 except Exception as exc:
-                    logger.warning(f"[FeedbackLoop] Subscription to {pattern} failed: {exc}")
+                    logger.warning(
+                        f"[FeedbackLoop] Subscription to {pattern} failed: {exc}"
+                    )
 
         logger.info(
             f"[FeedbackLoop] Started — interval={self._interval}s "

@@ -1,4 +1,5 @@
 """Remediation actions and trace aggregation repository."""
+
 from __future__ import annotations
 
 import json
@@ -80,7 +81,9 @@ class RemediationRepository:
     async def get_incident_trace(self, incident_id: str) -> dict[str, Any]:
         async with self._pool.acquire() as conn:
             u_id = _ensure_uuid(incident_id)
-            inc = await conn.fetchrow("SELECT * FROM incidents WHERE incident_id = $1", u_id)
+            inc = await conn.fetchrow(
+                "SELECT * FROM incidents WHERE incident_id = $1", u_id
+            )
             if not inc:
                 return {}
             transitions = await conn.fetch(

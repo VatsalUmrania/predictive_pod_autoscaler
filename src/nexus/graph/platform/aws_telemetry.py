@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 def _get_client(service: str, region: str) -> Any:
     import nexus.graph.platform.aws as aws_plat
+
     return aws_plat._get_boto3_client(service, region)
 
 
@@ -37,16 +38,24 @@ async def collect_aws_telemetry(
     if metric_tool:
         try:
             m_res = await metric_tool.execute(
-                namespace="AWS/Lambda" if target.kind == "lambda" else f"AWS/{target.kind.upper()}",
+                namespace=(
+                    "AWS/Lambda"
+                    if target.kind == "lambda"
+                    else f"AWS/{target.kind.upper()}"
+                ),
                 metric_name="Errors",
-                dimension_name="FunctionName" if target.kind == "lambda" else "QueueName",
+                dimension_name=(
+                    "FunctionName" if target.kind == "lambda" else "QueueName"
+                ),
                 dimension_value=target.name,
                 region=target.namespace,
             )
             if m_res.success and m_res.data:
                 metrics["error_metric"] = m_res.data
         except Exception as m_exc:
-            logger.debug("[AWSPlatformAdapter] CloudWatch metric query failed: %s", m_exc)
+            logger.debug(
+                "[AWSPlatformAdapter] CloudWatch metric query failed: %s", m_exc
+            )
 
     log_tool = tools.get("aws_get_log_events")
     if log_tool:
@@ -62,7 +71,10 @@ async def collect_aws_telemetry(
                 recent_logs = [e.get("message", "") for e in events]
                 if any("Task timed out" in line for line in recent_logs):
                     health_status = "timeout"
-                elif any("OutOfMemory" in line or "Memory Size" in line for line in recent_logs):
+                elif any(
+                    "OutOfMemory" in line or "Memory Size" in line
+                    for line in recent_logs
+                ):
                     health_status = "oomkilled"
         except Exception as l_exc:
             logger.debug("[AWSPlatformAdapter] CloudWatch log query failed: %s", l_exc)
@@ -70,7 +82,9 @@ async def collect_aws_telemetry(
     try:
         if target.kind == "lambda":
             client = await asyncio.to_thread(_get_client, "lambda", target.namespace)
-            func_cfg = await asyncio.to_thread(client.get_function_configuration, FunctionName=target.name)
+            func_cfg = await asyncio.to_thread(
+                client.get_function_configuration, FunctionName=target.name
+            )
             live_config["MemorySize"] = func_cfg.get("MemorySize")
             live_config["Timeout"] = func_cfg.get("Timeout")
             live_config["LastModified"] = func_cfg.get("LastModified")
@@ -91,7 +105,9 @@ async def inspect_aws_live_state(target: TargetResource) -> LiveStateSnapshot:
     try:
         if target.kind == "lambda":
             client = await asyncio.to_thread(_get_client, "lambda", target.namespace)
-            cfg = await asyncio.to_thread(client.get_function_configuration, FunctionName=target.name)
+            cfg = await asyncio.to_thread(
+                client.get_function_configuration, FunctionName=target.name
+            )
             return LiveStateSnapshot(
                 target=target,
                 exists=True,
@@ -120,7 +136,9 @@ async def verify_aws_health(
     try:
         if target.kind == "lambda":
             client = await asyncio.to_thread(_get_client, "lambda", target.namespace)
-            cfg = await asyncio.to_thread(client.get_function_configuration, FunctionName=target.name)
+            cfg = await asyncio.to_thread(
+                client.get_function_configuration, FunctionName=target.name
+            )
             status = cfg.get("State", "Active")
             healthy = status == "Active"
             return HealthCheckResult(

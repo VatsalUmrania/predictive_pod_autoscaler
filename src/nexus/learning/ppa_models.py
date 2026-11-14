@@ -45,16 +45,20 @@ def fetch_actual_rps(deployment: str, prom_url: str | None = None) -> float:
     if url is None:
         try:
             from ppa.config import get_prometheus_url
+
             url = get_prometheus_url()
         except Exception:
             url = "http://prometheus:9090"
     try:
         from prometheus_api_client import PrometheusConnect
+
         prom = PrometheusConnect(url=url)
         query = f'sum(rate(nginx_ingress_requests_total{{backend=~"{deployment}.*"}}[1m])) * 60'
         result = prom.custom_query(query=query)
         if result and result[0]["value"][1] != "NaN":
             return float(result[0]["value"][1])
     except Exception as exc:
-        logger.warning(f"[PpaOutcomeTracker] Failed to fetch actual RPS for {deployment}: {exc}")
+        logger.warning(
+            f"[PpaOutcomeTracker] Failed to fetch actual RPS for {deployment}: {exc}"
+        )
     return 0.0

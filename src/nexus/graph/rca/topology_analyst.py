@@ -10,7 +10,9 @@ from typing import Any
 class TopologyAnalystAgent:
     """Specialist agent correlating deployments, git revisions, and platform dependencies."""
 
-    def analyze(self, raw_signals: list[dict[str, Any]], live_config: dict[str, Any]) -> dict[str, Any]:
+    def analyze(
+        self, raw_signals: list[dict[str, Any]], live_config: dict[str, Any]
+    ) -> dict[str, Any]:
         findings: list[str] = []
         signatures: list[str] = []
         has_recent_deploy = False
@@ -20,7 +22,9 @@ class TopologyAnalystAgent:
             stype = str(sig.get("signal_type", "")).lower()
             if stype in ("deploy_event", "rollout_started", "image_updated"):
                 has_recent_deploy = True
-                findings.append(f"Recent deployment detected: {sig.get('resource_name', 'unknown')}")
+                findings.append(
+                    f"Recent deployment detected: {sig.get('resource_name', 'unknown')}"
+                )
                 signatures.append("recent_deploy")
             elif stype in ("pod_crashloop", "crashloopbackoff"):
                 signatures.append("crashloop")
@@ -43,7 +47,9 @@ class TopologyAnalystAgent:
                 or "newreplicaset" in desc
             ):
                 has_recent_deploy = True
-                findings.append("Active Kubernetes deployment rollout detected across multiple ReplicaSets")
+                findings.append(
+                    "Active Kubernetes deployment rollout detected across multiple ReplicaSets"
+                )
                 signatures.append("recent_deploy")
                 signatures.append("rollout_stuck")
 
@@ -54,13 +60,21 @@ class TopologyAnalystAgent:
                 or "command override" in desc
             ):
                 has_recent_deploy = True
-                findings.append("Container spec command override or broken startup script detected in deployment template")
+                findings.append(
+                    "Container spec command override or broken startup script detected in deployment template"
+                )
                 signatures.append("recent_deploy")
                 signatures.append("spec_mutation")
 
-            if "crashloopbackoff" in desc or "reason: error" in desc or "exit code 1" in desc:
+            if (
+                "crashloopbackoff" in desc
+                or "reason: error" in desc
+                or "exit code 1" in desc
+            ):
                 signatures.append("crashloop")
-                findings.append("Container termination with non-zero exit code observed in workload describe")
+                findings.append(
+                    "Container termination with non-zero exit code observed in workload describe"
+                )
 
         return {
             "agent": "TopologyAnalyst",

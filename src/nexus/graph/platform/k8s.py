@@ -61,9 +61,15 @@ class K8sPlatformAdapter(BasePlatformAdapter):
         self._tools["rollback_deployment"] = self._tools[K8sRollbackDeploymentTool.name]
         self._tools["k8s_restart"] = self._tools[K8sRestartDeploymentTool.name]
         self._tools["k8s_rollback"] = self._tools[K8sRollbackDeploymentTool.name]
-        self._tools["remove_command_override"] = self._tools[K8sRemoveContainerCommandTool.name]
-        self._tools["k8s_remove_command"] = self._tools[K8sRemoveContainerCommandTool.name]
-        self._tools["k8s_clear_command"] = self._tools[K8sRemoveContainerCommandTool.name]
+        self._tools["remove_command_override"] = self._tools[
+            K8sRemoveContainerCommandTool.name
+        ]
+        self._tools["k8s_remove_command"] = self._tools[
+            K8sRemoveContainerCommandTool.name
+        ]
+        self._tools["k8s_clear_command"] = self._tools[
+            K8sRemoveContainerCommandTool.name
+        ]
 
     @property
     def platform_id(self) -> str:
@@ -101,7 +107,9 @@ class K8sPlatformAdapter(BasePlatformAdapter):
         return await capture_k8s_snapshot(target, tool_name, parameters)
 
     async def execute_rollback(self, snapshot: RollbackSnapshot) -> NexusToolResult:
-        logger.info("[K8sPlatformAdapter] Executing rollback snapshot %s", snapshot.snapshot_id)
+        logger.info(
+            "[K8sPlatformAdapter] Executing rollback snapshot %s", snapshot.snapshot_id
+        )
         return await self.execute_action(
             snapshot.rollback_tool, snapshot.rollback_parameters
         )

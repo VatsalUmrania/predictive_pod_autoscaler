@@ -29,90 +29,114 @@ _EVIDENCE_REQUIREMENTS: dict[str, EvidenceRequirement] = {
         must_also_have=frozenset({"deploy_event"}),
     ),
     "resource_exhaustion": EvidenceRequirement(
-        must_have_any=frozenset({
-            "pod_oomkilled",
-            "hpa_maxed",
-            "lambda_oom",
-            "lambda_throttle_spike",
-            "db_connection_exhaustion",
-        }),
+        must_have_any=frozenset(
+            {
+                "pod_oomkilled",
+                "hpa_maxed",
+                "lambda_oom",
+                "lambda_throttle_spike",
+                "db_connection_exhaustion",
+            }
+        ),
     ),
     "dependency_failure": EvidenceRequirement(
-        must_have_any=frozenset({
-            "dns_resolution_failure",
-            "upstream_down",
-            "sqs_dlq_depth_high",
-            "dynamo_system_error",
-        }),
+        must_have_any=frozenset(
+            {
+                "dns_resolution_failure",
+                "upstream_down",
+                "sqs_dlq_depth_high",
+                "dynamo_system_error",
+            }
+        ),
     ),
     "config_error": EvidenceRequirement(
-        must_have_any=frozenset({
-            "env_contract_violation",
-            "secret_committed",
-            "pod_crashloop",
-        }),
+        must_have_any=frozenset(
+            {
+                "env_contract_violation",
+                "secret_committed",
+                "pod_crashloop",
+            }
+        ),
     ),
     "cascading_failure": EvidenceRequirement(
-        must_have_any=frozenset({
-            "high_error_rate",
-            "pod_crashloop",
-            "deployment_degraded",
-        }),
+        must_have_any=frozenset(
+            {
+                "high_error_rate",
+                "pod_crashloop",
+                "deployment_degraded",
+            }
+        ),
     ),
     "unknown": EvidenceRequirement(),
 }
 
 _ACTION_EVIDENCE: dict[str, frozenset[str]] = {
     "restart_pod": frozenset({"pod_crashloop", "pod_oomkilled", "pod_pending"}),
-    "restart_deployment": frozenset({
-        "pod_crashloop",
-        "pod_oomkilled",
-        "deployment_degraded",
-        "rollout_stuck",
-    }),
-    "k8s_restart_deployment": frozenset({
-        "pod_crashloop",
-        "pod_oomkilled",
-        "deployment_degraded",
-        "rollout_stuck",
-    }),
-    "kubectl_rollout_undo": frozenset({
-        "pod_crashloop",
-        "high_error_rate",
-        "rollout_stuck",
-    }),
-    "rollback_deployment": frozenset({
-        "pod_crashloop",
-        "high_error_rate",
-        "rollout_stuck",
-    }),
-    "k8s_rollback_deployment": frozenset({
-        "pod_crashloop",
-        "high_error_rate",
-        "rollout_stuck",
-    }),
+    "restart_deployment": frozenset(
+        {
+            "pod_crashloop",
+            "pod_oomkilled",
+            "deployment_degraded",
+            "rollout_stuck",
+        }
+    ),
+    "k8s_restart_deployment": frozenset(
+        {
+            "pod_crashloop",
+            "pod_oomkilled",
+            "deployment_degraded",
+            "rollout_stuck",
+        }
+    ),
+    "kubectl_rollout_undo": frozenset(
+        {
+            "pod_crashloop",
+            "high_error_rate",
+            "rollout_stuck",
+        }
+    ),
+    "rollback_deployment": frozenset(
+        {
+            "pod_crashloop",
+            "high_error_rate",
+            "rollout_stuck",
+        }
+    ),
+    "k8s_rollback_deployment": frozenset(
+        {
+            "pod_crashloop",
+            "high_error_rate",
+            "rollout_stuck",
+        }
+    ),
     "scale_deployment": frozenset({"hpa_maxed", "high_error_rate", "pod_pending"}),
     "k8s_scale_deployment": frozenset({"hpa_maxed", "high_error_rate", "pod_pending"}),
-    "scale_resource": frozenset({
-        "hpa_maxed",
-        "high_error_rate",
-        "pod_pending",
-        "lambda_throttle_spike",
-    }),
+    "scale_resource": frozenset(
+        {
+            "hpa_maxed",
+            "high_error_rate",
+            "pod_pending",
+            "lambda_throttle_spike",
+        }
+    ),
     "aws_update_lambda_memory": frozenset({"lambda_oom", "lambda_timeout"}),
     "aws_update_lambda_timeout": frozenset({"lambda_timeout"}),
     "aws_replay_dlq": frozenset({"sqs_dlq_depth_high"}),
     "flush_coredns_cache": frozenset({"dns_resolution_failure"}),
-    "k8s_remove_command_override": frozenset({
-        "pod_crashloop",
-        "high_error_rate",
-        "rollout_stuck",
-    }),
-    "remove_command_override": frozenset({
-        "pod_crashloop",
-        "high_error_rate",
-        "rollout_stuck",
-    }),
+    "k8s_remove_command_override": frozenset(
+        {
+            "pod_crashloop",
+            "high_error_rate",
+            "rollout_stuck",
+        }
+    ),
+    "remove_command_override": frozenset(
+        {
+            "pod_crashloop",
+            "high_error_rate",
+            "rollout_stuck",
+        }
+    ),
     "emit_alert": frozenset(),
     "patch_annotation": frozenset(),
     "patch_configmap": frozenset(),

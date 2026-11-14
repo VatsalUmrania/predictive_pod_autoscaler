@@ -10,6 +10,7 @@ from nexus.agents.db.models import DBConnectionStats, QuerySnapshot, SlowQuery
 
 logger = logging.getLogger(__name__)
 
+
 class MongoDBAdapter:
     """
     Monitors MongoDB via serverStatus and currentOp.

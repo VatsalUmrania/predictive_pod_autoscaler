@@ -19,6 +19,7 @@ from nexus.graph.workflow import IncidentWorkflow, route_after_govern
 
 # ── 1. Diagnostic Evaluator-Optimizer (Reflexion) Loop Tests ──────────────────
 
+
 @pytest.mark.asyncio
 async def test_diagnostic_evaluator_optimizer_reflection_success():
     """
@@ -96,7 +97,10 @@ async def test_diagnostic_evaluator_optimizer_reflection_success():
         assert len(reflections) == 1
         assert reflections[0]["iteration"] == 1
         assert reflections[0]["outcome"] == "refined_accepted"
-        assert reflections[0]["initial_hypothesis"]["failure_class"] == "resource_exhaustion"
+        assert (
+            reflections[0]["initial_hypothesis"]["failure_class"]
+            == "resource_exhaustion"
+        )
         assert reflections[0]["refined_hypothesis"]["failure_class"] == "bad_deploy"
 
 
@@ -161,6 +165,7 @@ async def test_diagnostic_reflection_fallback_on_unresolved_critique():
 
 
 # ── 2. Verification-Driven Adaptive Recovery Ladder Tests ─────────────────────
+
 
 def test_adaptive_recovery_ladder_escalation_on_k8s_restart_failure():
     """
@@ -249,6 +254,7 @@ def test_adaptive_recovery_ladder_escalation_on_aws_lambda():
 
 # ── 3. Pre-Flight Live-State Self-Healing Short-Circuit Tests ──────────────────
 
+
 @pytest.mark.asyncio
 async def test_preflight_self_healing_short_circuit():
     """
@@ -258,7 +264,11 @@ async def test_preflight_self_healing_short_circuit():
     state = {
         "incident_id": "inc-selfheal-01",
         "platform": "kubernetes",
-        "target": {"name": "auth-service", "namespace": "prod", "platform": "kubernetes"},
+        "target": {
+            "name": "auth-service",
+            "namespace": "prod",
+            "platform": "kubernetes",
+        },
         "plan": {
             "steps": [
                 {
@@ -276,7 +286,10 @@ async def test_preflight_self_healing_short_circuit():
     mock_live_report.verdict = "self_healed"
     mock_live_report.evidence = "1/1 pods running and ready with restart_count=0"
 
-    with patch("nexus.graph.nodes.govern.check_live_state", AsyncMock(return_value=mock_live_report)):
+    with patch(
+        "nexus.graph.nodes.govern.check_live_state",
+        AsyncMock(return_value=mock_live_report),
+    ):
         result = await govern_node(state)
 
         gov = result["governance"]
@@ -292,6 +305,7 @@ async def test_preflight_self_healing_short_circuit():
 
 
 # ── 4. End-to-End Workflow with Adaptive Ladder & Human Approval ──────────────
+
 
 @pytest.mark.asyncio
 async def test_e2e_workflow_adaptive_ladder_pause_and_resume():
@@ -318,15 +332,32 @@ async def test_e2e_workflow_adaptive_ladder_pause_and_resume():
         steps = (plan or {}).get("steps") or []
         tool = steps[0].get("tool_name", "") if steps else ""
         if tool == "k8s_restart_deployment":
-            return HealthCheckResult(healthy=False, slo_restored=False, failure_reason="CrashLoopBackOff exit code 137")
-        return HealthCheckResult(healthy=True, slo_restored=True, details="Deployment healthy and ready")
+            return HealthCheckResult(
+                healthy=False,
+                slo_restored=False,
+                failure_reason="CrashLoopBackOff exit code 137",
+            )
+        return HealthCheckResult(
+            healthy=True, slo_restored=True, details="Deployment healthy and ready"
+        )
 
-    with patch("nexus.agents.k8s_tools.describe_resource", return_value="Replicas: 1\nState: CrashLoopBackOff"):
-        with patch("nexus.agents.k8s_tools.restart_deployment", return_value="restarted"):
-            with patch("nexus.agents.k8s_tools.rollback_deployment", return_value="rolled_back"):
-                with patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05), \
-                     patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01):
-                    with patch.object(adapter, "verify_health", side_effect=mock_health_check):
+    with patch(
+        "nexus.agents.k8s_tools.describe_resource",
+        return_value="Replicas: 1\nState: CrashLoopBackOff",
+    ):
+        with patch(
+            "nexus.agents.k8s_tools.restart_deployment", return_value="restarted"
+        ):
+            with patch(
+                "nexus.agents.k8s_tools.rollback_deployment", return_value="rolled_back"
+            ):
+                with (
+                    patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05),
+                    patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01),
+                ):
+                    with patch.object(
+                        adapter, "verify_health", side_effect=mock_health_check
+                    ):
                         # Initial run: Attempt 0 plans restart -> pauses at approval (all actions require approval)
                         initial_run = await workflow.run_incident(
                             {
@@ -340,7 +371,10 @@ async def test_e2e_workflow_adaptive_ladder_pause_and_resume():
 
                         assert initial_run["fsm_state"] == "approval_pending"
                         assert initial_run["resolved"] is False
-                        assert initial_run["plan"]["steps"][0]["tool_name"] == "k8s_restart_deployment"
+                        assert (
+                            initial_run["plan"]["steps"][0]["tool_name"]
+                            == "k8s_restart_deployment"
+                        )
 
                         # 1st resume with operator approval: Attempt 0 executes restart -> fails verify -> Attempt 1 escalates to rollback -> pauses for approval
                         escalated_run = await workflow.resume_incident(
@@ -350,7 +384,10 @@ async def test_e2e_workflow_adaptive_ladder_pause_and_resume():
 
                         assert escalated_run["fsm_state"] == "approval_pending"
                         assert escalated_run["resolved"] is False
-                        assert escalated_run["plan"]["steps"][0]["tool_name"] == "k8s_rollback_deployment"
+                        assert (
+                            escalated_run["plan"]["steps"][0]["tool_name"]
+                            == "k8s_rollback_deployment"
+                        )
 
                         # 2nd resume with operator approval: Attempt 1 executes rollback -> passes verify -> resolved
                         resumed_run = await workflow.resume_incident(
@@ -362,12 +399,15 @@ async def test_e2e_workflow_adaptive_ladder_pause_and_resume():
                         assert resumed_run["resolved"] is True
                         assert resumed_run["escalated"] is False
                         # Both tools were executed across the two ladder attempts
-                        executed_tools = [rec["tool_name"] for rec in resumed_run["execution_records"]]
+                        executed_tools = [
+                            rec["tool_name"] for rec in resumed_run["execution_records"]
+                        ]
                         assert "k8s_restart_deployment" in executed_tools
                         assert "k8s_rollback_deployment" in executed_tools
 
 
 # ── 4. Dynamic Context-Driven Scenario Unit Tests ─────────────────────────────
+
 
 def test_dynamic_k8s_scaling_plan_from_traffic_spike():
     """Verify that a traffic surge dynamically computes scale replicas from current replicas."""
@@ -385,7 +425,11 @@ def test_dynamic_k8s_scaling_plan_from_traffic_spike():
             "metrics": {"current_replicas": 2, "traffic_ratio": 2.5},
         },
         "events": [
-            {"signal_type": "traffic_spike", "resource_name": "payments-svc", "severity": "warning"}
+            {
+                "signal_type": "traffic_spike",
+                "resource_name": "payments-svc",
+                "severity": "warning",
+            }
         ],
     }
 
@@ -458,7 +502,9 @@ async def test_k8s_telemetry_extraction_of_live_spec():
     from nexus.graph.platform.base import TargetResource
     from nexus.graph.platform.k8s_telemetry import collect_k8s_telemetry
 
-    target = TargetResource(platform="kubernetes", namespace="default", name="worker-app", kind="deployment")
+    target = TargetResource(
+        platform="kubernetes", namespace="default", name="worker-app", kind="deployment"
+    )
     raw_describe = """
     Name:                   worker-app
     Namespace:              default
@@ -476,8 +522,13 @@ async def test_k8s_telemetry_extraction_of_live_spec():
           Exit Code:    137
     """
 
-    with patch("nexus.agents.k8s_tools.describe_resource", return_value=raw_describe), \
-         patch("nexus.agents.k8s_tools.get_pod_logs", return_value="worker started\nOOMKilled exit code 137"):
+    with (
+        patch("nexus.agents.k8s_tools.describe_resource", return_value=raw_describe),
+        patch(
+            "nexus.agents.k8s_tools.get_pod_logs",
+            return_value="worker started\nOOMKilled exit code 137",
+        ),
+    ):
         telemetry = await collect_k8s_telemetry(target)
 
         assert telemetry.live_config["replicas"] == 4
@@ -486,4 +537,3 @@ async def test_k8s_telemetry_extraction_of_live_spec():
         assert telemetry.live_config["exit_code"] == 137
         assert telemetry.metrics["current_replicas"] == 4
         assert telemetry.metrics["memory_limit"] == "512Mi"
-

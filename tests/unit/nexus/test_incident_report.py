@@ -42,14 +42,35 @@ def _terminal_result() -> dict:
             "confidence": 0.91,
             "suggested_fix": "Pin correct env var in the deployment manifest",
         },
-        "plan": {"steps": [{"tool_name": "k8s_restart_deployment", "description": "Restart deployment"}]},
+        "plan": {
+            "steps": [
+                {
+                    "tool_name": "k8s_restart_deployment",
+                    "description": "Restart deployment",
+                }
+            ]
+        },
         "execution_records": [
-            {"tool_name": "k8s_restart_deployment", "success": True, "duration_ms": 540.0, "error": None}
+            {
+                "tool_name": "k8s_restart_deployment",
+                "success": True,
+                "duration_ms": 540.0,
+                "error": None,
+            }
         ],
         "remediation_history": [],
-        "verification": {"healthy": True, "slo_restored": True, "details": "Ready 3/3, 0% 5xx"},
+        "verification": {
+            "healthy": True,
+            "slo_restored": True,
+            "details": "Ready 3/3, 0% 5xx",
+        },
         "audit_log": [
-            {"timestamp": "2026-10-01T10:00:00+00:00", "stage": "triage", "action": "ingested", "details": "1 event"},
+            {
+                "timestamp": "2026-10-01T10:00:00+00:00",
+                "stage": "triage",
+                "action": "ingested",
+                "details": "1 event",
+            },
             {
                 "timestamp": "2026-10-01T10:00:05+00:00",
                 "stage": "learn",
@@ -137,10 +158,14 @@ async def test_template_fallback_when_llm_fails():
 
     assert report["generated_by"] == "template"
     for section in SECTIONS:
-        assert report["report"][section], f"template section '{section}' must be non-empty"
+        assert report["report"][
+            section
+        ], f"template section '{section}' must be non-empty"
     assert "Bad env var caused startup crash" in report["report"]["root_cause"]
     assert "ecommerce/checkout-service" in report["report"]["summary"]
-    assert "k8s_restart_deployment — succeeded" in report["report"]["remediation_actions"]
+    assert (
+        "k8s_restart_deployment — succeeded" in report["report"]["remediation_actions"]
+    )
     db.acquire.return_value.__aenter__.return_value.execute.assert_awaited_once()
 
 
@@ -162,6 +187,7 @@ async def test_partial_llm_output_filled_from_template():
 
 
 # ── HTML report page ─────────────────────────────────────────────────────────
+
 
 def test_render_report_html_escapes_content():
     """Report page escapes LLM/incident text (trust boundary) and renders sections."""
@@ -190,7 +216,9 @@ def test_render_report_html_escapes_content():
     import html as html_mod
 
     assert "<script>" not in page
-    assert html_mod.escape("<script>") in page  # target contained a script tag → escaped
+    assert (
+        html_mod.escape("<script>") in page
+    )  # target contained a script tag → escaped
     assert html_mod.escape("<b>bad</b>") in page  # LLM summary escaped too
     assert "Root Cause" in page
     assert "Evidence Timeline" not in page  # no raw timeline entries → omitted
@@ -230,7 +258,9 @@ async def test_report_endpoint_content_negotiation():
     acm.__aexit__ = AsyncMock(return_value=False)
     db.acquire = MagicMock(return_value=acm)
 
-    with patch("nexus.integration.incident_report.get_database_client", return_value=db):
+    with patch(
+        "nexus.integration.incident_report.get_database_client", return_value=db
+    ):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             # Browser: Accept: text/html

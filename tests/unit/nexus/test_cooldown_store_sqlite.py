@@ -121,4 +121,3 @@ async def test_postgres_unavailable_degrades_to_memory():
     await store.clear_cooldown(key)
     assert await store.is_in_cooldown(key) is False
     await store.close()
-

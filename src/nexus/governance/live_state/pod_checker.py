@@ -1,4 +1,5 @@
 """Pod failure state checker for live state validation."""
+
 from __future__ import annotations
 
 import asyncio
@@ -30,12 +31,18 @@ async def check_pod_failure_condition(
             lambda: k8s_core.list_namespaced_pod(namespace),
         )
     except Exception as exc:
-        logger.warning(f"[LiveStateValidator] Pod list failed for {namespace}/{resource_name}: {exc}")
+        logger.warning(
+            f"[LiveStateValidator] Pod list failed for {namespace}/{resource_name}: {exc}"
+        )
         return unknown_report(action_type, exc)
 
-    owned_pods = [p for p in pod_list.items if pod_belongs_to_deployment(p, resource_name)]
+    owned_pods = [
+        p for p in pod_list.items if pod_belongs_to_deployment(p, resource_name)
+    ]
     if not owned_pods:
-        logger.info(f"[LiveStateValidator] No pods found for deployment {namespace}/{resource_name}")
+        logger.info(
+            f"[LiveStateValidator] No pods found for deployment {namespace}/{resource_name}"
+        )
         return LiveStateReport(
             condition_still_active=True,
             verdict="proceed",
@@ -57,7 +64,9 @@ async def check_pod_failure_condition(
         }
 
         for cs in getattr(pod.status, "container_statuses", None) or []:
-            pod_info["restart_count"] = max(pod_info["restart_count"], cs.restart_count or 0)
+            pod_info["restart_count"] = max(
+                pod_info["restart_count"], cs.restart_count or 0
+            )
             if cs.state and cs.state.waiting:
                 reason = cs.state.waiting.reason or ""
                 if reason == "CrashLoopBackOff":
@@ -73,22 +82,36 @@ async def check_pod_failure_condition(
 
         if pod_info["failure_reason"] or pod_info["restart_count"] >= 3:
             failing_pods.append(pod_info)
-        elif phase == "running" and pod_info["ready"] and pod_info["restart_count"] == 0:
+        elif (
+            phase == "running" and pod_info["ready"] and pod_info["restart_count"] == 0
+        ):
             healthy_pods += 1
 
     if failing_pods:
-        logger.info(f"[LiveStateValidator] Condition confirmed for {namespace}/{resource_name}: {len(failing_pods)} failing pod(s)")
+        logger.info(
+            f"[LiveStateValidator] Condition confirmed for {namespace}/{resource_name}: {len(failing_pods)} failing pod(s)"
+        )
         return LiveStateReport(
             condition_still_active=True,
             verdict="proceed",
-            evidence={"failing_pods": failing_pods, "healthy_pods": healthy_pods, "total_checked": len(owned_pods)},
+            evidence={
+                "failing_pods": failing_pods,
+                "healthy_pods": healthy_pods,
+                "total_checked": len(owned_pods),
+            },
             action_type=action_type,
         )
 
-    logger.info(f"[LiveStateValidator] Condition RESOLVED for {namespace}/{resource_name}: self_healed")
+    logger.info(
+        f"[LiveStateValidator] Condition RESOLVED for {namespace}/{resource_name}: self_healed"
+    )
     return LiveStateReport(
         condition_still_active=False,
         verdict="self_healed",
-        evidence={"healthy_pods": healthy_pods, "total_checked": len(owned_pods), "all_running_ready": True},
+        evidence={
+            "healthy_pods": healthy_pods,
+            "total_checked": len(owned_pods),
+            "all_running_ready": True,
+        },
         action_type=action_type,
     )

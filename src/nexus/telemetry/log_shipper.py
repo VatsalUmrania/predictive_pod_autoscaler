@@ -64,7 +64,9 @@ class NginxLogShipper:
     async def _tail(self) -> AsyncIterator[str]:
         """Async generator that yields new lines as NGINX writes them."""
         if not self.log_path.exists():
-            logger.warning(f"[LogShipper] Log file not found: {self.log_path}. Waiting ...")
+            logger.warning(
+                f"[LogShipper] Log file not found: {self.log_path}. Waiting ..."
+            )
             while not self.log_path.exists():
                 await asyncio.sleep(5)
 
@@ -117,7 +119,9 @@ class NginxLogShipper:
                     IncidentEvent(
                         agent=AgentType.NGINX,
                         signal_type=SignalType.HIGH_ERROR_RATE,
-                        severity=Severity.CRITICAL if err_rate > 0.20 else Severity.WARNING,
+                        severity=(
+                            Severity.CRITICAL if err_rate > 0.20 else Severity.WARNING
+                        ),
                         context=NginxHighErrorContext(
                             endpoint=endpoint,
                             error_rate=err_rate,
@@ -151,7 +155,9 @@ class NginxLogShipper:
 
     async def run(self) -> None:
         """Start tailing and shipping. Runs indefinitely."""
-        logger.info(f"[LogShipper] Tailing {self.log_path}, shipping to {self.otel_endpoint}")
+        logger.info(
+            f"[LogShipper] Tailing {self.log_path}, shipping to {self.otel_endpoint}"
+        )
 
         async def threshold_loop():
             while True:

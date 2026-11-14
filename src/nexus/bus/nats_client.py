@@ -2,6 +2,7 @@
 
 Backward-compatible entry point re-exporting NATSClient and constants.
 """
+
 from nexus.bus.nats import (
     _PPA_STREAM_CONFIG,
     _STREAM_CONFIG,

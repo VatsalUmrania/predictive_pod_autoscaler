@@ -25,7 +25,9 @@ class PlatformRegistry:
     def register(self, adapter: BasePlatformAdapter) -> None:
         """Register a platform adapter instance."""
         self._adapters[adapter.platform_id.lower()] = adapter
-        logger.info("[PlatformRegistry] Registered platform adapter: %s", adapter.platform_id)
+        logger.info(
+            "[PlatformRegistry] Registered platform adapter: %s", adapter.platform_id
+        )
 
     def get(self, platform_id: str) -> BasePlatformAdapter | None:
         """Get an adapter by platform identifier."""
@@ -65,7 +67,11 @@ class PlatformRegistry:
                 if adapter.can_handle(candidate):
                     return adapter
             except Exception as e:
-                logger.debug("[PlatformRegistry] Adapter %s can_handle check error: %s", adapter.platform_id, e)
+                logger.debug(
+                    "[PlatformRegistry] Adapter %s can_handle check error: %s",
+                    adapter.platform_id,
+                    e,
+                )
 
         # 3. Default fallback to kubernetes if registered, otherwise first available
         if "kubernetes" in self._adapters:
@@ -73,7 +79,9 @@ class PlatformRegistry:
         if self._adapters:
             return next(iter(self._adapters.values()))
 
-        raise RuntimeError("[PlatformRegistry] No platform adapters registered in registry")
+        raise RuntimeError(
+            "[PlatformRegistry] No platform adapters registered in registry"
+        )
 
 
 # Global singleton registry
@@ -88,15 +96,23 @@ def get_platform_registry() -> PlatformRegistry:
         # Auto-register Kubernetes and AWS adapters
         try:
             from nexus.graph.platform.k8s import K8sPlatformAdapter
+
             registry.register(K8sPlatformAdapter())
         except Exception as k8s_err:
-            logger.warning("[PlatformRegistry] Failed to auto-register K8sPlatformAdapter: %s", k8s_err)
+            logger.warning(
+                "[PlatformRegistry] Failed to auto-register K8sPlatformAdapter: %s",
+                k8s_err,
+            )
 
         try:
             from nexus.graph.platform.aws import AWSPlatformAdapter
+
             registry.register(AWSPlatformAdapter())
         except Exception as aws_err:
-            logger.warning("[PlatformRegistry] Failed to auto-register AWSPlatformAdapter: %s", aws_err)
+            logger.warning(
+                "[PlatformRegistry] Failed to auto-register AWSPlatformAdapter: %s",
+                aws_err,
+            )
 
         _GLOBAL_PLATFORM_REGISTRY = registry
 

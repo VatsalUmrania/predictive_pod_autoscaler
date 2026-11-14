@@ -19,7 +19,11 @@ def deterministic_synthesis(
     target_ns: str,
 ) -> RCAResult:
     """Dynamic fallback synthesis for test environments where LLM API is unavailable."""
-    evidence: list[str] = log_report["findings"] + metrics_report["findings"] + topology_report["findings"]
+    evidence: list[str] = (
+        log_report["findings"]
+        + metrics_report["findings"]
+        + topology_report["findings"]
+    )
 
     # Case 1: Bad Deployment / Spec Mutation
     is_deploy_related = (
@@ -45,21 +49,50 @@ def deterministic_synthesis(
             reasoning="Topology and log analysts confirmed deployment rollout or spec mutation coincided with startup failure.",
             source="langgraph_multi_agent",
             domain=platform,
-            suggested_action="k8s_rollback_deployment" if platform == "kubernetes" else "aws_rollback_lambda_alias",
+            suggested_action=(
+                "k8s_rollback_deployment"
+                if platform == "kubernetes"
+                else "aws_rollback_lambda_alias"
+            ),
             suggested_fix=f"Roll back deployment {target_name} to previous stable revision to remove breaking deployment changes and restore pod readiness.",
-            action_params={"namespace": target_ns, "deployment_name": target_name} if platform == "kubernetes" else {"function_name": target_name},
-            actions_to_avoid=["k8s_restart_deployment", "k8s_scale_deployment", "ignore"],
+            action_params=(
+                {"namespace": target_ns, "deployment_name": target_name}
+                if platform == "kubernetes"
+                else {"function_name": target_name}
+            ),
+            actions_to_avoid=[
+                "k8s_restart_deployment",
+                "k8s_scale_deployment",
+                "ignore",
+            ],
             evidence_citations=evidence,
         )
 
     # Case 2: Memory Exhaustion / OOMKilled
-    if any(s in all_signatures for s in ("oom_event", "oom_signal", "memory_saturation", "pod_oomkilled", "lambda_oom")):
+    if any(
+        s in all_signatures
+        for s in (
+            "oom_event",
+            "oom_signal",
+            "memory_saturation",
+            "pod_oomkilled",
+            "lambda_oom",
+        )
+    ):
         if platform == "kubernetes":
-            action = "k8s_patch_resource_limits" if topology_report.get("memory_limit") else "k8s_restart_deployment"
+            action = (
+                "k8s_patch_resource_limits"
+                if topology_report.get("memory_limit")
+                else "k8s_restart_deployment"
+            )
             params = {"namespace": target_ns, "deployment_name": target_name}
         else:
             action = "aws_update_lambda_memory"
-            params = {"function_name": target_name, "memory_mb": 512, "region": target_ns}
+            params = {
+                "function_name": target_name,
+                "memory_mb": 512,
+                "region": target_ns,
+            }
         return RCAResult(
             root_cause=f"Resource memory limit exceeded for {target_name}.",
             failure_class="resource_exhaustion",
@@ -87,7 +120,11 @@ def deterministic_synthesis(
             domain=platform,
             suggested_action="aws_update_lambda_timeout",
             suggested_fix=f"Increase Lambda function {target_name} execution timeout to 60s to accommodate processing duration.",
-            action_params={"function_name": target_name, "timeout_seconds": 60, "region": target_ns},
+            action_params={
+                "function_name": target_name,
+                "timeout_seconds": 60,
+                "region": target_ns,
+            },
             evidence_citations=evidence,
         )
 
@@ -101,14 +138,23 @@ def deterministic_synthesis(
             reasoning="Log analyst detected missing environment variables preventing application startup.",
             source="langgraph_multi_agent",
             domain=platform,
-            suggested_action="k8s_patch_configmap" if platform == "kubernetes" else None,
+            suggested_action=(
+                "k8s_patch_configmap" if platform == "kubernetes" else None
+            ),
             suggested_fix=f"Patch configuration or environment variables for {target_name} to resolve startup dependency errors.",
             action_params={"namespace": target_ns, "deployment_name": target_name},
             evidence_citations=evidence,
         )
 
     # Case 5: Database / Dependency Connection Exhaustion
-    if any(s in all_signatures for s in ("connection_exhaustion", "database_anomaly", "db_connection_exhaustion")):
+    if any(
+        s in all_signatures
+        for s in (
+            "connection_exhaustion",
+            "database_anomaly",
+            "db_connection_exhaustion",
+        )
+    ):
         return RCAResult(
             root_cause=f"Downstream database connection pool is exhausted for {target_name}.",
             failure_class="resource_exhaustion",
@@ -117,7 +163,9 @@ def deterministic_synthesis(
             reasoning="Log analyst identified connection pool errors and timeout traces.",
             source="langgraph_multi_agent",
             domain=platform,
-            suggested_action="k8s_restart_deployment" if platform == "kubernetes" else None,
+            suggested_action=(
+                "k8s_restart_deployment" if platform == "kubernetes" else None
+            ),
             suggested_fix=f"Restart {target_name} to clear stale database pool connections and re-establish downstream pools.",
             action_params={"namespace": target_ns, "deployment_name": target_name},
             actions_to_avoid=["k8s_scale_deployment"],
@@ -125,7 +173,9 @@ def deterministic_synthesis(
         )
 
     # Case 6: General CrashLoop / Runtime Panics
-    if any(s in all_signatures for s in ("crashloop", "runtime_panic", "pod_crashloop")):
+    if any(
+        s in all_signatures for s in ("crashloop", "runtime_panic", "pod_crashloop")
+    ):
         return RCAResult(
             root_cause=f"Application pods for {target_name} encountered an unhandled runtime error or crashloop.",
             failure_class="bad_deploy",
@@ -134,13 +184,23 @@ def deterministic_synthesis(
             reasoning="Log analyst identified crashloop backoff trace.",
             source="langgraph_multi_agent",
             domain=platform,
-            suggested_action="k8s_restart_deployment" if platform == "kubernetes" else None,
+            suggested_action=(
+                "k8s_restart_deployment" if platform == "kubernetes" else None
+            ),
             action_params={"namespace": target_ns, "deployment_name": target_name},
             evidence_citations=evidence,
         )
 
     # Case 7: High Error Rate / Traffic Spikes
-    if any(s in all_signatures for s in ("elevated_error_rate", "high_error_rate", "traffic_spike", "load_surge")):
+    if any(
+        s in all_signatures
+        for s in (
+            "elevated_error_rate",
+            "high_error_rate",
+            "traffic_spike",
+            "load_surge",
+        )
+    ):
         return RCAResult(
             root_cause=f"HTTP error rate or traffic spike in {target_name} exceeding SLO threshold.",
             failure_class="cascading_failure",

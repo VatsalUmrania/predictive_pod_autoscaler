@@ -41,12 +41,14 @@ logger = logging.getLogger(__name__)
 
 class RunbookExecutor:
     """Backwards-compatibility shim for server tests."""
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         pass
 
 
 class RCAEngine:
     """Backwards-compatibility shim for server tests."""
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         pass
 
@@ -110,7 +112,9 @@ class NexusServer:
             await self.feedback_loop.start()
 
         self._tasks = [
-            asyncio.create_task(self.workflow.start(self.nats_client), name="langgraph-workflow"),
+            asyncio.create_task(
+                self.workflow.start(self.nats_client), name="langgraph-workflow"
+            ),
             asyncio.create_task(
                 uvicorn.Server(
                     uvicorn.Config(self.status_api, host="0.0.0.0", port=8080)
@@ -163,4 +167,3 @@ __all__ = [
     "status_api",
     "ConfidenceScorer",
 ]
-

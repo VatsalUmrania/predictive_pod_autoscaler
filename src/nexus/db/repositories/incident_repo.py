@@ -1,4 +1,5 @@
 """Incident database operations repository."""
+
 from __future__ import annotations
 
 import json
@@ -48,7 +49,16 @@ class IncidentRepository:
         RETURNING incident_id;
         """
         async with self._pool.acquire() as conn:
-            await conn.execute(sql, inc_uuid, fingerprint, env, target_resource, sev, trigger_source, payload_json)
+            await conn.execute(
+                sql,
+                inc_uuid,
+                fingerprint,
+                env,
+                target_resource,
+                sev,
+                trigger_source,
+                payload_json,
+            )
             await conn.execute(
                 """
                 INSERT INTO incident_state_transitions (
@@ -69,7 +79,9 @@ class IncidentRepository:
     ) -> None:
         inc_uuid = _ensure_uuid(incident_id)
         async with self._pool.acquire() as conn:
-            exists = await conn.fetchval("SELECT 1 FROM incidents WHERE incident_id = $1", inc_uuid)
+            exists = await conn.fetchval(
+                "SELECT 1 FROM incidents WHERE incident_id = $1", inc_uuid
+            )
             if not exists:
                 await conn.execute(
                     """
@@ -84,9 +96,15 @@ class IncidentRepository:
                     to_state.lower(),
                 )
 
-            row = await conn.fetchrow("SELECT current_state FROM incidents WHERE incident_id = $1", inc_uuid)
+            row = await conn.fetchrow(
+                "SELECT current_state FROM incidents WHERE incident_id = $1", inc_uuid
+            )
             from_state = row["current_state"] if row else "detected"
-            resolved_sql = ", resolved_at = NOW()" if to_state in ("resolved", "rolled_back", "failed") else ""
+            resolved_sql = (
+                ", resolved_at = NOW()"
+                if to_state in ("resolved", "rolled_back", "failed")
+                else ""
+            )
 
             await conn.execute(
                 f"""
@@ -113,7 +131,9 @@ class IncidentRepository:
     async def get_incident(self, incident_id: str) -> dict[str, Any] | None:
         inc_uuid = _ensure_uuid(incident_id)
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM incidents WHERE incident_id = $1", inc_uuid)
+            row = await conn.fetchrow(
+                "SELECT * FROM incidents WHERE incident_id = $1", inc_uuid
+            )
             if not row:
                 return None
             res = dict(row)
@@ -125,7 +145,9 @@ class IncidentRepository:
                     pass
             return res
 
-    async def get_active_incident_by_target(self, target_resource: str) -> dict[str, Any] | None:
+    async def get_active_incident_by_target(
+        self, target_resource: str
+    ) -> dict[str, Any] | None:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
@@ -147,7 +169,9 @@ class IncidentRepository:
                     pass
             return res
 
-    async def list_incidents(self, limit: int = 50, state: str | None = None) -> list[dict[str, Any]]:
+    async def list_incidents(
+        self, limit: int = 50, state: str | None = None
+    ) -> list[dict[str, Any]]:
         async with self._pool.acquire() as conn:
             if state:
                 rows = await conn.fetch(
@@ -156,7 +180,9 @@ class IncidentRepository:
                     limit,
                 )
             else:
-                rows = await conn.fetch("SELECT * FROM incidents ORDER BY created_at DESC LIMIT $1", limit)
+                rows = await conn.fetch(
+                    "SELECT * FROM incidents ORDER BY created_at DESC LIMIT $1", limit
+                )
             results = []
             for r in rows:
                 d = dict(r)
@@ -164,7 +190,9 @@ class IncidentRepository:
                 results.append(d)
             return results
 
-    async def update_root_cause(self, incident_id: str, summary: str, confidence: float) -> None:
+    async def update_root_cause(
+        self, incident_id: str, summary: str, confidence: float
+    ) -> None:
         async with self._pool.acquire() as conn:
             await conn.execute(
                 "UPDATE incidents SET root_cause_summary = $1, confidence_score = $2, updated_at = NOW() WHERE incident_id = $3",

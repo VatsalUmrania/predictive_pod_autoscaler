@@ -129,7 +129,9 @@ async def test_developer_post_incident_and_accept_endpoints(monkeypatch):
         # 4. Verify updated accepted_by in GET /developer/incidents
         res_get_after = await client.get("/developer/incidents?n=10")
         items_after = res_get_after.json()
-        match_after = next((i for i in items_after if i.get("incident_id") == "INC-DEMO-999"), None)
+        match_after = next(
+            (i for i in items_after if i.get("incident_id") == "INC-DEMO-999"), None
+        )
         assert match_after is not None
         assert match_after["accepted_by"] == "sre-alice"
         assert match_after.get("accepted_at") is not None
@@ -138,6 +140,7 @@ async def test_developer_post_incident_and_accept_endpoints(monkeypatch):
 @pytest.mark.asyncio
 async def test_developer_post_incident_offline_fallback(monkeypatch):
     """Verify POST /developer/incidents works even when PostgreSQL is not configured."""
+
     async def _failing_db():
         raise RuntimeError("No PostgreSQL DSN configured")
 
@@ -164,5 +167,3 @@ async def test_developer_post_incident_offline_fallback(monkeypatch):
         assert len(items) >= 1
         assert items[0]["incident_id"] == "INC-OFFLINE-123"
         assert items[0]["outcome"] == "failed"
-
-

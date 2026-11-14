@@ -111,9 +111,13 @@ async def bootstrap_components(
         from nexus.integration.dashboard import refresh_policy_cache
 
         _loaded = refresh_policy_cache()
-        logger.info(f"[NexusServer] Pre-cached {_loaded} selfheal.yaml policies for Notifier")
+        logger.info(
+            f"[NexusServer] Pre-cached {_loaded} selfheal.yaml policies for Notifier"
+        )
     except Exception as _pc_exc:
-        logger.warning(f"[NexusServer] Policy cache refresh failed (non-fatal): {_pc_exc}")
+        logger.warning(
+            f"[NexusServer] Policy cache refresh failed (non-fatal): {_pc_exc}"
+        )
 
     notifier = srv_mod.Notifier()
     notifier.start_background(nats)
@@ -126,7 +130,9 @@ async def bootstrap_components(
         knowledge_base=knowledge_base,
     )
 
-    agent_manager = srv_mod.AgentManager(nats_client=nats, prometheus_url=prometheus_url)
+    agent_manager = srv_mod.AgentManager(
+        nats_client=nats, prometheus_url=prometheus_url
+    )
 
     srv_mod.context.workflow = workflow
     srv_mod.context.orchestrator = workflow

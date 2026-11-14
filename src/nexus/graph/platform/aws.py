@@ -94,7 +94,9 @@ class AWSPlatformAdapter(BasePlatformAdapter):
         return await capture_aws_snapshot(target, tool_name, parameters)
 
     async def execute_rollback(self, snapshot: RollbackSnapshot) -> NexusToolResult:
-        logger.info("[AWSPlatformAdapter] Executing rollback snapshot %s", snapshot.snapshot_id)
+        logger.info(
+            "[AWSPlatformAdapter] Executing rollback snapshot %s", snapshot.snapshot_id
+        )
         return await self.execute_action(
             snapshot.rollback_tool, snapshot.rollback_parameters
         )

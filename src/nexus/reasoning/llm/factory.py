@@ -57,9 +57,18 @@ def get_llm_provider(
 
     expected_model = model or os.getenv("NEXUS_LLM_MODEL")
 
-    if _cached_provider is not None and provider is None and api_key is None and model is None:
-        env_provider_match = (provider_name == "") or (_cached_provider.name == provider_name)
-        env_model_match = (expected_model is None) or (_cached_provider.model == expected_model)
+    if (
+        _cached_provider is not None
+        and provider is None
+        and api_key is None
+        and model is None
+    ):
+        env_provider_match = (provider_name == "") or (
+            _cached_provider.name == provider_name
+        )
+        env_model_match = (expected_model is None) or (
+            _cached_provider.model == expected_model
+        )
         if env_provider_match and env_model_match:
             return _cached_provider
 

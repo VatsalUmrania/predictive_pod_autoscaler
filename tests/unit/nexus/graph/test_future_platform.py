@@ -37,7 +37,9 @@ class GCPRestartInstanceTool(NexusTool):
     args_schema = GCPRestartInstanceSchema
 
     async def execute(self, **kwargs: Any) -> NexusToolResult:
-        return NexusToolResult(success=True, data={"status": "TERMINATED -> PROVISIONING -> RUNNING"})
+        return NexusToolResult(
+            success=True, data={"status": "TERMINATED -> PROVISIONING -> RUNNING"}
+        )
 
 
 class MockGCPPlatformAdapter(BasePlatformAdapter):
@@ -58,21 +60,38 @@ class MockGCPPlatformAdapter(BasePlatformAdapter):
             if event_or_target.get("platform") == "gcp":
                 return True
             res = str(event_or_target.get("resource_name", ""))
-            return res.startswith("projects/") or "gcp" in str(event_or_target.get("namespace", "")).lower()
+            return (
+                res.startswith("projects/")
+                or "gcp" in str(event_or_target.get("namespace", "")).lower()
+            )
         return False
 
     def detect_target(self, events: list[dict[str, Any]]) -> TargetResource:
         evt = events[0] if events else {}
-        res = str(evt.get("resource_name", "projects/prod-cluster/zones/us-central1/instances/api-gw"))
+        res = str(
+            evt.get(
+                "resource_name",
+                "projects/prod-cluster/zones/us-central1/instances/api-gw",
+            )
+        )
         name = res.split("/")[-1]
         zone = res.split("/")[3] if len(res.split("/")) > 3 else "us-central1"
-        return TargetResource(platform="gcp", namespace=zone, name=name, kind="compute_instance", arn_or_uri=res)
+        return TargetResource(
+            platform="gcp",
+            namespace=zone,
+            name=name,
+            kind="compute_instance",
+            arn_or_uri=res,
+        )
 
     async def collect_telemetry(self, target: TargetResource) -> PlatformTelemetry:
         return PlatformTelemetry(
             target=target,
             metrics={"cpu_utilization": 0.99, "disk_throttle": True},
-            recent_logs=["GCP Compute VM memory pressure detected", "Instance unreachable: health check timeout"],
+            recent_logs=[
+                "GCP Compute VM memory pressure detected",
+                "Instance unreachable: health check timeout",
+            ],
             health_status="failing",
         )
 
@@ -82,11 +101,15 @@ class MockGCPPlatformAdapter(BasePlatformAdapter):
     def get_tools(self) -> list[NexusTool]:
         return list(self._tools.values())
 
-    async def execute_action(self, tool_name: str, parameters: dict[str, Any]) -> NexusToolResult:
+    async def execute_action(
+        self, tool_name: str, parameters: dict[str, Any]
+    ) -> NexusToolResult:
         self.restarted = True
         return await self._tools[tool_name].execute(**parameters)
 
-    async def capture_snapshot(self, target: TargetResource, tool_name: str, parameters: dict[str, Any]) -> RollbackSnapshot | None:
+    async def capture_snapshot(
+        self, target: TargetResource, tool_name: str, parameters: dict[str, Any]
+    ) -> RollbackSnapshot | None:
         return RollbackSnapshot(
             snapshot_id="gcp-snap-123",
             target=target,
@@ -97,9 +120,13 @@ class MockGCPPlatformAdapter(BasePlatformAdapter):
         )
 
     async def execute_rollback(self, snapshot: RollbackSnapshot) -> NexusToolResult:
-        return NexusToolResult(success=True, data={"rollback": "gcp_instance_state_reverted"})
+        return NexusToolResult(
+            success=True, data={"rollback": "gcp_instance_state_reverted"}
+        )
 
-    async def verify_health(self, target: TargetResource, plan_step: dict[str, Any]) -> HealthCheckResult:
+    async def verify_health(
+        self, target: TargetResource, plan_step: dict[str, Any]
+    ) -> HealthCheckResult:
         return HealthCheckResult(
             healthy=True,
             slo_restored=True,

@@ -47,7 +47,9 @@ class GraphCheckpointStore:
         backend = os.getenv("NEXUS_GRAPH_CHECKPOINTER", "auto").lower()
 
         if backend == "memory":
-            logger.info("[GraphCheckpointStore] Using MemorySaver (explicitly requested)")
+            logger.info(
+                "[GraphCheckpointStore] Using MemorySaver (explicitly requested)"
+            )
             return cls(MemorySaver())
 
         dsn = resolve_dsn()
@@ -72,6 +74,7 @@ class GraphCheckpointStore:
         if getattr(self, "_is_postgres", False) and self._dsn:
             try:
                 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
                 # In production, AsyncPostgresSaver.from_conn_string creates the pool
                 # For safety, check if from_conn_string or constructor is supported
                 if hasattr(AsyncPostgresSaver, "from_conn_string"):
@@ -79,7 +82,10 @@ class GraphCheckpointStore:
                     self.saver = AsyncPostgresSaver.from_conn_string(self._dsn)
                     if hasattr(self.saver, "setup"):
                         await self.saver.setup()
-                    logger.info("[GraphCheckpointStore] Initialized AsyncPostgresSaver on %s", self._dsn)
+                    logger.info(
+                        "[GraphCheckpointStore] Initialized AsyncPostgresSaver on %s",
+                        self._dsn,
+                    )
             except Exception as exc:
                 logger.warning(
                     "[GraphCheckpointStore] Failed to connect AsyncPostgresSaver (%s). Using MemorySaver fallback.",

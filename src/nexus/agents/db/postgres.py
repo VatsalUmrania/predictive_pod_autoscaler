@@ -10,6 +10,7 @@ from nexus.agents.db.models import DBConnectionStats, QuerySnapshot, SlowQuery
 
 logger = logging.getLogger(__name__)
 
+
 class PostgresAdapter:
     """
     Monitors PostgreSQL via pg_stat_activity and pg_stat_statements.

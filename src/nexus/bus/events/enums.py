@@ -1,4 +1,5 @@
 """Enumerations for NEXUS Incident Events."""
+
 from __future__ import annotations
 
 from enum import Enum
@@ -113,4 +114,6 @@ class HealingLevel(int, Enum):
     L0_ALERT_ONLY = 0  # Detect + alert; no infra changes
     L1_NO_REGRET = 1  # Pod restart, flush cache, scale +1 — always safe
     L2_BOUNDED_MITIGATION = 2  # Canary shift, rate-limit, drain — bounded blast radius
-    L3_HIGH_RISK = 3  # Rollback, config patch, DNS mutation — human approval if confidence < 0.85
+    L3_HIGH_RISK = (
+        3  # Rollback, config patch, DNS mutation — human approval if confidence < 0.85
+    )

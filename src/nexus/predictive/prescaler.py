@@ -3,6 +3,7 @@
 Receives TRAFFIC_SPIKE_PREDICTED events and decides whether to pre-scale
 deployments before spikes materialize.
 """
+
 from __future__ import annotations
 
 import logging
@@ -47,10 +48,18 @@ class Prescaler:
         self._nats = nats_client
         self._ladder = action_ladder
         self.mode = mode or PrescaleMode(os.getenv("NEXUS_PRESCALE_MODE", "shadow"))
-        self._max_replicas = max_replicas or int(os.getenv("NEXUS_PRESCALE_MAX_REPLICAS", "20"))
-        self._min_confidence = min_confidence or float(os.getenv("NEXUS_PRESCALE_MIN_CONFIDENCE", "0.55"))
-        self._threshold_pct = threshold_pct or float(os.getenv("NEXUS_PRESCALE_THRESHOLD_PCT", "30"))
-        self._cooldown = cooldown_seconds or float(os.getenv("NEXUS_PRESCALE_COOLDOWN_S", "300"))
+        self._max_replicas = max_replicas or int(
+            os.getenv("NEXUS_PRESCALE_MAX_REPLICAS", "20")
+        )
+        self._min_confidence = min_confidence or float(
+            os.getenv("NEXUS_PRESCALE_MIN_CONFIDENCE", "0.55")
+        )
+        self._threshold_pct = threshold_pct or float(
+            os.getenv("NEXUS_PRESCALE_THRESHOLD_PCT", "30")
+        )
+        self._cooldown = cooldown_seconds or float(
+            os.getenv("NEXUS_PRESCALE_COOLDOWN_S", "300")
+        )
         self._target_rps = target_rps_per_replica
 
         self._tracker = PrecisionTracker()
@@ -65,6 +74,7 @@ class Prescaler:
 
     async def subscribe_to_ppa_predictions(self) -> None:
         """Subscribe to ppa.predictions.* NATS subject."""
+
         async def handler(data: dict, subject: str) -> None:
             if not subject.startswith("ppa.predictions."):
                 return
@@ -80,7 +90,9 @@ class Prescaler:
                     "predicted_rps": data.get("predicted_rps", 0.0),
                     "confidence": data.get("confidence", 0.0),
                     "endpoint": f"/{deployment}",
-                    "prediction_horizon_minutes": parse_horizon(data.get("horizon_minutes", 10)),
+                    "prediction_horizon_minutes": parse_horizon(
+                        data.get("horizon_minutes", 10)
+                    ),
                     "db_table_trigger": None,
                     "ppa_model_version": data.get("model_version", "unknown"),
                     "raw_features": data.get("raw_features", {}),
@@ -90,9 +102,14 @@ class Prescaler:
             try:
                 await self.handle_spike_prediction(event)
             except Exception as exc:
-                logger.error(f"[PreScaler] handle_spike_prediction failed for {subject}: {exc}", exc_info=True)
+                logger.error(
+                    f"[PreScaler] handle_spike_prediction failed for {subject}: {exc}",
+                    exc_info=True,
+                )
 
-        await self._nats.subscribe_raw("ppa.predictions.>", handler=handler, stream_name="PPA_PREDICTIONS")
+        await self._nats.subscribe_raw(
+            "ppa.predictions.>", handler=handler, stream_name="PPA_PREDICTIONS"
+        )
 
     async def handle_spike_prediction(self, event: IncidentEvent) -> None:
         """Entry point: called when a TRAFFIC_SPIKE_PREDICTED event arrives."""
@@ -123,7 +140,9 @@ class Prescaler:
             self._skipped_cooldown += 1
             return
 
-        recommended = compute_recommended_replicas(predicted_rps, self._target_rps, self._max_replicas)
+        recommended = compute_recommended_replicas(
+            predicted_rps, self._target_rps, self._max_replicas
+        )
         current = await self._get_current_replicas(deployment, namespace)
         if recommended <= current:
             return
@@ -161,6 +180,7 @@ class Prescaler:
         try:
             from kubernetes import client as k8s_client
             from kubernetes import config as k8s_config
+
             try:
                 k8s_config.load_incluster_config()
             except Exception:
@@ -187,8 +207,13 @@ class Prescaler:
         prec = self._tracker.stats()
         smape = self._tracker.rolling_smape
         return {
-            "mode": self.mode.value, "events_received": self._events_received, "decisions_made": self._decisions_made,
-            "skipped_confidence": self._skipped_confidence, "skipped_threshold": self._skipped_threshold,
-            "skipped_cooldown": self._skipped_cooldown, "precision": round(prec.precision, 3),
-            "smape": round(smape, 2) if smape else None, "ready_for_advisory": self._tracker.ready_for_advisory(),
+            "mode": self.mode.value,
+            "events_received": self._events_received,
+            "decisions_made": self._decisions_made,
+            "skipped_confidence": self._skipped_confidence,
+            "skipped_threshold": self._skipped_threshold,
+            "skipped_cooldown": self._skipped_cooldown,
+            "precision": round(prec.precision, 3),
+            "smape": round(smape, 2) if smape else None,
+            "ready_for_advisory": self._tracker.ready_for_advisory(),
         }

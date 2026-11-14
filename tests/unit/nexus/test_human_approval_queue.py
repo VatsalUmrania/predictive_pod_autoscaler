@@ -183,4 +183,3 @@ async def test_enqueue_duplicate_target_suppresses_and_reuses_id_aws():
     assert pending is not None
     assert pending.approval_id == id1
     assert pending.confidence == 0.75
-

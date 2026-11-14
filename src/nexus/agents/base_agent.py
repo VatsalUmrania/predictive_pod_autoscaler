@@ -5,7 +5,6 @@ Abstract foundation that every domain agent extends.
 Lifecycle: on_start() -> run loop: [sense() -> publish events] -> on_stop()
 """
 
-
 from __future__ import annotations
 
 import asyncio
@@ -17,6 +16,7 @@ from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalT
 from nexus.bus.nats_client import NATSClient
 
 logger = logging.getLogger(__name__)
+
 
 class BaseAgent(ABC):
     """

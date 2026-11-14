@@ -149,6 +149,7 @@ class IncidentCluster:
     def signal_agreement_score(self) -> float:
         """Measures how strongly independent signals agree on a root cause (0.0–1.0)."""
         from nexus.reasoning.cluster_formatter import compute_signal_agreement
+
         return compute_signal_agreement(self)
 
     # ── Context rendering for LLM ─────────────────────────────────────────────
@@ -159,10 +160,12 @@ class IncidentCluster:
         Keeps token usage tight — no redundant fields.
         """
         from nexus.reasoning.cluster_formatter import format_llm_context
+
         return format_llm_context(self)
 
     def to_summary(self) -> dict[str, Any]:
         from nexus.reasoning.cluster_formatter import format_cluster_summary
+
         return format_cluster_summary(self)
 
     # ── Factory ───────────────────────────────────────────────────────────────

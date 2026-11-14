@@ -1,4 +1,5 @@
 """NEXUS NATS package."""
+
 from nexus.bus.nats.client import NATSClient
 from nexus.bus.nats.constants import (
     _PPA_STREAM_CONFIG,

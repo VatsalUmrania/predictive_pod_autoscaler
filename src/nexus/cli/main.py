@@ -70,7 +70,9 @@ def _post_approval(path: str, action_id: str, api_url: str) -> None:
         sys.exit(1)
     if resp.status_code == 503:
         if _RICH:
-            console.print("[red]NEXUS server reported 503 — approval queue not accessible.[/red]")
+            console.print(
+                "[red]NEXUS server reported 503 — approval queue not accessible.[/red]"
+            )
         else:
             print("NEXUS server reported 503 — approval queue not accessible.")
         sys.exit(1)
@@ -81,11 +83,15 @@ def _post_approval(path: str, action_id: str, api_url: str) -> None:
     if _RICH:
         console.print(f"[green]Action {action_id} → {status}[/green]")
         if outcome:
-            console.print(f"  outcome: {outcome.get('status')} (audit {outcome.get('action_id')})")
+            console.print(
+                f"  outcome: {outcome.get('status')} (audit {outcome.get('action_id')})"
+            )
     else:
         print(f"Action {action_id} → {status}")
         if outcome:
-            print(f"  outcome: {outcome.get('status')} (audit {outcome.get('action_id')})")
+            print(
+                f"  outcome: {outcome.get('status')} (audit {outcome.get('action_id')})"
+            )
 
 
 @cli.command()

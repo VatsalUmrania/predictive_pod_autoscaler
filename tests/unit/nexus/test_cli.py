@@ -38,8 +38,11 @@ def test_approve_invokes_api_post(monkeypatch):
 
     class _FakeResp:
         status_code = 200
-        _body = {"status": "approved", "action_id": "ABC12345",
-                 "outcome": {"status": "success", "action_id": "audit-1"}}
+        _body = {
+            "status": "approved",
+            "action_id": "ABC12345",
+            "outcome": {"status": "success", "action_id": "audit-1"},
+        }
 
         def json(self):
             return self._body
@@ -63,7 +66,9 @@ def test_approve_invokes_api_post(monkeypatch):
     from click.testing import CliRunner
 
     runner = CliRunner()
-    result = runner.invoke(cli_main.cli, ["approve", "ABC12345", "--api-url", "http://api.example"])
+    result = runner.invoke(
+        cli_main.cli, ["approve", "ABC12345", "--api-url", "http://api.example"]
+    )
 
     assert result.exit_code == 0, result.output
     assert captured["url"] == "http://api.example/approve/ABC12345"

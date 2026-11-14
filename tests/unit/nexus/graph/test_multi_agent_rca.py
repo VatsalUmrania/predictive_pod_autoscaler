@@ -111,7 +111,12 @@ async def test_diagnose_node_end_to_end():
         "platform": "kubernetes",
         "target": {"name": "orders-v2", "namespace": "default"},
         "events": [
-            {"signal_type": "pod_oomkilled", "resource_name": "orders-v2", "agent": "k8s", "severity": "critical"}
+            {
+                "signal_type": "pod_oomkilled",
+                "resource_name": "orders-v2",
+                "agent": "k8s",
+                "severity": "critical",
+            }
         ],
         "telemetry": {
             "recent_logs": ["Container killed by OOMKilled signal", "exit code 137"],

@@ -1,4 +1,5 @@
 """Row normalization and formatting for the Audit Trail."""
+
 from __future__ import annotations
 
 import json

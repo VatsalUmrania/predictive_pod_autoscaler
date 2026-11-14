@@ -35,7 +35,12 @@ def can_handle_k8s(event_or_target: dict[str, Any] | TargetResource) -> bool:
 def detect_k8s_target(events: list[dict[str, Any]]) -> TargetResource:
     """Detect the Kubernetes target resource from trigger events."""
     if not events:
-        return TargetResource(platform="kubernetes", namespace="default", name="unknown", kind="deployment")
+        return TargetResource(
+            platform="kubernetes",
+            namespace="default",
+            name="unknown",
+            kind="deployment",
+        )
 
     primary_evt = events[0]
     for evt in events:
@@ -43,7 +48,11 @@ def detect_k8s_target(events: list[dict[str, Any]]) -> TargetResource:
             primary_evt = evt
             break
 
-    ctx = primary_evt.get("context", {}) if isinstance(primary_evt.get("context"), dict) else {}
+    ctx = (
+        primary_evt.get("context", {})
+        if isinstance(primary_evt.get("context"), dict)
+        else {}
+    )
     namespace = str(primary_evt.get("namespace", "default"))
     raw_kind = str(primary_evt.get("resource_kind") or "").lower()
     deployment_name = ctx.get("deployment_name") or primary_evt.get("deployment")

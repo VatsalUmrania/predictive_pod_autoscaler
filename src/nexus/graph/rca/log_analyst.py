@@ -11,7 +11,9 @@ from typing import Any
 class LogAnalystAgent:
     """Specialist agent analyzing container logs, stack traces, and exit codes."""
 
-    def analyze(self, logs: list[str], raw_signals: list[dict[str, Any]]) -> dict[str, Any]:
+    def analyze(
+        self, logs: list[str], raw_signals: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         findings: list[str] = []
         signatures: list[str] = []
         confidence_delta = 0.0
@@ -26,11 +28,13 @@ class LogAnalystAgent:
             "cannot execute",
             "command not found",
         )
-        has_startup_crash = any(term in combined for term in startup_crash_terms) or bool(
-            re.search(r"\b(?:exit(?:ed with)? code 1|exit 1)\b", combined)
-        )
+        has_startup_crash = any(
+            term in combined for term in startup_crash_terms
+        ) or bool(re.search(r"\b(?:exit(?:ed with)? code 1|exit 1)\b", combined))
         if has_startup_crash:
-            findings.append("Container logs indicate immediate startup termination / exit code 1")
+            findings.append(
+                "Container logs indicate immediate startup termination / exit code 1"
+            )
             signatures.append("startup_crash")
             signatures.append("crashloop")
             confidence_delta += 0.30
@@ -61,7 +65,9 @@ class LogAnalystAgent:
                 "segmentation fault",
             )
         ):
-            findings.append("Log contains fatal application panic or unhandled exception trace")
+            findings.append(
+                "Log contains fatal application panic or unhandled exception trace"
+            )
             signatures.append("runtime_panic")
             confidence_delta += 0.25
 
@@ -76,7 +82,9 @@ class LogAnalystAgent:
                 "remaining connection slots",
             )
         ):
-            findings.append("Log indicates downstream connection pool or network socket exhaustion")
+            findings.append(
+                "Log indicates downstream connection pool or network socket exhaustion"
+            )
             signatures.append("connection_exhaustion")
             confidence_delta += 0.25
 
@@ -90,7 +98,9 @@ class LogAnalystAgent:
                 "cannot find module",
             )
         ):
-            findings.append("Log indicates missing configuration or environment variable")
+            findings.append(
+                "Log indicates missing configuration or environment variable"
+            )
             signatures.append("missing_config")
             confidence_delta += 0.30
 

@@ -33,12 +33,25 @@ class PlatformType(str, Enum):
 class TargetResource(BaseModel):
     """Normalized identifier for an infrastructure target across any platform."""
 
-    platform: str = Field(..., description="Platform identifier (e.g. 'kubernetes', 'aws')")
-    namespace: str = Field(default="default", description="Namespace, region, account, or project scope")
-    name: str = Field(..., description="Resource name (e.g. deployment name, lambda name, queue name)")
-    kind: str = Field(default="unknown", description="Resource kind (e.g. 'deployment', 'pod', 'lambda', 'sqs')")
-    arn_or_uri: str | None = Field(default=None, description="Platform-specific global URI or ARN if applicable")
-    labels: dict[str, str] = Field(default_factory=dict, description="Resource labels or tags")
+    platform: str = Field(
+        ..., description="Platform identifier (e.g. 'kubernetes', 'aws')"
+    )
+    namespace: str = Field(
+        default="default", description="Namespace, region, account, or project scope"
+    )
+    name: str = Field(
+        ..., description="Resource name (e.g. deployment name, lambda name, queue name)"
+    )
+    kind: str = Field(
+        default="unknown",
+        description="Resource kind (e.g. 'deployment', 'pod', 'lambda', 'sqs')",
+    )
+    arn_or_uri: str | None = Field(
+        default=None, description="Platform-specific global URI or ARN if applicable"
+    )
+    labels: dict[str, str] = Field(
+        default_factory=dict, description="Resource labels or tags"
+    )
 
     @property
     def target_key(self) -> str:
@@ -54,11 +67,23 @@ class PlatformTelemetry(BaseModel):
 
     target: TargetResource
     captured_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    metrics: dict[str, Any] = Field(default_factory=dict, description="Recent metrics (CPU, memory, error rates, latencies)")
-    recent_logs: list[str] = Field(default_factory=list, description="Recent log lines or events")
-    live_config: dict[str, Any] = Field(default_factory=dict, description="Live specs/limits/environment variables")
-    health_status: str = Field(default="unknown", description="Current target health: healthy, degraded, failing, oomkilled")
-    raw_signals: list[dict[str, Any]] = Field(default_factory=list, description="Correlated incoming alert/incident events")
+    metrics: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Recent metrics (CPU, memory, error rates, latencies)",
+    )
+    recent_logs: list[str] = Field(
+        default_factory=list, description="Recent log lines or events"
+    )
+    live_config: dict[str, Any] = Field(
+        default_factory=dict, description="Live specs/limits/environment variables"
+    )
+    health_status: str = Field(
+        default="unknown",
+        description="Current target health: healthy, degraded, failing, oomkilled",
+    )
+    raw_signals: list[dict[str, Any]] = Field(
+        default_factory=list, description="Correlated incoming alert/incident events"
+    )
 
 
 class LiveStateSnapshot(BaseModel):
@@ -66,7 +91,9 @@ class LiveStateSnapshot(BaseModel):
 
     target: TargetResource
     captured_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    state_attributes: dict[str, Any] = Field(default_factory=dict, description="Exact pre-mutation properties")
+    state_attributes: dict[str, Any] = Field(
+        default_factory=dict, description="Exact pre-mutation properties"
+    )
     exists: bool = True
     is_failing: bool = False
     failure_details: str | None = None
@@ -92,7 +119,9 @@ class HealthCheckResult(BaseModel):
     slo_restored: bool
     metrics: dict[str, Any] = Field(default_factory=dict)
     failure_reason: str | None = None
-    verification_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    verification_time: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
     details: str = ""
 
 

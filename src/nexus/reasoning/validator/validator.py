@@ -118,6 +118,8 @@ class RCAValidator:
                 f"(cluster={cluster.cluster_id}, llm_class={rca_result.failure_class})"
             )
         else:
-            logger.debug(f"[RCAValidator] PASS — no issues (cluster={cluster.cluster_id})")
+            logger.debug(
+                f"[RCAValidator] PASS — no issues (cluster={cluster.cluster_id})"
+            )
 
         return verdict
