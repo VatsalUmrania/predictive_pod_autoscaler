@@ -12,14 +12,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import operator
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any
 
 from nexus.engine.fsm import IncidentState
 from nexus.graph.platform import TargetResource, get_platform_registry
-from nexus.graph.state import IncidentGraphState
+from nexus.graph.state import IncidentGraphState, VerificationCondition
+from nexus.tools.registry import default_registry
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +30,118 @@ logger = logging.getLogger(__name__)
 # seconds to stabilize. Override via env for tests/tuning.
 VERIFY_TIMEOUT_S = float(os.getenv("NEXUS_VERIFY_TIMEOUT_S", "120"))
 VERIFY_POLL_INTERVAL_S = float(os.getenv("NEXUS_VERIFY_POLL_INTERVAL_S", "5"))
+
+OPERATOR_MAP = {
+    "<": operator.lt,
+    "<=": operator.le,
+    ">": operator.gt,
+    ">=": operator.ge,
+    "==": operator.eq,
+    "!=": operator.ne,
+}
+
+
+def evaluate_verification_condition(
+    condition: VerificationCondition | dict[str, Any],
+    observed_value: Any,
+) -> tuple[bool, str]:
+    """
+    Safely evaluate a verification condition against an observed value without eval().
+    Returns (passed, details).
+    """
+    if isinstance(condition, dict):
+        cond = VerificationCondition(**condition)
+    else:
+        cond = condition
+
+    op_symbol = cond.operator.strip()
+    if op_symbol not in OPERATOR_MAP:
+        return False, f"Unsupported or dangerous comparison operator: '{op_symbol}'"
+
+    op_func = OPERATOR_MAP[op_symbol]
+    try:
+        obs_float = float(observed_value)
+        target_float = float(cond.threshold)
+        passed = bool(op_func(obs_float, target_float))
+        details = (
+            f"Metric '{cond.metric_name}' observed={obs_float} "
+            f"condition=({op_symbol} {target_float}) -> {'PASS' if passed else 'FAIL'}"
+        )
+        return passed, details
+    except (ValueError, TypeError) as exc:
+        return (
+            False,
+            f"Could not evaluate metric '{cond.metric_name}': invalid observed value '{observed_value}' ({exc})",
+        )
+
+
+def extract_metric_value(
+    metric_name: str,
+    tool_data: Any = None,
+    health_result: Any = None,
+    telemetry: Any = None,
+) -> float | None:
+    """Extract numeric metric from tool output, adapter HealthCheckResult, or telemetry."""
+    # 1. Check tool_data dictionary
+    if isinstance(tool_data, dict):
+        if metric_name in tool_data:
+            try:
+                return float(tool_data[metric_name])
+            except (ValueError, TypeError):
+                pass
+        if (
+            "metrics" in tool_data
+            and isinstance(tool_data["metrics"], dict)
+            and metric_name in tool_data["metrics"]
+        ):
+            try:
+                return float(tool_data["metrics"][metric_name])
+            except (ValueError, TypeError):
+                pass
+        # Check CloudWatch datapoints
+        if (
+            "datapoints" in tool_data
+            and isinstance(tool_data["datapoints"], list)
+            and tool_data["datapoints"]
+        ):
+            dp = tool_data["datapoints"][-1]
+            if isinstance(dp, dict):
+                for k in ("Average", "Sum", "Maximum", "Minimum", "Value"):
+                    if k in dp:
+                        try:
+                            return float(dp[k])
+                        except (ValueError, TypeError):
+                            pass
+        # If describe output in status text
+        if "status" in tool_data and isinstance(tool_data["status"], str):
+            status_text = tool_data["status"]
+            if metric_name == "ready_replicas":
+                m = re.search(r"(\d+)\s+ready", status_text, re.IGNORECASE)
+                if m:
+                    return float(m.group(1))
+
+    # 2. Check health_result.metrics
+    if (
+        health_result
+        and hasattr(health_result, "metrics")
+        and isinstance(health_result.metrics, dict)
+    ):
+        if metric_name in health_result.metrics:
+            try:
+                return float(health_result.metrics[metric_name])
+            except (ValueError, TypeError):
+                pass
+
+    # 3. Check telemetry.metrics
+    if isinstance(telemetry, dict):
+        metrics = telemetry.get("metrics")
+        if isinstance(metrics, dict) and metric_name in metrics:
+            try:
+                return float(metrics[metric_name])
+            except (ValueError, TypeError):
+                pass
+
+    return None
 
 
 def _get_ladder() -> Any:
@@ -53,13 +168,19 @@ def _remediation_action_id(state: IncidentGraphState, plan: dict[str, Any]) -> s
 async def verify_node(state: IncidentGraphState) -> dict[str, Any]:
     """Poll target health/SLO via the platform adapter until healthy or window expires."""
     incident_id = state["incident_id"]
-    target_dict = state.get("target") or {}
-    target = TargetResource(**target_dict) if isinstance(target_dict, dict) else target_dict
+    target_dict = dict(state.get("target") or {})
     platform_id = state.get("platform", "kubernetes")
+    if "platform" not in target_dict:
+        target_dict["platform"] = platform_id
+    target = (
+        TargetResource(**target_dict) if isinstance(target_dict, dict) else target_dict
+    )
     plan = state.get("plan") or {}
 
     registry = get_platform_registry()
-    adapter = registry.get(platform_id) or registry.resolve_adapter(state.get("events", []))
+    adapter = registry.get(platform_id) or registry.resolve_adapter(
+        state.get("events", [])
+    )
 
     healthy = False
     slo_restored = False
@@ -71,18 +192,98 @@ async def verify_node(state: IncidentGraphState) -> dict[str, Any]:
     # Poll loop: first check immediately (fast path), then wait for stabilization.
     while True:
         attempts += 1
+        adapter_healthy = False
+        adapter_slo = False
+        verif_result = None
+
         try:
             verif_result = await adapter.verify_health(target, plan)
-            healthy = verif_result.healthy
-            slo_restored = verif_result.slo_restored
-            details = verif_result.details
+            adapter_healthy = verif_result.healthy
+            adapter_slo = verif_result.slo_restored
+            details = verif_result.details or ""
             failure_reason = verif_result.failure_reason or ""
         except Exception as exc:
             logger.warning("[Verify] Verification error for %s: %s", target, exc)
-            healthy = False
-            slo_restored = False
+            adapter_healthy = False
+            adapter_slo = False
             details = f"Verification exception: {exc}"
             failure_reason = str(exc)
+
+        if not adapter_healthy or not adapter_slo:
+            healthy = False
+            slo_restored = False
+        else:
+            # Adapter reported healthy. Check explicit VerificationConditions on plan steps
+            conditions_passed = True
+            cond_details_list: list[str] = []
+            steps = plan.get("steps") or []
+
+            for step in steps:
+                cond_dict = step.get("verification_condition")
+                if not cond_dict:
+                    continue
+
+                cond = (
+                    VerificationCondition(**cond_dict)
+                    if isinstance(cond_dict, dict)
+                    else cond_dict
+                )
+
+                v_tool_name = step.get("verification_tool")
+                v_tool_args = step.get("verification_parameters") or {}
+                tool_data = None
+
+                if v_tool_name and default_registry.get(v_tool_name):
+                    try:
+                        tool_res = await default_registry.execute_tool(
+                            v_tool_name, v_tool_args
+                        )
+                        if tool_res.success:
+                            tool_data = tool_res.data
+                    except Exception as t_exc:
+                        logger.warning(
+                            "[Verify] Verification tool %s error: %s",
+                            v_tool_name,
+                            t_exc,
+                        )
+
+                observed_val = extract_metric_value(
+                    metric_name=cond.metric_name,
+                    tool_data=tool_data,
+                    health_result=verif_result,
+                    telemetry=state.get("telemetry"),
+                )
+
+                if observed_val is None:
+                    logger.info(
+                        "[Verify] Metric '%s' unobserved directly; relying on adapter health verdict",
+                        cond.metric_name,
+                    )
+                    cond_details_list.append(
+                        f"Metric '{cond.metric_name}' inferred healthy from adapter"
+                    )
+                    continue
+
+                passed, cond_msg = evaluate_verification_condition(cond, observed_val)
+                cond_details_list.append(cond_msg)
+                if not passed:
+                    conditions_passed = False
+                    failure_reason = cond_msg
+                    break
+
+            if conditions_passed:
+                healthy = True
+                slo_restored = True
+                if cond_details_list:
+                    details = (
+                        f"{details} | {'; '.join(cond_details_list)}"
+                        if details
+                        else "; ".join(cond_details_list)
+                    )
+            else:
+                healthy = False
+                slo_restored = False
+                details = failure_reason
 
         if healthy and slo_restored:
             break
@@ -99,14 +300,21 @@ async def verify_node(state: IncidentGraphState) -> dict[str, Any]:
     ladder = _get_ladder()
 
     if healthy and slo_restored:
-        logger.info("[Verify] Incident %s VERIFIED: target %s healthy after %d check(s)", incident_id, target, attempts)
+        logger.info(
+            "[Verify] Incident %s VERIFIED: target %s healthy after %d check(s)",
+            incident_id,
+            target,
+            attempts,
+        )
 
         if ladder is not None:
             try:
                 ladder.record_post_check_success()
                 await ladder.set_cooldown(action_id, target_str)
             except Exception as cb_exc:
-                logger.warning("[Verify] Circuit-breaker/cooldown update failed: %s", cb_exc)
+                logger.warning(
+                    "[Verify] Circuit-breaker/cooldown update failed: %s", cb_exc
+                )
 
         audit_entry = {
             "timestamp": now_iso,
