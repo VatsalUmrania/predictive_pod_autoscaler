@@ -23,6 +23,7 @@ from nexus.graph.nodes import (
 )
 from nexus.graph.routes import (
     route_after_approval,
+    route_after_diagnose,
     route_after_execute,
     route_after_govern,
     route_after_verify,
@@ -47,11 +48,18 @@ def build_incident_graph(checkpointer: Any = None) -> Any:
     workflow.add_node("learn", learn_node)
     workflow.add_node("escalate", escalate_node)
 
-    # 2. Linear Entry & Analysis Edges
+    # 2. Entry & Diagnostic Topology
     workflow.add_edge(START, "triage")
-    workflow.add_edge("triage", "collect")
-    workflow.add_edge("collect", "diagnose")
-    workflow.add_edge("diagnose", "plan")
+    workflow.add_edge("triage", "diagnose")
+    workflow.add_conditional_edges(
+        "diagnose",
+        route_after_diagnose,
+        {
+            "plan": "plan",
+            "collect": "collect",
+        },
+    )
+    workflow.add_edge("collect", "plan")
     workflow.add_edge("plan", "govern")
 
     # 3. Governance Conditional Branching
@@ -72,6 +80,7 @@ def build_incident_graph(checkpointer: Any = None) -> Any:
         route_after_approval,
         {
             "execute": "execute",
+            "govern": "govern",
             "escalate": "escalate",
         },
     )
