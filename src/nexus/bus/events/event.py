@@ -1,4 +1,5 @@
 """The normalized NEXUS incident event model."""
+
 from __future__ import annotations
 
 import uuid
@@ -68,3 +69,57 @@ class IncidentEvent(BaseModel):
     def is_severity_at_least(self, minimum: str) -> bool:
         order = ["info", "warning", "critical", "emergency"]
         return order.index(self.severity) >= order.index(minimum)
+
+
+class AnomalySignal(BaseModel):
+    """Provider-agnostic symptom trigger payload."""
+
+    signal_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    source: str = Field(
+        default="prometheus",
+        description="Source of alert: prometheus, cloudwatch, otel, ppa_forecaster",
+    )
+    provider: str = Field(
+        default="kubernetes",
+        description="Infrastructure provider: aws, kubernetes, hybrid",
+    )
+    environment: str = Field(
+        default="production",
+        description="Environment: dev, staging, production, production_tier_0",
+    )
+    target_service: str = Field(..., description="Name of affected service")
+    target_resource_id: str = Field(
+        default="",
+        description="Identifier of resource (e.g. arn, pod name, deployment)",
+    )
+    symptom_summary: str = Field(
+        ..., description="Short plain-English summary of observed symptom"
+    )
+    raw_metrics_or_alert: dict[str, Any] = Field(
+        default_factory=dict, description="Alert payload or metrics snapshot"
+    )
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    model_config = {"use_enum_values": True}
+
+    @field_validator("timestamp", mode="before")
+    @classmethod
+    def ensure_utc(cls, v: Any) -> datetime:
+        if isinstance(v, str):
+            v = datetime.fromisoformat(v)
+        if isinstance(v, datetime) and v.tzinfo is None:
+            v = v.replace(tzinfo=timezone.utc)
+        return cast(datetime, v)
+
+    def nats_subject(self) -> str:
+        """Returns the canonical NATS subject for this anomaly signal."""
+        return f"nexus.anomaly.{self.provider}.{self.target_service}"
+
+    def to_nats_payload(self) -> bytes:
+        """Serializes the anomaly signal for NATS publish."""
+        return self.model_dump_json().encode("utf-8")
+
+    @classmethod
+    def from_nats_payload(cls, payload: bytes) -> AnomalySignal:
+        """Deserializes an anomaly signal received from NATS."""
+        return cls.model_validate_json(payload)

@@ -11,19 +11,61 @@ import operator
 from datetime import datetime, timezone
 from typing import Annotated, Any, TypedDict
 
+from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
+
+
+class VerificationCondition(BaseModel):
+    """Structured, safe verification contract (no Python eval)."""
+
+    metric_name: str = Field(..., description="Target metric name to evaluate")
+    operator: str = Field(..., description="Comparison operator (<, <=, >, >=, ==)")
+    threshold: float = Field(..., description="Target numeric threshold")
+    window_seconds: int = Field(
+        default=60, description="Evaluation observation window in seconds"
+    )
 
 
 class PlanStep(BaseModel):
     """A single atomic action step within a remediation plan."""
 
     step_index: int = Field(default=0, description="Execution order sequence")
-    tool_name: str = Field(..., description="Registered NexusTool name to execute")
-    parameters: dict[str, Any] = Field(default_factory=dict, description="Validated tool arguments")
-    description: str = Field(default="", description="Human-readable rationale for this action")
-    rollback_tool: str | None = Field(default=None, description="Tool name used to undo this action")
-    rollback_parameters: dict[str, Any] | None = Field(default=None, description="Arguments to undo this action")
-    risk_level: str | None = Field(default=None, description="Deprecated; levels removed")
+    tool_name: str = Field(
+        ..., alias="action_tool", description="Registered NexusTool name to execute"
+    )
+    parameters: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="action_args",
+        description="Validated tool arguments",
+    )
+    description: str = Field(
+        default="", description="Human-readable rationale for this action"
+    )
+    rollback_tool: str | None = Field(
+        default=None, description="Tool name used to undo this action"
+    )
+    rollback_parameters: dict[str, Any] | None = Field(
+        default=None, alias="rollback_args", description="Arguments to undo this action"
+    )
+    verification_tool: str | None = Field(
+        default=None, description="Tool name used to verify remediation"
+    )
+    verification_parameters: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="verification_args",
+        description="Parameters for verification tool",
+    )
+    verification_condition: VerificationCondition | None = Field(
+        default=None, description="Evaluation condition contract"
+    )
+    risk_level: str | None = Field(
+        default=None, description="Deprecated; levels removed"
+    )
+
+    model_config = {"populate_by_name": True}
+
+
+PlannedToolStep = PlanStep
 
 
 class RemediationPlan(BaseModel):
@@ -33,7 +75,9 @@ class RemediationPlan(BaseModel):
     root_cause: str
     failure_mode: str
     confidence: float = Field(default=0.8, ge=0.0, le=1.0)
-    steps: list[PlanStep] = Field(default_factory=list, description="Ordered remediation steps (max 3)")
+    steps: list[PlanStep] = Field(
+        default_factory=list, description="Ordered remediation steps (max 3)"
+    )
     requires_approval: bool = True
     approval_reason: str | None = None
     pre_flight_conditions: dict[str, Any] = Field(default_factory=dict)
@@ -51,8 +95,12 @@ class ExecutionRecord(BaseModel):
     snapshot_id: str | None = None
     executed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     duration_ms: float = 0.0
-    rollback_tool: str | None = Field(default=None, description="Captured pre-mutation inverse tool")
-    rollback_parameters: dict[str, Any] | None = Field(default=None, description="Captured inverse parameters")
+    rollback_tool: str | None = Field(
+        default=None, description="Captured pre-mutation inverse tool"
+    )
+    rollback_parameters: dict[str, Any] | None = Field(
+        default=None, description="Captured inverse parameters"
+    )
 
 
 class GovernanceVerdict(BaseModel):
@@ -66,8 +114,9 @@ class GovernanceVerdict(BaseModel):
     self_healed: bool = False
     reasons: list[str] = Field(default_factory=list)
     policy_checks: dict[str, Any] = Field(default_factory=dict)
-    risk_tier: str | None = Field(default=None, description="Deprecated; levels removed")
-
+    risk_tier: str | None = Field(
+        default=None, description="Deprecated; levels removed"
+    )
 
 
 class IncidentGraphState(TypedDict):
@@ -83,7 +132,7 @@ class IncidentGraphState(TypedDict):
     target: dict[str, Any]
     severity: str
 
-    # 1. Deterministic Telemetry (NO ReAct loop!)
+    # 1. Telemetry & Observation Scratchpad
     telemetry: dict[str, Any]
 
     # 2. Structured Diagnosis (Validated RCA & Reflexion)
@@ -113,8 +162,12 @@ class IncidentGraphState(TypedDict):
 
     # 8. Observability & Messages
     audit_log: Annotated[list[dict[str, Any]], operator.add]
-    messages: Annotated[list[Any], operator.add]
+    messages: Annotated[list[Any], add_messages]
     error_message: str | None
     resolved: bool
     escalated: bool
 
+    # 9. Autonomous Agent State Extensions
+    anomaly_signal: dict[str, Any] | None
+    agentic_rca: dict[str, Any] | None
+    fallback_active: bool

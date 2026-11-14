@@ -27,15 +27,21 @@ def build_cluster_event_dicts(cluster: Any) -> list[dict[str, Any]]:
         elif isinstance(e, dict):
             events_dicts.append(e)
         else:
-            events_dicts.append({
-                "agent": getattr(getattr(e, "agent", None), "value", "k8s"),
-                "signal_type": getattr(getattr(e, "signal_type", None), "value", "threshold_breach"),
-                "severity": getattr(getattr(e, "severity", None), "value", "warning"),
-                "namespace": getattr(e, "namespace", "default"),
-                "resource_name": getattr(e, "resource_name", "unknown"),
-                "resource_kind": getattr(e, "resource_kind", "Deployment"),
-                "context": getattr(e, "context", {}),
-            })
+            events_dicts.append(
+                {
+                    "agent": getattr(getattr(e, "agent", None), "value", "k8s"),
+                    "signal_type": getattr(
+                        getattr(e, "signal_type", None), "value", "threshold_breach"
+                    ),
+                    "severity": getattr(
+                        getattr(e, "severity", None), "value", "warning"
+                    ),
+                    "namespace": getattr(e, "namespace", "default"),
+                    "resource_name": getattr(e, "resource_name", "unknown"),
+                    "resource_kind": getattr(e, "resource_kind", "Deployment"),
+                    "context": getattr(e, "context", {}),
+                }
+            )
     return events_dicts
 
 
@@ -80,11 +86,11 @@ async def handle_incoming_event(workflow: Any, event: Any) -> None:
         e_dict = (
             event.model_dump()
             if hasattr(event, "model_dump")
-            else event.to_dict()
-            if hasattr(event, "to_dict")
-            else event
-            if isinstance(event, dict)
-            else {}
+            else (
+                event.to_dict()
+                if hasattr(event, "to_dict")
+                else event if isinstance(event, dict) else {}
+            )
         )
         inc_task = asyncio.create_task(
             workflow.run_incident(
@@ -116,11 +122,17 @@ async def run_flush_loop(workflow: Any) -> None:
             logger.error("[IncidentWorkflow] Flush loop error: %s", exc)
 
 
-def build_initial_state(incident_data: dict[str, Any], inc_id: str) -> IncidentGraphState:
+def build_initial_state(
+    incident_data: dict[str, Any], inc_id: str
+) -> IncidentGraphState:
     """Construct initial state dictionary for incident workflow."""
     events = incident_data.get("events", [])
     if not events and "event" in incident_data:
         events = [incident_data["event"]]
+
+    anomaly_signal = incident_data.get("anomaly_signal")
+    if anomaly_signal and hasattr(anomaly_signal, "model_dump"):
+        anomaly_signal = anomaly_signal.model_dump()
 
     return {
         "incident_id": inc_id,
@@ -144,10 +156,13 @@ def build_initial_state(incident_data: dict[str, Any], inc_id: str) -> IncidentG
         "retry_count": 0,
         "max_retries": incident_data.get("max_retries", 2),
         "audit_log": [],
-        "messages": [],
+        "messages": incident_data.get("messages", []),
         "error_message": None,
         "resolved": False,
         "escalated": False,
+        "anomaly_signal": anomaly_signal,
+        "agentic_rca": incident_data.get("agentic_rca"),
+        "fallback_active": incident_data.get("fallback_active", False),
     }
 
 
@@ -163,14 +178,32 @@ async def setup_event_subscriptions(workflow: Any) -> None:
             logger.warning("[IncidentWorkflow] NATS subscribe failed: %s", nats_sub_exc)
 
     if hasattr(workflow.nats, "subscribe_raw"):
+
         async def _raw_handler(data: dict[str, Any], subject: str = "") -> None:
-            inc_id = data.get("incident_id") or data.get("event_id") or str(uuid.uuid4())
-            logger.info("[IncidentWorkflow] Ingested raw incident signal from %s: %s", subject, inc_id)
+            inc_id = (
+                data.get("incident_id")
+                or data.get("event_id")
+                or data.get("signal_id")
+                or str(uuid.uuid4())
+            )
+            logger.info(
+                "[IncidentWorkflow] Ingested raw incident signal from %s: %s",
+                subject,
+                inc_id,
+            )
             workflow._incidents_processed += 1
-            t = asyncio.create_task(workflow.run_incident(data, thread_id=inc_id))
+            if subject.startswith("nexus.anomaly.") or "symptom_summary" in data:
+                payload = {"incident_id": inc_id, "anomaly_signal": data, "events": []}
+            else:
+                payload = data
+            t = asyncio.create_task(workflow.run_incident(payload, thread_id=inc_id))
             workflow._sub_tasks.append(t)
 
         try:
             await workflow.nats.subscribe_raw("ppa.incidents.>", handler=_raw_handler)
+            await workflow.nats.subscribe_raw("nexus.anomaly.>", handler=_raw_handler)
         except Exception as raw_exc:
-            logger.debug("[IncidentWorkflow] NATS raw subscription failed (non-fatal): %s", raw_exc)
+            logger.debug(
+                "[IncidentWorkflow] NATS raw subscription failed (non-fatal): %s",
+                raw_exc,
+            )
