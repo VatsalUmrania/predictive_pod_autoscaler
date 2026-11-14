@@ -54,7 +54,10 @@ async def test_tool_execution_with_db_logging():
     reg = ToolRegistry()
 
     # Mock the internal k8s_tools call for restart_deployment
-    with patch("nexus.agents.k8s_tools.restart_deployment", return_value="Restarted successfully"):
+    with patch(
+        "nexus.agents.k8s_tools.restart_deployment",
+        return_value="Restarted successfully",
+    ):
         res = await reg.execute_tool(
             name="k8s_restart_deployment",
             parameters={"namespace": "default", "deployment_name": "my-app"},

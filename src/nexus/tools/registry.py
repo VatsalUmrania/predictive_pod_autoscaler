@@ -19,6 +19,9 @@ from nexus.tools.aws_adapter import (
     AWSRollbackLambdaAliasTool,
     AWSUpdateLambdaMemoryTool,
     AWSUpdateLambdaTimeoutTool,
+    DynamoDBDescribeTableTool,
+    DynamoDBUpdateTableTool,
+    RDSDeleteInstanceTool,
 )
 from nexus.tools.base import NexusTool, NexusToolResult, ToolDomain, ToolRiskLevel
 from nexus.tools.k8s_adapter import (
@@ -26,6 +29,7 @@ from nexus.tools.k8s_adapter import (
     K8sGetMetricsTool,
     K8sGetPodLogsTool,
     K8sPatchResourceLimitsTool,
+    K8sRemoveContainerCommandTool,
     K8sRestartDeploymentTool,
     K8sRollbackDeploymentTool,
     K8sScaleResourceTool,
@@ -50,6 +54,7 @@ class ToolRegistry:
         self.register(K8sScaleResourceTool())
         self.register(K8sRollbackDeploymentTool())
         self.register(K8sPatchResourceLimitsTool())
+        self.register(K8sRemoveContainerCommandTool())
 
         # AWS tools
         self.register(AWSGetMetricDataTool())
@@ -58,10 +63,18 @@ class ToolRegistry:
         self.register(AWSUpdateLambdaTimeoutTool())
         self.register(AWSRollbackLambdaAliasTool())
         self.register(AWSReplaySQSDLQTool())
+        self.register(DynamoDBDescribeTableTool())
+        self.register(DynamoDBUpdateTableTool())
+        self.register(RDSDeleteInstanceTool())
 
     def register(self, tool: NexusTool) -> None:
         self._tools[tool.name] = tool
-        logger.debug("[ToolRegistry] Registered tool: %s (%s, %s)", tool.name, tool.domain.value, tool.risk_level.value)
+        logger.debug(
+            "[ToolRegistry] Registered tool: %s (%s, %s)",
+            tool.name,
+            tool.domain.value,
+            tool.risk_level.value,
+        )
 
     def get(self, name: str) -> NexusTool | None:
         return self._tools.get(name)
@@ -83,8 +96,28 @@ class ToolRegistry:
                 ToolRiskLevel.L3_DESTRUCTIVE: 3,
             }
             max_level = risk_order.get(max_risk, 3)
-            results = [t for t in results if risk_order.get(t.risk_level, 0) <= max_level]
+            results = [
+                t for t in results if risk_order.get(t.risk_level, 0) <= max_level
+            ]
         return results
+
+    def get_diagnostic_tools(self, as_langchain: bool = False) -> list[Any]:
+        """Return all read-only diagnostic tools (L0_OBSERVE)."""
+        tools = [
+            t for t in self._tools.values() if t.risk_level == ToolRiskLevel.L0_OBSERVE
+        ]
+        if as_langchain:
+            return [t.as_langchain_tool() for t in tools]
+        return tools
+
+    def get_remediation_tools(self, as_langchain: bool = False) -> list[Any]:
+        """Return all state-mutating remediation tools (L1_SAFE, L2_MUTATE_APPROVAL, L3_DESTRUCTIVE)."""
+        tools = [
+            t for t in self._tools.values() if t.risk_level != ToolRiskLevel.L0_OBSERVE
+        ]
+        if as_langchain:
+            return [t.as_langchain_tool() for t in tools]
+        return tools
 
     def get_function_declarations(
         self, domain: ToolDomain | None = None, max_risk: ToolRiskLevel | None = None
@@ -105,7 +138,9 @@ class ToolRegistry:
         """
         tool = self.get(name)
         if not tool:
-            return NexusToolResult(success=False, error=f"Tool '{name}' not found in registry")
+            return NexusToolResult(
+                success=False, error=f"Tool '{name}' not found in registry"
+            )
 
         call_id = None
         start_time = time.monotonic()
@@ -121,13 +156,17 @@ class ToolRegistry:
                     input_parameters=parameters,
                 )
             except Exception as log_exc:
-                logger.warning("[ToolRegistry] Failed to log tool call invocation: %s", log_exc)
+                logger.warning(
+                    "[ToolRegistry] Failed to log tool call invocation: %s", log_exc
+                )
 
         # Execute
         try:
             result = await tool.execute(**parameters)
         except Exception as exc:
-            logger.error("[ToolRegistry] Error executing tool %s: %s", name, exc, exc_info=True)
+            logger.error(
+                "[ToolRegistry] Error executing tool %s: %s", name, exc, exc_info=True
+            )
             result = NexusToolResult(success=False, error=str(exc))
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -144,7 +183,9 @@ class ToolRegistry:
                     duration_ms=duration_ms,
                 )
             except Exception as log_exc:
-                logger.warning("[ToolRegistry] Failed to update tool call outcome: %s", log_exc)
+                logger.warning(
+                    "[ToolRegistry] Failed to update tool call outcome: %s", log_exc
+                )
 
         return result
 

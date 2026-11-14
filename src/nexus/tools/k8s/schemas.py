@@ -19,9 +19,14 @@ class GetPodLogsSchema(BaseModel):
 class DescribeResourceSchema(BaseModel):
     model_config = {"extra": "ignore"}
     namespace: str = Field(default="default", description="Kubernetes namespace")
-    resource_kind: str = Field(default="deployment", description="Resource kind: pod, deployment, service, configmap")
+    resource_kind: str = Field(
+        default="deployment",
+        description="Resource kind: pod, deployment, service, configmap",
+    )
     resource_name: str = Field(default="", description="Resource name")
-    deployment_name: str | None = Field(default=None, description="Optional alias for resource_name")
+    deployment_name: str | None = Field(
+        default=None, description="Optional alias for resource_name"
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -41,8 +46,12 @@ class GetMetricsSchema(BaseModel):
 class RestartDeploymentSchema(BaseModel):
     model_config = {"extra": "ignore"}
     namespace: str = Field(default="default", description="Kubernetes namespace")
-    deployment_name: str = Field(default="", description="Deployment name to rollout restart")
-    resource_name: str | None = Field(default=None, description="Optional alias for deployment_name")
+    deployment_name: str = Field(
+        default="", description="Deployment name to rollout restart"
+    )
+    resource_name: str | None = Field(
+        default=None, description="Optional alias for deployment_name"
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -56,9 +65,13 @@ class RestartDeploymentSchema(BaseModel):
 class ScaleResourceSchema(BaseModel):
     model_config = {"extra": "ignore"}
     namespace: str = Field(default="default", description="Kubernetes namespace")
-    resource_kind: str = Field(default="deployment", description="Resource kind to scale (deployment)")
+    resource_kind: str = Field(
+        default="deployment", description="Resource kind to scale (deployment)"
+    )
     resource_name: str = Field(default="", description="Target resource name")
-    deployment_name: str | None = Field(default=None, description="Optional alias for resource_name")
+    deployment_name: str | None = Field(
+        default=None, description="Optional alias for resource_name"
+    )
     replicas: int = Field(..., description="Target replica count")
 
     @model_validator(mode="before")
@@ -73,9 +86,15 @@ class ScaleResourceSchema(BaseModel):
 class RollbackDeploymentSchema(BaseModel):
     model_config = {"extra": "ignore"}
     namespace: str = Field(default="default", description="Kubernetes namespace")
-    deployment_name: str = Field(default="", description="Deployment name to roll back to previous revision")
-    resource_name: str | None = Field(default=None, description="Optional alias for deployment_name")
-    target_revision: int | None = Field(default=None, description="Optional target revision number to roll back to")
+    deployment_name: str = Field(
+        default="", description="Deployment name to roll back to previous revision"
+    )
+    resource_name: str | None = Field(
+        default=None, description="Optional alias for deployment_name"
+    )
+    target_revision: int | None = Field(
+        default=None, description="Optional target revision number to roll back to"
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -90,8 +109,13 @@ class RemoveContainerCommandSchema(BaseModel):
     model_config = {"extra": "ignore"}
     namespace: str = Field(default="default", description="Kubernetes namespace")
     deployment_name: str = Field(default="", description="Deployment name")
-    resource_name: str | None = Field(default=None, description="Optional alias for deployment_name")
-    container_name: str | None = Field(default=None, description="Target container name (defaults to primary container)")
+    resource_name: str | None = Field(
+        default=None, description="Optional alias for deployment_name"
+    )
+    container_name: str | None = Field(
+        default=None,
+        description="Target container name (defaults to primary container)",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -106,6 +130,13 @@ class PatchResourceLimitsSchema(BaseModel):
     model_config = {"extra": "ignore"}
     namespace: str = Field(default="default", description="Kubernetes namespace")
     deployment_name: str = Field(..., description="Deployment name to patch")
-    container_name: str | None = Field(default=None, description="Optional container name (defaults to first container)")
-    cpu_limit: str | None = Field(default=None, description="CPU limit, e.g. '500m' or '1'")
-    memory_limit: str | None = Field(default=None, description="Memory limit, e.g. '512Mi' or '1Gi'")
+    container_name: str | None = Field(
+        default=None,
+        description="Optional container name (defaults to first container)",
+    )
+    cpu_limit: str | None = Field(
+        default=None, description="CPU limit, e.g. '500m' or '1'"
+    )
+    memory_limit: str | None = Field(
+        default=None, description="Memory limit, e.g. '512Mi' or '1Gi'"
+    )

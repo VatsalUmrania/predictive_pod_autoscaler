@@ -23,9 +23,13 @@ class K8sRestartDeploymentTool(NexusTool):
     domain = ToolDomain.K8S
     risk_level = ToolRiskLevel.L1_SAFE
     args_schema = RestartDeploymentSchema
+    blast_radius = "pod"
+    is_destructive = False
+    allows_unbacked_rollback = True
 
     async def execute(self, **kwargs: Any) -> NexusToolResult:
         from nexus.agents import k8s_tools
+
         args = self.args_schema(**kwargs)
         res = await asyncio.to_thread(
             k8s_tools.restart_deployment,
@@ -46,9 +50,13 @@ class K8sScaleResourceTool(NexusTool):
     domain = ToolDomain.K8S
     risk_level = ToolRiskLevel.L2_MUTATE_APPROVAL
     args_schema = ScaleResourceSchema
+    blast_radius = "service"
+    is_destructive = False
+    allows_unbacked_rollback = False
 
     async def execute(self, **kwargs: Any) -> NexusToolResult:
         from nexus.agents import k8s_tools
+
         args = self.args_schema(**kwargs)
         res = await asyncio.to_thread(
             k8s_tools.scale_resource,
@@ -81,13 +89,19 @@ class K8sScaleResourceTool(NexusTool):
 
 class K8sRollbackDeploymentTool(NexusTool):
     name = "k8s_rollback_deployment"
-    description = "Roll back a Kubernetes deployment to its previous stable ReplicaSet revision."
+    description = (
+        "Roll back a Kubernetes deployment to its previous stable ReplicaSet revision."
+    )
     domain = ToolDomain.K8S
-    risk_level = ToolRiskLevel.L3_DESTRUCTIVE
+    risk_level = ToolRiskLevel.L2_MUTATE_APPROVAL
     args_schema = RollbackDeploymentSchema
+    blast_radius = "service"
+    is_destructive = False
+    allows_unbacked_rollback = True
 
     async def execute(self, **kwargs: Any) -> NexusToolResult:
         from nexus.agents import k8s_tools
+
         args = self.args_schema(**kwargs)
         res = await asyncio.to_thread(
             k8s_tools.rollback_deployment,
@@ -109,9 +123,13 @@ class K8sRemoveContainerCommandTool(NexusTool):
     domain = ToolDomain.K8S
     risk_level = ToolRiskLevel.L2_MUTATE_APPROVAL
     args_schema = RemoveContainerCommandSchema
+    blast_radius = "service"
+    is_destructive = False
+    allows_unbacked_rollback = False
 
     async def execute(self, **kwargs: Any) -> NexusToolResult:
         from nexus.agents import k8s_tools
+
         args = self.args_schema(**kwargs)
         res = await asyncio.to_thread(
             k8s_tools.remove_container_command,
@@ -133,9 +151,13 @@ class K8sPatchResourceLimitsTool(NexusTool):
     domain = ToolDomain.K8S
     risk_level = ToolRiskLevel.L2_MUTATE_APPROVAL
     args_schema = PatchResourceLimitsSchema
+    blast_radius = "service"
+    is_destructive = False
+    allows_unbacked_rollback = False
 
     async def execute(self, **kwargs: Any) -> NexusToolResult:
         from nexus.agents.k8s_tools import _get_apps_api
+
         args = self.args_schema(**kwargs)
         try:
             apps = _get_apps_api()
@@ -146,7 +168,9 @@ class K8sPatchResourceLimitsTool(NexusTool):
             )
             containers = dep.spec.template.spec.containers
             if not containers:
-                return NexusToolResult(success=False, error="No containers found in deployment spec")
+                return NexusToolResult(
+                    success=False, error="No containers found in deployment spec"
+                )
 
             target_c = containers[0]
             if args.container_name:

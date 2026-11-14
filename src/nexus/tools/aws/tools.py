@@ -7,10 +7,13 @@ from nexus.tools.aws.mutate_tools import (
     AWSRollbackLambdaAliasTool,
     AWSUpdateLambdaMemoryTool,
     AWSUpdateLambdaTimeoutTool,
+    DynamoDBUpdateTableTool,
+    RDSDeleteInstanceTool,
 )
 from nexus.tools.aws.observe_tools import (
     AWSGetLogEventsTool,
     AWSGetMetricDataTool,
+    DynamoDBDescribeTableTool,
 )
 
 __all__ = [
@@ -20,4 +23,7 @@ __all__ = [
     "AWSUpdateLambdaTimeoutTool",
     "AWSRollbackLambdaAliasTool",
     "AWSReplaySQSDLQTool",
+    "DynamoDBDescribeTableTool",
+    "DynamoDBUpdateTableTool",
+    "RDSDeleteInstanceTool",
 ]

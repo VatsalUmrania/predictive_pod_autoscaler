@@ -21,10 +21,14 @@ class ToolDomain(str, Enum):
 
 
 class ToolRiskLevel(str, Enum):
-    L0_OBSERVE = "L0_OBSERVE"               # Read-only telemetry, logs, status
-    L1_SAFE = "L1_SAFE_AUTOMATED"           # Reversible/no-regret actions (e.g. pod restart)
-    L2_MUTATE_APPROVAL = "L2_MUTATING_APPROVAL"  # Bounded state modification (scale, memory patch)
-    L3_DESTRUCTIVE = "L3_DESTRUCTIVE"       # Major changes (rollout undo, lambda alias rollback)
+    L0_OBSERVE = "L0_OBSERVE"  # Read-only telemetry, logs, status
+    L1_SAFE = "L1_SAFE_AUTOMATED"  # Reversible/no-regret actions (e.g. pod restart)
+    L2_MUTATE_APPROVAL = (
+        "L2_MUTATING_APPROVAL"  # Bounded state modification (scale, memory patch)
+    )
+    L3_DESTRUCTIVE = (
+        "L3_DESTRUCTIVE"  # Major changes (rollout undo, lambda alias rollback)
+    )
 
 
 class NexusToolResult(BaseModel):
@@ -50,6 +54,47 @@ class NexusTool(ABC):
     domain: ToolDomain
     risk_level: ToolRiskLevel
     args_schema: type[BaseModel]
+    blast_radius: str = "service"
+    is_destructive: bool = False
+    allows_unbacked_rollback: bool = False
+
+    def as_langchain_tool(self) -> Any:
+        """Wrap this NexusTool into a LangChain StructuredTool."""
+        from langchain_core.tools import StructuredTool
+
+        async def _coroutine(**kwargs: Any) -> dict[str, Any]:
+            res = await self.execute(**kwargs)
+            return res.to_dict()
+
+        def _sync(**kwargs: Any) -> dict[str, Any]:
+            import asyncio
+
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop and loop.is_running():
+                import concurrent.futures
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    return pool.submit(asyncio.run, _coroutine(**kwargs)).result()
+            return asyncio.run(_coroutine(**kwargs))
+
+        tool = StructuredTool.from_function(
+            func=_sync,
+            coroutine=_coroutine,
+            name=self.name,
+            description=f"[{self.domain.value.upper()} | {self.risk_level.value}] {self.description}",
+            args_schema=self.args_schema,
+        )
+        tool.metadata = {
+            "blast_radius": self.blast_radius,
+            "is_destructive": self.is_destructive,
+            "allows_unbacked_rollback": self.allows_unbacked_rollback,
+            "risk_level": self.risk_level.value,
+            "domain": self.domain.value,
+        }
+        return tool
 
     @abstractmethod
     async def execute(self, **kwargs: Any) -> NexusToolResult:

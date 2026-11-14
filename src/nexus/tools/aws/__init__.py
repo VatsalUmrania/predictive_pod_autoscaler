@@ -10,6 +10,12 @@ from nexus.tools.aws.schemas import (
     AWSRollbackLambdaAliasSchema,
     AWSUpdateLambdaMemorySchema,
     AWSUpdateLambdaTimeoutSchema,
+    DynamoDBDescribeTableInput,
+    DynamoDBDescribeTableSchema,
+    DynamoDBUpdateTableInput,
+    DynamoDBUpdateTableSchema,
+    RDSDeleteInstanceInput,
+    RDSDeleteInstanceSchema,
 )
 from nexus.tools.aws.tools import (
     AWSGetLogEventsTool,
@@ -18,6 +24,9 @@ from nexus.tools.aws.tools import (
     AWSRollbackLambdaAliasTool,
     AWSUpdateLambdaMemoryTool,
     AWSUpdateLambdaTimeoutTool,
+    DynamoDBDescribeTableTool,
+    DynamoDBUpdateTableTool,
+    RDSDeleteInstanceTool,
 )
 
 __all__ = [
@@ -28,10 +37,19 @@ __all__ = [
     "AWSUpdateLambdaTimeoutSchema",
     "AWSRollbackLambdaAliasSchema",
     "AWSReplaySQSDLQSchema",
+    "DynamoDBUpdateTableSchema",
+    "DynamoDBUpdateTableInput",
+    "DynamoDBDescribeTableSchema",
+    "DynamoDBDescribeTableInput",
+    "RDSDeleteInstanceSchema",
+    "RDSDeleteInstanceInput",
     "AWSGetMetricDataTool",
     "AWSGetLogEventsTool",
     "AWSUpdateLambdaMemoryTool",
     "AWSUpdateLambdaTimeoutTool",
     "AWSRollbackLambdaAliasTool",
     "AWSReplaySQSDLQTool",
+    "DynamoDBDescribeTableTool",
+    "DynamoDBUpdateTableTool",
+    "RDSDeleteInstanceTool",
 ]

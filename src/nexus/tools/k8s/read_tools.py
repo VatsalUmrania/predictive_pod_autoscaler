@@ -21,9 +21,13 @@ class K8sGetPodLogsTool(NexusTool):
     domain = ToolDomain.K8S
     risk_level = ToolRiskLevel.L0_OBSERVE
     args_schema = GetPodLogsSchema
+    blast_radius = "none"
+    is_destructive = False
+    allows_unbacked_rollback = False
 
     async def execute(self, **kwargs: Any) -> NexusToolResult:
         from nexus.agents import k8s_tools
+
         args = self.args_schema(**kwargs)
         res = await asyncio.to_thread(
             k8s_tools.get_pod_logs,
@@ -41,13 +45,19 @@ class K8sGetPodLogsTool(NexusTool):
 
 class K8sDescribeResourceTool(NexusTool):
     name = "k8s_describe_resource"
-    description = "Get detailed status and state of a Kubernetes pod, deployment, or service."
+    description = (
+        "Get detailed status and state of a Kubernetes pod, deployment, or service."
+    )
     domain = ToolDomain.K8S
     risk_level = ToolRiskLevel.L0_OBSERVE
     args_schema = DescribeResourceSchema
+    blast_radius = "none"
+    is_destructive = False
+    allows_unbacked_rollback = False
 
     async def execute(self, **kwargs: Any) -> NexusToolResult:
         from nexus.agents import k8s_tools
+
         args = self.args_schema(**kwargs)
         res = await asyncio.to_thread(
             k8s_tools.describe_resource,
@@ -69,9 +79,13 @@ class K8sGetMetricsTool(NexusTool):
     domain = ToolDomain.K8S
     risk_level = ToolRiskLevel.L0_OBSERVE
     args_schema = GetMetricsSchema
+    blast_radius = "none"
+    is_destructive = False
+    allows_unbacked_rollback = False
 
     async def execute(self, **kwargs: Any) -> NexusToolResult:
         from nexus.agents import k8s_tools
+
         args = self.args_schema(**kwargs)
         res = await asyncio.to_thread(
             k8s_tools.get_metrics,
