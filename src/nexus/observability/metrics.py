@@ -23,6 +23,20 @@ __all__ = ["NexusMetrics", "get_metrics", "metrics", "_Noop"]
 class NexusMetrics:
     """Central Prometheus metric store for NEXUS."""
 
+    healing_actions_total: Any
+    rca_requests_total: Any
+    confidence_score: Any
+    rca_duration_seconds: Any
+    incident_clusters_total: Any
+    prescale_decisions_total: Any
+    governance_circuit_breaker_open: Any
+    active_clusters: Any
+    autonomous_success_rate: Any
+    false_heal_rate: Any
+    runbook_success_rate: Any
+    confidence_adjustment: Any
+    prescaler_precision: Any
+
     def __init__(self) -> None:
         self._available = False
         self._registry: Any = None

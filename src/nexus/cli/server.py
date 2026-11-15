@@ -6,7 +6,7 @@ import asyncio
 import logging
 import os
 import sys
-from typing import NoReturn
+from typing import Any, NoReturn
 
 import click
 
@@ -14,7 +14,7 @@ try:
     from rich.console import Console
 
     _RICH = True
-    console = Console()
+    console: Any = Console()
 except ImportError:
     _RICH = False
     console = None

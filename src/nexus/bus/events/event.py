@@ -5,10 +5,61 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from typing import Any, cast
+from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
 
-from nexus.bus.events.enums import AgentType, HealingLevel, Severity, SignalType
+from nexus.bus.events.enums import (
+    AgentType,
+    HealingLevel,
+    Severity,
+    SignalKind,
+    SignalSource,
+    SignalType,
+)
+
+
+class SymptomSignal(BaseModel):
+    signal_id: str = Field(default_factory=lambda: f"sig-{uuid4().hex[:12]}")
+    source: SignalSource
+    kind: SignalKind
+    provider: str = Field(
+        description="Cloud/platform provider, e.g., 'aws', 'kubernetes'"
+    )
+    resource_urn: str = Field(
+        description="Universal resource identifier, e.g., ARN 'arn:aws:rds:us-east-1:123456789012:db:prod-pg' or 'k8s://prod/apps/v1/StatefulSet/redis'"
+    )
+    region_or_namespace: str = Field(default="default")
+    symptom_summary: str = Field(
+        description="Natural-language alert or anomaly summary"
+    )
+    raw_payload: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Raw CloudWatch/EventBridge/K8s/OTel JSON payload",
+    )
+    severity: Severity = Severity.HIGH
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    model_config = {"use_enum_values": True}
+
+    @field_validator("timestamp", mode="before")
+    @classmethod
+    def ensure_utc(cls, v: Any) -> datetime:
+        if isinstance(v, str):
+            v = datetime.fromisoformat(v)
+        if isinstance(v, datetime) and v.tzinfo is None:
+            v = v.replace(tzinfo=timezone.utc)
+        return cast(datetime, v)
+
+    def nats_subject(self) -> str:
+        return f"nexus.symptom.{self.provider}.{self.kind}"
+
+    def to_nats_payload(self) -> bytes:
+        return self.model_dump_json().encode("utf-8")
+
+    @classmethod
+    def from_nats_payload(cls, payload: bytes) -> SymptomSignal:
+        return cls.model_validate_json(payload)
 
 
 class IncidentEvent(BaseModel):

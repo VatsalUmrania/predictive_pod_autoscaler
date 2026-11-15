@@ -29,13 +29,11 @@ class IncidentRepository:
         inc_uuid = _ensure_uuid(incident_id)
         inc_id = str(inc_uuid)
         payload_json = json.dumps(trigger_payload or {})
-
         sev = (severity or "error").lower()
         if sev == "emergency":
             sev = "critical"
         elif sev not in ("info", "warning", "error", "critical"):
             sev = "error"
-
         env = (environment or "kubernetes").lower()
         if env not in ("kubernetes", "aws", "hybrid", "on_prem"):
             env = "kubernetes"
@@ -45,8 +43,7 @@ class IncidentRepository:
             incident_id, fingerprint, environment, target_resource,
             severity, current_state, trigger_source, trigger_payload
         ) VALUES ($1, $2, $3::incident_environment, $4, $5::incident_severity, 'detected', $6, $7::jsonb)
-        ON CONFLICT (incident_id) DO NOTHING
-        RETURNING incident_id;
+        ON CONFLICT (incident_id) DO NOTHING RETURNING incident_id;
         """
         async with self._pool.acquire() as conn:
             await conn.execute(
@@ -95,7 +92,6 @@ class IncidentRepository:
                     f"fp-{inc_uuid.hex[:8]}",
                     to_state.lower(),
                 )
-
             row = await conn.fetchrow(
                 "SELECT current_state FROM incidents WHERE incident_id = $1", inc_uuid
             )
@@ -105,13 +101,8 @@ class IncidentRepository:
                 if to_state in ("resolved", "rolled_back", "failed")
                 else ""
             )
-
             await conn.execute(
-                f"""
-                UPDATE incidents
-                SET current_state = $1::incident_lifecycle_state, updated_at = NOW() {resolved_sql}
-                WHERE incident_id = $2
-                """,
+                f"UPDATE incidents SET current_state = $1::incident_lifecycle_state, updated_at = NOW() {resolved_sql} WHERE incident_id = $2",
                 to_state.lower(),
                 inc_uuid,
             )
@@ -151,8 +142,7 @@ class IncidentRepository:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT * FROM incidents
-                WHERE target_resource = $1
+                SELECT * FROM incidents WHERE target_resource = $1
                   AND current_state NOT IN ('resolved', 'rolled_back', 'rejected', 'escalated', 'failed')
                 ORDER BY created_at DESC LIMIT 1
                 """,

@@ -35,7 +35,6 @@ from nexus.integration.slack_verifier import (
 )
 
 logger = logging.getLogger(__name__)
-
 _approval_buttons_block = approval_buttons_block
 
 __all__ = [
@@ -66,13 +65,13 @@ class Notifier:
         description: str,
         target: str | None = None,
     ) -> None:
-        """Send a healing action notification."""
         webhook = self._get_webhook(app_name)
         if webhook:
-            payload = build_heal_payload(
-                app_name, runbook_id, outcome, description, target
+            await self._send(
+                webhook,
+                build_heal_payload(app_name, runbook_id, outcome, description, target),
+                app_name,
             )
-            await self._send(webhook, payload, app_name)
         if outcome in ("failed", "rolled_back"):
             self._fail_counts[app_name] = self._fail_counts.get(app_name, 0) + 1
             if self._fail_counts[app_name] >= self._get_page_threshold(app_name):
@@ -91,20 +90,27 @@ class Notifier:
         confidence: float = 0.0,
         tables: list[Any] | None = None,
     ) -> None:
-        """Send a pre-scale prediction notification."""
         webhook = self._get_webhook(app_name)
         if webhook:
-            payload = build_prescale_payload(
-                deployment, current_rps, predicted_rps, horizon_min, confidence, tables
+            await self._send(
+                webhook,
+                build_prescale_payload(
+                    deployment,
+                    current_rps,
+                    predicted_rps,
+                    horizon_min,
+                    confidence,
+                    tables,
+                ),
+                app_name,
             )
-            await self._send(webhook, payload, app_name)
 
     async def notify_escalation(self, app_name: str, failed_attempts: int) -> None:
-        """Send an SRE escalation alert when auto-healing is exhausted."""
         webhook = self._get_webhook(app_name)
         if webhook:
-            payload = build_escalation_payload(app_name, failed_attempts)
-            await self._send(webhook, payload, app_name)
+            await self._send(
+                webhook, build_escalation_payload(app_name, failed_attempts), app_name
+            )
             logger.warning(
                 f"[Notifier] SRE escalation sent for app='{app_name}' failures={failed_attempts}"
             )
@@ -119,19 +125,21 @@ class Notifier:
         confidence: float,
         context: dict | None = None,
     ) -> None:
-        """Send a notification when an action requires human approval."""
         webhook = self._get_webhook(app_name)
         if webhook:
-            payload = build_approval_required_payload(
+            await self._send(
+                webhook,
+                build_approval_required_payload(
+                    app_name,
+                    approval_id,
+                    runbook_id,
+                    target,
+                    healing_level,
+                    confidence,
+                    context,
+                ),
                 app_name,
-                approval_id,
-                runbook_id,
-                target,
-                healing_level,
-                confidence,
-                context,
             )
-            await self._send(webhook, payload, app_name)
 
     async def notify_incident_resolved(
         self,
@@ -146,20 +154,22 @@ class Notifier:
         duration_s: float | None = None,
         context: dict | None = None,
     ) -> None:
-        """Send notification when an incident is successfully resolved."""
         webhook = self._get_webhook(app_name)
         if webhook:
-            payload = build_incident_resolved_payload(
-                target,
-                incident_id,
-                failure_class,
-                confidence,
-                duration_s,
-                root_cause,
-                action_taken,
-                verification_details,
+            await self._send(
+                webhook,
+                build_incident_resolved_payload(
+                    target,
+                    incident_id,
+                    failure_class,
+                    confidence,
+                    duration_s,
+                    root_cause,
+                    action_taken,
+                    verification_details,
+                ),
+                app_name,
             )
-            await self._send(webhook, payload, app_name)
             logger.info(
                 f"[Notifier] Incident resolved notification sent for target='{target}' inc='{incident_id}'"
             )
@@ -174,13 +184,15 @@ class Notifier:
         root_cause: str = "Unknown",
         context: dict | None = None,
     ) -> None:
-        """Send notification when an incident escalates to human operators."""
         webhook = self._get_webhook(app_name)
         if webhook:
-            payload = build_incident_escalated_payload(
-                target, incident_id, failure_class, reason, root_cause
+            await self._send(
+                webhook,
+                build_incident_escalated_payload(
+                    target, incident_id, failure_class, reason, root_cause
+                ),
+                app_name,
             )
-            await self._send(webhook, payload, app_name)
             logger.warning(
                 f"[Notifier] Incident escalation sent for target='{target}' inc='{incident_id}'"
             )
@@ -194,11 +206,13 @@ class Notifier:
         summary: str = "",
         report_url: str = "",
     ) -> None:
-        """Post the post-incident report draft to the app's Slack channel."""
         webhook = self._get_webhook(app_name)
         if webhook:
-            payload = build_report_ready_payload(target, outcome, summary, report_url)
-            await self._send(webhook, payload, app_name)
+            await self._send(
+                webhook,
+                build_report_ready_payload(target, outcome, summary, report_url),
+                app_name,
+            )
             logger.info(
                 f"[Notifier] Post-incident report posted for target='{target}' inc='{incident_id}'"
             )
@@ -210,15 +224,17 @@ class Notifier:
         try:
             from nexus.integration.dashboard import _policy_cache
 
-            cfg = _policy_cache.get(app_name, {})
-            return int(cfg.get("notifications", {}).get("page_sre_after", 3))
+            return int(
+                _policy_cache.get(app_name, {})
+                .get("notifications", {})
+                .get("page_sre_after", 3)
+            )
         except Exception:
             return 3
 
     async def _send(
         self, webhook_url: str, payload: dict[str, Any], app_name: str
     ) -> None:
-        """POST a Slack webhook payload asynchronously."""
         try:
             import httpx
 
@@ -230,15 +246,13 @@ class Notifier:
                 )
                 if resp.status_code != 200:
                     logger.warning(
-                        f"[Notifier] Slack returned {resp.status_code} for '{app_name}': {resp.text[:100]}"
+                        f"[Notifier] Slack returned {resp.status_code} for '{app_name}'"
                     )
         except Exception as exc:
             logger.debug(f"[Notifier] Slack send failed for '{app_name}': {exc}")
 
     def start_background(self, nats_client: Any) -> None:
-        """Subscribe to NATS healing action subjects and auto-notify."""
-        self._running = True
-        self._nats_client = nats_client
+        self._running, self._nats_client = True, nats_client
         self._nats_task = asyncio.create_task(self._listen())
         self._nats_task.add_done_callback(self._on_listen_done)
 
@@ -251,7 +265,6 @@ class Notifier:
                 pass
 
     def stop(self) -> None:
-        """Stop the background NATS listener."""
         self._running = False
         if self._nats_task:
             self._nats_task.cancel()

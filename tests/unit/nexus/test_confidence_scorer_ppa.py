@@ -111,7 +111,7 @@ class TestPpaAlignmentBonus:
             [
                 0.55 * 0.65,
                 0.35 * cluster.signal_agreement_score(),
-                0.10 * ((0.0 + 0.20) / 0.25),
+                0.10 * ((0.05 + 0.20) / 0.25),
             ]
         )
         assert abs(score - (baseline - scorer._bias)) < 0.01

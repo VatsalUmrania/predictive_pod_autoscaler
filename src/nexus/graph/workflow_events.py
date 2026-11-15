@@ -94,8 +94,7 @@ async def handle_incoming_event(workflow: Any, event: Any) -> None:
         )
         inc_task = asyncio.create_task(
             workflow.run_incident(
-                {"incident_id": inc_id, "events": [e_dict]},
-                thread_id=inc_id,
+                {"incident_id": inc_id, "events": [e_dict]}, thread_id=inc_id
             ),
             name=f"process-{inc_id}",
         )
@@ -108,14 +107,13 @@ async def run_flush_loop(workflow: Any) -> None:
         try:
             await asyncio.sleep(workflow._flush_interval)
             if workflow.correlator and hasattr(workflow.correlator, "flush_stale"):
-                stale = workflow.correlator.flush_stale()
-                for cluster in stale:
+                for cluster in workflow.correlator.flush_stale():
                     workflow._incidents_processed += 1
-                    task = asyncio.create_task(
+                    t = asyncio.create_task(
                         workflow._process_cluster(cluster),
                         name=f"flush-{getattr(cluster, 'cluster_id', 'cluster')}",
                     )
-                    workflow._sub_tasks.append(task)
+                    workflow._sub_tasks.append(t)
         except asyncio.CancelledError:
             break
         except Exception as exc:
@@ -129,7 +127,6 @@ def build_initial_state(
     events = incident_data.get("events", [])
     if not events and "event" in incident_data:
         events = [incident_data["event"]]
-
     anomaly_signal = incident_data.get("anomaly_signal")
     if anomaly_signal and hasattr(anomaly_signal, "model_dump"):
         anomaly_signal = anomaly_signal.model_dump()
@@ -186,16 +183,12 @@ async def setup_event_subscriptions(workflow: Any) -> None:
                 or data.get("signal_id")
                 or str(uuid.uuid4())
             )
-            logger.info(
-                "[IncidentWorkflow] Ingested raw incident signal from %s: %s",
-                subject,
-                inc_id,
-            )
             workflow._incidents_processed += 1
-            if subject.startswith("nexus.anomaly.") or "symptom_summary" in data:
-                payload = {"incident_id": inc_id, "anomaly_signal": data, "events": []}
-            else:
-                payload = data
+            payload = (
+                {"incident_id": inc_id, "anomaly_signal": data, "events": []}
+                if subject.startswith("nexus.anomaly.") or "symptom_summary" in data
+                else data
+            )
             t = asyncio.create_task(workflow.run_incident(payload, thread_id=inc_id))
             workflow._sub_tasks.append(t)
 
@@ -203,7 +196,4 @@ async def setup_event_subscriptions(workflow: Any) -> None:
             await workflow.nats.subscribe_raw("ppa.incidents.>", handler=_raw_handler)
             await workflow.nats.subscribe_raw("nexus.anomaly.>", handler=_raw_handler)
         except Exception as raw_exc:
-            logger.debug(
-                "[IncidentWorkflow] NATS raw subscription failed (non-fatal): %s",
-                raw_exc,
-            )
+            logger.debug("[IncidentWorkflow] NATS raw subscription failed: %s", raw_exc)

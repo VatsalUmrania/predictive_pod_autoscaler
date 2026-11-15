@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from langgraph.types import Command
 
@@ -15,19 +15,17 @@ from nexus.engine.fsm import IncidentState
 logger = logging.getLogger(__name__)
 
 
+def _dump(obj: Any) -> dict[str, Any]:
+    fn = getattr(obj, "model_dump", getattr(obj, "to_dict", None))
+    res = fn() if callable(fn) else obj
+    return dict(res) if isinstance(res, dict) else {}
+
+
 def create_pending_approval_entry(
-    state_or_result: dict[str, Any],
-    inc_id: str,
-    thread_id: str,
+    state_or_result: dict[str, Any], inc_id: str, thread_id: str
 ) -> dict[str, Any]:
     """Format pending approval entry from state or result."""
-    plan = state_or_result.get("plan") or {}
-    plan_dict = (
-        plan.model_dump()
-        if hasattr(plan, "model_dump")
-        else (plan if isinstance(plan, dict) else {})
-    )
-
+    plan_dict = _dump(state_or_result.get("plan"))
     steps = plan_dict.get("steps", [])
     action_type = (
         steps[0].get("tool_name", "k8s_remediation") if steps else "k8s_remediation"
@@ -35,45 +33,25 @@ def create_pending_approval_entry(
     runbook_id = plan_dict.get("failure_mode") or "autonomous_remediation"
     confidence = float(state_or_result.get("diagnosis", {}).get("confidence", 0.8))
 
-    target = state_or_result.get("target") or {}
-    target_dict = (
-        target.model_dump()
-        if hasattr(target, "model_dump")
-        else (target if isinstance(target, dict) else {})
-    )
+    target_dict = _dump(state_or_result.get("target"))
     target_ns = target_dict.get("namespace", "default")
     target_name = target_dict.get("name", "unknown")
     target_str = f"{target_ns}/{target_name}"
 
-    gov = state_or_result.get("governance") or {}
-    gov_dict = (
-        gov.model_dump()
-        if hasattr(gov, "model_dump")
-        else (gov if isinstance(gov, dict) else {})
-    )
+    gov_dict = _dump(state_or_result.get("governance"))
     reasons = gov_dict.get(
         "reasons", ["L2/L3 mutating action requires operator authorization"]
     )
 
-    diagnosis = state_or_result.get("diagnosis") or {}
-    if hasattr(diagnosis, "model_dump"):
-        diag_dict = diagnosis.model_dump()
-    elif hasattr(diagnosis, "to_dict"):
-        diag_dict = diagnosis.to_dict()
-    elif isinstance(diagnosis, dict):
-        diag_dict = diagnosis
-    else:
-        diag_dict = {}
-
+    diag_dict = _dump(state_or_result.get("diagnosis"))
     suggested_fix = (
         diag_dict.get("suggested_fix")
         or (steps[0].get("description") if steps else None)
         or f"Execute {action_type} on {target_str}"
     )
 
-    approval_id = thread_id
     return {
-        "approval_id": approval_id,
+        "approval_id": thread_id,
         "thread_id": thread_id,
         "incident_id": inc_id,
         "runbook_id": runbook_id,
@@ -150,9 +128,7 @@ async def notify_incident_rejected_helper(
 
 
 async def resume_incident_execution(
-    workflow: Any,
-    thread_id: str,
-    approval_decision: str = "approved",
+    workflow: Any, thread_id: str, approval_decision: str = "approved"
 ) -> dict[str, Any]:
     """Resume an interrupted incident after human authorization."""
     entry = workflow._pending_approvals.get(thread_id)
@@ -164,7 +140,6 @@ async def resume_incident_execution(
             ):
                 entry = val
                 break
-
     actual_tid = entry.get("thread_id", thread_id) if entry else thread_id
     if entry:
         for k in [
@@ -183,7 +158,6 @@ async def resume_incident_execution(
         actual_tid,
         approval_decision,
     )
-
     result = await workflow._compiled_graph.ainvoke(
         Command(resume=approval_decision), config=config
     )
@@ -192,9 +166,8 @@ async def resume_incident_execution(
     if (state_snapshot.next and "approval" in state_snapshot.next) or result.get(
         "__interrupt__"
     ):
-        inc_id = result.get("incident_id", actual_tid)
         await workflow._record_pending_approval(
-            result, inc_id=inc_id, thread_id=actual_tid
+            result, inc_id=result.get("incident_id", actual_tid), thread_id=actual_tid
         )
     else:
         dec_str = (
@@ -214,7 +187,7 @@ async def resume_incident_execution(
             await workflow.notify_incident_rejected(
                 target_str,
                 result.get("incident_id", actual_tid),
-                reason=f"Rejected by operator: {approval_decision}",
+                reason=f"Rejected: {approval_decision}",
             )
         await workflow._handle_workflow_completion(
             result, inc_id=result.get("incident_id", actual_tid), thread_id=actual_tid
@@ -223,4 +196,4 @@ async def resume_incident_execution(
     if result.get("diagnosis"):
         workflow._rca_results.append(result["diagnosis"])
         workflow._rca_results = workflow._rca_results[-100:]
-    return result
+    return cast(dict[str, Any], result)

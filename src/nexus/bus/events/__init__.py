@@ -11,8 +11,15 @@ from nexus.bus.events.contexts import (
     PodFailureContext,
     TrafficSpikePredictionContext,
 )
-from nexus.bus.events.enums import AgentType, HealingLevel, Severity, SignalType
-from nexus.bus.events.event import AnomalySignal, IncidentEvent
+from nexus.bus.events.enums import (
+    AgentType,
+    HealingLevel,
+    Severity,
+    SignalKind,
+    SignalSource,
+    SignalType,
+)
+from nexus.bus.events.event import AnomalySignal, IncidentEvent, SymptomSignal
 
 __all__ = [
     "AgentType",
@@ -28,6 +35,9 @@ __all__ = [
     "NginxHighErrorContext",
     "PodFailureContext",
     "Severity",
+    "SignalKind",
+    "SignalSource",
     "SignalType",
+    "SymptomSignal",
     "TrafficSpikePredictionContext",
 ]

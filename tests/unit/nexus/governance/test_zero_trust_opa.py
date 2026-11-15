@@ -15,6 +15,7 @@ Verifies:
 from __future__ import annotations
 
 import zlib
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -251,11 +252,14 @@ async def test_govern_node_enforces_zero_trust_metadata_for_account_wide_tool():
         "approval_decision": None,
     }
 
-    result = await govern_node(state)
-    gov = result["governance"]
+    try:
+        result = await govern_node(state)
+        gov = result["governance"]
 
-    assert gov["allowed"] is False
-    assert any("account_wide" in r for r in gov["reasons"])
+        assert gov["allowed"] is False
+        assert any("account_wide" in r for r in gov["reasons"])
+    finally:
+        default_registry.unregister("mock_account_wipe")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

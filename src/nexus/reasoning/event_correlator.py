@@ -12,13 +12,22 @@ from collections import deque
 from datetime import datetime, timezone
 
 from nexus.bus.incident_event import IncidentEvent, SignalType
-from nexus.reasoning.correlator_rules import IMMEDIATE_EMIT, SKIP_CLUSTERING
 from nexus.reasoning.incident_cluster import IncidentCluster
 
 logger = logging.getLogger(__name__)
 
-_SKIP_CLUSTERING = SKIP_CLUSTERING
-_IMMEDIATE_EMIT = IMMEDIATE_EMIT
+_SKIP_CLUSTERING = frozenset(
+    {"db_query_spike", "metric_unavailable", "circuit_breaker_tripped", "deploy_event"}
+)
+_IMMEDIATE_EMIT = frozenset(
+    {
+        "env_contract_violation",
+        "secret_committed",
+        "pod_crashloop",
+        "pod_oomkilled",
+        "dns_resolution_failure",
+    }
+)
 
 
 class EventCorrelator:
@@ -45,8 +54,6 @@ class EventCorrelator:
         self._open: dict[str, IncidentCluster] = {}
 
         # De-duplication set (cluster_id → already emitted)
-        from collections import deque
-
         self._emitted: set[str] = set()
         self._emitted_order: deque[str] = deque()
         self._max_emitted = 500
@@ -167,9 +174,7 @@ class EventCorrelator:
     @staticmethod
     def _cluster_key(event: IncidentEvent) -> str:
         """Correlation key — events in the same namespace are clustered together."""
-        if event.namespace:
-            return event.namespace
-        return f"global:{event.agent}"
+        return event.namespace if event.namespace else f"global:{event.agent}"
 
     def _emit(self, cluster: IncidentCluster) -> IncidentCluster:
         self._emitted.add(cluster.cluster_id)
@@ -178,9 +183,9 @@ class EventCorrelator:
             oldest = self._emitted_order.popleft()
             self._emitted.discard(oldest)
         self._total_emitted += 1
+        agents = ", ".join(sorted(cluster.agent_types))
         logger.info(
-            f"[EventCorrelator] Cluster ready: {cluster.cluster_id} | {len(cluster.events)} events "
-            f"| agents=[{', '.join(sorted(cluster.agent_types))}] | severity={cluster.highest_severity}"
+            f"[EventCorrelator] Cluster ready: {cluster.cluster_id} | {len(cluster.events)} events | agents=[{agents}] | severity={cluster.highest_severity}"
         )
         return cluster
 

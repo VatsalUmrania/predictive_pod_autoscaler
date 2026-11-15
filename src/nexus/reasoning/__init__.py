@@ -1,7 +1,6 @@
 # nexus.reasoning — Reasoning Plane
 # ==================================
 
-from nexus.graph.rca.baseline import deterministic_baseline_rca
 from nexus.graph.rca.result import RCAResult
 from nexus.reasoning.confidence_scorer import ConfidenceScorer
 from nexus.reasoning.event_correlator import EventCorrelator
@@ -15,5 +14,4 @@ __all__ = [
     "ConfidenceScorer",
     "RCAValidator",
     "ValidationVerdict",
-    "deterministic_baseline_rca",
 ]

@@ -27,8 +27,9 @@ def triage_node(state: IncidentGraphState) -> dict[str, Any]:
     events = state.get("events", [])
     anomaly_signal = state.get("anomaly_signal")
     registry = get_platform_registry()
+    initial_messages: list[Any] = []
+    telemetry_dict: dict[str, Any] = state.get("telemetry") or {}
 
-    # 1. Resolve Platform Adapter & Target Resource
     if anomaly_signal:
         signal_dict = (
             anomaly_signal.model_dump()
@@ -69,16 +70,14 @@ def triage_node(state: IncidentGraphState) -> dict[str, Any]:
         adapter = registry.resolve_adapter(events)
         platform_id = adapter.platform_id
         target = adapter.detect_target(events)
-
         severity = "warning"
         for evt in events:
             s = str(evt.get("severity", "")).lower()
             if s == "critical":
                 severity = "critical"
                 break
-            elif s in ("error", "high"):
+            if s in ("error", "high"):
                 severity = "error"
-        initial_messages = []
 
     now_iso = datetime.now(timezone.utc).isoformat()
     audit_entry = {
@@ -90,7 +89,7 @@ def triage_node(state: IncidentGraphState) -> dict[str, Any]:
 
     logger.info(
         "[Triage] Incident %s triaged: target=%s, platform=%s, severity=%s",
-        state["incident_id"],
+        state.get("incident_id"),
         target,
         platform_id,
         severity,
@@ -100,6 +99,7 @@ def triage_node(state: IncidentGraphState) -> dict[str, Any]:
         "platform": platform_id,
         "target": target.model_dump(),
         "severity": severity,
+        "telemetry": telemetry_dict,
         "fsm_state": IncidentState.CORRELATED.value,
         "audit_log": [audit_entry],
         "fallback_active": False,

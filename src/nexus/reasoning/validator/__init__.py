@@ -2,7 +2,6 @@
 NEXUS RCA Validator Package.
 """
 
-from nexus.reasoning.validator.downgrade import downgrade_rca
 from nexus.reasoning.validator.models import (
     _ACTION_EVIDENCE,
     _CASCADING_WITHOUT_DIVERSITY_PENALTY,
@@ -27,5 +26,4 @@ __all__ = [
     "_EVIDENCE_REQUIREMENTS",
     "_VERDICT_PASS",
     "_normalize_signals",
-    "downgrade_rca",
 ]

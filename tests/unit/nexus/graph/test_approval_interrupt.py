@@ -8,15 +8,59 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 
 from nexus.engine.fsm import IncidentState
 from nexus.graph.nodes.approval import approval_node
-from nexus.graph.nodes.execute import execute_node
 from nexus.graph.platform import HealthCheckResult, get_platform_registry
 from nexus.graph.routes import route_after_approval
 from nexus.graph.workflow import IncidentWorkflow
 from nexus.integration.slack_templates import build_agentic_approval_payload
 from nexus.tools.base import NexusToolResult
+
+
+class MockRCAChatModel(BaseChatModel):
+    """Mock LLM that immediately emits structured RCAReport tool call."""
+
+    @property
+    def _llm_type(self) -> str:
+        return "mock-rca-chat-model"
+
+    def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
+        msg = AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "RCAReport",
+                    "args": {
+                        "root_cause_summary": "OOMKilled pod due to memory limit exhaustion",
+                        "affected_resource_urn": "k8s://production/apps/v1/Deployment/checkout-api",
+                        "provider": "kubernetes",
+                        "confidence": 0.95,
+                        "hypotheses_evaluated": ["oom", "bad_deploy"],
+                        "evidence_chain": [
+                            {
+                                "tool_name": "execute_k8s_get_logs",
+                                "tool_arguments": {
+                                    "pod_name": "checkout-api-123",
+                                    "namespace": "production",
+                                },
+                                "key_finding": "Pod status terminated with exitCode 137",
+                            }
+                        ],
+                        "pre_incident_resource_state": {"replicas": 2},
+                        "requires_remediation": True,
+                    },
+                    "id": "rca_call_1",
+                }
+            ],
+        )
+        return ChatResult(generations=[ChatGeneration(message=msg)])
+
+    def bind_tools(self, *args: Any, **kwargs: Any) -> Any:
+        return self
 
 
 def test_route_after_approval_logic():
@@ -141,22 +185,24 @@ async def test_e2e_approval_interrupt_and_resume_approved():
         }
     ]
 
-    with patch(
-        "nexus.agents.k8s_tools.describe_resource",
-        return_value="State: OOMKilled\nReplicas: 3",
-    ), patch(
-        "nexus.agents.k8s_tools.get_pod_logs",
-        return_value="panic: fatal memory error",
-    ), patch(
-        "nexus.agents.k8s_tools.restart_deployment",
-        return_value="deployment.apps/checkout-api restarted",
-    ), patch.object(
-        adapter,
-        "verify_health",
-        AsyncMock(
-            return_value=HealthCheckResult(
-                healthy=True, slo_restored=True, details="Pods Ready"
-            )
+    with (
+        patch(
+            "nexus.graph.nodes.diagnose.get_llm",
+            return_value=MockRCAChatModel(),
+        ),
+        patch.object(
+            adapter,
+            "execute_action",
+            AsyncMock(return_value=NexusToolResult(success=True)),
+        ),
+        patch.object(
+            adapter,
+            "verify_health",
+            AsyncMock(
+                return_value=HealthCheckResult(
+                    healthy=True, slo_restored=True, details="Pods Ready"
+                )
+            ),
         ),
     ):
         interrupted = await workflow.run_incident(
@@ -200,11 +246,8 @@ async def test_e2e_approval_interrupt_and_resume_rejected():
     ]
 
     with patch(
-        "nexus.agents.k8s_tools.describe_resource",
-        return_value="State: OOMKilled\nReplicas: 3",
-    ), patch(
-        "nexus.agents.k8s_tools.get_pod_logs",
-        return_value="panic: fatal memory error",
+        "nexus.graph.nodes.diagnose.get_llm",
+        return_value=MockRCAChatModel(),
     ):
         interrupted = await workflow.run_incident(
             {
@@ -245,22 +288,24 @@ async def test_e2e_approval_interrupt_resume_edit_re_governs_and_executes():
         }
     ]
 
-    with patch(
-        "nexus.agents.k8s_tools.describe_resource",
-        return_value="State: Running\nReplicas: 2",
-    ), patch(
-        "nexus.agents.k8s_tools.get_pod_logs",
-        return_value="high cpu load processing queue",
-    ), patch(
-        "nexus.agents.k8s_tools.restart_deployment",
-        return_value="deployment.apps/checkout-api restarted",
-    ), patch.object(
-        adapter,
-        "verify_health",
-        AsyncMock(
-            return_value=HealthCheckResult(
-                healthy=True, slo_restored=True, details="Healthy after edit"
-            )
+    with (
+        patch(
+            "nexus.graph.nodes.diagnose.get_llm",
+            return_value=MockRCAChatModel(),
+        ),
+        patch.object(
+            adapter,
+            "execute_action",
+            AsyncMock(return_value=NexusToolResult(success=True)),
+        ),
+        patch.object(
+            adapter,
+            "verify_health",
+            AsyncMock(
+                return_value=HealthCheckResult(
+                    healthy=True, slo_restored=True, details="Healthy after edit"
+                )
+            ),
         ),
     ):
         interrupted = await workflow.run_incident(
@@ -311,11 +356,8 @@ async def test_e2e_approval_interrupt_resume_edit_violating_policy_escalates():
     ]
 
     with patch(
-        "nexus.agents.k8s_tools.describe_resource",
-        return_value="State: Running",
-    ), patch(
-        "nexus.agents.k8s_tools.get_pod_logs",
-        return_value="normal logs",
+        "nexus.graph.nodes.diagnose.get_llm",
+        return_value=MockRCAChatModel(),
     ):
         interrupted = await workflow.run_incident(
             {

@@ -4,7 +4,11 @@ NEXUS RCA Validator Facade.
 Backward-compatible re-exports from nexus.reasoning.validator.
 """
 
-from nexus.graph.rca import deterministic_baseline_rca as _rule_based_rca
+from __future__ import annotations
+
+import copy
+from typing import Any
+
 from nexus.reasoning.validator import (
     _ACTION_EVIDENCE,
     _CASCADING_WITHOUT_DIVERSITY_PENALTY,
@@ -16,13 +20,24 @@ from nexus.reasoning.validator import (
     RCAValidator,
     ValidationVerdict,
     _normalize_signals,
-    downgrade_rca,
 )
+
+
+def downgrade_rca(rca: Any, reason: str, cluster: Any = None, **kwargs: Any) -> Any:
+    d = copy.deepcopy(rca)
+    d.failure_class = "unknown"
+    d.healing_level = 0
+    d.runbook_id = None
+    d.suggested_action = None
+    d.reasoning = f"VALIDATION BLOCKED: {reason}"
+    return d
+
 
 __all__ = [
     "EvidenceRequirement",
     "RCAValidator",
     "ValidationVerdict",
+    "downgrade_rca",
     "_ACTION_EVIDENCE",
     "_CASCADING_WITHOUT_DIVERSITY_PENALTY",
     "_DISAGREEMENT_PENALTY",
@@ -30,6 +45,4 @@ __all__ = [
     "_EVIDENCE_REQUIREMENTS",
     "_VERDICT_PASS",
     "_normalize_signals",
-    "_rule_based_rca",
-    "downgrade_rca",
 ]

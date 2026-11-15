@@ -1,9 +1,12 @@
 # Stage 1: Builder
 # Installs all dependencies into a virtual env so only that venv is copied
 # to the final slim runtime image.
-FROM python:3.11-slim AS builder
+FROM python:3.12-slim AS builder
 
 WORKDIR /build
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # System deps needed only at build time
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -15,13 +18,12 @@ COPY pyproject.toml ./
 COPY src ./src
 
 # Create isolated venv and install the nexus package + all extras
-RUN python -m venv /venv && \
-    /venv/bin/pip install --upgrade pip wheel && \
-    /venv/bin/pip install ".[nexus]" --no-cache-dir
+RUN uv venv /venv && \
+    uv pip install --no-cache ".[nexus]" --python /venv
 
 # Stage 2: Runtime
 # Slim image — only the venv + app source, no build tools
-FROM python:3.11-slim AS runtime
+FROM python:3.12-slim AS runtime
 
 LABEL org.opencontainers.image.title="NEXUS Self-Healing API"
 LABEL org.opencontainers.image.description="Autonomous infrastructure healing system"

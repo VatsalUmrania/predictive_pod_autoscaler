@@ -7,7 +7,6 @@ import logging
 from typing import Any
 
 from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
-from nexus.governance.action_ladder import ActionLadder
 from nexus.predictive.models import PrescaleDecision
 
 logger = logging.getLogger(__name__)
@@ -46,7 +45,7 @@ async def execute_advisory(
 async def execute_autonomous(
     decision: PrescaleDecision,
     source_event: IncidentEvent,
-    ladder: ActionLadder | None,
+    ladder: Any | None,
     cooldown: float,
 ) -> None:
     """Scale deployment directly via ActionLadder (L2 action)."""

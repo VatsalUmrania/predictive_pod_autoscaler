@@ -51,17 +51,14 @@ async def bootstrap_components(
     cooldown_store = srv_mod.CooldownStore(db_client=db_client)
     await cooldown_store.connect()
 
-    ladder = srv_mod.ActionLadder(
-        policy_engine=srv_mod.PolicyEngine(opa_url=opa_url),
-        cooldown_store=cooldown_store,
-        approval_queue=srv_mod.HumanApprovalQueue(nats_client=nats),
-        governance_cb=srv_mod.GovernanceCircuitBreaker(
-            failure_threshold=3,
-            nats_client=nats,
-        ),
+    policy_engine = srv_mod.PolicyEngine(opa_url=opa_url)
+    srv_mod.HumanApprovalQueue(nats_client=nats)
+    srv_mod.GovernanceCircuitBreaker(
+        failure_threshold=3,
+        nats_client=nats,
     )
 
-    prescaler = srv_mod.Prescaler(nats_client=nats, action_ladder=ladder)
+    prescaler = srv_mod.Prescaler(nats_client=nats, action_ladder=None)
     await prescaler.subscribe_to_ppa_predictions()
 
     outcome_tracker = srv_mod.PpaOutcomeTracker(
@@ -143,7 +140,7 @@ async def bootstrap_components(
     srv_mod.context.outcome_store = outcome_store
     srv_mod.context.knowledge_base = knowledge_base
     srv_mod.context.db_client = db_client
-    srv_mod.context.action_ladder = ladder
+    srv_mod.context.policy_engine = policy_engine
 
     return {
         "nats_client": nats,

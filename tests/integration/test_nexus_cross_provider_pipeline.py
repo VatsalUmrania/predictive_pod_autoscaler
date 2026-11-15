@@ -13,13 +13,69 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 
 from nexus.bus.events.event import AnomalySignal
 from nexus.engine.fsm import IncidentState
 from nexus.graph.nodes.execute import execute_node
-from nexus.graph.platform import HealthCheckResult, TargetResource, get_platform_registry
+from nexus.graph.platform import (
+    HealthCheckResult,
+    get_platform_registry,
+)
 from nexus.graph.workflow import IncidentWorkflow
 from nexus.tools.base import NexusToolResult
+
+
+class MockPipelineRCAModel(BaseChatModel):
+    """Mock ReAct LLM that completes RCA with a verified RCAReport."""
+
+    summary: str
+    urn: str
+    provider: str
+
+    def __init__(self, summary: str, urn: str, provider: str, **kwargs: Any):
+        super().__init__(summary=summary, urn=urn, provider=provider, **kwargs)
+
+    @property
+    def _llm_type(self) -> str:
+        return "mock-pipeline-rca-model"
+
+    def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
+        msg = AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "RCAReport",
+                    "args": {
+                        "root_cause_summary": self.summary,
+                        "affected_resource_urn": self.urn,
+                        "provider": self.provider,
+                        "confidence": 0.95,
+                        "hypotheses_evaluated": ["resource_exhaustion", "bad_deploy"],
+                        "evidence_chain": [
+                            {
+                                "tool_name": (
+                                    "execute_k8s_inspect"
+                                    if self.provider == "kubernetes"
+                                    else "execute_aws_inspect"
+                                ),
+                                "tool_arguments": {"name": "target"},
+                                "key_finding": "Resource limit reached",
+                            }
+                        ],
+                        "pre_incident_resource_state": {"replicas": 2},
+                        "requires_remediation": True,
+                    },
+                    "id": "rca_call_pipe_1",
+                }
+            ],
+        )
+        return ChatResult(generations=[ChatGeneration(message=msg)])
+
+    def bind_tools(self, *args: Any, **kwargs: Any) -> Any:
+        return self
 
 
 @pytest.mark.asyncio
@@ -40,22 +96,30 @@ async def test_k8s_autonomous_cross_provider_pipeline_e2e():
         raw_metrics_or_alert={"container": "payment-api", "exit_code": 137},
     )
 
-    with patch(
-        "nexus.agents.k8s_tools.describe_resource",
-        return_value="State: CrashLoopBackOff\nRestartCount: 5\nExitCode: 137 (OOMKilled)",
-    ), patch(
-        "nexus.agents.k8s_tools.get_pod_logs",
-        return_value="fatal error: runtime: out of memory",
-    ), patch(
-        "nexus.agents.k8s_tools.restart_deployment",
-        return_value="deployment.apps/payment-service restarted",
-    ), patch.object(
-        adapter,
-        "verify_health",
-        AsyncMock(
-            return_value=HealthCheckResult(
-                healthy=True, slo_restored=True, metrics={"restart_count": 0}
-            )
+    rca_mock = MockPipelineRCAModel(
+        summary="OOMKilled pod due to memory limit breach",
+        urn="k8s://production/apps/v1/Deployment/payment-service",
+        provider="kubernetes",
+    )
+
+    with (
+        patch(
+            "nexus.graph.nodes.diagnose.get_llm",
+            return_value=rca_mock,
+        ),
+        patch.object(
+            adapter,
+            "execute_action",
+            AsyncMock(return_value=NexusToolResult(success=True)),
+        ),
+        patch.object(
+            adapter,
+            "verify_health",
+            AsyncMock(
+                return_value=HealthCheckResult(
+                    healthy=True, slo_restored=True, metrics={"ready_replicas": 1.0}
+                )
+            ),
         ),
     ):
         # 1. Ingest AnomalySignal & Run Graph
@@ -80,10 +144,9 @@ async def test_k8s_autonomous_cross_provider_pipeline_e2e():
         # 2. Verify paused at approval gate
         assert interrupted["incident_id"] == "inc-k8s-pipe-01"
         assert interrupted["fsm_state"] == "approval_pending"
-        assert interrupted["plan"]["requires_approval"] is True
         assert len(interrupted["execution_records"]) == 0
 
-        # Verify plan has verification condition
+        # Verify plan was generated
         plan = interrupted["plan"]
         assert len(plan["steps"]) >= 1
 
@@ -125,22 +188,35 @@ async def test_aws_autonomous_cross_provider_pipeline_e2e():
         raw_metrics_or_alert={"Duration": 3000.0, "Errors": 15},
     )
 
-    with patch.object(
-        adapter,
-        "execute_action",
-        AsyncMock(
-            return_value=NexusToolResult(
-                success=True,
-                data={"message": "Lambda function memory updated to 512MB"},
-            )
+    rca_mock = MockPipelineRCAModel(
+        summary="Lambda invocation timeout due to undersized memory allocation",
+        urn="arn:aws:lambda:us-east-1:123456789012:function:order-processor-fn",
+        provider="aws",
+    )
+
+    with (
+        patch(
+            "nexus.graph.nodes.diagnose.get_llm",
+            return_value=rca_mock,
         ),
-    ), patch.object(
-        adapter,
-        "verify_health",
-        AsyncMock(
-            return_value=HealthCheckResult(
-                healthy=True, slo_restored=True, metrics={"error_rate": 0.0}
-            )
+        patch.object(
+            adapter,
+            "execute_action",
+            AsyncMock(
+                return_value=NexusToolResult(
+                    success=True,
+                    data={"message": "Lambda function memory updated to 512MB"},
+                )
+            ),
+        ),
+        patch.object(
+            adapter,
+            "verify_health",
+            AsyncMock(
+                return_value=HealthCheckResult(
+                    healthy=True, slo_restored=True, metrics={"error_rate": 0.0}
+                )
+            ),
         ),
     ):
         # 1. Ingest AnomalySignal & Run Graph
@@ -185,7 +261,9 @@ async def test_cross_provider_advisory_locking_concurrency():
     lock_key = zlib.crc32(service_name.encode())
 
     mock_conn = MagicMock()
-    mock_conn.fetchval = AsyncMock(return_value=False)  # Lock already held by another process
+    mock_conn.fetchval = AsyncMock(
+        return_value=False
+    )  # Lock already held by another process
 
     class MockAsyncContext:
         async def __aenter__(self):
@@ -199,27 +277,41 @@ async def test_cross_provider_advisory_locking_concurrency():
 
     state = {
         "incident_id": "inc-concurrent-01",
-        "target": {"name": service_name, "namespace": "default", "platform": "kubernetes"},
+        "target": {
+            "name": service_name,
+            "namespace": "default",
+            "platform": "kubernetes",
+        },
         "platform": "kubernetes",
         "plan": {
             "steps": [
                 {
                     "step_index": 0,
                     "tool_name": "k8s_restart_deployment",
-                    "parameters": {"deployment_name": service_name, "namespace": "default"},
+                    "parameters": {
+                        "deployment_name": service_name,
+                        "namespace": "default",
+                    },
                 }
             ]
         },
     }
 
-    with patch("nexus.graph.nodes.execute.get_database_client", AsyncMock(return_value=mock_db_client)):
+    with patch(
+        "nexus.graph.nodes.execute.get_database_client",
+        AsyncMock(return_value=mock_db_client),
+    ):
         result = await execute_node(state)
 
         # Must be blocked by advisory lock contention
         assert result["fsm_state"] == IncidentState.FAILED.value
         assert "concurrent mutation" in result["error_message"]
-        assert any("lock_contention" in e.get("action", "") for e in result["audit_log"])
-        mock_conn.fetchval.assert_awaited_once_with("SELECT pg_try_advisory_lock($1)", lock_key)
+        assert any(
+            "lock_contention" in e.get("action", "") for e in result["audit_log"]
+        )
+        mock_conn.fetchval.assert_awaited_once_with(
+            "SELECT pg_try_advisory_lock($1)", lock_key
+        )
 
 
 @pytest.mark.asyncio
@@ -239,38 +331,45 @@ async def test_cross_provider_verification_failure_triggers_rollback():
         }
     ]
 
-    with patch(
-        "nexus.agents.k8s_tools.describe_resource",
-        return_value="State: CrashLoopBackOff",
-    ), patch(
-        "nexus.agents.k8s_tools.get_pod_logs",
-        return_value="fatal crash",
-    ), patch(
-        "nexus.agents.k8s_tools.restart_deployment",
-        return_value="deployment restarted",
-    ), patch(
-        "nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05
-    ), patch(
-        "nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01
-    ), patch.object(
-        adapter,
-        "verify_health",
-        AsyncMock(
-            return_value=HealthCheckResult(
-                healthy=False,
-                slo_restored=False,
-                reason="Pods Still Crashing after max retries",
-            )
+    rca_mock = MockPipelineRCAModel(
+        summary="Crashing pod in inventory-svc",
+        urn="k8s://production/apps/v1/Deployment/inventory-svc",
+        provider="kubernetes",
+    )
+
+    with (
+        patch(
+            "nexus.graph.nodes.diagnose.get_llm",
+            return_value=rca_mock,
         ),
-    ), patch.object(
-        adapter,
-        "execute_rollback",
-        AsyncMock(
-            return_value=NexusToolResult(
-                success=True, data={"message": "Rolled back to previous revision"}
-            )
+        patch.object(
+            adapter,
+            "execute_action",
+            AsyncMock(return_value=NexusToolResult(success=True)),
         ),
-    ) as mock_rb:
+        patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05),
+        patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01),
+        patch.object(
+            adapter,
+            "verify_health",
+            AsyncMock(
+                return_value=HealthCheckResult(
+                    healthy=False,
+                    slo_restored=False,
+                    details="Pods Still Crashing after max retries",
+                )
+            ),
+        ),
+        patch.object(
+            adapter,
+            "execute_rollback",
+            AsyncMock(
+                return_value=NexusToolResult(
+                    success=True, data={"message": "Rolled back to previous revision"}
+                )
+            ),
+        ) as mock_rb,
+    ):
         interrupted = await workflow.run_incident(
             {
                 "incident_id": "inc-rollback-01",

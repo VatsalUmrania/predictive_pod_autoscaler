@@ -2,14 +2,12 @@
 # ====================================
 # Full public API for the Governance Layer.
 
-from nexus.governance.action_ladder import (
-    ActionLadder,
-    GovernanceCircuitBreaker,
+from nexus.governance.approval_queue import (
     HumanApprovalQueue,
-    LadderDecision,
     PendingApproval,
 )
 from nexus.governance.audit_trail import AuditTrail
+from nexus.governance.circuit_breaker import GovernanceCircuitBreaker
 from nexus.governance.cooldown_store import CooldownStore
 from nexus.governance.policy_engine import PolicyDecision, PolicyEngine
 from nexus.governance.rollback_registry import PreActionState, RollbackRegistry
@@ -25,10 +23,8 @@ __all__ = [
     # Rollback
     "RollbackRegistry",
     "PreActionState",
-    # Action Ladder
-    "ActionLadder",
+    # Circuit Breaker & Approval Queue
     "GovernanceCircuitBreaker",
     "HumanApprovalQueue",
-    "LadderDecision",
     "PendingApproval",
 ]

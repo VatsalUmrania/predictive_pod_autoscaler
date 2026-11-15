@@ -5,6 +5,22 @@ from __future__ import annotations
 from enum import Enum
 
 
+class SignalSource(str, Enum):
+    AWS_CLOUDWATCH = "aws_cloudwatch"
+    AWS_EVENTBRIDGE = "aws_eventbridge"
+    KUBERNETES_API = "kubernetes_api"
+    PROMETHEUS = "prometheus"
+    OTEL_SDK = "otel_sdk"
+    WEBHOOK = "webhook"
+
+
+class SignalKind(str, Enum):
+    METRIC_ANOMALY = "metric_anomaly"
+    ERROR_LOG_BURST = "error_log_burst"
+    STATE_TRANSITION = "state_transition"
+    SLO_BURN_ALERT = "slo_burn_alert"
+
+
 class AgentType(str, Enum):
     NGINX = "nginx"
     GIT = "git"
@@ -102,9 +118,12 @@ class SignalType(str, Enum):
 
 
 class Severity(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
     INFO = "info"
     WARNING = "warning"
-    CRITICAL = "critical"
     EMERGENCY = "emergency"
 
 

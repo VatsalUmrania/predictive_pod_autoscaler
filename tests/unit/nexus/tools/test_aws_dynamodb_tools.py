@@ -32,12 +32,13 @@ def fake_dynamodb():
             }
             self.updated_calls = []
 
-        def describe_table(self, TableName):
-            if TableName not in self.tables:
+        def describe_table(self, **kwargs):
+            table_name = kwargs.get("TableName")
+            if table_name not in self.tables:
                 raise Exception(
-                    f"ResourceNotFoundException: Table {TableName} not found"
+                    f"ResourceNotFoundException: Table {table_name} not found"
                 )
-            return {"Table": self.tables[TableName]}
+            return {"Table": self.tables[table_name]}
 
         def update_table(self, **kwargs):
             table_name = kwargs["TableName"]

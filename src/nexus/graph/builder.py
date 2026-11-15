@@ -1,57 +1,70 @@
 """
 StateGraph construction and compilation for NEXUS incidents.
+=============================================================
+Assembles the provider-agnostic, multi-turn ReAct investigator, schema-driven
+planner, attribute-based OPA gate, and closed-loop verification pipeline.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from langgraph.graph import END, START, StateGraph
 
 from nexus.graph.nodes import (
     approval_node,
-    collect_telemetry_node,
     diagnose_node,
     escalate_node,
     execute_node,
     govern_node,
     learn_node,
-    plan_remediation_node,
+    plan_node,
+    rca_reasoner_node,
+    rca_tool_executor_node,
     rollback_node,
     triage_node,
     verify_node,
 )
+from nexus.graph.nodes.collect import collect_telemetry_node
 from nexus.graph.routes import (
     route_after_approval,
     route_after_diagnose,
-    route_after_execute,
     route_after_govern,
+    route_after_rca_reasoner,
     route_after_verify,
 )
 from nexus.graph.state import IncidentGraphState
 
 
-def build_incident_graph(checkpointer: Any = None) -> Any:
-    """Construct and compile the unified NEXUS incident response StateGraph."""
-    workflow = StateGraph(IncidentGraphState)
+def build_nexus_agent_graph(
+    nodes: dict[str, Any] | None = None, checkpointer: Any = None
+) -> Any:
+    """Build and compile the governed NEXUS agentic incident StateGraph."""
+    graph = StateGraph(IncidentGraphState)
+    node_map = {
+        "triage": triage_node,
+        "rca_reasoner": rca_reasoner_node,
+        "rca_tool_executor": rca_tool_executor_node,
+        "diagnose": diagnose_node,
+        "collect": collect_telemetry_node,
+        "plan": plan_node,
+        "govern": govern_node,
+        "approval": approval_node,
+        "execute": execute_node,
+        "verify": verify_node,
+        "rollback": rollback_node,
+        "learn": learn_node,
+        "escalate": escalate_node,
+    }
+    if nodes:
+        node_map.update(nodes)
 
-    # 1. Register Nodes
-    workflow.add_node("triage", triage_node)
-    workflow.add_node("collect", collect_telemetry_node)
-    workflow.add_node("diagnose", diagnose_node)
-    workflow.add_node("plan", plan_remediation_node)
-    workflow.add_node("govern", govern_node)
-    workflow.add_node("approval", approval_node)
-    workflow.add_node("execute", execute_node)
-    workflow.add_node("verify", verify_node)
-    workflow.add_node("rollback", rollback_node)
-    workflow.add_node("learn", learn_node)
-    workflow.add_node("escalate", escalate_node)
+    for name, fn in node_map.items():
+        cast(Any, graph).add_node(name, fn)
 
-    # 2. Entry & Diagnostic Topology
-    workflow.add_edge(START, "triage")
-    workflow.add_edge("triage", "diagnose")
-    workflow.add_conditional_edges(
+    graph.add_edge(START, "triage")
+    graph.add_edge("triage", "diagnose")
+    graph.add_conditional_edges(
         "diagnose",
         route_after_diagnose,
         {
@@ -59,11 +72,22 @@ def build_incident_graph(checkpointer: Any = None) -> Any:
             "collect": "collect",
         },
     )
-    workflow.add_edge("collect", "plan")
-    workflow.add_edge("plan", "govern")
+    graph.add_edge("collect", "plan")
 
-    # 3. Governance Conditional Branching
-    workflow.add_conditional_edges(
+    # Connect multi-turn reasoning sub-loop if targeted
+    graph.add_conditional_edges(
+        "rca_reasoner",
+        route_after_rca_reasoner,
+        {
+            "rca_tool_executor": "rca_tool_executor",
+            "plan": "plan",
+            "learn": "learn",
+        },
+    )
+    graph.add_edge("rca_tool_executor", "rca_reasoner")
+
+    graph.add_edge("plan", "govern")
+    graph.add_conditional_edges(
         "govern",
         route_after_govern,
         {
@@ -73,9 +97,7 @@ def build_incident_graph(checkpointer: Any = None) -> Any:
             "learn": "learn",
         },
     )
-
-    # 4. Approval Conditional Branching
-    workflow.add_conditional_edges(
+    graph.add_conditional_edges(
         "approval",
         route_after_approval,
         {
@@ -84,31 +106,23 @@ def build_incident_graph(checkpointer: Any = None) -> Any:
             "escalate": "escalate",
         },
     )
-
-    # 5. Execution Conditional Branching
-    workflow.add_conditional_edges(
-        "execute",
-        route_after_execute,
-        {
-            "verify": "verify",
-            "rollback": "rollback",
-        },
-    )
-
-    # 6. Verification Conditional Branching
-    workflow.add_conditional_edges(
+    graph.add_edge("execute", "verify")
+    graph.add_conditional_edges(
         "verify",
         route_after_verify,
         {
             "learn": "learn",
-            "plan": "plan",
             "rollback": "rollback",
+            "plan": "plan",
         },
     )
+    graph.add_edge("rollback", "escalate")
+    graph.add_edge("learn", END)
+    graph.add_edge("escalate", END)
 
-    # 7. Rollback & Terminal Edges
-    workflow.add_edge("rollback", "escalate")
-    workflow.add_edge("learn", END)
-    workflow.add_edge("escalate", END)
+    return graph.compile(checkpointer=checkpointer)
 
-    return workflow.compile(checkpointer=checkpointer)
+
+def build_incident_graph(checkpointer: Any = None) -> Any:
+    """Compatibility builder for existing test harnesses and workflows."""
+    return build_nexus_agent_graph(checkpointer=checkpointer)

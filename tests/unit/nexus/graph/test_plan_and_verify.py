@@ -173,7 +173,7 @@ class MockPlanChatModel(BaseChatModel):
     def _llm_type(self) -> str:
         return "mock-plan-chat-model"
 
-    def _generate(self, messages: Any, stop: Any = None, **kwargs: Any) -> ChatResult:
+    def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
         return ChatResult(
             generations=[ChatGeneration(message=AIMessage(content=self.response_text))]
         )

@@ -15,7 +15,8 @@ def build_report_facts(
 
     def _plain(obj: Any) -> dict[str, Any]:
         if hasattr(obj, "model_dump"):
-            return obj.model_dump()
+            dumped = obj.model_dump()
+            return dict(dumped) if isinstance(dumped, dict) else {}
         return obj if isinstance(obj, dict) else {}
 
     payload = payload or {}

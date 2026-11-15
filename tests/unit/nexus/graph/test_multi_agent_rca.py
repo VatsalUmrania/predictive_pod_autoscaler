@@ -1,135 +1,231 @@
 """
-Tests for LangGraph Multi-Agent RCA System
-==========================================
-Verifies that LogAnalyst, MetricsAnalyst, TopologyAnalyst, and RCALeadSynthesizer
-collaboratively diagnose production incidents without static runbooks.
+Unit tests for the multi-turn ReAct Investigator Loop (diagnose.py).
+Verifies:
+  1. Multi-turn reasoning <-> tool execution loop for Kubernetes.
+  2. Multi-turn reasoning <-> tool execution loop for AWS with Boto3 self-correction.
+  3. Structured RCAReport generation with evidence citations.
 """
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
+from langchain_core.messages import AIMessage
 
-from nexus.graph.nodes.diagnose import diagnose_node
-from nexus.graph.rca import (
-    VALID_FAILURE_CLASSES,
-    LogAnalystAgent,
-    MetricsAnalystAgent,
-    RCALeadSynthesizer,
-    RCAResult,
-    TopologyAnalystAgent,
-)
-
-
-def test_log_analyst_agent_oom_detection():
-    agent = LogAnalystAgent()
-    logs = [
-        "2026-09-09T10:00:00Z Initializing worker pool",
-        "2026-09-09T10:01:00Z fatal memory error: out of memory",
-        "2026-09-09T10:01:05Z exit code 137",
-    ]
-    report = agent.analyze(logs, [])
-    assert report["agent"] == "LogAnalyst"
-    assert "oom_event" in report["signatures"]
-    assert report["has_critical_error"] is True
-    assert report["confidence_delta"] > 0
-
-
-def test_log_analyst_agent_connection_pool_detection():
-    agent = LogAnalystAgent()
-    logs = [
-        "2026-09-09T10:00:00Z Connected to db-replica-1",
-        "2026-09-09T10:01:15Z Error: connection pool exhausted, max 100 reached",
-    ]
-    report = agent.analyze(logs, [])
-    assert "connection_exhaustion" in report["signatures"]
-    assert report["has_critical_error"] is True
-
-
-def test_metrics_analyst_agent_breach_detection():
-    agent = MetricsAnalystAgent()
-    metrics = {
-        "error_rate": 0.12,
-        "p99_latency_ms": 1450.0,
-        "memory_usage_pct": 92.5,
-        "restart_count": 4,
-    }
-    report = agent.analyze(metrics, [])
-    assert report["agent"] == "MetricsAnalyst"
-    assert "elevated_error_rate" in report["signatures"]
-    assert "latency_spike" in report["signatures"]
-    assert "memory_saturation" in report["signatures"]
-    assert "pod_restarts" in report["signatures"]
-
-
-def test_topology_analyst_deploy_correlation():
-    agent = TopologyAnalystAgent()
-    raw_signals = [
-        {"signal_type": "deploy_event", "resource_name": "checkout-api"},
-        {"signal_type": "pod_crashloop", "resource_name": "checkout-api"},
-    ]
-    report = agent.analyze(raw_signals, {})
-    assert report["agent"] == "TopologyAnalyst"
-    assert report["has_recent_deploy"] is True
-    assert "recent_deploy" in report["signatures"]
-    assert "crashloop" in report["signatures"]
+from nexus.bus.events.enums import Severity, SignalKind, SignalSource
+from nexus.bus.events.event import SymptomSignal
+from nexus.graph.nodes.diagnose import rca_reasoner_node, rca_tool_executor_node
+from nexus.tools.registry import ToolRegistry
 
 
 @pytest.mark.asyncio
-async def test_rca_lead_synthesizer_bad_deploy():
-    synthesizer = RCALeadSynthesizer()
-    telemetry = {
-        "recent_logs": ["panic: runtime error: nil pointer dereference"],
-        "metrics": {"error_rate": 0.15, "restart_count": 3},
-        "live_config": {},
-    }
-    events = [
-        {"signal_type": "deploy_event", "resource_name": "checkout-api"},
-        {"signal_type": "pod_crashloop", "resource_name": "checkout-api"},
-    ]
-    target = {"name": "checkout-api", "namespace": "production"}
+async def test_react_investigator_k8s_loop():
+    registry = ToolRegistry()
+    mock_llm = MagicMock()
+    mock_llm_bound = AsyncMock()
+    mock_llm.bind_tools.return_value = mock_llm_bound
 
-    result: RCAResult = await synthesizer.investigate(
-        telemetry=telemetry,
-        events=events,
-        target=target,
-        platform="kubernetes",
+    signal = SymptomSignal(
+        source=SignalSource.KUBERNETES_API,
+        kind=SignalKind.STATE_TRANSITION,
+        provider="kubernetes",
+        resource_urn="k8s://prod/apps/v1/Deployment/order-service",
+        region_or_namespace="prod",
+        symptom_summary="CrashLoopBackOff observed on payment pod",
+        severity=Severity.HIGH,
     )
+    initial_state = {"symptom_signal": signal.model_dump(), "rca_steps": 0}
 
-    assert isinstance(result, RCAResult)
-    assert result.failure_class == "bad_deploy"
-    assert result.healing_level == 2
-    assert result.confidence >= 0.85
-    assert result.suggested_action == "k8s_rollback_deployment"
-    assert result.action_params["deployment_name"] == "checkout-api"
-    assert result.failure_class in VALID_FAILURE_CLASSES
-
-
-@pytest.mark.asyncio
-async def test_diagnose_node_end_to_end():
-    state = {
-        "incident_id": "inc-test-multiagent-01",
-        "platform": "kubernetes",
-        "target": {"name": "orders-v2", "namespace": "default"},
-        "events": [
+    # Turn 1: LLM chooses to call k8s_get_logs
+    call_logs = AIMessage(
+        content="",
+        tool_calls=[
             {
-                "signal_type": "pod_oomkilled",
-                "resource_name": "orders-v2",
-                "agent": "k8s",
-                "severity": "critical",
+                "name": "k8s_get_logs",
+                "args": {"pod_name": "order-service-789", "namespace": "prod"},
+                "id": "call-1",
             }
         ],
-        "telemetry": {
-            "recent_logs": ["Container killed by OOMKilled signal", "exit code 137"],
-            "metrics": {"memory_usage_pct": 98.0, "restart_count": 2},
-            "live_config": {},
-        },
-    }
+    )
+    # Turn 2: LLM concludes with RCAReport
+    call_report = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "RCAReport",
+                "args": {
+                    "root_cause_summary": "Out of memory in container order-worker (exit code 137)",
+                    "affected_resource_urn": "k8s://prod/apps/v1/Deployment/order-service",
+                    "provider": "kubernetes",
+                    "confidence": 0.95,
+                    "hypotheses_evaluated": [
+                        "Bad DB connection string (falsified)",
+                        "OOMKilled due to heap saturation (confirmed)",
+                    ],
+                    "evidence_chain": [
+                        {
+                            "tool_name": "k8s_get_logs",
+                            "tool_arguments": {
+                                "pod_name": "order-service-789",
+                                "namespace": "prod",
+                            },
+                            "key_finding": "fatal error: runtime: out of memory",
+                        }
+                    ],
+                    "pre_incident_resource_state": {
+                        "limits": {"memory": "256Mi"},
+                        "replicas": 3,
+                    },
+                    "requires_remediation": True,
+                },
+                "id": "call-2",
+            }
+        ],
+    )
 
-    out = await diagnose_node(state)
-    assert "diagnosis" in out
-    diag = out["diagnosis"]
-    assert diag["failure_class"] == "resource_exhaustion"
-    assert diag["confidence"] >= 0.80
-    assert diag["suggested_action"] == "k8s_restart_deployment"
-    assert out["fsm_state"] == "planning"
-    assert len(out["audit_log"]) == 1
+    mock_llm_bound.ainvoke.side_effect = [call_logs, call_report]
+
+    mock_core = MagicMock()
+    mock_core.read_namespaced_pod_log.return_value = (
+        "fatal error: runtime: out of memory"
+    )
+
+    with patch(
+        "nexus.tools.k8s.universal.get_default_k8s_clients",
+        return_value=(MagicMock(), mock_core),
+    ):
+        # Step 1: Reasoner -> tool call
+        out1 = await rca_reasoner_node(initial_state, llm=mock_llm, registry=registry)
+        assert out1["rca_complete"] is False
+        assert out1["rca_steps"] == 1
+
+        # Step 2: Executor runs k8s_get_logs
+        state2 = {**initial_state, **out1}
+        out_exec = await rca_tool_executor_node(state2, registry=registry)
+        assert len(out_exec["investigation_trace"]) == 1
+        assert "out of memory" in out_exec["investigation_trace"][0]["output"]
+
+        # Step 3: Reasoner -> concludes RCAReport
+        state3 = {**state2, **out_exec}
+        out_final = await rca_reasoner_node(state3, llm=mock_llm, registry=registry)
+        assert out_final["rca_complete"] is True
+        report = out_final["rca_report"]
+        assert "Out of memory" in report["root_cause_summary"]
+        assert len(report["evidence_chain"]) == 1
+        assert report["confidence"] >= 0.9
+
+
+@pytest.mark.asyncio
+async def test_react_investigator_aws_loop_with_self_correction():
+    registry = ToolRegistry()
+    mock_llm = MagicMock()
+    mock_llm_bound = AsyncMock()
+    mock_llm.bind_tools.return_value = mock_llm_bound
+
+    signal = SymptomSignal(
+        source=SignalSource.AWS_CLOUDWATCH,
+        kind=SignalKind.METRIC_ANOMALY,
+        provider="aws",
+        resource_urn="arn:aws:rds:us-east-1:123456789012:db:orders-db",
+        region_or_namespace="us-east-1",
+        symptom_summary="Database connection count breached threshold",
+    )
+    initial_state = {"symptom_signal": signal.model_dump(), "rca_steps": 0}
+
+    # Turn 1: Invalid kwargs causing ParamValidationError
+    call_invalid = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "aws_inspect_resource",
+                "args": {
+                    "service": "rds",
+                    "operation": "describe_db_instances",
+                    "parameters": {"InvalidParam": "bad"},
+                },
+                "id": "call-aws-1",
+            }
+        ],
+    )
+    # Turn 2: Self-corrected call
+    call_corrected = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "aws_inspect_resource",
+                "args": {
+                    "service": "rds",
+                    "operation": "describe_db_instances",
+                    "parameters": {"DBInstanceIdentifier": "orders-db"},
+                },
+                "id": "call-aws-2",
+            }
+        ],
+    )
+    # Turn 3: Conclude
+    call_conclude = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "RCAReport",
+                "args": {
+                    "root_cause_summary": "RDS MaxConnections exceeded on orders-db",
+                    "affected_resource_urn": "arn:aws:rds:us-east-1:123456789012:db:orders-db",
+                    "provider": "aws",
+                    "confidence": 0.92,
+                    "hypotheses_evaluated": [
+                        "Exhaustion from connection leak (confirmed)"
+                    ],
+                    "evidence_chain": [
+                        {
+                            "tool_name": "aws_inspect_resource",
+                            "tool_arguments": {"DBInstanceIdentifier": "orders-db"},
+                            "key_finding": "MaxAllocatedStorage 100, current connections 100/100",
+                        }
+                    ],
+                    "pre_incident_resource_state": {"DBInstanceClass": "db.t3.medium"},
+                    "requires_remediation": True,
+                },
+                "id": "call-aws-3",
+            }
+        ],
+    )
+
+    mock_llm_bound.ainvoke.side_effect = [call_invalid, call_corrected, call_conclude]
+
+    # Turn 1: Reasoner produces invalid args
+    out1 = await rca_reasoner_node(initial_state, llm=mock_llm, registry=registry)
+    # Executor catches validation error and returns hint
+    with patch("boto3.client") as mock_boto:
+        mock_client = MagicMock()
+        mock_boto.return_value = mock_client
+        from botocore.exceptions import ParamValidationError
+
+        mock_client.describe_db_instances.side_effect = [
+            ParamValidationError(report="Unknown parameter InvalidParam"),
+            {
+                "DBInstances": [
+                    {
+                        "DBInstanceIdentifier": "orders-db",
+                        "DBInstanceClass": "db.t3.medium",
+                    }
+                ]
+            },
+        ]
+
+        state1 = {**initial_state, **out1}
+        exec1 = await rca_tool_executor_node(state1, registry=registry)
+        assert "self_correction_hint" in str(exec1["investigation_trace"][0]["output"])
+
+        # Turn 2: Corrected invocation
+        state2 = {**state1, **exec1}
+        out2 = await rca_reasoner_node(state2, llm=mock_llm, registry=registry)
+        exec2 = await rca_tool_executor_node({**state2, **out2}, registry=registry)
+        assert "orders-db" in str(exec2["investigation_trace"][1]["output"])
+
+        # Turn 3: Conclude
+        state3 = {**state2, **out2, **exec2}
+        out_final = await rca_reasoner_node(state3, llm=mock_llm, registry=registry)
+        assert out_final["rca_complete"] is True
+        assert out_final["rca_report"]["provider"] == "aws"

@@ -119,7 +119,7 @@ class GovernanceVerdict(BaseModel):
     )
 
 
-class IncidentGraphState(TypedDict):
+class IncidentGraphState(TypedDict, total=False):
     """
     Central LangGraph state dictionary.
     Threaded through every node in the governed state machine.
@@ -171,3 +171,18 @@ class IncidentGraphState(TypedDict):
     anomaly_signal: dict[str, Any] | None
     agentic_rca: dict[str, Any] | None
     fallback_active: bool
+
+    # 10. ReAct Loop & Universal Agentic State
+    symptom_signal: dict[str, Any] | None
+    rca_messages: list[Any]
+    rca_steps: int
+    rca_complete: bool
+    rca_report: dict[str, Any] | None
+    investigation_trace: list[dict[str, Any]]
+    remediation_plan: dict[str, Any] | None
+    governance_decision: str | None
+    human_approved: bool | None
+    verification_passed: bool | None
+
+
+IncidentState = IncidentGraphState

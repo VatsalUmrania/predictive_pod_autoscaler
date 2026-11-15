@@ -128,10 +128,11 @@ async def test_langchain_tool_invocation(monkeypatch):
 
     # Mock _client
     class FakeDynamoDB:
-        def describe_table(self, TableName):
+        def describe_table(self, **kwargs):
+            table_name = kwargs.get("TableName")
             return {
                 "Table": {
-                    "TableName": TableName,
+                    "TableName": table_name,
                     "TableStatus": "ACTIVE",
                     "ItemCount": 42,
                     "TableSizeBytes": 1024,

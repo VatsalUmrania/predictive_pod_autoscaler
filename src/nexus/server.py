@@ -15,12 +15,9 @@ if TYPE_CHECKING:
 from nexus.agents.manager import AgentManager
 from nexus.bus.nats_client import NATSClient
 from nexus.db.client import get_database_client
-from nexus.governance.action_ladder import (
-    ActionLadder,
-    GovernanceCircuitBreaker,
-    HumanApprovalQueue,
-)
+from nexus.governance.approval_queue import HumanApprovalQueue
 from nexus.governance.audit_trail import AuditTrail
+from nexus.governance.circuit_breaker import GovernanceCircuitBreaker
 from nexus.governance.cooldown_store import CooldownStore
 from nexus.governance.policy_engine import PolicyEngine
 from nexus.governance.rollback_registry import RollbackRegistry
@@ -154,7 +151,6 @@ __all__ = [
     "RCAEngine",
     "RunbookExecutor",
     "get_database_client",
-    "ActionLadder",
     "GovernanceCircuitBreaker",
     "HumanApprovalQueue",
     "AuditTrail",

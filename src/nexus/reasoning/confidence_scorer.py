@@ -10,12 +10,18 @@ from __future__ import annotations
 import logging
 
 from nexus.graph.rca import RCAResult
-from nexus.reasoning.confidence_constants import (
-    _CLASS_ADJUSTMENTS,
-)
 from nexus.reasoning.incident_cluster import IncidentCluster
 
 logger = logging.getLogger(__name__)
+
+_CLASS_ADJUSTMENTS = {
+    "bad_deploy": 0.05,
+    "resource_exhaustion": 0.05,
+    "dependency_failure": 0.0,
+    "config_error": 0.0,
+    "cascading_failure": -0.05,
+    "unknown": -0.15,
+}
 
 
 class ConfidenceScorer:

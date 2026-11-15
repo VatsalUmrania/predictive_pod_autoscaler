@@ -14,9 +14,9 @@ import zlib
 from datetime import datetime, timezone
 from typing import Any
 
+from nexus.db import get_database_client
 from nexus.engine.fsm import IncidentState
 from nexus.graph.state import IncidentGraphState
-from nexus.db import get_database_client
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +53,7 @@ async def learn_node(state: IncidentGraphState) -> dict[str, Any]:
         await trail.write(
             triggered_by=f"nexus:workflow:{platform}",
             runbook_id=str(
-                (state.get("plan") or {}).get("runbook_id")
-                or "autonomous_remediation"
+                (state.get("plan") or {}).get("runbook_id") or "autonomous_remediation"
             ),
             healing_level=1,
             target=str(target_service),

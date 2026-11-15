@@ -1,5 +1,9 @@
 """
-NEXUS Kubernetes Agent Implementation
+NEXUS Universal Kubernetes Event Watcher Agent
+==============================================
+Monitors Kubernetes v1.Event streams for Warning events across all workload and
+infrastructure kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, Node,
+PersistentVolumeClaim, Ingress, CRDs) and emits generic SymptomSignals.
 """
 
 from __future__ import annotations
@@ -7,36 +11,32 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Callable
 from typing import Any
 
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 
 from nexus.agents.base_agent import BaseAgent
-from nexus.agents.k8s.constants import SYSTEM_NAMESPACES
-from nexus.agents.k8s.deployment_checker import check_deployment, check_hpa
-from nexus.agents.k8s.pod_checker import check_pod
-from nexus.bus.incident_event import AgentType, IncidentEvent
+from nexus.bus.events.enums import AgentType, Severity, SignalKind, SignalSource
+from nexus.bus.events.event import IncidentEvent, SymptomSignal
 from nexus.bus.nats_client import NATSClient
 
 logger = logging.getLogger(__name__)
 
+SYSTEM_NAMESPACES = frozenset({"kube-system", "kube-public", "kube-node-lease"})
+
 
 class K8sAgent(BaseAgent):
     """
-    Kubernetes event watcher agent.
+    Provider-agnostic Kubernetes Warning event watcher.
     """
 
     def __init__(
         self,
         nats_client: NATSClient,
         namespaces: list[str] | None = None,
-        crashloop_threshold: int = 3,
-        pending_threshold_min: float = 2.0,
-        degraded_threshold_min: float = 1.0,
-        hpa_maxed_threshold_min: float = 5.0,
         poll_interval_seconds: float = 30.0,
+        **kwargs: Any,
     ):
         super().__init__(
             nats_client=nats_client,
@@ -44,7 +44,7 @@ class K8sAgent(BaseAgent):
             poll_interval_seconds=poll_interval_seconds,
         )
         env_ns = os.getenv("NEXUS_WATCH_NAMESPACES")
-        self.namespaces: list[str] | None = None
+        self.namespaces: list[str] | None
         if namespaces is not None:
             self.namespaces = namespaces
         elif env_ns:
@@ -52,25 +52,15 @@ class K8sAgent(BaseAgent):
         else:
             self.namespaces = None
 
-        self.crashloop_threshold = crashloop_threshold
-        self.pending_threshold_s = pending_threshold_min * 60.0
-        self.degraded_threshold_s = degraded_threshold_min * 60.0
-        self.hpa_maxed_threshold_s = hpa_maxed_threshold_min * 60.0
-
-        self._pending_since: dict[str, float] = {}
-        self._hpa_maxed_since: dict[str, float] = {}
-        self._degraded_since: dict[str, float] = {}
-        self._emitted_this_cycle: set[str] = set()
-
         self._k8s_core: k8s_client.CoreV1Api | None = None
-        self._k8s_apps: k8s_client.AppsV1Api | None = None
-        self._k8s_autoscaling: k8s_client.AutoscalingV2Api | None = None
+        self._seen_event_uids: set[str] = set()
+        self._max_seen_cache: int = 1000
 
     async def on_start(self) -> None:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._init_k8s)
         logger.info(
-            f"[K8sAgent] Watching namespaces: "
+            f"[K8sAgent] Watching Warning events in namespaces: "
             f"{'ALL' if not self.namespaces else self.namespaces}"
         )
 
@@ -83,99 +73,120 @@ class K8sAgent(BaseAgent):
         except Exception:
             k8s_config.load_kube_config()
         self._k8s_core = k8s_client.CoreV1Api()
-        self._k8s_apps = k8s_client.AppsV1Api()
-        self._k8s_autoscaling = k8s_client.AutoscalingV2Api()
 
-    def _check_pod(self, pod: Any) -> list[IncidentEvent]:
-        return check_pod(
-            pod=pod,
-            pending_since=self._pending_since,
-            emitted_this_cycle=self._emitted_this_cycle,
-            pending_threshold_s=self.pending_threshold_s,
-            crashloop_threshold=self.crashloop_threshold,
+    def _event_to_symptom_signal(self, event: Any) -> SymptomSignal:
+        """Map a Kubernetes v1.Event to an open SymptomSignal."""
+        obj = getattr(event, "involved_object", None)
+        kind = getattr(obj, "kind", "Resource") if obj else "Resource"
+        name = getattr(obj, "name", "unknown") if obj else "unknown"
+        ns = str(
+            getattr(obj, "namespace", None)
+            or getattr(event.metadata, "namespace", "default")
+            or "default"
+        )
+        api_ver = getattr(obj, "api_version", "v1") if obj else "v1"
+
+        reason = getattr(event, "reason", "StateTransition")
+        message = getattr(event, "message", "")
+        count = getattr(event, "count", 1) or 1
+        urn = f"k8s://{ns}/{api_ver}/{kind}/{name}"
+
+        return SymptomSignal(
+            source=SignalSource.KUBERNETES_API,
+            kind=SignalKind.STATE_TRANSITION,
+            provider="kubernetes",
+            resource_urn=urn,
+            region_or_namespace=ns,
+            symptom_summary=f"[{kind}/{name}] {reason}: {message} (count={count})",
+            raw_payload={
+                "event_uid": getattr(event.metadata, "uid", None),
+                "reason": reason,
+                "message": message,
+                "involved_object": {
+                    "kind": kind,
+                    "name": name,
+                    "namespace": ns,
+                    "api_version": api_ver,
+                },
+                "count": count,
+                "type": getattr(event, "type", "Warning"),
+            },
+            severity=Severity.HIGH,
         )
 
-    def _check_deployment(self, dep: Any) -> list[IncidentEvent]:
-        return check_deployment(
-            dep=dep,
-            degraded_since=self._degraded_since,
-            emitted_this_cycle=self._emitted_this_cycle,
-            degraded_threshold_s=self.degraded_threshold_s,
-        )
-
-    def _check_hpa(self, hpa: Any) -> list[IncidentEvent]:
-        return check_hpa(
-            hpa=hpa,
-            hpa_maxed_since=self._hpa_maxed_since,
-            hpa_maxed_threshold_s=self.hpa_maxed_threshold_s,
-        )
-
-    async def _fetch_resources(
-        self,
-        loop: asyncio.AbstractEventLoop,
-        namespaced_fn: Callable[..., Any],
-        cluster_fn: Callable[..., Any],
-    ) -> list[Any]:
-        if self.namespaces:
-            lists = await asyncio.gather(
-                *[
-                    loop.run_in_executor(None, namespaced_fn, ns)
-                    for ns in self.namespaces
-                ],
-                return_exceptions=True,
-            )
-            items = []
-            for res in lists:
-                if not isinstance(res, BaseException):
-                    items.extend(res.items)
-                else:
-                    logger.warning(f"[K8sAgent] Resource list error: {res}")
-            return items
-        res = await loop.run_in_executor(None, cluster_fn)
-        return res.items
-
-    async def sense(self) -> list[IncidentEvent]:
-        if not self._k8s_core or not self._k8s_apps or not self._k8s_autoscaling:
+    async def sense_symptoms(self) -> list[SymptomSignal]:
+        """Fetch warning events across all kinds and produce SymptomSignals."""
+        core = self._k8s_core
+        if not core:
             return []
 
-        events: list[IncidentEvent] = []
-        self._emitted_this_cycle.clear()
         loop = asyncio.get_running_loop()
+        symptoms: list[SymptomSignal] = []
 
-        # 1. Pods
-        pods = await self._fetch_resources(
-            loop,
-            self._k8s_core.list_namespaced_pod,
-            self._k8s_core.list_pod_for_all_namespaces,
-        )
-        for pod in pods:
-            if not self.namespaces and pod.metadata.namespace in SYSTEM_NAMESPACES:
-                continue
-            events.extend(self._check_pod(pod))
-
-        # 2. Deployments
-        deps = await self._fetch_resources(
-            loop,
-            self._k8s_apps.list_namespaced_deployment,
-            self._k8s_apps.list_deployment_for_all_namespaces,
-        )
-        for dep in deps:
-            if not self.namespaces and dep.metadata.namespace in SYSTEM_NAMESPACES:
-                continue
-            events.extend(self._check_deployment(dep))
-
-        # 3. HPAs
         try:
-            hpas = await self._fetch_resources(
-                loop,
-                self._k8s_autoscaling.list_namespaced_horizontal_pod_autoscaler,
-                self._k8s_autoscaling.list_horizontal_pod_autoscaler_for_all_namespaces,
-            )
-            for hpa in hpas:
-                if not self.namespaces and hpa.metadata.namespace in SYSTEM_NAMESPACES:
-                    continue
-                events.extend(self._check_hpa(hpa))
-        except Exception as exc:
-            logger.debug(f"[K8sAgent] HPA check skipped: {exc}")
+            if self.namespaces:
+                events_list = []
+                for ns in self.namespaces:
 
+                    def _fetch(n: str = ns) -> Any:
+                        return core.list_namespaced_event(
+                            namespace=n, field_selector="type=Warning"
+                        )
+
+                    res = await loop.run_in_executor(None, _fetch)
+                    events_list.extend(res.items)
+            else:
+
+                def _fetch_all() -> Any:
+                    return core.list_event_for_all_namespaces(
+                        field_selector="type=Warning"
+                    )
+
+                res = await loop.run_in_executor(None, _fetch_all)
+                events_list = res.items
+
+            for ev in events_list:
+                uid = (
+                    getattr(ev.metadata, "uid", None)
+                    or f"{ev.involved_object.name}-{ev.reason}"
+                )
+                if uid in self._seen_event_uids:
+                    continue
+                self._seen_event_uids.add(uid)
+                if len(self._seen_event_uids) > self._max_seen_cache:
+                    self._seen_event_uids.clear()
+
+                ns = getattr(ev.metadata, "namespace", "")
+                if not self.namespaces and ns in SYSTEM_NAMESPACES:
+                    continue
+
+                symptoms.append(self._event_to_symptom_signal(ev))
+        except Exception as exc:
+            logger.warning(f"[K8sAgent] Failed to poll Kubernetes events: {exc}")
+
+        return symptoms
+
+    async def sense(self) -> list[IncidentEvent]:
+        """Sense warning events and return normalized IncidentEvents for bus publish."""
+        symptoms = await self.sense_symptoms()
+        events: list[IncidentEvent] = []
+        for sym in symptoms:
+            raw = sym.raw_payload
+            inv = raw.get("involved_object", {})
+            events.append(
+                IncidentEvent(
+                    agent=AgentType.K8S,
+                    signal_type="state_transition",
+                    severity=getattr(sym.severity, "value", sym.severity),
+                    namespace=sym.region_or_namespace,
+                    resource_name=inv.get("name"),
+                    resource_kind=inv.get("kind"),
+                    context={
+                        "symptom_signal": sym.model_dump(),
+                        "summary": sym.symptom_summary,
+                    },
+                    raw=raw,
+                    confidence=0.9,
+                )
+            )
         return events

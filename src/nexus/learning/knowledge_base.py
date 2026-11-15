@@ -16,12 +16,6 @@ from nexus.learning.kb_models import (
     AdjustmentRecord,
     compute_delta,
 )
-from nexus.learning.kb_patterns import (
-    query_best_runbook_for_pattern,
-    query_working_patterns,
-    record_db_incident_outcome,
-    record_signal_pattern,
-)
 from nexus.learning.outcome_store import RunbookStats
 
 logger = logging.getLogger(__name__)
@@ -136,15 +130,15 @@ class KnowledgeBase:
     async def record_pattern(
         self, signal_types: set[str], runbook_id: str, success: bool
     ) -> None:
-        await record_signal_pattern(self._db_client, signal_types, runbook_id, success)
+        pass
 
     async def get_best_runbook_for_pattern(self, signal_types: set[str]) -> str | None:
-        return await query_best_runbook_for_pattern(self._db_client, signal_types)
+        return None
 
     async def get_working_patterns(
         self, min_success_rate: float = 0.80
     ) -> list[dict[str, Any]]:
-        return await query_working_patterns(self._db_client, min_success_rate)
+        return []
 
     async def _refresh_cache(self) -> None:
         if not self._db_client:
@@ -166,6 +160,4 @@ class KnowledgeBase:
         resolved: bool,
         reason: str,
     ) -> None:
-        await record_db_incident_outcome(
-            self._db_client, incident_id, runbook_id, action_type, resolved, reason
-        )
+        pass

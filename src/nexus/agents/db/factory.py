@@ -23,7 +23,7 @@ def db_agent_from_env(nats_client: NATSClient) -> DBAgent:
     """Build a DBAgent from environment variable configuration."""
     from nexus.agents.db.agent import DBAgent
 
-    adapters = []
+    adapters: list[PostgresAdapter | MySQLAdapter | MongoDBAdapter] = []
 
     if os.getenv("NEXUS_POSTGRES_HOST"):
         adapters.append(

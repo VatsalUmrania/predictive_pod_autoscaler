@@ -24,6 +24,8 @@ def approval_node(state: IncidentGraphState) -> dict[str, Any]:
     """Human approval gate using LangGraph interrupt()."""
     incident_id = state["incident_id"]
     decision = state.get("approval_decision")
+    if state.get("retry_count", 0) > 0 and len(state.get("execution_records", [])) > 0:
+        decision = None
 
     # If decision was not pre-populated, pause execution via LangGraph interrupt
     if not decision:
@@ -114,9 +116,7 @@ def approval_node(state: IncidentGraphState) -> dict[str, Any]:
             }
         ]
     else:
-        logger.warning(
-            "[Approval] Incident %s REJECTED by human operator", incident_id
-        )
+        logger.warning("[Approval] Incident %s REJECTED by human operator", incident_id)
         res_payload["fsm_state"] = IncidentState.REJECTED.value
         res_payload["audit_log"] = [
             {

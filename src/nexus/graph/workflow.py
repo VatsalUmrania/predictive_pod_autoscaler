@@ -2,8 +2,6 @@
 NEXUS Unified LangGraph Incident Workflow
 =========================================
 Builds, compiles, and orchestrates the governed incident response StateGraph.
-Replaces basic ReAct loops with a deterministic Plan-Validate-Execute-Verify-Rollback
-state machine integrated with PostgreSQL/Memory checkpointers.
 """
 
 from __future__ import annotations
@@ -66,13 +64,9 @@ class IncidentWorkflow:
         if correlator is None:
             try:
                 from nexus.reasoning.event_correlator import EventCorrelator
-
                 correlator = EventCorrelator()
-            except Exception as _corr_exc:
-                logger.warning(
-                    "[IncidentWorkflow] Could not default EventCorrelator: %s",
-                    _corr_exc,
-                )
+            except Exception:
+                pass
         self.correlator = correlator
         self._flush_interval = kwargs.get("flush_interval_s", 15.0)
         self._flush_task: asyncio.Task[Any] | None = None
@@ -90,27 +84,15 @@ class IncidentWorkflow:
 
     async def _process_cluster(self, cluster: Any) -> None:
         try:
-            events_dicts = build_cluster_event_dicts(cluster)
+            events = build_cluster_event_dicts(cluster)
             inc_id = getattr(cluster, "cluster_id", str(uuid.uuid4()))
-            logger.info(
-                "[IncidentWorkflow] Processing cluster %s with %d event(s) (ns=%s, resource=%s)",
-                inc_id,
-                len(events_dicts),
-                getattr(cluster, "namespace", "default"),
-                getattr(cluster, "primary_resource", "unknown"),
-            )
-            await self.run_incident(
-                {
-                    "incident_id": inc_id,
-                    "events": events_dicts,
-                    "severity": getattr(cluster, "highest_severity", "warning"),
-                },
-                thread_id=inc_id,
-            )
+            sev = getattr(cluster, "highest_severity", "warning")
+            await self.run_incident({"incident_id": inc_id, "events": events, "severity": sev}, thread_id=inc_id)
         except Exception as exc:
+            cid = getattr(cluster, "cluster_id", "unknown")
             logger.error(
                 "[IncidentWorkflow] Error processing cluster %s: %s",
-                getattr(cluster, "cluster_id", "unknown"),
+                cid,
                 exc,
                 exc_info=True,
             )
@@ -134,17 +116,16 @@ class IncidentWorkflow:
 
     def pending_approvals(self) -> list[dict[str, Any]]:
         seen: set[str] = set()
-        return [
-            v
-            for v in self._pending_approvals.values()
-            if v.get("approval_id")
-            and not (v["approval_id"] in seen or seen.add(v["approval_id"]))
-        ]
+        out: list[dict[str, Any]] = []
+        for v in self._pending_approvals.values():
+            aid = v.get("approval_id")
+            if aid and aid not in seen:
+                seen.add(aid)
+                out.append(v)
+        return out
 
     def has_pending(self, action_id: str) -> bool:
-        if action_id in self._pending_approvals:
-            return True
-        return any(
+        return action_id in self._pending_approvals or any(
             val.get("approval_id") == action_id or val.get("incident_id") == action_id
             for val in self._pending_approvals.values()
         )
@@ -157,19 +138,7 @@ class IncidentWorkflow:
             self.nats = nats_client
         self._running = True
         logger.info("[IncidentWorkflow] Started LangGraph production incident listener")
-        if not self.correlator:
-            try:
-                from nexus.reasoning.event_correlator import EventCorrelator
-
-                self.correlator = EventCorrelator()
-            except Exception as e_corr:
-                logger.warning(
-                    "[IncidentWorkflow] Could not instantiate EventCorrelator: %s",
-                    e_corr,
-                )
-        self._flush_task = asyncio.create_task(
-            self._flush_loop(), name="workflow-flush"
-        )
+        self._flush_task = asyncio.create_task(self._flush_loop(), name="workflow-flush")
         self._sub_tasks.append(self._flush_task)
         await setup_event_subscriptions(self)
 
@@ -182,18 +151,12 @@ class IncidentWorkflow:
         self._sub_tasks.clear()
 
     async def run_incident(
-        self,
-        incident_data: dict[str, Any],
-        thread_id: str | None = None,
+        self, incident_data: dict[str, Any], thread_id: str | None = None
     ) -> dict[str, Any]:
         inc_id = incident_data.get("incident_id") or str(uuid.uuid4())
         tid = thread_id or inc_id
         config = {"configurable": {"thread_id": tid}}
-        logger.info(
-            "[IncidentWorkflow] Starting workflow for incident %s (thread=%s)",
-            inc_id,
-            tid,
-        )
+        logger.info("[IncidentWorkflow] Starting workflow for incident %s (thread=%s)", inc_id, tid)
 
         result = await self._compiled_graph.ainvoke(
             build_initial_state(incident_data, inc_id), config=config
@@ -203,9 +166,7 @@ class IncidentWorkflow:
             self._rca_results = self._rca_results[-100:]
 
         state_snapshot = self._compiled_graph.get_state(config)
-        if (state_snapshot.next and "approval" in state_snapshot.next) or result.get(
-            "__interrupt__"
-        ):
+        if (state_snapshot.next and "approval" in state_snapshot.next) or result.get("__interrupt__"):
             await self._record_pending_approval(result, inc_id=inc_id, thread_id=tid)
         else:
             await self._handle_workflow_completion(result, inc_id=inc_id, thread_id=tid)
@@ -232,8 +193,6 @@ class IncidentWorkflow:
         return entry
 
     async def resume_incident(
-        self,
-        thread_id: str,
-        approval_decision: str = "approved",
+        self, thread_id: str, approval_decision: str = "approved"
     ) -> dict[str, Any]:
         return await resume_incident_execution(self, thread_id, approval_decision)

@@ -20,7 +20,10 @@ async def fetch_developer_incidents(
     make_plain_english_fn: Any,
 ) -> list[dict[str, Any]]:
     """Fetch, merge, and enrich healing incidents."""
-    results = await read_incidents_fn(n=n, app=app)
+    raw_results = await read_incidents_fn(n=n, app=app)
+    results: list[dict[str, Any]] = (
+        list(raw_results) if isinstance(raw_results, (list, tuple)) else []
+    )
     seen_ids = {r.get("incident_id") for r in results if r.get("incident_id")}
 
     for entry in reversed(in_memory_incidents):

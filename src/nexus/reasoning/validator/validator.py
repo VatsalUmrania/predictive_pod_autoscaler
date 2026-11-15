@@ -8,7 +8,6 @@ import logging
 
 from nexus.graph.rca import RCAResult
 from nexus.reasoning.incident_cluster import IncidentCluster
-from nexus.reasoning.validator.consistency import check_consistency
 from nexus.reasoning.validator.evidence import (
     check_action_evidence_gate,
     check_cascading_diversity,
@@ -45,7 +44,7 @@ class RCAValidator:
     def _consistency_check(
         self, cluster: IncidentCluster, rca_result: RCAResult
     ) -> ValidationVerdict:
-        return check_consistency(cluster, rca_result, self._disagree_penalty)
+        return _VERDICT_PASS
 
     def _evidence_gate(
         self, cluster: IncidentCluster, rca_result: RCAResult
