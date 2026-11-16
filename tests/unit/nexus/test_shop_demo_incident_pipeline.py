@@ -1,9 +1,9 @@
 """Integration test for shop-demo CrashLoopBackOff incident diagnosis, approval gate, and rollback."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
-from nexus.graph.platform.base import TargetResource
 from nexus.graph.workflow import IncidentWorkflow
 
 
@@ -52,8 +52,14 @@ async def test_shop_demo_crashloop_requires_approval_and_rolls_back():
     assert step["parameters"]["deployment_name"] == "shop-demo"
 
     # 2. Operator approves remediation
-    with patch("nexus.agents.k8s_tools.rollback_deployment", return_value="deployment.apps/shop-demo rolled back"):
-        with patch("nexus.agents.k8s_tools.describe_resource", return_value="Deployment shop-demo: replicas=2, ready=2, available=2, unavailable=0"):
+    with patch(
+        "nexus.agents.k8s_tools.rollback_deployment",
+        return_value="deployment.apps/shop-demo rolled back",
+    ):
+        with patch(
+            "nexus.agents.k8s_tools.describe_resource",
+            return_value="Deployment shop-demo: replicas=2, ready=2, available=2, unavailable=0",
+        ):
             resumed = await workflow.resume_incident(
                 thread_id="thread-shop-demo-test", approval_decision="approved"
             )

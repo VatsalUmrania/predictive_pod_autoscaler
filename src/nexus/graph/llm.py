@@ -24,9 +24,7 @@ logger = logging.getLogger(__name__)
 __all__ = ["get_llm", "LLMQuotaExhaustedError", "RateLimitedChatModel"]
 
 
-def _init_gemini_model(
-    api_key: str, model_name: str, temperature: float
-) -> Any:
+def _init_gemini_model(api_key: str, model_name: str, temperature: float) -> Any:
     try:
         from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -44,6 +42,7 @@ def _init_gemini_model(
     except ImportError:
         try:
             import asyncio
+
             from google import genai
             from google.genai import types
 

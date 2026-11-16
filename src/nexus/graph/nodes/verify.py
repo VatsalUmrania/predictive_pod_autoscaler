@@ -17,13 +17,10 @@ from typing import Any
 
 from nexus.engine.fsm import IncidentState
 from nexus.graph.nodes.verify_helpers import (
-    OPERATOR_MAP,
-    evaluate_verification_condition,
-    extract_metric_value,
     verify_step_conditions,
 )
 from nexus.graph.platform import TargetResource, get_platform_registry
-from nexus.graph.state import IncidentGraphState, VerificationCondition
+from nexus.graph.state import IncidentGraphState
 from nexus.tools.registry import default_registry
 
 logger = logging.getLogger(__name__)
@@ -69,7 +66,12 @@ async def verify_node(state: IncidentGraphState) -> dict[str, Any]:
             details = verif_result.details or ""
             failure_reason = verif_result.failure_reason or ""
         except Exception as exc:
-            healthy, slo_restored, details, failure_reason = False, False, f"Exception: {exc}", str(exc)
+            healthy, slo_restored, details, failure_reason = (
+                False,
+                False,
+                f"Exception: {exc}",
+                str(exc),
+            )
 
         if healthy and slo_restored:
             steps = plan.get("steps") or []
@@ -77,9 +79,18 @@ async def verify_node(state: IncidentGraphState) -> dict[str, Any]:
                 steps, default_registry, verif_result, state.get("telemetry")
             )
             if conds_ok:
-                details = f"{details} | {'; '.join(cond_details)}" if details and cond_details else ("; ".join(cond_details) or details)
+                details = (
+                    f"{details} | {'; '.join(cond_details)}"
+                    if details and cond_details
+                    else ("; ".join(cond_details) or details)
+                )
             else:
-                healthy, slo_restored, details, failure_reason = False, False, c_fail, c_fail
+                healthy, slo_restored, details, failure_reason = (
+                    False,
+                    False,
+                    c_fail,
+                    c_fail,
+                )
 
         if (healthy and slo_restored) or time.monotonic() >= deadline:
             break

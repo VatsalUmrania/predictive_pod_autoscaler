@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import yaml
 
-from nexus.graph.manifest_formatter import extract_diagnostic_logs, plan_to_yaml_manifest
+from nexus.graph.manifest_formatter import (
+    extract_diagnostic_logs,
+    plan_to_yaml_manifest,
+)
 
 
 def test_plan_to_yaml_manifest_scale_action():
@@ -48,7 +51,12 @@ def test_plan_to_yaml_manifest_patch_limits():
     }
     manifest_yaml = plan_to_yaml_manifest(plan, target="default/shop-demo")
     parsed = yaml.safe_load(manifest_yaml)
-    assert parsed["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]["memory"] == "512Mi"
+    assert (
+        parsed["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"][
+            "memory"
+        ]
+        == "512Mi"
+    )
 
 
 def test_extract_diagnostic_logs():

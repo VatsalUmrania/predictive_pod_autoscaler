@@ -63,7 +63,11 @@ class MockFutureGCPModel(BaseChatModel):
                         "confidence": 0.95,
                         "hypotheses_evaluated": ["memory_pressure"],
                         "evidence_chain": [
-                            {"tool_name": "gcp_get_telemetry", "tool_arguments": {}, "key_finding": "Unreachable"}
+                            {
+                                "tool_name": "gcp_get_telemetry",
+                                "tool_arguments": {},
+                                "key_finding": "Unreachable",
+                            }
                         ],
                         "pre_incident_resource_state": {"status": "RUNNING"},
                         "requires_remediation": True,
@@ -92,15 +96,29 @@ class MockGCPPlatformAdapter(BasePlatformAdapter):
         if isinstance(event_or_target, TargetResource):
             return event_or_target.platform.lower() in ("gcp", "google_cloud")
         if isinstance(event_or_target, dict):
-            return event_or_target.get("platform") == "gcp" or "gcp" in str(event_or_target.get("namespace", "")).lower()
+            return (
+                event_or_target.get("platform") == "gcp"
+                or "gcp" in str(event_or_target.get("namespace", "")).lower()
+            )
         return False
 
     def detect_target(self, events: list[dict[str, Any]]) -> TargetResource:
         evt = events[0] if events else {}
-        res = str(evt.get("resource_name", "projects/prod-cluster/zones/us-central1/instances/api-gw"))
+        res = str(
+            evt.get(
+                "resource_name",
+                "projects/prod-cluster/zones/us-central1/instances/api-gw",
+            )
+        )
         name = res.split("/")[-1]
         zone = res.split("/")[3] if len(res.split("/")) > 3 else "us-central1"
-        return TargetResource(platform="gcp", namespace=zone, name=name, kind="compute_instance", arn_or_uri=res)
+        return TargetResource(
+            platform="gcp",
+            namespace=zone,
+            name=name,
+            kind="compute_instance",
+            arn_or_uri=res,
+        )
 
     async def collect_telemetry(self, target: TargetResource) -> PlatformTelemetry:
         return PlatformTelemetry(
@@ -116,11 +134,15 @@ class MockGCPPlatformAdapter(BasePlatformAdapter):
     def get_tools(self) -> list[NexusTool]:
         return list(self._tools.values())
 
-    async def execute_action(self, tool_name: str, parameters: dict[str, Any]) -> NexusToolResult:
+    async def execute_action(
+        self, tool_name: str, parameters: dict[str, Any]
+    ) -> NexusToolResult:
         self.restarted = True
         return await self._tools[tool_name].execute(**parameters)
 
-    async def capture_snapshot(self, target: TargetResource, tool_name: str, parameters: dict[str, Any]) -> RollbackSnapshot | None:
+    async def capture_snapshot(
+        self, target: TargetResource, tool_name: str, parameters: dict[str, Any]
+    ) -> RollbackSnapshot | None:
         return RollbackSnapshot(
             snapshot_id="gcp-snap-123",
             target=target,
@@ -133,8 +155,12 @@ class MockGCPPlatformAdapter(BasePlatformAdapter):
     async def execute_rollback(self, snapshot: RollbackSnapshot) -> NexusToolResult:
         return NexusToolResult(success=True, data={"rollback": "gcp_reverted"})
 
-    async def verify_health(self, target: TargetResource, plan_step: dict[str, Any]) -> HealthCheckResult:
-        return HealthCheckResult(healthy=True, slo_restored=True, details="Instance RUNNING")
+    async def verify_health(
+        self, target: TargetResource, plan_step: dict[str, Any]
+    ) -> HealthCheckResult:
+        return HealthCheckResult(
+            healthy=True, slo_restored=True, details="Instance RUNNING"
+        )
 
 
 @pytest.mark.asyncio
@@ -164,5 +190,14 @@ async def test_future_platform_registration_and_workflow_execution():
     assert result["resolved"] is True
     assert result["fsm_state"] == "resolved"
     stages = [entry["stage"] for entry in result["audit_log"]]
-    for s in ["triage", "collect_telemetry", "diagnose", "plan", "govern", "execute", "verify", "learn"]:
+    for s in [
+        "triage",
+        "collect_telemetry",
+        "diagnose",
+        "plan",
+        "govern",
+        "execute",
+        "verify",
+        "learn",
+    ]:
         assert s in stages

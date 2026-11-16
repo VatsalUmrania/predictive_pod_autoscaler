@@ -3,6 +3,7 @@ NEXUS Policy ABAC Input Builder & Local Evaluator
 =================================================
 Constructs OPA input with deterministic risk overrides and provides local fallback evaluation.
 """
+
 from __future__ import annotations
 
 import logging

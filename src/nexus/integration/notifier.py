@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import Any
 
@@ -39,8 +38,12 @@ logger = logging.getLogger(__name__)
 _approval_buttons_block = approval_buttons_block
 
 __all__ = [
-    "Notifier", "resolve_slack_webhook", "verify_slack_request",
-    "SLACK_INTERACTIVE_URL", "SLACK_SIGNING_SECRET", "SLACK_REQUEST_TOLERANCE_S",
+    "Notifier",
+    "resolve_slack_webhook",
+    "verify_slack_request",
+    "SLACK_INTERACTIVE_URL",
+    "SLACK_SIGNING_SECRET",
+    "SLACK_REQUEST_TOLERANCE_S",
     "_approval_buttons_block",
 ]
 
@@ -81,13 +84,26 @@ class Notifier:
         confidence: float = 0.0,
         tables: list[Any] | None = None,
     ) -> None:
-        await send_prescale(self, app_name, deployment, current_rps, predicted_rps, horizon_min, confidence, tables)
+        await send_prescale(
+            self,
+            app_name,
+            deployment,
+            current_rps,
+            predicted_rps,
+            horizon_min,
+            confidence,
+            tables,
+        )
 
     async def notify_escalation(self, app_name: str, failed_attempts: int) -> None:
         webhook = self._get_webhook(app_name)
         if webhook:
-            await self._send(webhook, build_escalation_payload(app_name, failed_attempts), app_name)
-            logger.warning(f"[Notifier] SRE escalation sent for app='{app_name}' failures={failed_attempts}")
+            await self._send(
+                webhook, build_escalation_payload(app_name, failed_attempts), app_name
+            )
+            logger.warning(
+                f"[Notifier] SRE escalation sent for app='{app_name}' failures={failed_attempts}"
+            )
 
     async def notify_approval_required(
         self,
@@ -99,32 +115,83 @@ class Notifier:
         confidence: float,
         context: dict | None = None,
     ) -> None:
-        await send_approval_required(self, app_name, approval_id, runbook_id, target, healing_level, confidence, context)
+        await send_approval_required(
+            self,
+            app_name,
+            approval_id,
+            runbook_id,
+            target,
+            healing_level,
+            confidence,
+            context,
+        )
 
     async def notify_incident_resolved(
-        self, app_name: str, incident_id: str, target: str, failure_class: str = "Unknown",
-        root_cause: str = "Unknown", action_taken: str = "Automated remediation",
+        self,
+        app_name: str,
+        incident_id: str,
+        target: str,
+        failure_class: str = "Unknown",
+        root_cause: str = "Unknown",
+        action_taken: str = "Automated remediation",
         verification_details: str = "Target verified healthy and SLO restored",
-        confidence: float = 1.0, duration_s: float | None = None, context: dict | None = None,
+        confidence: float = 1.0,
+        duration_s: float | None = None,
+        context: dict | None = None,
     ) -> None:
         await send_incident_resolved(
-            self, app_name, incident_id, target, failure_class=failure_class, root_cause=root_cause,
-            action_taken=action_taken, verification_details=verification_details,
-            confidence=confidence, duration_s=duration_s, context=context,
+            self,
+            app_name,
+            incident_id,
+            target,
+            failure_class=failure_class,
+            root_cause=root_cause,
+            action_taken=action_taken,
+            verification_details=verification_details,
+            confidence=confidence,
+            duration_s=duration_s,
+            context=context,
         )
 
     async def notify_incident_escalated(
-        self, app_name: str, incident_id: str, target: str, reason: str = "Remediation failed or maximum retries exhausted",
-        failure_class: str = "Unknown", root_cause: str = "Unknown", context: dict | None = None,
+        self,
+        app_name: str,
+        incident_id: str,
+        target: str,
+        reason: str = "Remediation failed or maximum retries exhausted",
+        failure_class: str = "Unknown",
+        root_cause: str = "Unknown",
+        context: dict | None = None,
     ) -> None:
         await send_incident_escalated(
-            self, app_name, incident_id, target, reason=reason, failure_class=failure_class, root_cause=root_cause, context=context,
+            self,
+            app_name,
+            incident_id,
+            target,
+            reason=reason,
+            failure_class=failure_class,
+            root_cause=root_cause,
+            context=context,
         )
 
     async def notify_report_ready(
-        self, app_name: str, incident_id: str, target: str, outcome: str = "resolved", summary: str = "", report_url: str = "",
+        self,
+        app_name: str,
+        incident_id: str,
+        target: str,
+        outcome: str = "resolved",
+        summary: str = "",
+        report_url: str = "",
     ) -> None:
-        await send_report_ready(self, app_name, incident_id, target, outcome=outcome, summary=summary, report_url=report_url)
+        await send_report_ready(
+            self,
+            app_name,
+            incident_id,
+            target,
+            outcome=outcome,
+            summary=summary,
+            report_url=report_url,
+        )
 
     def _get_webhook(self, app_name: str) -> str | None:
         return resolve_slack_webhook(app_name)
@@ -132,11 +199,18 @@ class Notifier:
     def _get_page_threshold(self, app_name: str) -> int:
         try:
             from nexus.integration.dashboard import _policy_cache
-            return int(_policy_cache.get(app_name, {}).get("notifications", {}).get("page_sre_after", 3))
+
+            return int(
+                _policy_cache.get(app_name, {})
+                .get("notifications", {})
+                .get("page_sre_after", 3)
+            )
         except Exception:
             return 3
 
-    async def _send(self, webhook_url: str, payload: dict[str, Any], app_name: str) -> None:
+    async def _send(
+        self, webhook_url: str, payload: dict[str, Any], app_name: str
+    ) -> None:
         await send_slack_http(webhook_url, payload, app_name)
 
     def start_background(self, nats_client: Any) -> None:

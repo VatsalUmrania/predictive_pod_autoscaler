@@ -1,6 +1,7 @@
 """
 Plan formatting utilities for NEXUS planning nodes.
 """
+
 from __future__ import annotations
 
 import re

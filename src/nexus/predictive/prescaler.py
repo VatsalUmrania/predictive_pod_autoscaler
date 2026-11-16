@@ -44,10 +44,18 @@ class Prescaler:
     ):
         self._nats, self._ladder = nats_client, action_ladder
         self.mode = mode or PrescaleMode(os.getenv("NEXUS_PRESCALE_MODE", "shadow"))
-        self._max_replicas = max_replicas or int(os.getenv("NEXUS_PRESCALE_MAX_REPLICAS", "20"))
-        self._min_confidence = min_confidence or float(os.getenv("NEXUS_PRESCALE_MIN_CONFIDENCE", "0.55"))
-        self._threshold_pct = threshold_pct or float(os.getenv("NEXUS_PRESCALE_THRESHOLD_PCT", "30"))
-        self._cooldown = cooldown_seconds or float(os.getenv("NEXUS_PRESCALE_COOLDOWN_S", "300"))
+        self._max_replicas = max_replicas or int(
+            os.getenv("NEXUS_PRESCALE_MAX_REPLICAS", "20")
+        )
+        self._min_confidence = min_confidence or float(
+            os.getenv("NEXUS_PRESCALE_MIN_CONFIDENCE", "0.55")
+        )
+        self._threshold_pct = threshold_pct or float(
+            os.getenv("NEXUS_PRESCALE_THRESHOLD_PCT", "30")
+        )
+        self._cooldown = cooldown_seconds or float(
+            os.getenv("NEXUS_PRESCALE_COOLDOWN_S", "300")
+        )
         self._target_rps = target_rps_per_replica
         self._tracker = PrecisionTracker()
         self._all_decisions: list[PrescaleDecision] = []

@@ -58,12 +58,26 @@ async def govern_node(state: IncidentGraphState) -> dict[str, Any]:
         diag_conf = getattr(diag, "confidence", 0.85) or 0.85
     confidence = float(diag_conf)
     prior_decision = str(state.get("approval_decision", "")).lower()
-    operator_confirmed = prior_decision in ("approved", "yes", "proceed", "edit", "modify")
+    operator_confirmed = prior_decision in (
+        "approved",
+        "yes",
+        "proceed",
+        "edit",
+        "modify",
+    )
     if state.get("retry_count", 0) > 0 and len(state.get("execution_records", [])) > 0:
         operator_confirmed = False
 
-    allowed, requires_approval, is_self_healed, cb_open, cooldown_active = True, False, False, False, False
-    reasons: list[str] = [plan["approval_reason"]] if plan.get("approval_reason") else []
+    allowed, requires_approval, is_self_healed, cb_open, cooldown_active = (
+        True,
+        False,
+        False,
+        False,
+        False,
+    )
+    reasons: list[str] = (
+        [plan["approval_reason"]] if plan.get("approval_reason") else []
+    )
 
     # 1. PostgreSQL Advisory Locking
     conn, conn_ctx, lock_acquired = None, None, False
@@ -73,10 +87,14 @@ async def govern_node(state: IncidentGraphState) -> dict[str, Any]:
         conn_ctx = db_client.acquire()
         conn = await conn_ctx.__aenter__()
         if hasattr(conn, "fetchval"):
-            lock_acquired = bool(await conn.fetchval("SELECT pg_try_advisory_lock($1)", lock_key))
+            lock_acquired = bool(
+                await conn.fetchval("SELECT pg_try_advisory_lock($1)", lock_key)
+            )
             if not lock_acquired:
                 allowed = False
-                reasons.append(f"Concurrent mutation locked on service '{target_service}' (advisory lock held)")
+                reasons.append(
+                    f"Concurrent mutation locked on service '{target_service}' (advisory lock held)"
+                )
     except Exception as db_exc:
         logger.debug("[Govern] Advisory lock skipped: %s", db_exc)
 
@@ -85,7 +103,15 @@ async def govern_node(state: IncidentGraphState) -> dict[str, Any]:
         if platform_id == "kubernetes" and allowed:
             try:
                 first_tool = steps[0].get("tool_name", "") if steps else ""
-                action_type = "scale" if "scale" in first_tool else ("rollback_deployment" if "rollback" in first_tool else "restart_pod")
+                action_type = (
+                    "scale"
+                    if "scale" in first_tool
+                    else (
+                        "rollback_deployment"
+                        if "rollback" in first_tool
+                        else "restart_pod"
+                    )
+                )
                 live_report = await check_live_state(
                     action_type=action_type,
                     namespace=getattr(target, "namespace", "default"),
@@ -95,7 +121,9 @@ async def govern_node(state: IncidentGraphState) -> dict[str, Any]:
                 )
                 if live_report.verdict == "self_healed":
                     allowed, is_self_healed = False, True
-                    reasons.append(f"Target already self-healed: {live_report.evidence}")
+                    reasons.append(
+                        f"Target already self-healed: {live_report.evidence}"
+                    )
             except Exception as lsv_err:
                 logger.debug("[Govern] Live state validation skipped: %s", lsv_err)
 
@@ -104,24 +132,36 @@ async def govern_node(state: IncidentGraphState) -> dict[str, Any]:
             ladder = None
             try:
                 from nexus.observability.status_api import context
-                ladder = context.action_ladder if hasattr(context, "action_ladder") else None
+
+                ladder = (
+                    context.action_ladder if hasattr(context, "action_ladder") else None
+                )
             except Exception:
                 pass
             if ladder is not None:
                 if ladder.governance_cb.is_open:
                     cb_open, allowed = True, False
-                    reasons.append(f"governance circuit breaker open ({ladder.governance_cb.consecutive_failures} failures)")
+                    reasons.append(
+                        f"governance circuit breaker open ({ladder.governance_cb.consecutive_failures} failures)"
+                    )
                 else:
                     action_id = str(steps[0].get("tool_name", "unknown"))
-                    c_key = CooldownStore.make_key(action_id, f"{getattr(target, 'namespace', 'default')}/{target_service}")
+                    c_key = CooldownStore.make_key(
+                        action_id,
+                        f"{getattr(target, 'namespace', 'default')}/{target_service}",
+                    )
                     if await ladder.cooldown_store.is_in_cooldown(c_key):
                         cooldown_active, allowed = True, False
                         rem = await ladder.cooldown_store.remaining_seconds(c_key)
-                        reasons.append(f"target in cooldown for {action_id} ({rem:.0f}s remaining)")
+                        reasons.append(
+                            f"target in cooldown for {action_id} ({rem:.0f}s remaining)"
+                        )
 
         # 4. Attribute-Based OPA Policy Engine Evaluation
         if allowed and steps and not is_self_healed:
-            opa_allowed, opa_approval, opa_reasons = await evaluate_steps_opa(steps, confidence, cb_open, cooldown_active)
+            opa_allowed, opa_approval, opa_reasons = await evaluate_steps_opa(
+                steps, confidence, cb_open, cooldown_active
+            )
             if not opa_allowed:
                 allowed = False
                 reasons.extend(opa_reasons)
@@ -135,7 +175,9 @@ async def govern_node(state: IncidentGraphState) -> dict[str, Any]:
             else:
                 requires_approval = True
                 if not any("Human authorization" in r for r in reasons):
-                    reasons.append("Human authorization required for all remediation actions")
+                    reasons.append(
+                        "Human authorization required for all remediation actions"
+                    )
         elif not steps and not is_self_healed:
             allowed = False
             reasons.append("No remediation steps generated in plan")

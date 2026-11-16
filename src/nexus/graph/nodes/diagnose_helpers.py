@@ -101,9 +101,16 @@ def infer_symptom_fallback(
     urn: str,
 ) -> dict[str, Any]:
     raw_str = f"{json.dumps(sig, default=str)} {json.dumps(telem, default=str)} {raw_content}".lower()
-    is_oom = any(w in raw_str for w in ("oom", "exit code 137", "oomkilled", "out of memory"))
-    is_crash = any(w in raw_str for w in ("crashloop", "backoff", "exit code 1", "failed container", "error"))
-    is_traffic = any(w in raw_str for w in ("traffic_spike", "high_traffic", "429", "throttl"))
+    is_oom = any(
+        w in raw_str for w in ("oom", "exit code 137", "oomkilled", "out of memory")
+    )
+    is_crash = any(
+        w in raw_str
+        for w in ("crashloop", "backoff", "exit code 1", "failed container", "error")
+    )
+    is_traffic = any(
+        w in raw_str for w in ("traffic_spike", "high_traffic", "429", "throttl")
+    )
 
     if is_oom:
         return {

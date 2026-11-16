@@ -68,6 +68,7 @@ class MockWorkflowK8sModel(BaseChatModel):
     def bind_tools(self, *args: Any, **kwargs: Any) -> Any:
         return self
 
+
 # ── Test 1: Kubernetes Autonomous L1 Remediation ─────────────────────────────
 
 
@@ -89,7 +90,9 @@ async def test_k8s_remediation_requires_approval_and_resumes():
     ]
 
     with (
-        patch("nexus.graph.nodes.diagnose.get_llm", return_value=MockWorkflowK8sModel()),
+        patch(
+            "nexus.graph.nodes.diagnose.get_llm", return_value=MockWorkflowK8sModel()
+        ),
         patch(
             "nexus.agents.k8s_tools.describe_resource",
             return_value="State: OOMKilled\nReplicas: 3",
@@ -112,39 +115,39 @@ async def test_k8s_remediation_requires_approval_and_resumes():
             ),
         ),
     ):
-                    interrupted = await workflow.run_incident(
-                        {
-                            "incident_id": "inc-k8s-auto-01",
-                            "platform": "kubernetes",
-                            "events": events,
-                        },
-                        thread_id=thread_id,
-                    )
+        interrupted = await workflow.run_incident(
+            {
+                "incident_id": "inc-k8s-auto-01",
+                "platform": "kubernetes",
+                "events": events,
+            },
+            thread_id=thread_id,
+        )
 
-                    # Must halt for operator approval
-                    assert interrupted["incident_id"] == "inc-k8s-auto-01"
-                    assert interrupted["fsm_state"] == "approval_pending"
-                    assert interrupted["plan"]["requires_approval"] is True
-                    assert len(interrupted["execution_records"]) == 0
+        # Must halt for operator approval
+        assert interrupted["incident_id"] == "inc-k8s-auto-01"
+        assert interrupted["fsm_state"] == "approval_pending"
+        assert interrupted["plan"]["requires_approval"] is True
+        assert len(interrupted["execution_records"]) == 0
 
-                    # Operator approves
-                    result = await workflow.resume_incident(
-                        thread_id=thread_id,
-                        approval_decision="approved",
-                    )
+        # Operator approves
+        result = await workflow.resume_incident(
+            thread_id=thread_id,
+            approval_decision="approved",
+        )
 
-                    assert result["resolved"] is True
-                    assert result["escalated"] is False
-                    assert result["fsm_state"] == "resolved"
-                    assert len(result["execution_records"]) == 1
-                    assert result["execution_records"][0]["success"] is True
+        assert result["resolved"] is True
+        assert result["escalated"] is False
+        assert result["fsm_state"] == "resolved"
+        assert len(result["execution_records"]) == 1
+        assert result["execution_records"][0]["success"] is True
 
-                    # Check deterministic sequence in audit log (NO ReAct!)
-                    stages = [e["stage"] for e in result["audit_log"]]
-                    assert "govern" in stages
-                    assert "execute" in stages
-                    assert "verify" in stages
-                    assert "learn" in stages
+        # Check deterministic sequence in audit log (NO ReAct!)
+        stages = [e["stage"] for e in result["audit_log"]]
+        assert "govern" in stages
+        assert "execute" in stages
+        assert "verify" in stages
+        assert "learn" in stages
 
 
 class MockWorkflowAWSModel(BaseChatModel):
@@ -205,7 +208,9 @@ async def test_aws_hitl_approval_and_resume():
     ]
 
     with (
-        patch("nexus.graph.nodes.diagnose.get_llm", return_value=MockWorkflowAWSModel()),
+        patch(
+            "nexus.graph.nodes.diagnose.get_llm", return_value=MockWorkflowAWSModel()
+        ),
         patch("nexus.graph.platform.aws._get_boto3_client") as mock_boto,
         patch("nexus.tools.aws_adapter._get_boto3_client") as mock_tools_boto,
     ):
@@ -282,7 +287,9 @@ async def test_operator_rejection_pathway():
     ]
 
     with (
-        patch("nexus.graph.nodes.diagnose.get_llm", return_value=MockWorkflowAWSModel()),
+        patch(
+            "nexus.graph.nodes.diagnose.get_llm", return_value=MockWorkflowAWSModel()
+        ),
         patch("nexus.graph.platform.aws._get_boto3_client") as mock_boto,
         patch("nexus.tools.aws_adapter._get_boto3_client") as mock_tools_boto,
     ):
@@ -350,9 +357,7 @@ async def test_verification_failure_and_deterministic_rollback():
             "nexus.agents.k8s_tools.describe_resource",
             return_value="Replicas: 2\nState: CrashLoopBackOff",
         ),
-        patch(
-            "nexus.agents.k8s_tools.restart_deployment", return_value="restarted"
-        ),
+        patch("nexus.agents.k8s_tools.restart_deployment", return_value="restarted"),
         patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05),
         patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01),
         patch.object(
@@ -477,48 +482,44 @@ async def test_dynamic_tool_planning_without_runbooks_and_evidence_confidence():
         patch(
             "nexus.graph.nodes.govern.check_live_state",
             AsyncMock(
-                return_value=MagicMock(
-                    verdict="degraded", evidence="Pod crashlooping"
-                )
+                return_value=MagicMock(verdict="degraded", evidence="Pod crashlooping")
             ),
         ),
         patch.object(
             adapter,
             "verify_health",
-            AsyncMock(
-                return_value=HealthCheckResult(healthy=True, slo_restored=True)
-            ),
+            AsyncMock(return_value=HealthCheckResult(healthy=True, slo_restored=True)),
         ),
     ):
-                    interrupted = await workflow.run_incident(
-                        {
-                            "incident_id": "inc-dynamic-tool-01",
-                            "platform": "kubernetes",
-                            "events": events,
-                            "max_retries": 1,
-                        },
-                        thread_id="thread-dynamic-tool-01",
-                    )
+        interrupted = await workflow.run_incident(
+            {
+                "incident_id": "inc-dynamic-tool-01",
+                "platform": "kubernetes",
+                "events": events,
+                "max_retries": 1,
+            },
+            thread_id="thread-dynamic-tool-01",
+        )
 
-                    # Verify dynamic plan requires human approval
-                    assert interrupted["fsm_state"] == "approval_pending"
-                    plan = interrupted["plan"]
-                    assert len(plan["steps"]) == 1
-                    assert plan["steps"][0]["tool_name"] == "k8s_restart_deployment"
-                    assert plan["requires_approval"] is True
+        # Verify dynamic plan requires human approval
+        assert interrupted["fsm_state"] == "approval_pending"
+        plan = interrupted["plan"]
+        assert len(plan["steps"]) == 1
+        assert plan["steps"][0]["tool_name"] == "k8s_restart_deployment"
+        assert plan["requires_approval"] is True
 
-                    # Operator approves
-                    result = await workflow.resume_incident(
-                        thread_id="thread-dynamic-tool-01",
-                        approval_decision="approved",
-                    )
+        # Operator approves
+        result = await workflow.resume_incident(
+            thread_id="thread-dynamic-tool-01",
+            approval_decision="approved",
+        )
 
-                    assert result["resolved"] is True
-                    assert result["escalated"] is False
-                    assert result["fsm_state"] == "resolved"
+        assert result["resolved"] is True
+        assert result["escalated"] is False
+        assert result["fsm_state"] == "resolved"
 
-                    # Verify evidence-based confidence
-                    assert result["diagnosis"]["confidence"] >= 0.80
+        # Verify evidence-based confidence
+        assert result["diagnosis"]["confidence"] >= 0.80
 
 
 @pytest.mark.asyncio
@@ -569,69 +570,63 @@ async def test_workflow_pending_approvals_and_status_api_integration():
         patch(
             "nexus.graph.nodes.govern.check_live_state",
             AsyncMock(
-                return_value=MagicMock(
-                    verdict="degraded", evidence="Pod crashlooping"
-                )
+                return_value=MagicMock(verdict="degraded", evidence="Pod crashlooping")
             ),
         ),
         patch.object(
             get_platform_registry().get("kubernetes"),
             "verify_health",
-            AsyncMock(
-                return_value=HealthCheckResult(
-                    healthy=True, slo_restored=True
-                )
-            ),
+            AsyncMock(return_value=HealthCheckResult(healthy=True, slo_restored=True)),
         ),
     ):
-                        interrupted = await workflow.run_incident(
-                            {
-                                "incident_id": incident_id,
-                                "platform": "kubernetes",
-                                "events": events,
-                            },
-                            thread_id=thread_id,
-                        )
+        interrupted = await workflow.run_incident(
+            {
+                "incident_id": incident_id,
+                "platform": "kubernetes",
+                "events": events,
+            },
+            thread_id=thread_id,
+        )
 
-                        assert interrupted["fsm_state"] == "approval_pending"
-                        assert workflow.has_pending(thread_id) is True
-                        assert workflow.has_pending(incident_id) is True
-                        assert workflow.status["pending_approvals"] == 1
+        assert interrupted["fsm_state"] == "approval_pending"
+        assert workflow.has_pending(thread_id) is True
+        assert workflow.has_pending(incident_id) is True
+        assert workflow.status["pending_approvals"] == 1
 
-                        approvals = workflow.pending_approvals()
-                        assert len(approvals) == 1
-                        appr = approvals[0]
-                        assert appr["approval_id"] == thread_id
-                        assert appr["incident_id"] == incident_id
-                        assert appr["action_type"] == "k8s_restart_deployment"
-                        assert appr["target"] == "default/shop-demo"
+        approvals = workflow.pending_approvals()
+        assert len(approvals) == 1
+        appr = approvals[0]
+        assert appr["approval_id"] == thread_id
+        assert appr["incident_id"] == incident_id
+        assert appr["action_type"] == "k8s_restart_deployment"
+        assert appr["target"] == "default/shop-demo"
 
-                        # Integrate with status_api
-                        status_api_module.context.workflow = workflow
-                        status_api_module.context.orchestrator = None
+        # Integrate with status_api
+        status_api_module.context.workflow = workflow
+        status_api_module.context.orchestrator = None
 
-                        api_pending = await status_api_module.pending_approvals()
-                        assert len(api_pending) == 1
-                        assert api_pending[0]["approval_id"] == thread_id
+        api_pending = await status_api_module.pending_approvals()
+        assert len(api_pending) == 1
+        assert api_pending[0]["approval_id"] == thread_id
 
-                        # Approve via status API
-                        res = await status_api_module.approve_action(thread_id)
-                        assert res["status"] == "approved"
-                        assert workflow.has_pending(thread_id) is False
-                        assert len(workflow.pending_approvals()) == 0
+        # Approve via status API
+        res = await status_api_module.approve_action(thread_id)
+        assert res["status"] == "approved"
+        assert workflow.has_pending(thread_id) is False
+        assert len(workflow.pending_approvals()) == 0
 
-                        # Test rejection pathway
-                        thread_id_rej = "thread-reject-integration"
-                        await workflow.run_incident(
-                            {
-                                "incident_id": "inc-reject-integration",
-                                "platform": "kubernetes",
-                                "events": events,
-                            },
-                            thread_id=thread_id_rej,
-                        )
-                        assert workflow.has_pending(thread_id_rej) is True
-                        rej_res = await status_api_module.reject_action(thread_id_rej)
-                        assert rej_res["status"] == "rejected"
-                        assert workflow.has_pending(thread_id_rej) is False
-                        assert len(workflow.pending_approvals()) == 0
+        # Test rejection pathway
+        thread_id_rej = "thread-reject-integration"
+        await workflow.run_incident(
+            {
+                "incident_id": "inc-reject-integration",
+                "platform": "kubernetes",
+                "events": events,
+            },
+            thread_id=thread_id_rej,
+        )
+        assert workflow.has_pending(thread_id_rej) is True
+        rej_res = await status_api_module.reject_action(thread_id_rej)
+        assert rej_res["status"] == "rejected"
+        assert workflow.has_pending(thread_id_rej) is False
+        assert len(workflow.pending_approvals()) == 0

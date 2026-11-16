@@ -19,7 +19,9 @@ __all__ = ["plan_to_yaml_manifest", "extract_diagnostic_logs"]
 def _format_k8s_action(
     tool: str, params: dict[str, Any], target: str
 ) -> dict[str, Any]:
-    ns = params.get("namespace") or (target.split("/")[0] if "/" in target else "default")
+    ns = params.get("namespace") or (
+        target.split("/")[0] if "/" in target else "default"
+    )
     name = (
         params.get("resource_name")
         or params.get("deployment_name")
@@ -40,7 +42,11 @@ def _format_k8s_action(
         base["spec"] = {"replicas": replicas}
         return base
 
-    if tool in ("k8s_patch_resource_limits",) or "memory_limit" in params or "cpu_limit" in params:
+    if (
+        tool in ("k8s_patch_resource_limits",)
+        or "memory_limit" in params
+        or "cpu_limit" in params
+    ):
         limits: dict[str, str] = {}
         if params.get("memory_limit"):
             limits["memory"] = str(params["memory_limit"])
@@ -59,7 +65,9 @@ def _format_k8s_action(
         now_ts = datetime.now(timezone.utc).isoformat()
         base["spec"] = {
             "template": {
-                "metadata": {"annotations": {"kubectl.kubernetes.io/restartedAt": now_ts}}
+                "metadata": {
+                    "annotations": {"kubectl.kubernetes.io/restartedAt": now_ts}
+                }
             }
         }
         return base
@@ -72,9 +80,7 @@ def _format_k8s_action(
     return base
 
 
-def plan_to_yaml_manifest(
-    plan: dict[str, Any] | None, target: str = ""
-) -> str:
+def plan_to_yaml_manifest(plan: dict[str, Any] | None, target: str = "") -> str:
     """Format planned remediation actions as a valid YAML manifest or action spec."""
     if not plan:
         return "# No active remediation plan\n"
@@ -82,12 +88,19 @@ def plan_to_yaml_manifest(
     actions = plan.get("actions") or plan.get("steps") or []
     if not actions:
         summary = plan.get("summary") or "Remediation plan"
-        return yaml.safe_dump({"summary": summary, "status": "no_mutations_needed"}, sort_keys=False)
+        return yaml.safe_dump(
+            {"summary": summary, "status": "no_mutations_needed"}, sort_keys=False
+        )
 
     rendered_docs: list[dict[str, Any]] = []
     for act in actions:
         tool = str(act.get("tool_name") or act.get("action") or act.get("tool") or "")
-        params = act.get("tool_arguments") or act.get("parameters") or act.get("arguments") or {}
+        params = (
+            act.get("tool_arguments")
+            or act.get("parameters")
+            or act.get("arguments")
+            or {}
+        )
         act_target = act.get("target_resource_urn") or act.get("target") or target
 
         if (
@@ -104,8 +117,10 @@ def plan_to_yaml_manifest(
                     "target": act_target,
                     "parameters": params,
                     "rollback": {
-                        "tool": act.get("rollback_tool_name") or act.get("rollback_tool"),
-                        "parameters": act.get("rollback_arguments") or act.get("rollback_parameters", {}),
+                        "tool": act.get("rollback_tool_name")
+                        or act.get("rollback_tool"),
+                        "parameters": act.get("rollback_arguments")
+                        or act.get("rollback_parameters", {}),
                     },
                 }
             )
@@ -115,9 +130,7 @@ def plan_to_yaml_manifest(
     return yaml.safe_dump_all(rendered_docs, sort_keys=False)
 
 
-def extract_diagnostic_logs(
-    state_or_rca: dict[str, Any], max_lines: int = 25
-) -> str:
+def extract_diagnostic_logs(state_or_rca: dict[str, Any], max_lines: int = 25) -> str:
     """Extract verifiable pod logs and diagnostic evidence traces that identified the failure."""
     lines: list[str] = []
 
@@ -156,7 +169,9 @@ def extract_diagnostic_logs(
     if not lines:
         for ev in state_or_rca.get("events", []):
             if isinstance(ev, dict) and ev.get("signal_type"):
-                lines.append(f"Signal: {ev.get('signal_type')} ({ev.get('severity', 'warning')}) - {json.dumps(ev.get('context', {}))}")
+                lines.append(
+                    f"Signal: {ev.get('signal_type')} ({ev.get('severity', 'warning')}) - {json.dumps(ev.get('context', {}))}"
+                )
 
     if not lines:
         root_cause = rca.get("root_cause") or rca.get("root_cause_summary")

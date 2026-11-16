@@ -43,7 +43,7 @@ class AsyncLLMRateLimiter:
     def release(self) -> None:
         self.semaphore.release()
 
-    async def __aenter__(self) -> "AsyncLLMRateLimiter":
+    async def __aenter__(self) -> AsyncLLMRateLimiter:
         await self.acquire()
         return self
 
@@ -77,7 +77,9 @@ def is_rate_limit_error(exc: Exception) -> bool:
 class RateLimitedChatModel:
     """Transparent proxy that applies rate limiting and non-blocking 429 handling."""
 
-    def __init__(self, delegate: Any, limiter: AsyncLLMRateLimiter | None = None) -> None:
+    def __init__(
+        self, delegate: Any, limiter: AsyncLLMRateLimiter | None = None
+    ) -> None:
         self._delegate = delegate
         self._limiter = limiter or get_global_rate_limiter()
 

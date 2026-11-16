@@ -25,7 +25,11 @@ __all__ = [
 
 
 def build_heal_payload(
-    app_name: str, runbook_id: str, outcome: str, description: str, target: str | None = None
+    app_name: str,
+    runbook_id: str,
+    outcome: str,
+    description: str,
+    target: str | None = None,
 ) -> dict[str, Any]:
     color = "#83ef48" if outcome == "success" else "#ff0000"
     return {
@@ -34,13 +38,22 @@ def build_heal_payload(
                 "color": color,
                 "fallback": f"NEXUS healed {app_name}: {description}",
                 "blocks": [
-                    {"type": "section", "text": {"type": "mrkdwn", "text": f"*NEXUS Healing Action — `{app_name}`*"}},
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*NEXUS Healing Action — `{app_name}`*",
+                        },
+                    },
                     {
                         "type": "section",
                         "fields": [
                             {"type": "mrkdwn", "text": f"*Action:*\n{description}"},
                             {"type": "mrkdwn", "text": f"*Outcome:*\n`{outcome}`"},
-                            {"type": "mrkdwn", "text": f"*Target:*\n`{target or 'unknown'}`"},
+                            {
+                                "type": "mrkdwn",
+                                "text": f"*Target:*\n`{target or 'unknown'}`",
+                            },
                         ],
                     },
                 ],
@@ -59,14 +72,22 @@ def build_prescale_payload(
 ) -> dict[str, Any]:
     tables = tables or []
     mult = predicted_rps / current_rps if current_rps > 0 else 1.0
-    table_clause = f" — DB spike on {', '.join(f'`{t}`' for t in tables[:3])}" if tables else ""
+    table_clause = (
+        f" — DB spike on {', '.join(f'`{t}`' for t in tables[:3])}" if tables else ""
+    )
     return {
         "attachments": [
             {
                 "color": "#ECB22E",
                 "fallback": f"NEXUS pre-scaling {deployment}",
                 "blocks": [
-                    {"type": "section", "text": {"type": "mrkdwn", "text": f"*NEXUS Pre-Scale — `{deployment}`*"}},
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*NEXUS Pre-Scale — `{deployment}`*",
+                        },
+                    },
                     {
                         "type": "section",
                         "text": {
@@ -112,7 +133,13 @@ def build_approval_required_payload(
     ctx = context or {}
     rca, event = ctx.get("rca", {}), ctx.get("event", {})
     blocks: list[dict[str, Any]] = [
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"*NEXUS L{healing_level} Action Requires Approval*"}},
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*NEXUS L{healing_level} Action Requires Approval*",
+            },
+        },
         {
             "type": "section",
             "fields": [
@@ -124,16 +151,19 @@ def build_approval_required_payload(
         },
     ]
     if rca:
-        blocks.append({
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*Root Cause Analysis*\n*Class:* {rca.get('failure_class', 'Unknown')}\n*Root Cause:* {str(rca.get('root_cause', 'Unknown'))[:300]}",
-            },
-        })
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Root Cause Analysis*\n*Class:* {rca.get('failure_class', 'Unknown')}\n*Root Cause:* {str(rca.get('root_cause', 'Unknown'))[:300]}",
+                },
+            }
+        )
     diag_logs = ctx.get("diagnostic_logs")
     if not diag_logs:
         from nexus.graph.manifest_formatter import extract_diagnostic_logs
+
         diag_logs = extract_diagnostic_logs(ctx)
     if diag_logs:
         blocks.append(build_diagnostic_logs_block(diag_logs))
@@ -141,24 +171,44 @@ def build_approval_required_payload(
     rem_yaml = ctx.get("remediation_yaml")
     if not rem_yaml:
         from nexus.graph.manifest_formatter import plan_to_yaml_manifest
+
         rem_yaml = plan_to_yaml_manifest(ctx.get("plan"), target)
     if rem_yaml:
         blocks.append(build_yaml_manifest_block(rem_yaml))
 
     if event:
-        blocks.append({
+        blocks.append(
+            {
+                "type": "section",
+                "fields": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Signal:*\n`{event.get('signal_type', 'unknown')}`",
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Severity:*\n`{event.get('severity', 'unknown')}`",
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Namespace:*\n`{event.get('namespace', 'unknown')}`",
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*RCA Source:*\n`{ctx.get('rca_source', 'autonomous')}`",
+                    },
+                ],
+            }
+        )
+    blocks.append(
+        {
             "type": "section",
-            "fields": [
-                {"type": "mrkdwn", "text": f"*Signal:*\n`{event.get('signal_type', 'unknown')}`"},
-                {"type": "mrkdwn", "text": f"*Severity:*\n`{event.get('severity', 'unknown')}`"},
-                {"type": "mrkdwn", "text": f"*Namespace:*\n`{event.get('namespace', 'unknown')}`"},
-                {"type": "mrkdwn", "text": f"*RCA Source:*\n`{ctx.get('rca_source', 'autonomous')}`"},
-            ],
-        })
-    blocks.append({
-        "type": "section",
-        "text": {"type": "mrkdwn", "text": f"To approve this action, run:\n`nexus approve {approval_id}`"},
-    })
+            "text": {
+                "type": "mrkdwn",
+                "text": f"To approve this action, run:\n`nexus approve {approval_id}`",
+            },
+        }
+    )
     blocks.append(approval_buttons_block(approval_id))
     return {
         "attachments": [

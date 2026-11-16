@@ -62,7 +62,11 @@ async def collect_k8s_telemetry(target: TargetResource) -> PlatformTelemetry:
 
     # Health status & command override
     raw_lower = (raw_desc + " " + " ".join(logs)).lower()
-    if "echo crashing" in raw_lower or "command" in raw_lower or live_config.get("exit_code") in (1, 127):
+    if (
+        "echo crashing" in raw_lower
+        or "command" in raw_lower
+        or live_config.get("exit_code") in (1, 127)
+    ):
         live_config["has_command_override"] = True
     if "oomkilled" in raw_lower:
         status = "oomkilled"

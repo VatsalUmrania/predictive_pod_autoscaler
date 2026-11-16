@@ -24,11 +24,21 @@ _OUTCOME_SUFFIX = {
 
 def make_plain_english(row: dict[str, Any]) -> str:
     """Turn an AuditTrail row into a plain-English incident description."""
-    action = row.get("description") or row.get("action_taken") or row.get("runbook_id", "")
+    action = (
+        row.get("description") or row.get("action_taken") or row.get("runbook_id", "")
+    )
     target = row.get("target") or row.get("resource_name") or "the service"
     outcome = row.get("execution_outcome", "pending")
     ts = (row.get("timestamp") or "")[:19].replace("T", " ")
-    action_text = action if " on " in str(action) else f"Remediation '{action}' on {target}" if action else f"Remediation on {target}"
+    action_text = (
+        action
+        if " on " in str(action)
+        else (
+            f"Remediation '{action}' on {target}"
+            if action
+            else f"Remediation on {target}"
+        )
+    )
     return f"At {ts} UTC — {action_text}. {_OUTCOME_SUFFIX.get(outcome, '')}".strip()
 
 
@@ -65,7 +75,11 @@ async def write_incident(
             "description, confidence, timestamp, rca, accepted_by, accepted_at, diagnostic_logs, remediation_yaml) "
             "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13)"
         )
-        conf = float(row.get("confidence", 0.0)) if row.get("confidence") is not None else None
+        conf = (
+            float(row.get("confidence", 0.0))
+            if row.get("confidence") is not None
+            else None
+        )
         async with db.acquire() as conn:
             await conn.execute(
                 "ALTER TABLE developer_incidents ADD COLUMN IF NOT EXISTS diagnostic_logs TEXT; "
@@ -90,7 +104,9 @@ async def write_incident(
             await conn.execute(
                 "DELETE FROM developer_incidents WHERE id NOT IN (SELECT id FROM developer_incidents ORDER BY id DESC LIMIT 200)"
             )
-        logger.info(f"[Dashboard] Incident stored: {row.get('incident_id')} outcome={row.get('outcome')}")
+        logger.info(
+            f"[Dashboard] Incident stored: {row.get('incident_id')} outcome={row.get('outcome')}"
+        )
     except Exception as _e:
         logger.warning(f"[Dashboard] incident write failed: {_e}")
 
@@ -102,10 +118,14 @@ async def record_incident_resolution(
     import nexus.integration.dashboard as dash_mod
 
     inc_id = data.get("incident_id")
-    target = data.get("target") or data.get("target_name") or data.get("app") or "service"
+    target = (
+        data.get("target") or data.get("target_name") or data.get("app") or "service"
+    )
     plan = data.get("plan") or {}
     rca = data.get("rca") or data.get("diagnosis") or {}
-    runbook_id = plan.get("failure_mode") or data.get("runbook_id") or "dynamic_remediation"
+    runbook_id = (
+        plan.get("failure_mode") or data.get("runbook_id") or "dynamic_remediation"
+    )
     level = data.get("level", 3)
     outcome = data.get("outcome", "success")
 
@@ -114,11 +134,21 @@ async def record_incident_resolution(
     action_desc = (
         steps[0].get("description")
         if steps and steps[0].get("description")
-        else data.get("action_taken") or data.get("description") or f"Executed remediation for {failure_class}"
+        else data.get("action_taken")
+        or data.get("description")
+        or f"Executed remediation for {failure_class}"
     )
 
-    ts = (data.get("resolved_at") or data.get("timestamp") or datetime.now(timezone.utc).isoformat())[:19].replace("T", " ")
-    desc = f"At {ts} UTC — {action_desc} on {target}. Successfully resolved and verified healthy." if outcome == "success" else f"At {ts} UTC — Incident on {target} escalated: {data.get('reason', 'Failed')}"
+    ts = (
+        data.get("resolved_at")
+        or data.get("timestamp")
+        or datetime.now(timezone.utc).isoformat()
+    )[:19].replace("T", " ")
+    desc = (
+        f"At {ts} UTC — {action_desc} on {target}. Successfully resolved and verified healthy."
+        if outcome == "success"
+        else f"At {ts} UTC — Incident on {target} escalated: {data.get('reason', 'Failed')}"
+    )
 
     confidence = data.get("confidence")
     if confidence is None and rca.get("confidence") is not None:
@@ -127,11 +157,13 @@ async def record_incident_resolution(
     rem_yaml = data.get("remediation_yaml")
     if not rem_yaml and plan:
         from nexus.graph.manifest_formatter import plan_to_yaml_manifest
+
         rem_yaml = plan_to_yaml_manifest(plan, target=str(target))
 
     diag_logs = data.get("diagnostic_logs")
     if not diag_logs:
         from nexus.graph.manifest_formatter import extract_diagnostic_logs
+
         diag_logs = extract_diagnostic_logs(data)
 
     row = {

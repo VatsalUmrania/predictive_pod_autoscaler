@@ -1,6 +1,7 @@
 """
 Slack notification event senders for NEXUS Notifier.
 """
+
 from __future__ import annotations
 
 import json
@@ -50,7 +51,9 @@ async def send_prescale(
     if webhook:
         await notifier._send(
             webhook,
-            build_prescale_payload(deployment, current_rps, predicted_rps, horizon_min, confidence, tables),
+            build_prescale_payload(
+                deployment, current_rps, predicted_rps, horizon_min, confidence, tables
+            ),
             app_name,
         )
 
@@ -69,12 +72,22 @@ async def send_approval_required(
     if webhook:
         await notifier._send(
             webhook,
-            build_approval_required_payload(app_name, approval_id, runbook_id, target, healing_level, confidence, context),
+            build_approval_required_payload(
+                app_name,
+                approval_id,
+                runbook_id,
+                target,
+                healing_level,
+                confidence,
+                context,
+            ),
             app_name,
         )
 
 
-async def send_slack_http(webhook_url: str, payload: dict[str, Any], app_name: str) -> None:
+async def send_slack_http(
+    webhook_url: str, payload: dict[str, Any], app_name: str
+) -> None:
     try:
         import httpx
 
@@ -85,7 +98,9 @@ async def send_slack_http(webhook_url: str, payload: dict[str, Any], app_name: s
                 headers={"Content-Type": "application/json"},
             )
             if resp.status_code != 200:
-                logger.warning(f"[Notifier] Slack returned {resp.status_code} for '{app_name}'")
+                logger.warning(
+                    f"[Notifier] Slack returned {resp.status_code} for '{app_name}'"
+                )
     except Exception as exc:
         logger.debug(f"[Notifier] Slack send failed for '{app_name}': {exc}")
 
@@ -116,7 +131,9 @@ async def send_incident_resolved(
             verification_details,
         )
         await notifier._send(webhook, payload, app_name)
-        logger.info(f"[Notifier] Incident resolved notification sent for target='{target}' inc='{incident_id}'")
+        logger.info(
+            f"[Notifier] Incident resolved notification sent for target='{target}' inc='{incident_id}'"
+        )
 
 
 async def send_incident_escalated(
@@ -131,9 +148,13 @@ async def send_incident_escalated(
 ) -> None:
     webhook = notifier._get_webhook(app_name)
     if webhook:
-        payload = build_incident_escalated_payload(target, incident_id, failure_class, reason, root_cause)
+        payload = build_incident_escalated_payload(
+            target, incident_id, failure_class, reason, root_cause
+        )
         await notifier._send(webhook, payload, app_name)
-        logger.warning(f"[Notifier] Incident escalation sent for target='{target}' inc='{incident_id}'")
+        logger.warning(
+            f"[Notifier] Incident escalation sent for target='{target}' inc='{incident_id}'"
+        )
 
 
 async def send_report_ready(
@@ -149,4 +170,6 @@ async def send_report_ready(
     if webhook:
         payload = build_report_ready_payload(target, outcome, summary, report_url)
         await notifier._send(webhook, payload, app_name)
-        logger.info(f"[Notifier] Post-incident report posted for target='{target}' inc='{incident_id}'")
+        logger.info(
+            f"[Notifier] Post-incident report posted for target='{target}' inc='{incident_id}'"
+        )

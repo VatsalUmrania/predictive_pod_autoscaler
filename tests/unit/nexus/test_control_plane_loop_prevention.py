@@ -1,10 +1,11 @@
 """Tests for control plane self-healing loop prevention."""
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
+
 import pytest
 
-from nexus.graph.workflow_events import is_control_plane_resource, handle_incoming_event
+from nexus.graph.workflow_events import handle_incoming_event, is_control_plane_resource
 
 
 def test_is_control_plane_resource():
@@ -20,7 +21,9 @@ def test_is_control_plane_resource():
     assert is_control_plane_resource(ev_pub) is True
 
     # Control plane pod/service prefixes
-    ev_api = SimpleNamespace(namespace="default", resource_name="nexus-api-6f555b8cb7-8pcdv")
+    ev_api = SimpleNamespace(
+        namespace="default", resource_name="nexus-api-6f555b8cb7-8pcdv"
+    )
     assert is_control_plane_resource(ev_api) is True
 
     ev_nats = SimpleNamespace(namespace="default", resource_name="nats-0")
@@ -29,17 +32,23 @@ def test_is_control_plane_resource():
     ev_opa = SimpleNamespace(namespace="default", resource_name="opa-65f7459b8f-ffzqg")
     assert is_control_plane_resource(ev_opa) is True
 
-    ev_grafana = SimpleNamespace(namespace="monitoring", resource_name="grafana-agent-xyz")
+    ev_grafana = SimpleNamespace(
+        namespace="monitoring", resource_name="grafana-agent-xyz"
+    )
     assert is_control_plane_resource(ev_grafana) is True
 
     # User workload services
     ev_demo = SimpleNamespace(namespace="default", resource_name="shop-demo")
     assert is_control_plane_resource(ev_demo) is False
 
-    ev_prom = SimpleNamespace(namespace="monitoring", resource_name="prometheus-grafana")
+    ev_prom = SimpleNamespace(
+        namespace="monitoring", resource_name="prometheus-grafana"
+    )
     assert is_control_plane_resource(ev_prom) is False
 
-    ev_checkout = SimpleNamespace(namespace="production", resource_name="checkout-service")
+    ev_checkout = SimpleNamespace(
+        namespace="production", resource_name="checkout-service"
+    )
     assert is_control_plane_resource(ev_checkout) is False
 
 

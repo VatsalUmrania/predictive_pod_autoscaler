@@ -1,6 +1,7 @@
 """
 Helper functions for NEXUS verification node.
 """
+
 from __future__ import annotations
 
 import logging
@@ -122,7 +123,9 @@ async def verify_step_conditions(
             telemetry=telemetry,
         )
         if obs is None:
-            cond_details.append(f"Metric '{cond.metric_name}' inferred healthy from adapter")
+            cond_details.append(
+                f"Metric '{cond.metric_name}' inferred healthy from adapter"
+            )
             continue
         passed, c_msg = evaluate_verification_condition(cond, obs)
         cond_details.append(c_msg)

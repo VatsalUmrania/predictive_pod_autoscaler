@@ -18,11 +18,23 @@ def build_scenario_plan(
     state: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]] | None]:
     target = state.get("target") or {}
-    t_name = target.get("name", "service") if isinstance(target, dict) else getattr(target, "name", "service")
-    t_ns = target.get("namespace", "default") if isinstance(target, dict) else getattr(target, "namespace", "default")
+    t_name = (
+        target.get("name", "service")
+        if isinstance(target, dict)
+        else getattr(target, "name", "service")
+    )
+    t_ns = (
+        target.get("namespace", "default")
+        if isinstance(target, dict)
+        else getattr(target, "namespace", "default")
+    )
     diag = state.get("diagnosis") or {}
     prov = state.get("platform") or "kubernetes"
-    dep_name = re.sub(r"-[0-9a-f]{8,10}-[0-9a-z]{5}$", "", t_name) if prov == "kubernetes" else t_name
+    dep_name = (
+        re.sub(r"-[0-9a-f]{8,10}-[0-9a-z]{5}$", "", t_name)
+        if prov == "kubernetes"
+        else t_name
+    )
     telem = state.get("telemetry") or {}
     live_cfg = telem.get("live_config") or {}
     metrics = telem.get("metrics") or {}
@@ -61,7 +73,9 @@ def build_scenario_plan(
             rb_params = {"function_name": t_name, "timeout_seconds": cur_to}
             v_tool = "aws_get_function_configuration"
             return (
-                format_plan(tool, params, rb_tool, rb_params, v_tool, t_name, approval_reason),
+                format_plan(
+                    tool, params, rb_tool, rb_params, v_tool, t_name, approval_reason
+                ),
                 history,
             )
         if prov == "kubernetes" and "k8s_restart_deployment" in prior_tools:
@@ -75,7 +89,9 @@ def build_scenario_plan(
             rb_params = dict(params)
             v_tool = "k8s_describe_resource"
             return (
-                format_plan(tool, params, rb_tool, rb_params, v_tool, dep_name, approval_reason),
+                format_plan(
+                    tool, params, rb_tool, rb_params, v_tool, dep_name, approval_reason
+                ),
                 history,
             )
 
@@ -83,7 +99,10 @@ def build_scenario_plan(
     if suggested and (
         (prov == "aws" and not suggested.startswith("k8s_"))
         or (prov == "kubernetes" and not suggested.startswith("aws_"))
-        or (prov not in ("aws", "kubernetes") and not suggested.startswith(("k8s_", "aws_")))
+        or (
+            prov not in ("aws", "kubernetes")
+            and not suggested.startswith(("k8s_", "aws_"))
+        )
     ):
         tool = suggested
     elif (
@@ -93,13 +112,21 @@ def build_scenario_plan(
         or "startup script" in root_cause
     ):
         tool = "k8s_remove_container_command"
-        params = {"namespace": t_ns, "resource_name": dep_name, "deployment_name": dep_name}
+        params = {
+            "namespace": t_ns,
+            "resource_name": dep_name,
+            "deployment_name": dep_name,
+        }
         rb_tool = "k8s_restart_deployment"
         rb_params = dict(params)
         v_tool = "k8s_describe_resource"
         return format_plan(tool, params, rb_tool, rb_params, v_tool, dep_name), None
     elif (
-        any(e.get("signal_type") == "traffic_spike" for e in events if isinstance(e, dict))
+        any(
+            e.get("signal_type") == "traffic_spike"
+            for e in events
+            if isinstance(e, dict)
+        )
         or fail_cls == "cascading_failure"
         or "traffic" in root_cause
     ):
@@ -148,7 +175,12 @@ def build_scenario_plan(
         return format_plan(tool, params, rb_tool, rb_params, v_tool, dep_name), None
     elif prov == "aws":
         tool = "aws_update_lambda_memory"
-    elif fail_cls == "bad_deploy" or "revision" in root_cause or "rollback" in root_cause or "regression" in root_cause:
+    elif (
+        fail_cls == "bad_deploy"
+        or "revision" in root_cause
+        or "rollback" in root_cause
+        or "regression" in root_cause
+    ):
         tool = "k8s_rollback_deployment"
     elif "deploy" in fail_cls or "deploy" in root_cause or "crash" in root_cause:
         tool = "k8s_restart_deployment"
@@ -172,7 +204,11 @@ def build_scenario_plan(
         }
         rb_tool, rb_params, v_tool = (
             tool,
-            {"function_name": t_name, "memory_mb": 256, "region": t_ns if t_ns != "default" else "us-east-1"},
+            {
+                "function_name": t_name,
+                "memory_mb": 256,
+                "region": t_ns if t_ns != "default" else "us-east-1",
+            },
             "aws_get_function_configuration",
         )
     elif tool == "gcp_restart_compute_instance":
@@ -188,7 +224,16 @@ def build_scenario_plan(
             "resource_name": dep_name,
             "deployment_name": dep_name,
         }
-        rb_tool = "k8s_rollback_deployment" if tool == "k8s_rollback_deployment" else "k8s_restart_deployment"
+        rb_tool = (
+            "k8s_rollback_deployment"
+            if tool == "k8s_rollback_deployment"
+            else "k8s_restart_deployment"
+        )
         rb_params, v_tool = dict(params), "k8s_describe_resource"
 
-    return format_plan(tool, params, rb_tool, rb_params, v_tool, dep_name, approval_reason), None
+    return (
+        format_plan(
+            tool, params, rb_tool, rb_params, v_tool, dep_name, approval_reason
+        ),
+        None,
+    )

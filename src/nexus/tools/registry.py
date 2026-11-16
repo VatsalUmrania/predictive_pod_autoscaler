@@ -92,10 +92,14 @@ class ToolRegistry:
         return tools
 
     def get_mutating_tool_schemas(self) -> list[dict[str, Any]]:
-        return build_tool_schemas(self._universal_callables, self._tools, is_mutating=True)
+        return build_tool_schemas(
+            self._universal_callables, self._tools, is_mutating=True
+        )
 
     def get_read_only_tool_schemas(self) -> list[dict[str, Any]]:
-        return build_tool_schemas(self._universal_callables, self._tools, is_mutating=False)
+        return build_tool_schemas(
+            self._universal_callables, self._tools, is_mutating=False
+        )
 
     async def execute_read_only(self, tool_name: str, tool_args: dict[str, Any]) -> Any:
         if tool_name in self._universal_callables:

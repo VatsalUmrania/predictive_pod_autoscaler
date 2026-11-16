@@ -14,17 +14,25 @@ from typing import Any, cast
 from nexus.graph.builder import build_incident_graph
 from nexus.graph.checkpointer import GraphCheckpointStore
 from nexus.graph.routes import (
-    route_after_approval, route_after_diagnose, route_after_execute,
-    route_after_govern, route_after_verify,
+    route_after_approval,
+    route_after_diagnose,
+    route_after_execute,
+    route_after_govern,
+    route_after_verify,
 )
 from nexus.graph.workflow_approval import (
-    create_pending_approval_entry, notify_incident_rejected_helper,
-    publish_pending_approval, resume_incident_execution,
+    create_pending_approval_entry,
+    notify_incident_rejected_helper,
+    publish_pending_approval,
+    resume_incident_execution,
 )
 from nexus.graph.workflow_completion import handle_workflow_completion
 from nexus.graph.workflow_events import (
-    build_cluster_event_dicts, build_initial_state, handle_incoming_event,
-    run_flush_loop, setup_event_subscriptions,
+    build_cluster_event_dicts,
+    build_initial_state,
+    handle_incoming_event,
+    run_flush_loop,
+    setup_event_subscriptions,
 )
 
 logger = logging.getLogger(__name__)
@@ -86,7 +94,12 @@ class IncidentWorkflow:
             )
         except Exception as exc:
             cid = getattr(cluster, "cluster_id", "unknown")
-            logger.error("[IncidentWorkflow] Error processing cluster %s: %s", cid, exc, exc_info=True)
+            logger.error(
+                "[IncidentWorkflow] Error processing cluster %s: %s",
+                cid,
+                exc,
+                exc_info=True,
+            )
 
     async def notify_incident_rejected(
         self, target_key: str, incident_id: str, reason: str = ""
@@ -129,7 +142,9 @@ class IncidentWorkflow:
             self.nats = nats_client
         self._running = True
         logger.info("[IncidentWorkflow] Started LangGraph production incident listener")
-        self._flush_task = asyncio.create_task(self._flush_loop(), name="workflow-flush")
+        self._flush_task = asyncio.create_task(
+            self._flush_loop(), name="workflow-flush"
+        )
         self._sub_tasks.append(self._flush_task)
         await setup_event_subscriptions(self)
 
@@ -161,7 +176,9 @@ class IncidentWorkflow:
             self._rca_results = self._rca_results[-100:]
 
         state_snapshot = self._compiled_graph.get_state(config)
-        if (state_snapshot.next and "approval" in state_snapshot.next) or result.get("__interrupt__"):
+        if (state_snapshot.next and "approval" in state_snapshot.next) or result.get(
+            "__interrupt__"
+        ):
             await self._record_pending_approval(result, inc_id=inc_id, thread_id=tid)
         else:
             await self._handle_workflow_completion(result, inc_id=inc_id, thread_id=tid)

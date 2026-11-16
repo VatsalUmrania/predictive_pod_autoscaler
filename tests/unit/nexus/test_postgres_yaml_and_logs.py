@@ -1,11 +1,11 @@
 """Tests for PostgreSQL persistence of diagnostic logs and remediation YAML."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from nexus.integration.dashboard_incidents import (
     record_incident_resolution,
-    write_incident,
 )
 
 
@@ -21,18 +21,25 @@ async def test_record_incident_resolution_persists_yaml_and_logs():
             "actions": [
                 {
                     "tool": "kubernetes_scale_deployment",
-                    "arguments": {"namespace": "default", "deployment": "shop-demo", "replicas": 3},
+                    "arguments": {
+                        "namespace": "default",
+                        "deployment": "shop-demo",
+                        "replicas": 3,
+                    },
                 }
             ]
         },
         "diagnostic_logs": "Pod logs: Connection timeout to database",
-        "rca": {"failure_class": "db_pressure", "root_cause": "connection pool exhausted"},
+        "rca": {
+            "failure_class": "db_pressure",
+            "root_cause": "connection pool exhausted",
+        },
     }
 
     mock_db = MagicMock()
     mock_conn = MagicMock()
     mock_conn.execute = AsyncMock()
-    
+
     # Setup async context manager for db.acquire()
     mock_db.acquire.return_value.__aenter__.return_value = mock_conn
     mock_db.acquire.return_value.__aexit__.return_value = None

@@ -138,34 +138,72 @@ class K8sPlatformAdapter(BasePlatformAdapter):
         except Exception as exc:
             desc = f"Error: {exc}"
 
-        if dep_name and (not desc or desc.startswith("Error") or "not found" in desc.lower()):
+        if dep_name and (
+            not desc or desc.startswith("Error") or "not found" in desc.lower()
+        ):
             try:
                 dep_desc = k8s_tools.describe_resource(
-                    namespace=target.namespace, resource_kind="deployment", resource_name=dep_name
+                    namespace=target.namespace,
+                    resource_kind="deployment",
+                    resource_name=dep_name,
                 )
                 if dep_desc and not dep_desc.startswith("Error"):
                     dl = dep_desc.lower()
-                    bad = any(b in dl for b in ("crashloop", "error", "backoff", "unavailable=1", "unavailable=2", "ready=0/"))
-                    if not bad and any(ok in dl for ok in ("1 available", "available", "ready: 1", "ready")):
-                        return HealthCheckResult(healthy=True, slo_restored=True, details=f"Parent deployment {dep_name} healthy")
+                    bad = any(
+                        b in dl
+                        for b in (
+                            "crashloop",
+                            "error",
+                            "backoff",
+                            "unavailable=1",
+                            "unavailable=2",
+                            "ready=0/",
+                        )
+                    )
+                    if not bad and any(
+                        ok in dl
+                        for ok in ("1 available", "available", "ready: 1", "ready")
+                    ):
+                        return HealthCheckResult(
+                            healthy=True,
+                            slo_restored=True,
+                            details=f"Parent deployment {dep_name} healthy",
+                        )
             except Exception:
                 pass
 
         if not desc or desc.startswith("Error"):
-            return HealthCheckResult(healthy=False, slo_restored=False, details=desc or "Empty describe")
+            return HealthCheckResult(
+                healthy=False, slo_restored=False, details=desc or "Empty describe"
+            )
 
         d_lower = desc.lower()
         has_failure = any(
-            bad in d_lower for bad in ("crashloop", "error", "backoff", "ready=0/", "unavailable=1", "unavailable=2")
+            bad in d_lower
+            for bad in (
+                "crashloop",
+                "error",
+                "backoff",
+                "ready=0/",
+                "unavailable=1",
+                "unavailable=2",
+            )
         )
         if has_failure:
             return HealthCheckResult(healthy=False, slo_restored=False, details=desc)
 
         if dep_name:
             dep_desc = k8s_tools.describe_resource(
-                namespace=target.namespace, resource_kind="deployment", resource_name=dep_name
+                namespace=target.namespace,
+                resource_kind="deployment",
+                resource_name=dep_name,
             )
-            if any(bad in dep_desc.lower() for bad in ("unavailable=1", "unavailable=2", "ready=0", "error")):
-                return HealthCheckResult(healthy=False, slo_restored=False, details=f"{desc} | {dep_desc}")
+            if any(
+                bad in dep_desc.lower()
+                for bad in ("unavailable=1", "unavailable=2", "ready=0", "error")
+            ):
+                return HealthCheckResult(
+                    healthy=False, slo_restored=False, details=f"{desc} | {dep_desc}"
+                )
 
         return HealthCheckResult(healthy=True, slo_restored=True, details=desc)

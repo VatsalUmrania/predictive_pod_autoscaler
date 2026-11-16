@@ -23,7 +23,9 @@ from nexus.bus.nats_client import NATSClient
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_NAMESPACES = frozenset({"kube-system", "kube-public", "kube-node-lease", "nexus"})
+SYSTEM_NAMESPACES = frozenset(
+    {"kube-system", "kube-public", "kube-node-lease", "nexus"}
+)
 CONTROL_PLANE_PREFIXES = ("nexus-api", "nats", "opa", "grafana-agent")
 
 
@@ -160,7 +162,9 @@ class K8sAgent(BaseAgent):
                 ns = getattr(ev.metadata, "namespace", "")
                 inv_obj = getattr(ev, "involved_object", None)
                 r_name = getattr(inv_obj, "name", "") if inv_obj else ""
-                if ns in SYSTEM_NAMESPACES or any(p in r_name for p in CONTROL_PLANE_PREFIXES):
+                if ns in SYSTEM_NAMESPACES or any(
+                    p in r_name for p in CONTROL_PLANE_PREFIXES
+                ):
                     continue
 
                 symptoms.append(self._event_to_symptom_signal(ev))

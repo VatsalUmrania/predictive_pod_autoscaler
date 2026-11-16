@@ -2,6 +2,7 @@
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from nexus.graph.llm_limiter import (
@@ -50,7 +51,9 @@ async def test_rate_limited_chat_model_delegation():
 async def test_rate_limited_chat_model_catches_429_quota():
     """Verify RateLimitedChatModel intercepts 429 RESOURCE_EXHAUSTED."""
     mock_base = AsyncMock()
-    mock_base.ainvoke.side_effect = Exception("429 Resource has been exhausted (e.g. check quota)")
+    mock_base.ainvoke.side_effect = Exception(
+        "429 Resource has been exhausted (e.g. check quota)"
+    )
 
     limiter = AsyncLLMRateLimiter(rpm=100, max_concurrent=1)
     proxy = RateLimitedChatModel(mock_base, limiter=limiter)

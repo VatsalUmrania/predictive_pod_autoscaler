@@ -3,7 +3,6 @@
 from nexus.integration.slack_action_templates import build_approval_required_payload
 from nexus.integration.slack_agentic_templates import (
     build_agentic_approval_payload,
-    build_slack_approval_blocks,
 )
 
 
@@ -13,7 +12,11 @@ def test_build_approval_required_payload_has_yaml_and_logs():
         "remediation_yaml": "apiVersion: apps/v1\nkind: Deployment\nspec:\n  replicas: 4",
         "diagnostic_logs": "Container crashloop exit 137\nOOMKilled: true",
         "rca": {"failure_class": "resource_exhaustion", "root_cause": "OOMKilled pod"},
-        "event": {"signal_type": "pod_crashloop", "severity": "critical", "namespace": "prod"},
+        "event": {
+            "signal_type": "pod_crashloop",
+            "severity": "critical",
+            "namespace": "prod",
+        },
     }
 
     payload = build_approval_required_payload(
@@ -55,7 +58,11 @@ def test_build_agentic_approval_payload_has_yaml():
         proposed_steps=[
             {
                 "tool": "kubernetes_scale_deployment",
-                "arguments": {"namespace": "default", "deployment": "checkout-service", "replicas": 5},
+                "arguments": {
+                    "namespace": "default",
+                    "deployment": "checkout-service",
+                    "replicas": 5,
+                },
             }
         ],
         confidence=0.95,

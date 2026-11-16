@@ -14,9 +14,6 @@ from typing import Any
 import httpx
 
 from nexus.governance.policy_abac import (
-    DESTRUCTIVE_VERBS,
-    RESTRICTED_AWS_SERVICES,
-    STATEFUL_KINDS_OR_SERVICES,
     build_opa_input_for_action,
     evaluate_local_abac,
 )
@@ -62,7 +59,11 @@ class PolicyEngine:
             if self._fallback_to_local:
                 dec, reasons = evaluate_local_abac(input_doc)
                 return {"decision": dec, "deny_reasons": reasons, "source": "local"}
-            return {"decision": "DENY", "deny_reasons": ["opa_unavailable_deny_closed"], "source": "error"}
+            return {
+                "decision": "DENY",
+                "deny_reasons": ["opa_unavailable_deny_closed"],
+                "source": "error",
+            }
 
         try:
             async with httpx.AsyncClient(timeout=self._http_timeout) as client:
@@ -72,15 +73,28 @@ class PolicyEngine:
                 )
                 if resp.status_code == 200:
                     raw = resp.json().get("result")
-                    if isinstance(raw, dict) and ("decision" in raw or "allow" in raw or "allowed" in raw):
+                    if isinstance(raw, dict) and (
+                        "decision" in raw or "allow" in raw or "allowed" in raw
+                    ):
                         raw_dec = raw.get("decision")
                         if raw_dec:
                             dec = str(raw_dec)
                         else:
                             allow = raw.get("allow", raw.get("allowed", False))
-                            req = raw.get("require_human_approval", raw.get("requires_human_approval", False))
-                            dec = "DENY" if not allow else ("REQUIRE_APPROVAL" if req else "ALLOW_AUTO")
-                        return {"decision": dec, "deny_reasons": raw.get("deny_reasons", []), "source": "opa"}
+                            req = raw.get(
+                                "require_human_approval",
+                                raw.get("requires_human_approval", False),
+                            )
+                            dec = (
+                                "DENY"
+                                if not allow
+                                else ("REQUIRE_APPROVAL" if req else "ALLOW_AUTO")
+                            )
+                        return {
+                            "decision": dec,
+                            "deny_reasons": raw.get("deny_reasons", []),
+                            "source": "opa",
+                        }
                 elif resp.status_code not in (400, 404):
                     resp.raise_for_status()
         except Exception as exc:
@@ -90,20 +104,43 @@ class PolicyEngine:
                 if self._fallback_to_local:
                     dec, reasons = evaluate_local_abac(input_doc)
                     return {"decision": dec, "deny_reasons": reasons, "source": "local"}
-                return {"decision": "DENY", "deny_reasons": ["opa_unavailable_deny_closed"], "source": "error"}
+                return {
+                    "decision": "DENY",
+                    "deny_reasons": ["opa_unavailable_deny_closed"],
+                    "source": "error",
+                }
 
         # Legacy endpoint fallback
         try:
             async with httpx.AsyncClient(timeout=self._http_timeout) as client:
                 leg_doc = {"input": {"action": input_doc, "context": {}}}
-                allow_resp = await client.post(f"{self._opa_url}/v1/data/nexus/allow_action", json=leg_doc)
+                allow_resp = await client.post(
+                    f"{self._opa_url}/v1/data/nexus/allow_action", json=leg_doc
+                )
                 allow_resp.raise_for_status()
                 allowed = bool(allow_resp.json().get("result", False))
-                deny_resp = await client.post(f"{self._opa_url}/v1/data/nexus/deny_reasons", json=leg_doc)
-                deny_reasons = list(deny_resp.json().get("result", [])) if deny_resp.status_code == 200 else []
-                appr_resp = await client.post(f"{self._opa_url}/v1/data/nexus/requires_human_approval", json=leg_doc)
-                req_appr = bool(appr_resp.json().get("result", False)) if appr_resp.status_code == 200 else False
-                dec = "DENY" if not allowed else ("REQUIRE_APPROVAL" if req_appr else "ALLOW_AUTO")
+                deny_resp = await client.post(
+                    f"{self._opa_url}/v1/data/nexus/deny_reasons", json=leg_doc
+                )
+                deny_reasons = (
+                    list(deny_resp.json().get("result", []))
+                    if deny_resp.status_code == 200
+                    else []
+                )
+                appr_resp = await client.post(
+                    f"{self._opa_url}/v1/data/nexus/requires_human_approval",
+                    json=leg_doc,
+                )
+                req_appr = (
+                    bool(appr_resp.json().get("result", False))
+                    if appr_resp.status_code == 200
+                    else False
+                )
+                dec = (
+                    "DENY"
+                    if not allowed
+                    else ("REQUIRE_APPROVAL" if req_appr else "ALLOW_AUTO")
+                )
                 return {"decision": dec, "deny_reasons": deny_reasons, "source": "opa"}
         except Exception:
             self._opa_available = False
@@ -111,7 +148,11 @@ class PolicyEngine:
             if self._fallback_to_local:
                 dec, reasons = evaluate_local_abac(input_doc)
                 return {"decision": dec, "deny_reasons": reasons, "source": "local"}
-            return {"decision": "DENY", "deny_reasons": ["opa_unavailable_deny_closed"], "source": "error"}
+            return {
+                "decision": "DENY",
+                "deny_reasons": ["opa_unavailable_deny_closed"],
+                "source": "error",
+            }
 
     async def evaluate(
         self,

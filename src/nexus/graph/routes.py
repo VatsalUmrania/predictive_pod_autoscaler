@@ -16,7 +16,10 @@ def route_after_rca_reasoner(state: dict[str, Any]) -> str:
     """Route after RCA reasoner: tool executor if incomplete, plan or learn if complete."""
     if state.get("rca_complete"):
         rca = state.get("rca_report") or state.get("diagnosis") or {}
-        if not rca.get("requires_remediation", True) or float(rca.get("confidence", 1.0)) <= 0.0:
+        if (
+            not rca.get("requires_remediation", True)
+            or float(rca.get("confidence", 1.0)) <= 0.0
+        ):
             return "learn"
         return "plan"
     return "rca_tool_executor"
