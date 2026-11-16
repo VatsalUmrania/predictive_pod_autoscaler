@@ -11,7 +11,6 @@ import zlib
 from typing import Any, cast
 
 from nexus.db import get_database_client
-from nexus.governance.live_state_validator import check_live_state
 from nexus.governance.policy_engine import PolicyEngine, build_opa_input_for_action
 
 logger = logging.getLogger(__name__)
@@ -58,32 +57,6 @@ async def release_advisory_lock(
             await conn_ctx.__aexit__(None, None, None)
         except Exception:
             pass
-
-
-async def check_live_validation(
-    platform_id: str, target: Any, target_service: str, steps: list
-) -> tuple[bool, str]:
-    if platform_id != "kubernetes" or not steps:
-        return False, ""
-    try:
-        first_tool = steps[0].get("tool_name", "") if steps else ""
-        action_type = (
-            "scale"
-            if "scale" in first_tool
-            else ("rollback_deployment" if "rollback" in first_tool else "restart_pod")
-        )
-        live_report = await check_live_state(
-            action_type=action_type,
-            namespace=getattr(target, "namespace", "default"),
-            resource_name=target_service,
-            k8s_core=None,
-            k8s_apps=None,
-        )
-        if live_report.verdict == "self_healed":
-            return True, str(live_report.evidence)
-    except Exception as lsv_err:
-        logger.debug("[Govern] Live state validation skipped: %s", lsv_err)
-    return False, ""
 
 
 async def evaluate_steps_opa(

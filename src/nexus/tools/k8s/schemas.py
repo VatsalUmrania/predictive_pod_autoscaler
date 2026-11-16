@@ -41,7 +41,21 @@ class DescribeResourceSchema(BaseModel):
 class GetMetricsSchema(BaseModel):
     model_config = {"extra": "ignore"}
     namespace: str = Field(default="default", description="Kubernetes namespace")
-    pod_name: str = Field(..., description="Target pod name")
+    resource_kind: str = Field(
+        default="pod", description="Resource kind: pod, deployment"
+    )
+    resource_name: str = Field(default="", description="Target resource name")
+    pod_name: str | None = Field(default=None, description="Optional alias for resource_name")
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_name(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            if not values.get("resource_name") and values.get("pod_name"):
+                values["resource_name"] = values["pod_name"]
+            elif not values.get("pod_name") and values.get("resource_name"):
+                values["pod_name"] = values["resource_name"]
+        return values
 
 
 class RestartDeploymentSchema(BaseModel):

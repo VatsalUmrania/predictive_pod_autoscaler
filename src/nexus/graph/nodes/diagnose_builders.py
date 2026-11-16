@@ -1,15 +1,61 @@
 """
 NEXUS Diagnostic Builders & RCA Formatters
 ==========================================
-Constructs structured RCA dictionaries, audit trail entries, and diagnosis states.
+Constructs structured RCA dictionaries, audit trail entries, observation truncation,
+and diagnosis states.
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from nexus.engine.fsm import IncidentState
+
+logger = logging.getLogger(__name__)
+
+
+def truncate_observation(
+    value: Any, max_lines: int = 100, max_bytes: int = 4096
+) -> Any:
+    """Enforce strict truncation on tool observations: maximum 100 lines or 4KB text."""
+    if isinstance(value, str):
+        lines = value.splitlines()
+        truncated_lines = False
+        if len(lines) > max_lines:
+            lines = lines[:max_lines]
+            truncated_lines = True
+        text = "\n".join(lines)
+        raw_bytes = text.encode("utf-8")
+        if len(raw_bytes) > max_bytes:
+            text = raw_bytes[:max_bytes].decode("utf-8", errors="ignore")
+            return text + "\n[... truncated: output exceeded 4KB ...]"
+        elif truncated_lines:
+            return text + "\n[... truncated: output exceeded 100 lines ...]"
+        return text
+    elif isinstance(value, dict):
+        return {
+            k: truncate_observation(v, max_lines, max_bytes) for k, v in value.items()
+        }
+    elif isinstance(value, list):
+        return [truncate_observation(item, max_lines, max_bytes) for item in value]
+    return value
+
+
+def parse_rca_json(text: str) -> dict[str, Any] | None:
+    """Parse JSON object from model response text if present."""
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        try:
+            data = json.loads(match.group(0))
+            if isinstance(data, dict):
+                return cast(dict[str, Any], data)
+        except Exception:
+            pass
+    return None
 
 
 def build_rca_success(

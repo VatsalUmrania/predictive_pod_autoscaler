@@ -50,9 +50,9 @@ class K8sPlatformAdapter(BasePlatformAdapter):
     def _resolve_owner(self, namespace: str, pod_name: str) -> tuple[str, str] | None:
         """Resolve top-level workload controller for an ephemeral pod via ownerReferences."""
         try:
-            from nexus.agents import k8s_tools
+            from nexus.tools.k8s.client import get_k8s_client
 
-            core = k8s_tools._get_api()
+            core = get_k8s_client("CoreV1Api")
             if not core:
                 return None
             pod = core.read_namespaced_pod(name=pod_name, namespace=namespace)
@@ -61,7 +61,7 @@ class K8sPlatformAdapter(BasePlatformAdapter):
                 o_kind = getattr(owner, "kind", "")
                 o_name = getattr(owner, "name", "")
                 if o_kind == "ReplicaSet":
-                    apps = k8s_tools._get_apps_api()
+                    apps = get_k8s_client("AppsV1Api")
                     if apps:
                         rs = apps.read_namespaced_replica_set(
                             name=o_name, namespace=namespace
@@ -101,9 +101,23 @@ class K8sPlatformAdapter(BasePlatformAdapter):
         )
 
     async def collect_telemetry(self, target: TargetResource) -> PlatformTelemetry:
-        from nexus.graph.platform.k8s_telemetry import collect_k8s_telemetry
+        from nexus.tools.k8s.observe_tools import describe_resource, get_pod_logs
 
-        return await collect_k8s_telemetry(target)
+        desc = describe_resource(
+            namespace=target.namespace,
+            resource_kind=target.kind,
+            resource_name=target.name,
+        )
+        logs_str = get_pod_logs(namespace=target.namespace, pod_name=target.name)
+        logs = [line for line in logs_str.splitlines() if line.strip()] if logs_str else []
+        h_status = "crashloopbackoff" if "crashloop" in desc.lower() else "unknown"
+        return PlatformTelemetry(
+            target=target,
+            health_status=h_status,
+            recent_logs=logs,
+            live_config={"describe": desc},
+            metrics={},
+        )
 
     async def inspect_live_state(self, target: TargetResource) -> LiveStateSnapshot:
         return LiveStateSnapshot(target=target, exists=True, is_failing=False)
@@ -130,9 +144,9 @@ class K8sPlatformAdapter(BasePlatformAdapter):
     ) -> RollbackSnapshot | None:
         prev_replicas = int(parameters.get("replicas", 1))
         try:
-            from nexus.agents import k8s_tools
+            from nexus.tools.k8s.observe_tools import describe_resource
 
-            desc = k8s_tools.describe_resource(
+            desc = describe_resource(
                 namespace=target.namespace,
                 resource_kind=target.kind,
                 resource_name=target.name,
@@ -162,7 +176,7 @@ class K8sPlatformAdapter(BasePlatformAdapter):
     async def verify_health(
         self, target: TargetResource, plan_step: dict[str, Any]
     ) -> HealthCheckResult:
-        from nexus.agents import k8s_tools
+        from nexus.tools.k8s.observe_tools import describe_resource
 
         dep_name = (
             target.name if target.kind.lower() in ("deployment", "deploy") else None
@@ -174,7 +188,7 @@ class K8sPlatformAdapter(BasePlatformAdapter):
 
         # 1. If target or owner is a deployment, perform strict multi-replica verification
         if dep_name:
-            dep_desc = k8s_tools.describe_resource(
+            dep_desc = describe_resource(
                 namespace=target.namespace,
                 resource_kind="deployment",
                 resource_name=dep_name,
@@ -202,7 +216,7 @@ class K8sPlatformAdapter(BasePlatformAdapter):
         # 2. Inspect specific target resource
         desc = ""
         try:
-            desc = k8s_tools.describe_resource(
+            desc = describe_resource(
                 namespace=target.namespace,
                 resource_kind=target.kind,
                 resource_name=target.name,
@@ -214,7 +228,7 @@ class K8sPlatformAdapter(BasePlatformAdapter):
             not desc or desc.startswith("Error") or "not found" in desc.lower()
         ):
             try:
-                dep_desc = k8s_tools.describe_resource(
+                dep_desc = describe_resource(
                     namespace=target.namespace,
                     resource_kind="deployment",
                     resource_name=dep_name,
@@ -266,7 +280,7 @@ class K8sPlatformAdapter(BasePlatformAdapter):
             return HealthCheckResult(healthy=False, slo_restored=False, details=desc)
 
         if dep_name:
-            dep_desc = k8s_tools.describe_resource(
+            dep_desc = describe_resource(
                 namespace=target.namespace,
                 resource_kind="deployment",
                 resource_name=dep_name,

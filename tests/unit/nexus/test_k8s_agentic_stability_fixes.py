@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from nexus.agents.k8s.agent import K8sAgent
 from nexus.graph.platform.base import TargetResource
 from nexus.graph.platform.k8s import K8sPlatformAdapter
 from nexus.tools.k8s.universal import (
@@ -27,60 +26,7 @@ from nexus.tools.k8s.universal import (
     execute_k8s_mutate,
 )
 
-# ── 1. uid:count Deduplication in K8sAgent ────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_k8s_agent_uid_count_deduplication():
-    mock_nats = MagicMock()
-    agent = K8sAgent(nats_client=mock_nats)
-
-    # Mock K8s warning events with same metadata.uid but incrementing count
-    ev1 = MagicMock()
-    ev1.metadata.uid = "event-uid-abc"
-    ev1.metadata.namespace = "default"
-    ev1.count = 1
-    ev1.reason = "BackOff"
-    ev1.message = "Back-off restarting failed container"
-    ev1.type = "Warning"
-    ev1.involved_object.kind = "Pod"
-    ev1.involved_object.name = "shop-demo-76d-xyz"
-    ev1.involved_object.namespace = "default"
-    ev1.involved_object.api_version = "v1"
-
-    ev2 = MagicMock()
-    ev2.metadata.uid = "event-uid-abc"
-    ev2.metadata.namespace = "default"
-    ev2.count = 2  # Second crash
-    ev2.reason = "BackOff"
-    ev2.message = "Back-off restarting failed container"
-    ev2.type = "Warning"
-    ev2.involved_object.kind = "Pod"
-    ev2.involved_object.name = "shop-demo-76d-xyz"
-    ev2.involved_object.namespace = "default"
-    ev2.involved_object.api_version = "v1"
-
-    mock_core = MagicMock()
-    mock_core.list_event_for_all_namespaces.return_value = MagicMock(items=[ev1])
-    agent._k8s_core = mock_core
-
-    # Poll 1: First crash should be captured
-    symptoms_1 = await agent.sense_symptoms()
-    assert len(symptoms_1) == 1
-    assert "event-uid-abc:1" in agent._seen_event_uids
-
-    # Poll 1 retry (identical count 1): should be deduplicated
-    symptoms_dupe = await agent.sense_symptoms()
-    assert len(symptoms_dupe) == 0
-
-    # Poll 2: Second crash (count 2): should enter the system!
-    mock_core.list_event_for_all_namespaces.return_value = MagicMock(items=[ev2])
-    symptoms_2 = await agent.sense_symptoms()
-    assert len(symptoms_2) == 1
-    assert "event-uid-abc:2" in agent._seen_event_uids
-
-
-# ── 2. k8s_inspect_resource returns ownerReferences & lastState ───────────────
+# ── 1. k8s_inspect_resource returns ownerReferences & lastState ───────────────
 
 
 def test_k8s_inspect_resource_preserves_owner_and_last_state():
@@ -191,7 +137,7 @@ def test_k8s_mutate_strategic_merge_patch_and_rollback():
 
     # Test rollback mutation
     with patch(
-        "nexus.agents.k8s_tools.rollback_deployment",
+        "nexus.tools.k8s.mutate_tools.rollback_deployment",
         return_value="Rolled back deployment shop-demo.",
     ):
         inp_rb = K8sMutateResourceInput(
@@ -207,18 +153,7 @@ def test_k8s_mutate_strategic_merge_patch_and_rollback():
         assert "Rolled back" in res_rb["status"]
 
 
-# ── 4. No Hardcoded Diagnostic Rules in diagnose_helpers ─────────────────────
-
-
-def test_no_infer_symptom_fallback_in_diagnose_helpers():
-    import nexus.graph.nodes.diagnose_helpers as dh
-
-    assert not hasattr(
-        dh, "infer_symptom_fallback"
-    ), "infer_symptom_fallback must be completely deleted!"
-
-
-# ── 5. Strict Multi-Replica Health Verification ──────────────────────────────
+# ── 3. Strict Multi-Replica Health Verification ──────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -235,7 +170,8 @@ async def test_k8s_platform_adapter_verify_health_rejects_crashing_replica():
     dep_describe_output = "Deployment shop-demo: replicas=1, ready=1, available=1, unavailable=0, updated=1 [shop-demo-76d-xyz:CrashLoopBackOff, shop-demo-76d-xyz:LastState:OOMKilled(exit 137)]"
 
     with patch(
-        "nexus.agents.k8s_tools.describe_resource", return_value=dep_describe_output
+        "nexus.tools.k8s.observe_tools.describe_resource",
+        return_value=dep_describe_output,
     ):
         check = await adapter.verify_health(target, plan_step={})
         assert check.healthy is False
@@ -245,7 +181,8 @@ async def test_k8s_platform_adapter_verify_health_rejects_crashing_replica():
     # Clean healthy deployment
     healthy_describe = "Deployment shop-demo: replicas=1, ready=1, available=1, unavailable=0, updated=1"
     with patch(
-        "nexus.agents.k8s_tools.describe_resource", return_value=healthy_describe
+        "nexus.tools.k8s.observe_tools.describe_resource",
+        return_value=healthy_describe,
     ):
         check_ok = await adapter.verify_health(target, plan_step={})
         assert check_ok.healthy is True

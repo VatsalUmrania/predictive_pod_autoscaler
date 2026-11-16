@@ -1,47 +1,40 @@
 """
-Kubernetes Tools Facade
-=======================
-Backward-compatibility facade for k8s tool functions.
+Kubernetes Read-Only Observation Tools & Functions
+==================================================
+Observation tools and raw inspection functions for Kubernetes resources.
+Mirrors nexus.tools.aws.observe_tools.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import re
 from typing import Any
+
+from nexus.tools.base import NexusTool, NexusToolResult, ToolDomain, ToolRiskLevel
+from nexus.tools.k8s.client import get_k8s_client
+from nexus.tools.k8s.schemas import (
+    DescribeResourceSchema,
+    GetMetricsSchema,
+    GetPodLogsSchema,
+)
 
 logger = logging.getLogger(__name__)
 
-PROMETHEUS_URL = "http://prometheus:9090"
-
-
-def _load_k8s_client(api_cls: str) -> Any:
-    try:
-        from kubernetes import client as _c
-        from kubernetes import config as _cfg
-
-        try:
-            _cfg.load_incluster_config()
-        except Exception:
-            _cfg.load_kube_config()
-        conf = _c.Configuration.get_default_copy()
-        conf.retries = 1
-        api_client = _c.ApiClient(configuration=conf)
-        return getattr(_c, api_cls)(api_client=api_client)
-    except Exception:
-        return None
-
 
 def _get_api() -> Any:
-    return _load_k8s_client("CoreV1Api")
+    return get_k8s_client("CoreV1Api")
 
 
 def _get_apps_api() -> Any:
-    return _load_k8s_client("AppsV1Api")
+    return get_k8s_client("AppsV1Api")
 
 
 def get_pod_logs(
-    namespace: str = "default", pod_name: str = "", tail_lines: int = 50, **kwargs: Any
+    namespace: str = "default",
+    pod_name: str = "",
+    tail_lines: int = 50,
+    **kwargs: Any,
 ) -> str:
     api = _get_api()
     if api:
@@ -169,103 +162,82 @@ def get_yaml(*args: Any, **kwargs: Any) -> str:
     return "apiVersion: v1\nkind: Pod"
 
 
-def restart_deployment(
-    namespace: str = "default", deployment_name: str = "", **kwargs: Any
-) -> str:
-    apps = _get_apps_api()
-    if apps:
-        try:
-            from datetime import datetime, timezone
+class K8sGetPodLogsTool(NexusTool):
+    name = "k8s_get_pod_logs"
+    description = "Fetch recent log lines from a Kubernetes pod to diagnose errors."
+    domain = ToolDomain.K8S
+    risk_level = ToolRiskLevel.L0_OBSERVE
+    args_schema = GetPodLogsSchema
+    blast_radius = "none"
+    is_destructive = False
+    allows_unbacked_rollback = False
 
-            now = datetime.now(timezone.utc).isoformat()
-            body = {
-                "spec": {
-                    "template": {
-                        "metadata": {
-                            "annotations": {"kubectl.kubernetes.io/restartedAt": now}
-                        }
-                    }
-                }
-            }
-            apps.patch_namespaced_deployment(
-                name=deployment_name, namespace=namespace, body=body
-            )
-            return f"Restarted deployment {deployment_name}."
-        except Exception as exc:
-            return f"Error restarting deployment: {exc}"
-    return f"Restarted deployment {deployment_name}."
-
-
-def rollback_deployment(
-    namespace: str = "default",
-    deployment_name: str = "",
-    target_revision: int | None = None,
-    **kwargs: Any,
-) -> str:
-    dep = deployment_name
-    m = re.match(r"^(.*?)-[0-9a-f]{8,10}-[0-9a-z]{5}$", dep)
-    if m:
-        dep = m.group(1)
-    import subprocess
-
-    cmd = ["kubectl", "rollout", "undo", f"deployment/{dep}", "-n", namespace]
-    if target_revision:
-        cmd.extend(["--to-revision", str(target_revision)])
-    try:
-        out = subprocess.check_output(
-            cmd, stderr=subprocess.STDOUT, text=True, timeout=15
+    async def execute(self, **kwargs: Any) -> NexusToolResult:
+        args = self.args_schema(**kwargs)
+        res = await asyncio.to_thread(
+            get_pod_logs,
+            namespace=args.namespace,
+            pod_name=args.pod_name,
+            tail_lines=args.tail_lines,
         )
-        return out.strip() or f"Rolled back {dep}."
-    except Exception as exc:
-        return f"Error rolling back {dep}: {exc}"
+        is_err = "Error fetching logs" in res
+        return NexusToolResult(
+            success=not is_err,
+            data={"logs": res} if not is_err else None,
+            error=res if is_err else None,
+        )
 
 
-def remove_container_command(
-    namespace: str = "default", deployment_name: str = "", **kwargs: Any
-) -> str:
-    dep = deployment_name
-    m = re.match(r"^(.*?)-[0-9a-f]{8,10}-[0-9a-z]{5}$", dep)
-    if m:
-        dep = m.group(1)
-    apps = _get_apps_api()
-    if apps:
-        try:
-            body = [
-                {"op": "remove", "path": "/spec/template/spec/containers/0/command"}
-            ]
-            apps.patch_namespaced_deployment(name=dep, namespace=namespace, body=body)
-            return f"Removed container command for {dep}."
-        except Exception:
-            pass
-    return rollback_deployment(namespace=namespace, deployment_name=dep)
+class K8sDescribeResourceTool(NexusTool):
+    name = "k8s_describe_resource"
+    description = (
+        "Get detailed status and state of a Kubernetes pod, deployment, or service."
+    )
+    domain = ToolDomain.K8S
+    risk_level = ToolRiskLevel.L0_OBSERVE
+    args_schema = DescribeResourceSchema
+    blast_radius = "none"
+    is_destructive = False
+    allows_unbacked_rollback = False
+
+    async def execute(self, **kwargs: Any) -> NexusToolResult:
+        args = self.args_schema(**kwargs)
+        res = await asyncio.to_thread(
+            describe_resource,
+            namespace=args.namespace,
+            resource_kind=args.resource_kind,
+            resource_name=args.resource_name,
+        )
+        is_err = "Error describing" in res
+        return NexusToolResult(
+            success=not is_err,
+            data={"details": res} if not is_err else None,
+            error=res if is_err else None,
+        )
 
 
-def patch_configmap(
-    namespace: str = "default", configmap_name: str = "", **kwargs: Any
-) -> str:
-    return f"Patched configmap {configmap_name}."
+class K8sGetMetricsTool(NexusTool):
+    name = "k8s_get_metrics"
+    description = "Query Kubernetes metrics for a specific pod or deployment."
+    domain = ToolDomain.K8S
+    risk_level = ToolRiskLevel.L0_OBSERVE
+    args_schema = GetMetricsSchema
+    blast_radius = "none"
+    is_destructive = False
+    allows_unbacked_rollback = False
 
-
-def scale_resource(
-    namespace: str = "default",
-    resource_kind: str = "deployment",
-    resource_name: str = "",
-    replicas: int = 1,
-    **kwargs: Any,
-) -> str:
-    return f"Scaled {resource_kind} {resource_name} to {replicas}."
-
-
-def cordon_node(node_name: str) -> str:
-    return f"Node {node_name} cordoned."
-
-
-def drain_node(node_name: str) -> str:
-    return f"Node {node_name} drained."
+    async def execute(self, **kwargs: Any) -> NexusToolResult:
+        args = self.args_schema(**kwargs)
+        res = await asyncio.to_thread(
+            get_metrics,
+            namespace=args.namespace,
+            resource_kind=args.resource_kind,
+            resource_name=args.resource_name or args.pod_name or "",
+        )
+        return NexusToolResult(success=True, data={"metrics": res})
 
 
 __all__ = [
-    "PROMETHEUS_URL",
     "_get_api",
     "_get_apps_api",
     "get_pod_logs",
@@ -273,11 +245,7 @@ __all__ = [
     "get_events",
     "get_metrics",
     "get_yaml",
-    "restart_deployment",
-    "rollback_deployment",
-    "remove_container_command",
-    "patch_configmap",
-    "scale_resource",
-    "cordon_node",
-    "drain_node",
+    "K8sGetPodLogsTool",
+    "K8sDescribeResourceTool",
+    "K8sGetMetricsTool",
 ]

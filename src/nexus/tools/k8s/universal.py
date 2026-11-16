@@ -204,12 +204,12 @@ def execute_k8s_mutate(
             return json.dumps(_clean_k8s_manifest(data), default=str)[:6000]
 
         if args.mutation_type == "rollback":
-            from nexus.agents import k8s_tools
+            from nexus.tools.k8s.mutate_tools import rollback_deployment
 
             rev = args.patch_body.get("revision") or args.patch_body.get(
                 "target_revision"
             )
-            res_str = k8s_tools.rollback_deployment(
+            res_str = rollback_deployment(
                 namespace=args.namespace,
                 deployment_name=args.name,
                 target_revision=int(rev) if rev is not None else None,

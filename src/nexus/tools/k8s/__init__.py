@@ -1,12 +1,11 @@
 """
 Kubernetes Tools Package
+========================
+Exports client factory, schemas, and tools for Kubernetes operations.
+Mirrors nexus.tools.aws.
 """
 
-from nexus.tools.k8s.read_tools import (
-    K8sDescribeResourceTool,
-    K8sGetMetricsTool,
-    K8sGetPodLogsTool,
-)
+from nexus.tools.k8s.client import get_k8s_client
 from nexus.tools.k8s.schemas import (
     DescribeResourceSchema,
     GetMetricsSchema,
@@ -17,7 +16,10 @@ from nexus.tools.k8s.schemas import (
     RollbackDeploymentSchema,
     ScaleResourceSchema,
 )
-from nexus.tools.k8s.write_tools import (
+from nexus.tools.k8s.tools import (
+    K8sDescribeResourceTool,
+    K8sGetMetricsTool,
+    K8sGetPodLogsTool,
     K8sPatchResourceLimitsTool,
     K8sRemoveContainerCommandTool,
     K8sRestartDeploymentTool,
@@ -26,6 +28,7 @@ from nexus.tools.k8s.write_tools import (
 )
 
 __all__ = [
+    "get_k8s_client",
     "GetPodLogsSchema",
     "DescribeResourceSchema",
     "GetMetricsSchema",

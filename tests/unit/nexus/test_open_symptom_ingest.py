@@ -3,16 +3,10 @@ Unit tests for Open Symptom Ingestion Layer.
 Verifies:
   1. SymptomSignal model validation and serialization
   2. Generic log parser emitting SymptomSignal on ERROR/CRITICAL/FATAL and HTTP >= 500
-  3. K8s Warning event watcher emitting SymptomSignal across arbitrary kinds (Pod, StatefulSet, PVC, Ingress)
 """
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
-import pytest
-
-from nexus.agents.k8s.agent import K8sAgent
 from nexus.bus.events.enums import Severity, SignalKind, SignalSource
 from nexus.bus.events.event import SymptomSignal
 from nexus.telemetry.log_parser import is_error_log, parse_and_group_log_burst
@@ -67,37 +61,3 @@ def test_log_parser_burst_detection():
     assert signal.kind == SignalKind.ERROR_LOG_BURST
     assert signal.raw_payload["total_error_count"] == 2
     assert "order-service" in signal.symptom_summary
-
-
-@pytest.mark.asyncio
-async def test_k8s_agent_warning_event_watcher():
-    mock_nats = MagicMock()
-    agent = K8sAgent(nats_client=mock_nats, namespaces=["prod"])
-
-    # Simulate k8s v1.Event for a StatefulSet
-    mock_ev = MagicMock()
-    mock_ev.metadata.uid = "ev-uid-001"
-    mock_ev.metadata.namespace = "prod"
-    mock_ev.involved_object.kind = "StatefulSet"
-    mock_ev.involved_object.name = "redis-cluster"
-    mock_ev.involved_object.namespace = "prod"
-    mock_ev.involved_object.api_version = "apps/v1"
-    mock_ev.reason = "FailedCreate"
-    mock_ev.message = "PVC storage quota exceeded for redis-data"
-    mock_ev.count = 3
-    mock_ev.type = "Warning"
-
-    signal = agent._event_to_symptom_signal(mock_ev)
-    assert signal.source == SignalSource.KUBERNETES_API
-    assert signal.kind == SignalKind.STATE_TRANSITION
-    assert signal.resource_urn == "k8s://prod/apps/v1/StatefulSet/redis-cluster"
-    assert "redis-cluster" in signal.symptom_summary
-    assert "FailedCreate" in signal.symptom_summary
-
-    # Also test sense() producing IncidentEvents without 'str' has no attribute 'value' error
-    agent._k8s_core = MagicMock()
-    agent._k8s_core.list_namespaced_event.return_value = MagicMock(items=[mock_ev])
-    events = await agent.sense()
-    assert len(events) == 1
-    assert events[0].resource_name == "redis-cluster"
-    assert events[0].severity in ("high", Severity.HIGH)

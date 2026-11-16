@@ -94,15 +94,15 @@ async def test_k8s_remediation_requires_approval_and_resumes():
             "nexus.graph.nodes.diagnose.get_llm", return_value=MockWorkflowK8sModel()
         ),
         patch(
-            "nexus.agents.k8s_tools.describe_resource",
+            "nexus.tools.k8s.observe_tools.describe_resource",
             return_value="State: OOMKilled\nReplicas: 3",
         ),
         patch(
-            "nexus.agents.k8s_tools.get_pod_logs",
+            "nexus.tools.k8s.observe_tools.get_pod_logs",
             return_value="panic: fatal memory error",
         ),
         patch(
-            "nexus.agents.k8s_tools.restart_deployment",
+            "nexus.tools.k8s.mutate_tools.restart_deployment",
             return_value="deployment.apps/checkout-api restarted",
         ),
         patch.object(
@@ -354,10 +354,10 @@ async def test_verification_failure_and_deterministic_rollback():
             ),
         ),
         patch(
-            "nexus.agents.k8s_tools.describe_resource",
+            "nexus.tools.k8s.observe_tools.describe_resource",
             return_value="Replicas: 2\nState: CrashLoopBackOff",
         ),
-        patch("nexus.agents.k8s_tools.restart_deployment", return_value="restarted"),
+        patch("nexus.tools.k8s.mutate_tools.restart_deployment", return_value="restarted"),
         patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05),
         patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01),
         patch.object(
@@ -472,18 +472,12 @@ async def test_dynamic_tool_planning_without_runbooks_and_evidence_confidence():
             ),
         ),
         patch(
-            "nexus.agents.k8s_tools.describe_resource",
+            "nexus.tools.k8s.observe_tools.describe_resource",
             return_value="Pod: shop-demo\nState: CrashLoopBackOff\nRestarts: 5",
         ),
         patch(
-            "nexus.agents.k8s_tools.restart_deployment",
+            "nexus.tools.k8s.mutate_tools.restart_deployment",
             return_value="restarted deployment shop-demo",
-        ),
-        patch(
-            "nexus.graph.nodes.govern.check_live_state",
-            AsyncMock(
-                return_value=MagicMock(verdict="degraded", evidence="Pod crashlooping")
-            ),
         ),
         patch.object(
             adapter,
@@ -559,19 +553,13 @@ async def test_workflow_pending_approvals_and_status_api_integration():
                 suggested_action="k8s_restart_deployment",
             ),
         ),
-        patch("nexus.agents.k8s_tools.describe_resource", side_effect=mock_describe),
+        patch("nexus.tools.k8s.observe_tools.describe_resource", side_effect=mock_describe),
         patch(
-            "nexus.agents.k8s_tools.get_pod_logs", return_value="panic: runtime crash"
+            "nexus.tools.k8s.observe_tools.get_pod_logs", return_value="panic: runtime crash"
         ),
         patch(
-            "nexus.agents.k8s_tools.restart_deployment",
+            "nexus.tools.k8s.mutate_tools.restart_deployment",
             return_value="restarted deployment shop-demo",
-        ),
-        patch(
-            "nexus.graph.nodes.govern.check_live_state",
-            AsyncMock(
-                return_value=MagicMock(verdict="degraded", evidence="Pod crashlooping")
-            ),
         ),
         patch.object(
             get_platform_registry().get("kubernetes"),

@@ -16,13 +16,12 @@ from langgraph.prebuilt import create_react_agent
 
 from nexus.engine.fsm import IncidentState
 from nexus.graph.llm import get_llm
-from nexus.graph.nodes.diagnose_builders import build_rca_success, parsed_to_rca_dict
-from nexus.graph.nodes.diagnose_helpers import (
-    get_hardened_diagnostic_tools,
+from nexus.graph.nodes.diagnose_builders import (
+    build_rca_success,
     parse_rca_json,
+    parsed_to_rca_dict,
     truncate_observation,
 )
-from nexus.graph.nodes.diagnose_legacy import diagnose_node
 from nexus.graph.rca import RCALeadSynthesizer
 from nexus.graph.rca.result import RCAReport
 from nexus.tools.registry import ToolRegistry, default_registry
@@ -40,11 +39,12 @@ Follow this strict scientific ReAct investigation protocol:
 3. TEST & FALSIFY: Gather evidence proving one hypothesis and falsifying others.
 4. CONCLUDE: Call the RCAReport structured output tool once proven with failure_class, root_cause, confidence, and suggested_action. Never invent tool outputs."""
 
+diagnose_node = None  # Defined after rca_reasoner_node below
+
 __all__ = [
     "RCAEngine",
     "MAX_RCA_STEPS",
     "truncate_observation",
-    "get_hardened_diagnostic_tools",
     "rca_reasoner_node",
     "rca_tool_executor_node",
     "diagnose_node",
@@ -204,6 +204,9 @@ async def rca_reasoner_node(
     return build_rca_success(
         messages, response, inconclusive_dict, steps, state, model, telemetry=telem
     )
+
+
+diagnose_node = rca_reasoner_node
 
 
 async def rca_tool_executor_node(

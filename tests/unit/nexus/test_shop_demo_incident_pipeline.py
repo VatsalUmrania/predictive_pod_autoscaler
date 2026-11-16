@@ -65,11 +65,11 @@ async def test_shop_demo_crashloop_requires_approval_and_rolls_back():
 
     # 2. Operator approves remediation
     with patch(
-        "nexus.agents.k8s_tools.rollback_deployment",
+        "nexus.tools.k8s.mutate_tools.rollback_deployment",
         return_value="deployment.apps/shop-demo rolled back",
     ):
         with patch(
-            "nexus.agents.k8s_tools.describe_resource",
+            "nexus.tools.k8s.observe_tools.describe_resource",
             return_value="Deployment shop-demo: replicas=2, ready=2, available=2, unavailable=0",
         ):
             resumed = await workflow.resume_incident(

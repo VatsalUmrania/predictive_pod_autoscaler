@@ -12,7 +12,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field
 
@@ -65,7 +65,10 @@ def _build_deterministic_plan(
 ) -> tuple[dict[str, Any], list[dict[str, Any]] | None]:
     from nexus.graph.nodes.plan_helpers import build_scenario_plan
 
-    return build_scenario_plan(state)
+    return cast(
+        tuple[dict[str, Any], list[dict[str, Any]] | None],
+        build_scenario_plan(state),
+    )
 
 
 async def plan_node(
@@ -86,9 +89,7 @@ async def plan_node(
                 try:
                     s_llm = model.with_structured_output(RemediationPlan)
                     call = (
-                        s_llm.ainvoke(prompt)
-                        if hasattr(s_llm, "ainvoke")
-                        else s_llm.invoke(prompt)
+                        s_llm.ainvoke(prompt) if hasattr(s_llm, "ainvoke") else s_llm.invoke(prompt)
                     )
                     res = await call if asyncio.iscoroutine(call) else call
                     if isinstance(res, RemediationPlan):

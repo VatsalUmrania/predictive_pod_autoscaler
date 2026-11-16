@@ -127,10 +127,6 @@ async def bootstrap_components(
         knowledge_base=knowledge_base,
     )
 
-    agent_manager = srv_mod.AgentManager(
-        nats_client=nats, prometheus_url=prometheus_url
-    )
-
     srv_mod.context.workflow = workflow
     srv_mod.context.orchestrator = workflow
     srv_mod.context.prescaler = prescaler
@@ -148,7 +144,6 @@ async def bootstrap_components(
         "prescaler": prescaler,
         "outcome_tracker": outcome_tracker,
         "notifier": notifier,
-        "agent_manager": agent_manager,
         "feedback_loop": feedback_loop,
         "status_api": srv_mod.status_api,
         "orchestrator": orchestrator,

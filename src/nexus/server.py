@@ -12,7 +12,6 @@ import uvicorn
 if TYPE_CHECKING:
     import uvicorn
 
-from nexus.agents.manager import AgentManager
 from nexus.bus.nats_client import NATSClient
 from nexus.db.client import get_database_client
 from nexus.governance.approval_queue import HumanApprovalQueue
@@ -63,7 +62,6 @@ class NexusServer:
         prescaler: Prescaler,
         outcome_tracker: PpaOutcomeTracker,
         notifier: Notifier,
-        agent_manager: AgentManager,
         feedback_loop,  # FeedbackLoop | None
         status_api,  # FastAPI app
         orchestrator: Any = None,
@@ -74,7 +72,6 @@ class NexusServer:
         self.prescaler = prescaler
         self.outcome_tracker = outcome_tracker
         self.notifier = notifier
-        self.agent_manager = agent_manager
         self.feedback_loop = feedback_loop
         self.status_api = status_api
         self._tasks: list[asyncio.Task] = []
@@ -102,7 +99,6 @@ class NexusServer:
 
     async def start(self) -> None:
         """Start all background tasks."""
-        await self.agent_manager.start()
         await self.outcome_tracker.start()
 
         if self.feedback_loop is not None:
@@ -119,8 +115,6 @@ class NexusServer:
                 name="status-api",
             ),
         ]
-        if self.agent_manager._monitor_task:
-            self._tasks.append(self.agent_manager._monitor_task)
 
     async def stop(self) -> None:
         """Graceful shutdown: cancel all tasks, stop subsystems, close NATS."""
@@ -129,7 +123,6 @@ class NexusServer:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks = []
 
-        await self.agent_manager.stop()
         await self.outcome_tracker.stop()
         await self.workflow.stop()
         if self.feedback_loop is not None:

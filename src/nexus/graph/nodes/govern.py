@@ -19,7 +19,6 @@ from typing import Any
 from nexus.db import get_database_client
 from nexus.engine.fsm import IncidentState
 from nexus.governance.cooldown_store import CooldownStore
-from nexus.governance.live_state_validator import check_live_state
 from nexus.graph.nodes.govern_helpers import evaluate_steps_opa
 from nexus.graph.platform import TargetResource
 from nexus.graph.state import GovernanceVerdict, IncidentGraphState
@@ -48,7 +47,7 @@ async def govern_node(state: IncidentGraphState) -> dict[str, Any]:
         else target_dict
     )
     target_service = getattr(target, "name", str(target_dict.get("name", "unknown")))
-    platform_id = state.get("platform", "kubernetes")
+    state.get("platform", "kubernetes")
 
     diag = state.get("diagnosis")
     diag_conf = 0.85
@@ -99,35 +98,7 @@ async def govern_node(state: IncidentGraphState) -> dict[str, Any]:
         logger.debug("[Govern] Advisory lock skipped: %s", db_exc)
 
     try:
-        # 2. Live State Validation
-        if platform_id == "kubernetes" and allowed:
-            try:
-                first_tool = steps[0].get("tool_name", "") if steps else ""
-                action_type = (
-                    "scale"
-                    if "scale" in first_tool
-                    else (
-                        "rollback_deployment"
-                        if "rollback" in first_tool
-                        else "restart_pod"
-                    )
-                )
-                live_report = await check_live_state(
-                    action_type=action_type,
-                    namespace=getattr(target, "namespace", "default"),
-                    resource_name=target_service,
-                    k8s_core=None,
-                    k8s_apps=None,
-                )
-                if live_report.verdict == "self_healed":
-                    allowed, is_self_healed = False, True
-                    reasons.append(
-                        f"Target already self-healed: {live_report.evidence}"
-                    )
-            except Exception as lsv_err:
-                logger.debug("[Govern] Live state validation skipped: %s", lsv_err)
-
-        # 3. Circuit Breaker & Cooldown
+        # 2. Circuit Breaker & Cooldown
         if allowed and steps and not is_self_healed:
             ladder = None
             try:
