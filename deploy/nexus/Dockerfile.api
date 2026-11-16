@@ -38,6 +38,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget curl git \
     && rm -rf /var/lib/apt/lists/*
 
+COPY deploy/nexus/kubectl /usr/local/bin/kubectl
+RUN chmod +x /usr/local/bin/kubectl
+
 WORKDIR /app
 
 # Copy virtual env from builder

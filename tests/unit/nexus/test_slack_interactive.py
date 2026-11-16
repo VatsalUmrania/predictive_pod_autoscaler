@@ -31,7 +31,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from nexus.governance.action_ladder import HumanApprovalQueue, PendingApproval
+from nexus.governance.approval_queue import HumanApprovalQueue, PendingApproval
 from nexus.integration import notifier as notifier_module
 from nexus.observability import status_api as status_api_module
 

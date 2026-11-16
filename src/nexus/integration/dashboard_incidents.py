@@ -12,14 +12,7 @@ from nexus.db.postgres import PostgresClient
 logger = logging.getLogger(__name__)
 
 _in_memory_incidents: list[dict[str, Any]] = []
-
-_RUNBOOK_DESCRIPTIONS = {
-    "runbook_pod_crashloop_v1": "Restarted {target} which was crash-looping",
-    "runbook_high_error_rate_post_deploy_v1": "Rolled back deployment {target} — error rate spiked after a code push",
-    "runbook_missing_env_key_v1": "Blocked deployment of {target} — required environment variables were missing",
-    "runbook_dns_resolution_failure_v1": "Triggered DNS refresh for {target} — DNS resolution was failing",
-    "runbook_db_connection_exhaustion_v1": "Reset the database connection pool for {target} — connections were exhausted",
-}
+_RUNBOOK_DESCRIPTIONS: dict[str, str] = {}
 
 _OUTCOME_SUFFIX = {
     "success": "Successfully resolved.",
@@ -31,14 +24,12 @@ _OUTCOME_SUFFIX = {
 
 def make_plain_english(row: dict[str, Any]) -> str:
     """Turn an AuditTrail row into a plain-English incident description."""
-    runbook_id = row.get("runbook_id", "")
+    action = row.get("description") or row.get("action_taken") or row.get("runbook_id", "")
     target = row.get("target") or row.get("resource_name") or "the service"
     outcome = row.get("execution_outcome", "pending")
     ts = (row.get("timestamp") or "")[:19].replace("T", " ")
-    template = _RUNBOOK_DESCRIPTIONS.get(
-        runbook_id, f"Performed healing action '{runbook_id}' on {{target}}"
-    )
-    return f"At {ts} UTC — {template.format(target=target)}. {_OUTCOME_SUFFIX.get(outcome, '')}".strip()
+    action_text = action if " on " in str(action) else f"Remediation '{action}' on {target}" if action else f"Remediation on {target}"
+    return f"At {ts} UTC — {action_text}. {_OUTCOME_SUFFIX.get(outcome, '')}".strip()
 
 
 def record_in_memory_incident(row: dict[str, Any]) -> None:
@@ -71,15 +62,15 @@ async def write_incident(
         db = client or await dash_mod.get_database_client()
         sql = (
             "INSERT INTO developer_incidents (incident_id, runbook_id, target, level, outcome, "
-            "description, confidence, timestamp, rca, accepted_by, accepted_at) "
-            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)"
+            "description, confidence, timestamp, rca, accepted_by, accepted_at, diagnostic_logs, remediation_yaml) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13)"
         )
-        conf = (
-            float(row.get("confidence", 0.0))
-            if row.get("confidence") is not None
-            else None
-        )
+        conf = float(row.get("confidence", 0.0)) if row.get("confidence") is not None else None
         async with db.acquire() as conn:
+            await conn.execute(
+                "ALTER TABLE developer_incidents ADD COLUMN IF NOT EXISTS diagnostic_logs TEXT; "
+                "ALTER TABLE developer_incidents ADD COLUMN IF NOT EXISTS remediation_yaml TEXT;"
+            )
             await conn.execute(
                 sql,
                 row.get("incident_id"),
@@ -93,63 +84,55 @@ async def write_incident(
                 rca_val,
                 row.get("accepted_by"),
                 row.get("accepted_at"),
+                row.get("diagnostic_logs"),
+                row.get("remediation_yaml"),
             )
             await conn.execute(
-                "DELETE FROM developer_incidents WHERE id NOT IN "
-                "(SELECT id FROM developer_incidents ORDER BY id DESC LIMIT 200)"
+                "DELETE FROM developer_incidents WHERE id NOT IN (SELECT id FROM developer_incidents ORDER BY id DESC LIMIT 200)"
             )
-        logger.info(
-            f"[Dashboard] Incident stored: {row.get('incident_id')} outcome={row.get('outcome')}"
-        )
+        logger.info(f"[Dashboard] Incident stored: {row.get('incident_id')} outcome={row.get('outcome')}")
     except Exception as _e:
         logger.warning(f"[Dashboard] incident write failed: {_e}")
 
 
 async def record_incident_resolution(
-    data: dict[str, Any],
-    client: PostgresClient | None = None,
+    data: dict[str, Any], client: PostgresClient | None = None
 ) -> None:
-    """Format and record an incident resolution or escalation into developer_incidents table."""
+    """Format and record an incident resolution into developer_incidents table."""
     import nexus.integration.dashboard as dash_mod
 
     inc_id = data.get("incident_id")
-    target = (
-        data.get("target") or data.get("target_name") or data.get("app") or "service"
-    )
+    target = data.get("target") or data.get("target_name") or data.get("app") or "service"
     plan = data.get("plan") or {}
     rca = data.get("rca") or data.get("diagnosis") or {}
-    runbook_id = (
-        plan.get("failure_mode") or data.get("runbook_id") or "autonomous_remediation"
-    )
+    runbook_id = plan.get("failure_mode") or data.get("runbook_id") or "dynamic_remediation"
     level = data.get("level", 3)
     outcome = data.get("outcome", "success")
 
     failure_class = rca.get("failure_class") or "issue"
-    steps = plan.get("steps") or []
+    steps = plan.get("steps") or plan.get("actions") or []
     action_desc = (
         steps[0].get("description")
         if steps and steps[0].get("description")
-        else data.get("action_taken")
-        or data.get("description")
-        or f"Executed remediation for {failure_class}"
+        else data.get("action_taken") or data.get("description") or f"Executed remediation for {failure_class}"
     )
 
-    ts = (
-        data.get("resolved_at")
-        or data.get("timestamp")
-        or datetime.now(timezone.utc).isoformat()
-    )[:19].replace("T", " ")
-    if outcome == "success":
-        desc = f"At {ts} UTC — {action_desc} on {target}. Successfully resolved and verified healthy."
-    else:
-        reason = (
-            data.get("reason") or "Remediation failed or maximum retries exhausted."
-        )
-        desc = f"At {ts} UTC — Incident on {target} escalated: {reason}"
+    ts = (data.get("resolved_at") or data.get("timestamp") or datetime.now(timezone.utc).isoformat())[:19].replace("T", " ")
+    desc = f"At {ts} UTC — {action_desc} on {target}. Successfully resolved and verified healthy." if outcome == "success" else f"At {ts} UTC — Incident on {target} escalated: {data.get('reason', 'Failed')}"
 
     confidence = data.get("confidence")
     if confidence is None and rca.get("confidence") is not None:
         confidence = rca.get("confidence")
+
+    rem_yaml = data.get("remediation_yaml")
+    if not rem_yaml and plan:
+        from nexus.graph.manifest_formatter import plan_to_yaml_manifest
+        rem_yaml = plan_to_yaml_manifest(plan, target=str(target))
+
+    diag_logs = data.get("diagnostic_logs")
+    if not diag_logs:
+        from nexus.graph.manifest_formatter import extract_diagnostic_logs
+        diag_logs = extract_diagnostic_logs(data)
 
     row = {
         "incident_id": inc_id,
@@ -163,6 +146,8 @@ async def record_incident_resolution(
         "rca": rca,
         "accepted_by": data.get("accepted_by"),
         "accepted_at": data.get("accepted_at"),
+        "diagnostic_logs": diag_logs,
+        "remediation_yaml": rem_yaml,
     }
     await dash_mod._write_incident(row, client=client)
 

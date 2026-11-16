@@ -24,7 +24,6 @@ data:
     default allow := false
     default require_human_approval := false
     default valid_input := false
-    default auto_allowed := false
 
     valid_input if {
         is_object(input)
@@ -69,36 +68,26 @@ data:
         input.blast_radius == "account_wide"
     }
 
+    deny_reasons contains "Mutating action is missing an explicit rollback tool call" if {
+        input.has_rollback_plan == false
+    }
+
     deny_reasons contains "Circuit breaker is tripped for target resource" if {
         input.circuit_breaker_tripped == true
     }
 
-    auto_allowed if {
-        count(deny_reasons) == 0
-        valid_input
-
-        input.reversible == true
-        input.action_category in {"restart", "scale"}
-        input.blast_radius == "pod_or_instance"
-
-        input.rca_confidence >= 0.85
-        input.cooldown_active == false
-        input.estimated_cost_delta_pct <= 25.0
-
-        input.has_rollback_plan == true
+    deny_reasons contains "Resource is currently in remediation cooldown window" if {
+        input.cooldown_active == true
     }
 
-    decision := "ALLOW_AUTO" if {
-        auto_allowed
-    }
-
+    # Mandatory 1-Click Slack Approval Tier:
+    # Every valid plan that passes OPA safety guardrails requires 1-click human approval in Slack before execution.
     decision := "REQUIRE_APPROVAL" if {
         count(deny_reasons) == 0
-        not auto_allowed
     }
 
     allow if {
-        decision in {"ALLOW_AUTO", "REQUIRE_APPROVAL"}
+        decision == "REQUIRE_APPROVAL"
     }
 
     require_human_approval if {

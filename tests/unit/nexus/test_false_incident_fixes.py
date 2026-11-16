@@ -9,7 +9,7 @@ from nats.js.api import DeliverPolicy
 from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
 from nexus.bus.nats_client import NATSClient
 from nexus.engine.fsm import IncidentFSM, IncidentState
-from nexus.governance.action_ladder import HumanApprovalQueue
+from nexus.governance.approval_queue import HumanApprovalQueue
 from nexus.reasoning.incident_cluster import IncidentCluster
 from nexus.reasoning.orchestrator import NexusOrchestrator
 from nexus.reasoning.rca_engine import RCAResult

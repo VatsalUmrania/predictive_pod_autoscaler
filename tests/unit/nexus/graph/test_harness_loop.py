@@ -5,9 +5,13 @@ Tests the governed Evaluator-Optimizer diagnostic reflection loop,
 the verification-driven adaptive recovery ladder, and pre-flight self-healing.
 """
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 
 from nexus.engine.fsm import IncidentState
 from nexus.graph.nodes.diagnose import diagnose_node
@@ -307,6 +311,44 @@ async def test_preflight_self_healing_short_circuit():
 # ── 4. End-to-End Workflow with Adaptive Ladder & Human Approval ──────────────
 
 
+class MockHarnessK8sModel(BaseChatModel):
+    @property
+    def _llm_type(self) -> str:
+        return "mock-harness-k8s"
+
+    def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
+        msg = AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "RCAReport",
+                    "args": {
+                        "root_cause_summary": "Application crash loop detected",
+                        "affected_resource_urn": "k8s://production/apps/v1/Deployment/checkout-web",
+                        "provider": "kubernetes",
+                        "confidence": 0.95,
+                        "hypotheses_evaluated": ["crash", "bad_deploy"],
+                        "evidence_chain": [
+                            {
+                                "tool_name": "k8s_get_logs",
+                                "tool_arguments": {},
+                                "key_finding": "crashloopbackoff",
+                            }
+                        ],
+                        "pre_incident_resource_state": {"replicas": 1},
+                        "requires_remediation": True,
+                        "suggested_action": "k8s_restart_deployment",
+                    },
+                    "id": "rca_wf_harness_1",
+                }
+            ],
+        )
+        return ChatResult(generations=[ChatGeneration(message=msg)])
+
+    def bind_tools(self, *args: Any, **kwargs: Any) -> Any:
+        return self
+
+
 @pytest.mark.asyncio
 async def test_e2e_workflow_adaptive_ladder_pause_and_resume():
     """
@@ -341,23 +383,22 @@ async def test_e2e_workflow_adaptive_ladder_pause_and_resume():
             healthy=True, slo_restored=True, details="Deployment healthy and ready"
         )
 
-    with patch(
-        "nexus.agents.k8s_tools.describe_resource",
-        return_value="Replicas: 1\nState: CrashLoopBackOff",
-    ):
-        with patch(
+    with (
+        patch("nexus.graph.nodes.diagnose.get_llm", return_value=MockHarnessK8sModel()),
+        patch(
+            "nexus.agents.k8s_tools.describe_resource",
+            return_value="Replicas: 1\nState: CrashLoopBackOff",
+        ),
+        patch(
             "nexus.agents.k8s_tools.restart_deployment", return_value="restarted"
-        ):
-            with patch(
-                "nexus.agents.k8s_tools.rollback_deployment", return_value="rolled_back"
-            ):
-                with (
-                    patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05),
-                    patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01),
-                ):
-                    with patch.object(
-                        adapter, "verify_health", side_effect=mock_health_check
-                    ):
+        ),
+        patch(
+            "nexus.agents.k8s_tools.rollback_deployment", return_value="rolled_back"
+        ),
+        patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05),
+        patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01),
+        patch.object(adapter, "verify_health", side_effect=mock_health_check),
+    ):
                         # Initial run: Attempt 0 plans restart -> pauses at approval (all actions require approval)
                         initial_run = await workflow.run_incident(
                             {

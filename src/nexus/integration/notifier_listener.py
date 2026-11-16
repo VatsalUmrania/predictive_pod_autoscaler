@@ -42,6 +42,11 @@ async def handle_prescale_message(notifier: Any, data: dict[str, Any]) -> None:
 
 async def handle_approval_message(notifier: Any, data: dict[str, Any]) -> None:
     try:
+        ctx = dict(data.get("context", {}))
+        if "remediation_yaml" in data and "remediation_yaml" not in ctx:
+            ctx["remediation_yaml"] = data["remediation_yaml"]
+        if "diagnostic_logs" in data and "diagnostic_logs" not in ctx:
+            ctx["diagnostic_logs"] = data["diagnostic_logs"]
         await notifier.notify_approval_required(
             app_name=data.get("app", "unknown"),
             approval_id=data.get("approval_id", ""),
@@ -49,7 +54,7 @@ async def handle_approval_message(notifier: Any, data: dict[str, Any]) -> None:
             target=data.get("target", ""),
             healing_level=data.get("healing_level", 3),
             confidence=data.get("confidence", 0.0),
-            context=data.get("context", {}),
+            context=ctx,
         )
     except Exception as exc:
         logger.debug(f"[Notifier] approval message error: {exc}")
@@ -57,19 +62,36 @@ async def handle_approval_message(notifier: Any, data: dict[str, Any]) -> None:
 
 async def handle_incident_resolved_message(notifier: Any, data: dict[str, Any]) -> None:
     try:
-        app_name = data.get("app") or data.get("namespace") or data.get("target_name") or "default"
-        target = data.get("target") or f"{app_name}/{data.get('target_name', 'resource')}"
+        app_name = (
+            data.get("app")
+            or data.get("namespace")
+            or data.get("target_name")
+            or "default"
+        )
+        target = (
+            data.get("target") or f"{app_name}/{data.get('target_name', 'resource')}"
+        )
         rca = data.get("rca") or data.get("diagnosis") or {}
         verif, plan = data.get("verification") or {}, data.get("plan") or {}
-        failure_class = rca.get("failure_class") or plan.get("failure_mode") or "Unknown"
-        root_cause = rca.get("root_cause") or rca.get("reasoning") or "Target restored to healthy baseline."
+        failure_class = (
+            rca.get("failure_class") or plan.get("failure_mode") or "Unknown"
+        )
+        root_cause = (
+            rca.get("root_cause")
+            or rca.get("reasoning")
+            or "Target restored to healthy baseline."
+        )
         steps = plan.get("steps") or []
         action_taken = (
             steps[0].get("description")
             if steps and steps[0].get("description")
-            else data.get("action_taken") or data.get("description") or "Remediation plan executed"
+            else data.get("action_taken")
+            or data.get("description")
+            or "Remediation plan executed"
         )
-        verif_details = verif.get("details") or "Target verified healthy and SLO restored"
+        verif_details = (
+            verif.get("details") or "Target verified healthy and SLO restored"
+        )
         conf = float(rca.get("confidence") or data.get("confidence") or 1.0)
 
         await notifier.notify_incident_resolved(
@@ -92,10 +114,21 @@ async def handle_incident_escalated_message(
     notifier: Any, data: dict[str, Any]
 ) -> None:
     try:
-        app_name = data.get("app") or data.get("namespace") or data.get("target_name") or "default"
-        target = data.get("target") or f"{app_name}/{data.get('target_name', 'resource')}"
+        app_name = (
+            data.get("app")
+            or data.get("namespace")
+            or data.get("target_name")
+            or "default"
+        )
+        target = (
+            data.get("target") or f"{app_name}/{data.get('target_name', 'resource')}"
+        )
         rca = data.get("rca") or data.get("diagnosis") or {}
-        reason = data.get("reason") or data.get("error_message") or "Remediation failed or maximum retries exhausted"
+        reason = (
+            data.get("reason")
+            or data.get("error_message")
+            or "Remediation failed or maximum retries exhausted"
+        )
         await notifier.notify_incident_escalated(
             app_name=app_name,
             incident_id=data.get("incident_id", "unknown"),
@@ -135,46 +168,23 @@ async def listen_notifier_nats(notifier: Any, nc: Any) -> None:
         elif "report" in subject:
             await notifier._on_report_ready_message(data)
 
-    action_ok = prescale_ok = approval_ok = incident_ok = False
+    subs = [
+        ("nexus.actions.>", lambda d, s: notifier._on_action_message(d)),
+        ("nexus.prescale.>", lambda d, s: notifier._on_prescale_message(d)),
+        ("nexus.approvals.>", lambda d, s: notifier._on_approval_message(d)),
+        ("nexus.lifecycle.>", _incident_wrapper),
+    ]
+    ready: set[str] = set()
     backoff = 1.0
-    while notifier._running and not (
-        action_ok and prescale_ok and approval_ok and incident_ok
-    ):
-        if not action_ok:
-            try:
-                await nc.subscribe_raw(
-                    "nexus.actions.>",
-                    handler=lambda d, s: notifier._on_action_message(d),
-                )
-                action_ok = True
-            except Exception as exc:
-                logger.warning(f"[Notifier] nexus.actions.> subscribe retry: {exc}")
-        if not prescale_ok:
-            try:
-                await nc.subscribe_raw(
-                    "nexus.prescale.>",
-                    handler=lambda d, s: notifier._on_prescale_message(d),
-                )
-                prescale_ok = True
-            except Exception as exc:
-                logger.warning(f"[Notifier] nexus.prescale.> subscribe retry: {exc}")
-        if not approval_ok:
-            try:
-                await nc.subscribe_raw(
-                    "nexus.approvals.>",
-                    handler=lambda d, s: notifier._on_approval_message(d),
-                )
-                approval_ok = True
-            except Exception as exc:
-                logger.warning(f"[Notifier] nexus.approvals.> subscribe retry: {exc}")
-        if not incident_ok:
-            try:
-                await nc.subscribe_raw("nexus.lifecycle.>", handler=_incident_wrapper)
-                incident_ok = True
-            except Exception as exc:
-                logger.warning(f"[Notifier] nexus.lifecycle.> subscribe retry: {exc}")
-
-        if not (action_ok and prescale_ok and approval_ok and incident_ok):
+    while notifier._running and len(ready) < len(subs):
+        for subject, h in subs:
+            if subject not in ready:
+                try:
+                    await nc.subscribe_raw(subject, handler=h)
+                    ready.add(subject)
+                except Exception as exc:
+                    logger.warning(f"[Notifier] {subject} subscribe retry: {exc}")
+        if len(ready) < len(subs):
             await asyncio.sleep(min(backoff, 30.0))
             backoff *= 2
         else:

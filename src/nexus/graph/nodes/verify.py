@@ -10,14 +10,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import operator
 import os
-import re
 import time
 from datetime import datetime, timezone
 from typing import Any
 
 from nexus.engine.fsm import IncidentState
+from nexus.graph.nodes.verify_helpers import (
+    OPERATOR_MAP,
+    evaluate_verification_condition,
+    extract_metric_value,
+    verify_step_conditions,
+)
 from nexus.graph.platform import TargetResource, get_platform_registry
 from nexus.graph.state import IncidentGraphState, VerificationCondition
 from nexus.tools.registry import default_registry
@@ -26,80 +30,6 @@ logger = logging.getLogger(__name__)
 
 VERIFY_TIMEOUT_S = float(os.getenv("NEXUS_VERIFY_TIMEOUT_S", "120"))
 VERIFY_POLL_INTERVAL_S = float(os.getenv("NEXUS_VERIFY_POLL_INTERVAL_S", "5"))
-OPERATOR_MAP = {
-    "<": operator.lt,
-    "<=": operator.le,
-    ">": operator.gt,
-    ">=": operator.ge,
-    "==": operator.eq,
-    "!=": operator.ne,
-}
-
-
-def evaluate_verification_condition(
-    condition: VerificationCondition | dict[str, Any], observed_value: Any
-) -> tuple[bool, str]:
-    cond = (
-        VerificationCondition(**condition) if isinstance(condition, dict) else condition
-    )
-    op_symbol = cond.operator.strip()
-    if op_symbol not in OPERATOR_MAP:
-        return False, f"Unsupported or dangerous comparison operator: '{op_symbol}'"
-    try:
-        passed = bool(
-            OPERATOR_MAP[op_symbol](float(observed_value), float(cond.threshold))
-        )
-        status_str = "PASS" if passed else "FAIL"
-        return (
-            passed,
-            f"Metric '{cond.metric_name}' observed={float(observed_value)} ({op_symbol} {float(cond.threshold)}) -> {status_str}",
-        )
-    except (ValueError, TypeError) as exc:
-        return (
-            False,
-            f"Could not evaluate metric '{cond.metric_name}': invalid observed value '{observed_value}' ({exc})",
-        )
-
-
-def extract_metric_value(
-    metric_name: str,
-    tool_data: Any = None,
-    health_result: Any = None,
-    telemetry: Any = None,
-) -> float | None:
-    sources = [tool_data, getattr(health_result, "metrics", None)]
-    if isinstance(telemetry, dict):
-        sources.append(telemetry.get("metrics"))
-    for source in sources:
-        if not isinstance(source, dict):
-            continue
-        if metric_name in source:
-            try:
-                return float(source[metric_name])
-            except (ValueError, TypeError):
-                pass
-        nested = source.get("metrics")
-        if isinstance(nested, dict) and metric_name in nested:
-            try:
-                return float(nested[metric_name])
-            except (ValueError, TypeError):
-                pass
-        dps = source.get("datapoints")
-        if isinstance(dps, list) and dps:
-            dp = dps[-1]
-            if isinstance(dp, dict):
-                for k in ("Average", "Sum", "Maximum", "Minimum", "Value"):
-                    if k in dp:
-                        try:
-                            return float(dp[k])
-                        except (ValueError, TypeError):
-                            pass
-        status_val = source.get("status")
-        if isinstance(status_val, str) and metric_name == "ready_replicas":
-            m = re.search(r"(\d+)\s+ready", status_val, re.IGNORECASE)
-            if m:
-                return float(m.group(1))
-    return None
 
 
 def _get_ladder() -> Any:
@@ -136,65 +66,20 @@ async def verify_node(state: IncidentGraphState) -> dict[str, Any]:
         try:
             verif_result = await adapter.verify_health(target, plan)
             healthy, slo_restored = verif_result.healthy, verif_result.slo_restored
-            details, failure_reason = (
-                verif_result.details or "",
-                verif_result.failure_reason or "",
-            )
+            details = verif_result.details or ""
+            failure_reason = verif_result.failure_reason or ""
         except Exception as exc:
-            healthy, slo_restored, details, failure_reason = (
-                False,
-                False,
-                f"Exception: {exc}",
-                str(exc),
-            )
+            healthy, slo_restored, details, failure_reason = False, False, f"Exception: {exc}", str(exc)
 
         if healthy and slo_restored:
-            conds_passed, cond_details = True, []
             steps = plan.get("steps") or []
-            for step in steps:
-                cond_dict = step.get("verification_condition")
-                if not cond_dict:
-                    continue
-                cond = (
-                    VerificationCondition(**cond_dict)
-                    if isinstance(cond_dict, dict)
-                    else cond_dict
-                )
-                t_data = None
-                v_tool = step.get("verification_tool")
-                if v_tool and default_registry.get(v_tool):
-                    try:
-                        res = await default_registry.execute_tool(
-                            v_tool, step.get("verification_parameters") or {}
-                        )
-                        if res.success:
-                            t_data = res.data
-                    except Exception as te:
-                        logger.warning("[Verify] Tool %s error: %s", v_tool, te)
-                obs = extract_metric_value(
-                    cond.metric_name,
-                    tool_data=t_data,
-                    health_result=verif_result,
-                    telemetry=state.get("telemetry"),
-                )
-                if obs is None:
-                    cond_details.append(
-                        f"Metric '{cond.metric_name}' inferred healthy from adapter"
-                    )
-                    continue
-                passed, c_msg = evaluate_verification_condition(cond, obs)
-                cond_details.append(c_msg)
-                if not passed:
-                    conds_passed, failure_reason = False, c_msg
-                    break
-            if conds_passed:
-                details = (
-                    f"{details} | {'; '.join(cond_details)}"
-                    if details and cond_details
-                    else ("; ".join(cond_details) or details)
-                )
+            conds_ok, cond_details, c_fail = await verify_step_conditions(
+                steps, default_registry, verif_result, state.get("telemetry")
+            )
+            if conds_ok:
+                details = f"{details} | {'; '.join(cond_details)}" if details and cond_details else ("; ".join(cond_details) or details)
             else:
-                healthy, slo_restored, details = False, False, failure_reason
+                healthy, slo_restored, details, failure_reason = False, False, c_fail, c_fail
 
         if (healthy and slo_restored) or time.monotonic() >= deadline:
             break
@@ -222,6 +107,7 @@ async def verify_node(state: IncidentGraphState) -> dict[str, Any]:
                 "attempts": attempts,
             },
             "resolved": True,
+            "verification_passed": True,
             "fsm_state": IncidentState.RESOLVED.value,
             "audit_log": [
                 {
@@ -248,6 +134,7 @@ async def verify_node(state: IncidentGraphState) -> dict[str, Any]:
                 "failure_reason": failure_reason,
                 "attempts": attempts,
             },
+            "verification_passed": False,
             "retry_count": retry_count + 1,
             "fsm_state": IncidentState.RETRYING.value,
             "approval_decision": None,
@@ -269,6 +156,7 @@ async def verify_node(state: IncidentGraphState) -> dict[str, Any]:
             "failure_reason": failure_reason,
             "attempts": attempts,
         },
+        "verification_passed": False,
         "fsm_state": IncidentState.ROLLING_BACK.value,
         "audit_log": [
             {

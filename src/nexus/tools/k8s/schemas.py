@@ -4,6 +4,7 @@ Kubernetes Tool Input Schemas
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
@@ -59,6 +60,9 @@ class RestartDeploymentSchema(BaseModel):
         if isinstance(values, dict):
             if not values.get("deployment_name") and values.get("resource_name"):
                 values["deployment_name"] = values["resource_name"]
+            dep = values.get("deployment_name")
+            if dep:
+                values["deployment_name"] = re.sub(r"-[0-9a-f]{8,10}-[0-9a-z]{5}$", "", str(dep))
         return values
 
 
@@ -80,6 +84,9 @@ class ScaleResourceSchema(BaseModel):
         if isinstance(values, dict):
             if not values.get("resource_name") and values.get("deployment_name"):
                 values["resource_name"] = values["deployment_name"]
+            res = values.get("resource_name")
+            if res:
+                values["resource_name"] = re.sub(r"-[0-9a-f]{8,10}-[0-9a-z]{5}$", "", str(res))
         return values
 
 
@@ -102,6 +109,9 @@ class RollbackDeploymentSchema(BaseModel):
         if isinstance(values, dict):
             if not values.get("deployment_name") and values.get("resource_name"):
                 values["deployment_name"] = values["resource_name"]
+            dep = values.get("deployment_name")
+            if dep:
+                values["deployment_name"] = re.sub(r"-[0-9a-f]{8,10}-[0-9a-z]{5}$", "", str(dep))
         return values
 
 

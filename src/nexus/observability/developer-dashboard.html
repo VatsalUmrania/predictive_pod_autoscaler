@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
-    href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap"
     rel="stylesheet"
   >
   <!-- Phosphor Icons -->
@@ -49,9 +49,10 @@
       --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
       --shadow-md: 0 4px 12px -2px rgba(15, 23, 42, 0.06), 0 2px 4px -1px rgba(15, 23, 42, 0.03);
       --shadow-lg: 0 10px 24px -4px rgba(15, 23, 42, 0.08), 0 4px 6px -2px rgba(15, 23, 42, 0.03);
+      --r-xs: 4px;
       --r-sm: 6px;
-      --r: 12px;
-      --r-lg: 16px;
+      --r: 10px;
+      --r-lg: 14px;
       --r-pill: 9999px;
     }
 
@@ -90,9 +91,10 @@
       --shadow-sm: none;
       --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.4);
       --shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.5);
+      --r-xs: 4px;
       --r-sm: 6px;
-      --r: 12px;
-      --r-lg: 16px;
+      --r: 10px;
+      --r-lg: 14px;
       --r-pill: 9999px;
     }
 
@@ -103,7 +105,7 @@
     }
 
     body {
-      font-family: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       background: var(--bg);
       color: var(--text);
       min-height: 100vh;
@@ -665,12 +667,14 @@
       background: var(--surface-0);
       border: 1px solid var(--border);
       border-radius: var(--r);
-      padding: 22px;
+      padding: 0;
       margin-bottom: 16px;
       box-shadow: var(--shadow-sm);
       position: relative;
       overflow: hidden;
       transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
+      display: flex;
+      flex-direction: column;
     }
 
     .card::before {
@@ -702,8 +706,8 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 12px;
+      gap: 10px;
+      margin-bottom: 8px;
       flex-wrap: wrap;
     }
 
@@ -821,19 +825,45 @@
 
     /* RCA Block inside Card - High Visibility & Contrast */
     .rca-box {
-      background: #f8faff;
-      border: 1.5px solid #c7d2fe;
-      border-left: 4px solid #4f46e5;
-      border-radius: 12px;
-      padding: 16px 18px;
-      margin: 16px 0 14px;
-      box-shadow: 0 2px 8px rgba(79, 70, 229, 0.05);
-      transition: all .2s ease;
+      display: flex;
+      flex-direction: column;
+      margin: 12px 0 0;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--r-sm);
+      overflow: hidden;
+      background: var(--s1);
+      box-shadow: none;
     }
-
-    .rca-box:hover {
-      border-color: #a5b4fc;
-      box-shadow: 0 4px 14px rgba(79, 70, 229, 0.09);
+    .rca-summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 9px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      background: var(--s2);
+      border-bottom: 1px solid var(--border-subtle);
+      cursor: pointer;
+      list-style: none;
+    }
+    .rca-summary::-webkit-details-marker { display: none; }
+    .rca-summary::marker { content: ""; }
+    .rca-summary .rca-chevron {
+      width: 14px; height: 14px; flex-shrink: 0; color: var(--text-dim);
+    }
+    .rca-body {
+      padding: 12px 14px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .rca-body .rca-item {
+      padding: 10px 12px;
+      background: var(--surface-0);
+      border: 1px solid var(--border);
+      border-radius: var(--r-sm);
     }
 
     .rca-header {
@@ -1280,7 +1310,51 @@
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
-  </style>
+  /* ---------- Hierarchy & visibility ---------- */
+
+/* Shape consistency lock: radii via --r / --r-sm tokens; cards use .card-inner for inner padding */
+
+/* Incident card: description first, RCA collapsible + subordinate */
+.card-inner {
+  padding: 18px 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.card-desc {
+  font-size: 14.5px;
+  line-height: 1.55;
+  font-weight: 500;
+  color: var(--text-bright);
+  margin: 0 0 10px;
+}
+.card-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Keyboard focus visibility (a11y) */
+button:focus-visible,
+.aspect-btn:focus-visible,
+.aspect-search:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Metric ribbon legibility */
+.metric-val {
+  letter-spacing: -0.02em;
+}
+
+/* Collapsible RCA chevron */
+.rca-chevron { transition: transform .2s ease; }
+details[open] .rca-chevron { transform: rotate(180deg); }
+</style>
 </head>
 
 <body>
@@ -1676,7 +1750,7 @@
         const reasoningText = rca.reasoning;
         const actionsToAvoid = rca.actions_to_avoid || [];
 
-        return `<div class="card ${cardStateClass}">
+        return `<div class="card ${cardStateClass}"><div class="card-inner">
           <div class="card-top">
             <div class="card-meta">
               <span class="badge ${outCls}">${iconHtml} ${outcomeText}</span>
@@ -1686,7 +1760,11 @@
               ${isAccepted ? `<span class="badge success"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:3px"><path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"/><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg> Claimed: @${inc.accepted_by}</span>` : ''}
               <span class="ts"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:2px"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> ${inc.timestamp || ''}</span>
             </div>
-            <div class="btn-row">
+          </div>
+
+          <div class="card-desc">${inc.description || ''}</div>
+
+          <div class="card-actions">
               ${!isAccepted ? `
                 <button class="btn-accept" onclick="accept('${inc.incident_id}')" title="Accept ownership and claim this incident">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"/><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg> Claim
@@ -1706,17 +1784,11 @@
                 <button class="btn-reject" onclick="reject('${inc.incident_id}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Reject</button>
               ` : ''}
             </div>
-          </div>
-
-          <div class="desc">${inc.description || ''}</div>
 
           <!-- Root Cause Analysis (RCA) -->
-          <div class="rca-box">
-            <div class="rca-header">
-              <span class="rca-title">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8L12 2z"/></svg>
-                Root Cause Analysis (RCA)
-              </span>
+          <details class="rca-box">
+            <summary class="rca-summary">
+              RCA <svg class="rca-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
               <span class="rca-meta">
                 <span class="engine-chip">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3"/></svg>
@@ -1727,9 +1799,10 @@
                   ${confPct}% Confidence
                 </span>
               </span>
-            </div>
-            <div class="rca-conf-bar"><div class="rca-conf-fill" style="width:${confPct}%"></div></div>
-            <div class="rca-grid">
+            </summary>
+            <div class="rca-body">
+              <div class="rca-conf-bar"><div class="rca-conf-fill" style="width:${confPct}%"></div></div>
+              <div class="rca-grid">
               <div class="rca-item cause-item">
                 <div class="rca-item-head cause-head">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
@@ -1763,14 +1836,15 @@
                 <div class="rca-item-body rca-avoid">${actionsToAvoid.map(a => `<span class="rca-guard-pill"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> ${a}</span>`).join('')}</div>
               </div>` : ''}
             </div>
-          </div>
+            </div>
+          </details>
 
           <div class="inc-id">
             <span>Runbook: <code>${inc.runbook_id || 'n/a'}</code></span>
             ${inc.incident_id ? `<span>ID: <code>${inc.incident_id}</code> <button class="copy-btn" id="cp-${inc.incident_id}" onclick="copyText('${inc.incident_id}')" title="Copy Incident ID"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></span>` : ''}
             ${inc.target ? `<span>Target: ${inc.target}</span>` : ''}
           </div>
-        </div>`;
+        </div></div>`;
       }).join('');
     }
 
@@ -1974,7 +2048,7 @@
       return [
         {
           incident_id: 'INC-7841',
-          runbook_id: 'runbook_high_error_rate_post_deploy_v1',
+          runbook_id: 'k8s_rollback_deployment',
           target: 'checkout-service',
           level: 2,
           outcome: 'pending',
@@ -1995,7 +2069,7 @@
         },
         {
           incident_id: 'INC-7839',
-          runbook_id: 'runbook_db_connection_exhaustion_v1',
+          runbook_id: 'reset_connection_pool',
           target: 'cart-service',
           level: 1,
           outcome: 'success',
@@ -2016,7 +2090,7 @@
         },
         {
           incident_id: 'INC-7832',
-          runbook_id: 'runbook_pod_crashloop_v1',
+          runbook_id: 'k8s_restart_pod',
           target: 'notification-worker',
           level: 0,
           outcome: 'success',

@@ -93,11 +93,24 @@ class AWSPlatformAdapter(BasePlatformAdapter):
                 live_cfg = client.get_function_configuration(FunctionName=target.name)
         except Exception:
             pass
-        status = (
-            "oomkilled"
-            if any("outofmemory" in line.lower() for line in logs)
-            else "healthy"
-        )
+        status = "healthy"
+        for line in logs:
+            l_lower = line.lower()
+            if "outofmemory" in l_lower or "oom" in l_lower:
+                status = "oomkilled"
+                break
+            if any(
+                w in l_lower
+                for w in (
+                    "error",
+                    "exception",
+                    "timeout",
+                    "timed out",
+                    "throttl",
+                    "fail",
+                )
+            ):
+                status = "degraded"
         return PlatformTelemetry(
             target=target, health_status=status, recent_logs=logs, live_config=live_cfg
         )

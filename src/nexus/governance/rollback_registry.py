@@ -1,7 +1,7 @@
 """NEXUS Rollback Registry.
 
-Captures resource state BEFORE a healing action executes and provides
-undo operations in case post-checks fail.
+Captures resource state and pre-registered inverse mutating tool calls
+so executions can be deterministically reverted in reverse order.
 """
 
 from __future__ import annotations
@@ -15,10 +15,78 @@ logger = logging.getLogger(__name__)
 
 
 class RollbackRegistry:
-    """Captures pre-action state and provides undo operations."""
+    """Stores pre-action states and pre-registered inverse tool actions."""
 
     def __init__(self, dry_run: bool = False):
         self.dry_run = dry_run
+        self._entries: dict[str, list[dict[str, Any]]] = {}
+
+    def register(
+        self,
+        incident_id: str,
+        step_number: int,
+        tool_name: str,
+        tool_arguments: dict[str, Any],
+    ) -> None:
+        """Pre-register inverse rollback call BEFORE mutating the target resource."""
+        if incident_id not in self._entries:
+            self._entries[incident_id] = []
+        self._entries[incident_id].append(
+            {
+                "step_number": step_number,
+                "tool_name": tool_name,
+                "tool_arguments": tool_arguments,
+            }
+        )
+        logger.info(
+            "[RollbackRegistry] Registered inverse call for inc=%s step=%d: %s",
+            incident_id,
+            step_number,
+            tool_name,
+        )
+
+    async def execute_all(
+        self, incident_id: str, registry: Any = None
+    ) -> list[dict[str, Any]]:
+        """Execute pre-registered inverse actions in reverse step order."""
+        from nexus.tools.registry import default_registry
+
+        reg = registry or default_registry
+        actions = self._entries.pop(incident_id, [])
+        actions.sort(key=lambda a: a.get("step_number", 0), reverse=True)
+        results: list[dict[str, Any]] = []
+
+        for act in actions:
+            t_name = act["tool_name"]
+            t_args = act["tool_arguments"]
+            logger.warning(
+                "[RollbackRegistry] Executing rollback tool '%s' with args: %s",
+                t_name,
+                t_args,
+            )
+            try:
+                res = await reg.execute_mutating(t_name, t_args)
+                results.append(
+                    {
+                        "step_number": act.get("step_number"),
+                        "tool_name": t_name,
+                        "success": True,
+                        "output": res,
+                    }
+                )
+            except Exception as exc:
+                logger.error(
+                    "[RollbackRegistry] Rollback tool '%s' failed: %s", t_name, exc
+                )
+                results.append(
+                    {
+                        "step_number": act.get("step_number"),
+                        "tool_name": t_name,
+                        "success": False,
+                        "error": str(exc),
+                    }
+                )
+        return results
 
     async def capture(
         self,
@@ -28,13 +96,12 @@ class RollbackRegistry:
         k8s_apps=None,
         k8s_core=None,
     ) -> PreActionState:
-        """Capture the current state of the target resource."""
+        """Capture the current state of the target resource (legacy helper)."""
         state = PreActionState(
             action_type=action_type,
             target_namespace=namespace,
             target_name=name,
         )
-
         try:
             if action_type == "scale_deployment" and k8s_apps:
                 dep = k8s_apps.read_namespaced_deployment(name, namespace)
@@ -48,10 +115,6 @@ class RollbackRegistry:
             logger.warning(
                 f"[RollbackRegistry] Could not capture state for {action_type} on {namespace}/{name}: {exc}"
             )
-
-        logger.debug(
-            f"[RollbackRegistry] Captured state for {action_type} on {namespace}/{name}: {state.state_data}"
-        )
         return state
 
     async def rollback(
@@ -60,81 +123,39 @@ class RollbackRegistry:
         k8s_apps=None,
         k8s_core=None,
     ) -> dict[str, Any]:
-        """Execute the undo operation for the given action using captured pre-state."""
+        """Execute legacy undo operation using captured pre-state."""
         action_type = pre_state.action_type
         ns = pre_state.target_namespace
         name = pre_state.target_name
         result: dict[str, Any] = {"action_type": action_type, "status": "noop"}
 
-        logger.info(f"[RollbackRegistry] Rolling back: {action_type} on {ns}/{name}")
-
         if action_type == "scale_deployment":
             prev_replicas = pre_state.state_data.get("previous_replicas")
             if prev_replicas is None:
-                result.update(status="skipped", reason="previous_replicas not captured")
-                return result
-
+                return {
+                    "action_type": action_type,
+                    "status": "skipped",
+                    "reason": "no_replicas",
+                }
             if self.dry_run:
-                result.update(
-                    status="dry_run",
-                    message=f"Would scale {ns}/{name} → {prev_replicas}",
-                )
-                return result
-
+                return {
+                    "action_type": action_type,
+                    "status": "dry_run",
+                    "message": f"Scale {ns}/{name} -> {prev_replicas}",
+                }
             if k8s_apps:
                 try:
                     patch = {"spec": {"replicas": prev_replicas}}
                     k8s_apps.patch_namespaced_deployment_scale(name, ns, patch)
-                    result.update(
-                        status="executed",
-                        message=f"Restored {ns}/{name} → {prev_replicas} replicas",
-                    )
+                    return {
+                        "action_type": action_type,
+                        "status": "executed",
+                        "message": f"Restored replicas -> {prev_replicas}",
+                    }
                 except Exception as exc:
-                    result.update(status="failed", error=str(exc))
-            else:
-                result.update(status="skipped", reason="k8s_apps client not provided")
-
-        elif action_type == "patch_annotation":
-            if self.dry_run:
-                result.update(
-                    status="dry_run",
-                    message=f"Would remove nexus annotations from {ns}/{name}",
-                )
-                return result
-
-            if k8s_apps:
-                try:
-                    dep = k8s_apps.read_namespaced_deployment(name, ns)
-                    anns = dict(dep.metadata.annotations or {})
-                    nexus_keys = [k for k in anns if k.startswith("nexus.io/")]
-                    for k in nexus_keys:
-                        anns[k] = None
-                    patch = {"metadata": {"annotations": anns}}
-                    k8s_apps.patch_namespaced_deployment(name, ns, patch)
-                    result.update(
-                        status="executed",
-                        message=f"Removed {len(nexus_keys)} nexus.io/* annotations from {ns}/{name}",
-                    )
-                except Exception as exc:
-                    result.update(status="failed", error=str(exc))
-            else:
-                result.update(status="skipped", reason="k8s_apps client not provided")
-
-        elif action_type in (
-            "restart_pod",
-            "kubectl_rollout_undo",
-            "flush_coredns_cache",
-            "emit_alert",
-        ):
-            result.update(
-                status="noop",
-                message=f"No rollback defined for action type: {action_type}",
-            )
-        else:
-            result.update(
-                status="unknown",
-                message=f"Unknown action type for rollback: {action_type}",
-            )
-
-        logger.info(f"[RollbackRegistry] Rollback result: {result['status']}")
+                    return {
+                        "action_type": action_type,
+                        "status": "failed",
+                        "error": str(exc),
+                    }
         return result

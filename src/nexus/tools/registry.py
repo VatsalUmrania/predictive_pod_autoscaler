@@ -15,24 +15,13 @@ from typing import Any
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
-from nexus.tools.aws.universal import (
-    AWSInspectInput,
-    AWSMutateInput,
-    AWSQueryTelemetryInput,
-    execute_aws_inspect,
-    execute_aws_mutate,
-    execute_aws_query_telemetry,
-)
 from nexus.tools.base import NexusTool, NexusToolResult, ToolDomain, ToolRiskLevel
-from nexus.tools.k8s.universal import (
-    K8sGetLogsInput,
-    K8sInspectResourceInput,
-    K8sMutateResourceInput,
-    execute_k8s_get_logs,
-    execute_k8s_inspect,
-    execute_k8s_mutate,
+from nexus.tools.registry_helpers import (
+    build_tool_schemas,
+    execute_tool_with_db,
+    register_legacy_tools,
+    register_universal_tools,
 )
-from nexus.tools.registry_helpers import execute_tool_with_db, register_legacy_tools
 
 logger = logging.getLogger(__name__)
 
@@ -45,52 +34,8 @@ class ToolRegistry:
         self._universal_callables: dict[
             str, tuple[Callable[..., Any], type[BaseModel], bool, str]
         ] = {}
-        self._register_universal_tools()
+        register_universal_tools(self)
         register_legacy_tools(self)
-
-    def _register_universal_tools(self) -> None:
-        self.register_function(
-            "aws_inspect_resource",
-            execute_aws_inspect,
-            AWSInspectInput,
-            is_mutating=False,
-            provider="aws",
-        )
-        self.register_function(
-            "aws_query_telemetry",
-            execute_aws_query_telemetry,
-            AWSQueryTelemetryInput,
-            is_mutating=False,
-            provider="aws",
-        )
-        self.register_function(
-            "aws_mutate_resource",
-            execute_aws_mutate,
-            AWSMutateInput,
-            is_mutating=True,
-            provider="aws",
-        )
-        self.register_function(
-            "k8s_inspect_resource",
-            execute_k8s_inspect,
-            K8sInspectResourceInput,
-            is_mutating=False,
-            provider="kubernetes",
-        )
-        self.register_function(
-            "k8s_get_logs",
-            execute_k8s_get_logs,
-            K8sGetLogsInput,
-            is_mutating=False,
-            provider="kubernetes",
-        )
-        self.register_function(
-            "k8s_mutate_resource",
-            execute_k8s_mutate,
-            K8sMutateResourceInput,
-            is_mutating=True,
-            provider="kubernetes",
-        )
 
     def register_function(
         self,
@@ -147,45 +92,10 @@ class ToolRegistry:
         return tools
 
     def get_mutating_tool_schemas(self) -> list[dict[str, Any]]:
-        schemas: list[dict[str, Any]] = [
-            {
-                "name": n,
-                "provider": p,
-                "is_mutating": True,
-                "parameters": s.model_json_schema(),
-            }
-            for n, (_, s, is_mut, p) in self._universal_callables.items()
-            if is_mut
-        ]
-        for t in self._tools.values():
-            if getattr(t, "risk_level", None) != ToolRiskLevel.L0_OBSERVE:
-                sch = getattr(t, "args_schema", None)
-                params = (
-                    sch.model_json_schema()
-                    if sch and hasattr(sch, "model_json_schema")
-                    else {}
-                )
-                schemas.append(
-                    {
-                        "name": t.name,
-                        "provider": getattr(t.domain, "value", "unknown"),
-                        "is_mutating": True,
-                        "parameters": params,
-                    }
-                )
-        return schemas
+        return build_tool_schemas(self._universal_callables, self._tools, is_mutating=True)
 
     def get_read_only_tool_schemas(self) -> list[dict[str, Any]]:
-        return [
-            {
-                "name": n,
-                "provider": p,
-                "is_mutating": False,
-                "parameters": s.model_json_schema(),
-            }
-            for n, (_, s, is_mut, p) in self._universal_callables.items()
-            if not is_mut
-        ]
+        return build_tool_schemas(self._universal_callables, self._tools, is_mutating=False)
 
     async def execute_read_only(self, tool_name: str, tool_args: dict[str, Any]) -> Any:
         if tool_name in self._universal_callables:

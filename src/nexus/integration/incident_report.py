@@ -6,6 +6,7 @@ Resolve.ai-style postmortem drafts generated when an incident reaches a terminal
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import logging
@@ -65,16 +66,31 @@ __all__ = [
 
 async def _llm_report(facts: dict[str, Any]) -> dict[str, str] | None:
     """Ask the LLM to write the narrative report; None on any failure."""
+    if os.getenv("NEXUS_REPORT_USE_LLM", "true").lower() == "false":
+        return None
     timeout_s = float(os.getenv("NEXUS_REPORT_LLM_TIMEOUT_S", "60"))
     try:
         llm = get_llm()
         resp = await asyncio.wait_for(
-            llm.ainvoke([("system", _SYSTEM_PROMPT), ("human", json.dumps(facts))]),
+            llm.ainvoke(
+                [("system", _SYSTEM_PROMPT), ("human", json.dumps(facts, default=str))]
+            ),
             timeout=timeout_s,
         )
         text = str(getattr(resp, "content", resp)).strip()
-        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
-        data = json.loads(text)
+        m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        candidate = m.group(1).strip() if m else text
+        if not candidate.startswith("{"):
+            brace_m = re.search(r"(\{.*\})", candidate, re.DOTALL)
+            if brace_m:
+                candidate = brace_m.group(1).strip()
+        try:
+            data = json.loads(candidate)
+        except Exception:
+            try:
+                data = ast.literal_eval(candidate)
+            except Exception:
+                return None
         if not isinstance(data, dict):
             return None
         return {s: str(data.get(s, "")).strip() for s in SECTIONS}

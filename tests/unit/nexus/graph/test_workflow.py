@@ -14,6 +14,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 
 from nexus.graph.platform import (
     HealthCheckResult,
@@ -21,6 +24,49 @@ from nexus.graph.platform import (
 )
 from nexus.graph.workflow import IncidentWorkflow
 from nexus.tools.base import NexusToolResult
+
+
+class MockWorkflowK8sModel(BaseChatModel):
+    root_cause: str = "OOMKilled container memory saturation"
+    suggested_action: str | None = "k8s_restart_deployment"
+
+    @property
+    def _llm_type(self) -> str:
+        return "mock-workflow-k8s"
+
+    def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
+        args_dict = {
+            "root_cause_summary": self.root_cause,
+            "affected_resource_urn": "k8s://production/apps/v1/Deployment/checkout-api",
+            "provider": "kubernetes",
+            "confidence": 0.95,
+            "hypotheses_evaluated": ["oom", "bad_deploy"],
+            "evidence_chain": [
+                {
+                    "tool_name": "k8s_get_logs",
+                    "tool_arguments": {},
+                    "key_finding": "fatal memory error",
+                }
+            ],
+            "pre_incident_resource_state": {"replicas": 3},
+            "requires_remediation": True,
+        }
+        if self.suggested_action:
+            args_dict["suggested_action"] = self.suggested_action
+        msg = AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "RCAReport",
+                    "args": args_dict,
+                    "id": "rca_wf_k8s_1",
+                }
+            ],
+        )
+        return ChatResult(generations=[ChatGeneration(message=msg)])
+
+    def bind_tools(self, *args: Any, **kwargs: Any) -> Any:
+        return self
 
 # ── Test 1: Kubernetes Autonomous L1 Remediation ─────────────────────────────
 
@@ -42,27 +88,30 @@ async def test_k8s_remediation_requires_approval_and_resumes():
         }
     ]
 
-    with patch(
-        "nexus.agents.k8s_tools.describe_resource",
-        return_value="State: OOMKilled\nReplicas: 3",
-    ):
-        with patch(
+    with (
+        patch("nexus.graph.nodes.diagnose.get_llm", return_value=MockWorkflowK8sModel()),
+        patch(
+            "nexus.agents.k8s_tools.describe_resource",
+            return_value="State: OOMKilled\nReplicas: 3",
+        ),
+        patch(
             "nexus.agents.k8s_tools.get_pod_logs",
             return_value="panic: fatal memory error",
-        ):
-            with patch(
-                "nexus.agents.k8s_tools.restart_deployment",
-                return_value="deployment.apps/checkout-api restarted",
-            ):
-                with patch.object(
-                    adapter,
-                    "verify_health",
-                    AsyncMock(
-                        return_value=HealthCheckResult(
-                            healthy=True, slo_restored=True, details="Pods Ready"
-                        )
-                    ),
-                ):
+        ),
+        patch(
+            "nexus.agents.k8s_tools.restart_deployment",
+            return_value="deployment.apps/checkout-api restarted",
+        ),
+        patch.object(
+            adapter,
+            "verify_health",
+            AsyncMock(
+                return_value=HealthCheckResult(
+                    healthy=True, slo_restored=True, details="Pods Ready"
+                )
+            ),
+        ),
+    ):
                     interrupted = await workflow.run_incident(
                         {
                             "incident_id": "inc-k8s-auto-01",
@@ -98,6 +147,43 @@ async def test_k8s_remediation_requires_approval_and_resumes():
                     assert "learn" in stages
 
 
+class MockWorkflowAWSModel(BaseChatModel):
+    @property
+    def _llm_type(self) -> str:
+        return "mock-workflow-aws"
+
+    def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
+        msg = AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "RCAReport",
+                    "args": {
+                        "root_cause_summary": "Lambda memory exhausted causing invocation failure",
+                        "affected_resource_urn": "arn:aws:lambda:us-east-1:123456789012:function:payments-worker",
+                        "provider": "aws",
+                        "confidence": 0.95,
+                        "hypotheses_evaluated": ["oom", "timeout"],
+                        "evidence_chain": [
+                            {
+                                "tool_name": "execute_aws_query_telemetry",
+                                "tool_arguments": {},
+                                "key_finding": "OutOfMemoryError in CloudWatch logs",
+                            }
+                        ],
+                        "pre_incident_resource_state": {"MemorySize": 256},
+                        "requires_remediation": True,
+                    },
+                    "id": "rca_wf_aws_1",
+                }
+            ],
+        )
+        return ChatResult(generations=[ChatGeneration(message=msg)])
+
+    def bind_tools(self, *args: Any, **kwargs: Any) -> Any:
+        return self
+
+
 # ── Test 2: AWS Human-in-the-Loop Interruption & Resume ───────────────────────
 
 
@@ -119,6 +205,7 @@ async def test_aws_hitl_approval_and_resume():
     ]
 
     with (
+        patch("nexus.graph.nodes.diagnose.get_llm", return_value=MockWorkflowAWSModel()),
         patch("nexus.graph.platform.aws._get_boto3_client") as mock_boto,
         patch("nexus.tools.aws_adapter._get_boto3_client") as mock_tools_boto,
     ):
@@ -194,13 +281,19 @@ async def test_operator_rejection_pathway():
         }
     ]
 
-    with patch("nexus.graph.platform.aws._get_boto3_client") as mock_boto:
+    with (
+        patch("nexus.graph.nodes.diagnose.get_llm", return_value=MockWorkflowAWSModel()),
+        patch("nexus.graph.platform.aws._get_boto3_client") as mock_boto,
+        patch("nexus.tools.aws_adapter._get_boto3_client") as mock_tools_boto,
+    ):
         client = MagicMock()
         client.get_function_configuration.return_value = {
             "MemorySize": 256,
             "Timeout": 30,
+            "State": "Active",
         }
         mock_boto.return_value = client
+        mock_tools_boto.return_value = client
 
         # 1. Run until approval interrupt
         await workflow.run_incident(
@@ -245,53 +338,60 @@ async def test_verification_failure_and_deterministic_rollback():
         }
     ]
 
-    with patch(
-        "nexus.agents.k8s_tools.describe_resource",
-        return_value="Replicas: 2\nState: CrashLoopBackOff",
-    ):
-        with patch(
+    with (
+        patch(
+            "nexus.graph.nodes.diagnose.get_llm",
+            return_value=MockWorkflowK8sModel(
+                root_cause="Application crash detected",
+                suggested_action="k8s_restart_deployment",
+            ),
+        ),
+        patch(
+            "nexus.agents.k8s_tools.describe_resource",
+            return_value="Replicas: 2\nState: CrashLoopBackOff",
+        ),
+        patch(
             "nexus.agents.k8s_tools.restart_deployment", return_value="restarted"
-        ):
-            with (
-                patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05),
-                patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01),
-            ):
-                with patch.object(
-                    adapter,
-                    "verify_health",
-                    AsyncMock(
-                        return_value=HealthCheckResult(
-                            healthy=False,
-                            slo_restored=False,
-                            failure_reason="OOM persists",
-                        )
-                    ),
-                ):
-                    with patch.object(
-                        adapter,
-                        "execute_rollback",
-                        AsyncMock(
-                            return_value=NexusToolResult(
-                                success=True, data={"status": "rolled_back"}
-                            )
-                        ),
-                    ) as mock_rb:
-                        result = await workflow.run_incident(
-                            {
-                                "incident_id": "inc-rollback-01",
-                                "platform": "kubernetes",
-                                "events": events,
-                                "max_retries": 0,
-                                "approval_decision": "approved",
-                            }
-                        )
+        ),
+        patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05),
+        patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01),
+        patch.object(
+            adapter,
+            "verify_health",
+            AsyncMock(
+                return_value=HealthCheckResult(
+                    healthy=False,
+                    slo_restored=False,
+                    failure_reason="OOM persists",
+                )
+            ),
+        ),
+        patch.object(
+            adapter,
+            "execute_rollback",
+            AsyncMock(
+                return_value=NexusToolResult(
+                    success=True, data={"status": "rolled_back"}
+                )
+            ),
+        ) as mock_rb,
+    ):
+        result = await workflow.run_incident(
+            {
+                "incident_id": "inc-rollback-01",
+                "platform": "kubernetes",
+                "events": events,
+                "max_retries": 0,
+                "approval_decision": "approved",
+            }
+        )
 
-                    assert result["resolved"] is False
-                    assert result["escalated"] is True
-                    assert result["rollback_executed"] is True
-                    assert len(result["rollback_records"]) > 0
-                    assert result["fsm_state"] == "escalated"
-                    mock_rb.assert_called()
+        assert result["resolved"] is False
+        assert result["escalated"] is True
+        assert result["rollback_executed"] is True
+        assert len(result["rollback_records"]) > 0
+        assert result["fsm_state"] == "escalated"
+        mock_rb.assert_called()
 
 
 # ── Test 5: Architectural Guarantee: NOT a ReAct Loop ─────────────────────────
@@ -310,8 +410,8 @@ def test_not_a_react_loop_architecture():
     # Verify nodes are distinct lifecycle stages
     expected_nodes = {
         "triage",
-        "collect",
-        "diagnose",
+        "rca_reasoner",
+        "rca_tool_executor",
         "plan",
         "govern",
         "approval",
@@ -358,29 +458,38 @@ async def test_dynamic_tool_planning_without_runbooks_and_evidence_confidence():
         }
     ]
 
-    with patch(
-        "nexus.agents.k8s_tools.describe_resource",
-        return_value="Pod: shop-demo\nState: CrashLoopBackOff\nRestarts: 5",
-    ):
-        with patch(
+    with (
+        patch(
+            "nexus.graph.nodes.diagnose.get_llm",
+            return_value=MockWorkflowK8sModel(
+                root_cause="Application crash loop detected",
+                suggested_action="k8s_restart_deployment",
+            ),
+        ),
+        patch(
+            "nexus.agents.k8s_tools.describe_resource",
+            return_value="Pod: shop-demo\nState: CrashLoopBackOff\nRestarts: 5",
+        ),
+        patch(
             "nexus.agents.k8s_tools.restart_deployment",
             return_value="restarted deployment shop-demo",
-        ):
-            with patch(
-                "nexus.graph.nodes.govern.check_live_state",
-                AsyncMock(
-                    return_value=MagicMock(
-                        verdict="degraded", evidence="Pod crashlooping"
-                    )
-                ),
-            ):
-                with patch.object(
-                    adapter,
-                    "verify_health",
-                    AsyncMock(
-                        return_value=HealthCheckResult(healthy=True, slo_restored=True)
-                    ),
-                ):
+        ),
+        patch(
+            "nexus.graph.nodes.govern.check_live_state",
+            AsyncMock(
+                return_value=MagicMock(
+                    verdict="degraded", evidence="Pod crashlooping"
+                )
+            ),
+        ),
+        patch.object(
+            adapter,
+            "verify_health",
+            AsyncMock(
+                return_value=HealthCheckResult(healthy=True, slo_restored=True)
+            ),
+        ),
+    ):
                     interrupted = await workflow.run_incident(
                         {
                             "incident_id": "inc-dynamic-tool-01",
@@ -441,31 +550,40 @@ async def test_workflow_pending_approvals_and_status_api_integration():
             return "Pod: shop-demo\nState: CrashLoopBackOff\nRestarts: 5"
         return "Pod: shop-demo\nState: Running\nReady: 1/1"
 
-    with patch("nexus.agents.k8s_tools.describe_resource", side_effect=mock_describe):
-        with patch(
+    with (
+        patch(
+            "nexus.graph.nodes.diagnose.get_llm",
+            return_value=MockWorkflowK8sModel(
+                root_cause="Application crash loop detected",
+                suggested_action="k8s_restart_deployment",
+            ),
+        ),
+        patch("nexus.agents.k8s_tools.describe_resource", side_effect=mock_describe),
+        patch(
             "nexus.agents.k8s_tools.get_pod_logs", return_value="panic: runtime crash"
-        ):
-            with patch(
-                "nexus.agents.k8s_tools.restart_deployment",
-                return_value="restarted deployment shop-demo",
-            ):
-                with patch(
-                    "nexus.graph.nodes.govern.check_live_state",
-                    AsyncMock(
-                        return_value=MagicMock(
-                            verdict="degraded", evidence="Pod crashlooping"
-                        )
-                    ),
-                ):
-                    with patch.object(
-                        get_platform_registry().get("kubernetes"),
-                        "verify_health",
-                        AsyncMock(
-                            return_value=HealthCheckResult(
-                                healthy=True, slo_restored=True
-                            )
-                        ),
-                    ):
+        ),
+        patch(
+            "nexus.agents.k8s_tools.restart_deployment",
+            return_value="restarted deployment shop-demo",
+        ),
+        patch(
+            "nexus.graph.nodes.govern.check_live_state",
+            AsyncMock(
+                return_value=MagicMock(
+                    verdict="degraded", evidence="Pod crashlooping"
+                )
+            ),
+        ),
+        patch.object(
+            get_platform_registry().get("kubernetes"),
+            "verify_health",
+            AsyncMock(
+                return_value=HealthCheckResult(
+                    healthy=True, slo_restored=True
+                )
+            ),
+        ),
+    ):
                         interrupted = await workflow.run_incident(
                             {
                                 "incident_id": incident_id,

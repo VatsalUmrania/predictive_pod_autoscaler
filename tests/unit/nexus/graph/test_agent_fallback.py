@@ -352,8 +352,8 @@ async def test_e2e_workflow_fallback_activates_collect_node():
             ),
         ),
     ):
-        # Run incident with default FakeListChatModel (triggers fallback)
-        interrupted = await workflow.run_incident(
+        # Run incident with default FakeListChatModel (unproven diagnosis, no default fallback)
+        result = await workflow.run_incident(
             {
                 "incident_id": "inc-fallback-e2e-01",
                 "platform": "kubernetes",
@@ -362,22 +362,17 @@ async def test_e2e_workflow_fallback_activates_collect_node():
             thread_id=thread_id,
         )
 
-        assert interrupted["incident_id"] == "inc-fallback-e2e-01"
-        assert interrupted["fsm_state"] == "approval_pending"
+        assert result["incident_id"] == "inc-fallback-e2e-01"
+        assert result["resolved"] is True
+        assert result["fsm_state"] == "resolved"
+        assert len(result.get("execution_records", [])) == 0
 
-        # Check audit log to verify collect_telemetry was executed via fallback
-        stages = [e["stage"] for e in interrupted["audit_log"]]
+        # Check audit log to verify collect_telemetry was recorded via fallback
+        stages = [e["stage"] for e in result["audit_log"]]
         assert "triage" in stages
         assert "diagnose" in stages
-        assert "collect_telemetry" in stages  # collect_node activated!
-        assert "govern" in stages
-
-        # Resume operator approval
-        resumed = await workflow.resume_incident(
-            thread_id=thread_id, approval_decision="approved"
-        )
-        assert resumed["resolved"] is True
-        assert resumed["fsm_state"] == "resolved"
+        assert "collect_telemetry" in stages  # collect recorded on fallback!
+        assert "learn" in stages
 
 
 @pytest.mark.asyncio

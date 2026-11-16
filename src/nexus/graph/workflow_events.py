@@ -10,10 +10,20 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from nexus.engine.fsm import IncidentState
-from nexus.graph.state import IncidentGraphState
+from nexus.graph.workflow_state import build_initial_state
 
 logger = logging.getLogger(__name__)
+
+EXCLUDED_NAMESPACES = {"nexus", "kube-system", "kube-public", "kube-node-lease"}
+EXCLUDED_RESOURCE_PREFIXES = ("nexus-api", "nats", "opa", "grafana-agent")
+
+__all__ = [
+    "build_cluster_event_dicts",
+    "handle_incoming_event",
+    "run_flush_loop",
+    "build_initial_state",
+    "setup_event_subscriptions",
+]
 
 
 def build_cluster_event_dicts(cluster: Any) -> list[dict[str, Any]]:
@@ -45,22 +55,34 @@ def build_cluster_event_dicts(cluster: Any) -> list[dict[str, Any]]:
     return events_dicts
 
 
+def is_control_plane_resource(event: Any) -> bool:
+    """Check if event targets NEXUS internal control plane or K8s system components."""
+    ns = str(getattr(event, "namespace", "") or "").lower()
+    r_name = str(getattr(event, "resource_name", "") or "").lower()
+    if ns in EXCLUDED_NAMESPACES:
+        return True
+    return any(p in r_name for p in EXCLUDED_RESOURCE_PREFIXES)
+
+
 async def handle_incoming_event(workflow: Any, event: Any) -> None:
-    """Handler for single incoming IncidentEvent, dropping stale events > 120s."""
+    """Handler for single incoming IncidentEvent, dropping stale and control plane events."""
     from nexus.bus.incident_event import IncidentEvent
 
     if isinstance(event, IncidentEvent) and event.timestamp:
         age = datetime.now(timezone.utc) - event.timestamp
         if age > timedelta(seconds=120):
-            logger.info(
-                "[IncidentWorkflow] Dropping stale event: %s (age=%.1fs)",
-                event.event_id,
-                age.total_seconds(),
-            )
             return
 
     agent_str = str(getattr(event, "agent", "")).lower()
     if agent_str in ("orchestrator", "nexus"):
+        return
+
+    if is_control_plane_resource(event):
+        logger.debug(
+            "[IncidentWorkflow] Dropping internal control plane event: ns=%s, resource=%s",
+            getattr(event, "namespace", ""),
+            getattr(event, "resource_name", ""),
+        )
         return
 
     logger.info(
@@ -118,49 +140,6 @@ async def run_flush_loop(workflow: Any) -> None:
             break
         except Exception as exc:
             logger.error("[IncidentWorkflow] Flush loop error: %s", exc)
-
-
-def build_initial_state(
-    incident_data: dict[str, Any], inc_id: str
-) -> IncidentGraphState:
-    """Construct initial state dictionary for incident workflow."""
-    events = incident_data.get("events", [])
-    if not events and "event" in incident_data:
-        events = [incident_data["event"]]
-    anomaly_signal = incident_data.get("anomaly_signal")
-    if anomaly_signal and hasattr(anomaly_signal, "model_dump"):
-        anomaly_signal = anomaly_signal.model_dump()
-
-    return {
-        "incident_id": inc_id,
-        "fsm_state": IncidentState.DETECTED.value,
-        "events": events,
-        "platform": incident_data.get("platform", "kubernetes"),
-        "target": incident_data.get("target", {}),
-        "severity": incident_data.get("severity", "warning"),
-        "telemetry": {},
-        "diagnosis": {},
-        "diagnostic_reflections": [],
-        "plan": None,
-        "remediation_history": [],
-        "governance": None,
-        "approval_id": None,
-        "approval_decision": incident_data.get("approval_decision"),
-        "execution_records": [],
-        "rollback_executed": False,
-        "rollback_records": [],
-        "verification": None,
-        "retry_count": 0,
-        "max_retries": incident_data.get("max_retries", 2),
-        "audit_log": [],
-        "messages": incident_data.get("messages", []),
-        "error_message": None,
-        "resolved": False,
-        "escalated": False,
-        "anomaly_signal": anomaly_signal,
-        "agentic_rca": incident_data.get("agentic_rca"),
-        "fallback_active": incident_data.get("fallback_active", False),
-    }
 
 
 async def setup_event_subscriptions(workflow: Any) -> None:

@@ -53,32 +53,26 @@ async def handle_workflow_completion(
     target_str = f"{target_ns}/{target_name}"
 
     diag = result.get("diagnosis") or {}
-    diag_dict = (
-        diag.model_dump()
-        if hasattr(diag, "model_dump")
-        else (diag if isinstance(diag, dict) else {})
-    )
+    diag_dict = diag.model_dump() if hasattr(diag, "model_dump") else (diag if isinstance(diag, dict) else {})
     plan = result.get("plan") or {}
-    plan_dict = (
-        plan.model_dump()
-        if hasattr(plan, "model_dump")
-        else (plan if isinstance(plan, dict) else {})
-    )
+    plan_dict = plan.model_dump() if hasattr(plan, "model_dump") else (plan if isinstance(plan, dict) else {})
     verif = result.get("verification") or {}
-    verif_dict = (
-        verif.model_dump()
-        if hasattr(verif, "model_dump")
-        else (verif if isinstance(verif, dict) else {})
-    )
+    verif_dict = verif.model_dump() if hasattr(verif, "model_dump") else (verif if isinstance(verif, dict) else {})
 
     confidence = float(diag_dict.get("confidence") or 1.0)
-    steps = plan_dict.get("steps", [])
+    steps = plan_dict.get("steps", []) or plan_dict.get("actions", [])
+    action_type = (steps[0].get("tool_name") if steps and isinstance(steps[0], dict) else None) or "none"
     action_desc = (
         steps[0].get("description")
         if steps and steps[0].get("description")
         else f"Remediation executed on {target_str}"
     )
     outcome_str = "success" if is_resolved else "failed"
+
+    from nexus.graph.manifest_formatter import extract_diagnostic_logs, plan_to_yaml_manifest
+
+    rem_yaml = plan_to_yaml_manifest(plan_dict, target=target_str)
+    diag_logs = extract_diagnostic_logs(result)
 
     payload = {
         "incident_id": inc_id,
@@ -94,16 +88,14 @@ async def handle_workflow_completion(
         "verification": verif_dict,
         "action_taken": action_desc,
         "confidence": confidence,
-        "reason": result.get("error_message")
-        or ("Resolved successfully" if is_resolved else "Escalated"),
+        "remediation_yaml": rem_yaml,
+        "diagnostic_logs": diag_logs,
+        "reason": result.get("error_message") or ("Resolved successfully" if is_resolved else "Escalated"),
         "resolved_at": datetime.now(timezone.utc).isoformat(),
     }
 
     # 0. Learning plane recording
-    runbook_id = plan_dict.get("failure_mode") or "autonomous_remediation"
-    action_type = (
-        steps[0].get("tool_name") if steps and isinstance(steps[0], dict) else None
-    ) or "none"
+    runbook_id = plan_dict.get("failure_mode") or action_type or "dynamic_remediation"
     audit_outcome = (
         "success"
         if is_resolved

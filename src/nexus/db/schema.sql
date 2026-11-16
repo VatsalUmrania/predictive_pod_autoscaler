@@ -234,18 +234,20 @@ CREATE TABLE IF NOT EXISTS app_tokens (
 
 -- 11. Integration: Developer Incidents (Dashboard Feed)
 CREATE TABLE IF NOT EXISTS developer_incidents (
-    id          BIGSERIAL PRIMARY KEY,
-    incident_id VARCHAR(255),
-    runbook_id  VARCHAR(100),
-    target      VARCHAR(255),
-    level       INTEGER,
-    outcome     VARCHAR(50),
-    description TEXT,
-    confidence  REAL,
-    timestamp   VARCHAR(100),
-    rca         JSONB,
-    accepted_by VARCHAR(100),
-    accepted_at VARCHAR(100)
+    id               BIGSERIAL PRIMARY KEY,
+    incident_id      VARCHAR(255),
+    runbook_id       VARCHAR(100),
+    target           VARCHAR(255),
+    level            INTEGER,
+    outcome          VARCHAR(50),
+    description      TEXT,
+    confidence       REAL,
+    timestamp        VARCHAR(100),
+    rca              JSONB,
+    accepted_by      VARCHAR(100),
+    accepted_at      VARCHAR(100),
+    diagnostic_logs  TEXT,
+    remediation_yaml TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_dev_incidents_id ON developer_incidents(id DESC);

@@ -5,36 +5,43 @@
 A full inspection of `src/nexus/` and `deploy/opa/` reveals **7 layers of hardcoding** that currently prevent NEXUS from acting as a general-purpose, cross-provider self-healing agent.
 
 ### 1. Ingestion, Log Parsing & Event Bus (`src/nexus/bus/` & `src/nexus/telemetry/`)
+
 * **`src/nexus/bus/events/enums.py` & `src/nexus/bus/events/contexts.py`**: Hardcodes closed `Enum` classes for failure types and rigid context models (`K8sContext`, `DBContext`, `AWSContext`). Any failure outside this list fails Pydantic validation before reaching NATS.
 * **`src/nexus/telemetry/log_parser.py` & `src/nexus/telemetry/log_shipper.py`**: Uses static regex rules to match known error strings (e.g., `OOMKilled`, `ProvisionedThroughputExceededException`, `Connection refused`) and maps them to hardcoded enums. Unrecognized stack traces or new AWS/K8s service errors are silently dropped.
 
 ### 2. Polling Specialist Checkers (`src/nexus/agents/`)
+
 * **`src/nexus/agents/k8s/constants.py`, `pod_checker.py`, `deployment_checker.py`**: Only polls `v1.Pod` and `apps/v1.Deployment` for `CrashLoopBackOff`, `OOMKilled`, `ImagePullBackOff`, and replica count mismatches. It is completely blind to `StatefulSet`, `DaemonSet`, `Job`, `CronJob`, `PVC` storage exhaustion, `Ingress` misconfigurations, `NetworkPolicy` drops, `CoreDNS` failures, or `Node` disk/PID pressure.
 * **`src/nexus/agents/metrics/queries.py` & `checker.py`**: Hardcodes a small set of PromQL query templates and static threshold comparisons.
 * **`src/nexus/agents/db/postgres.py`, `mysql.py`, `mongo.py`**: Hardcodes specific connection-pool and slow-query checks rather than exposing database inspection tools to the RCA agent.
 * **`src/nexus/agents/nginx/parser.py` & `evaluator.py`**: Hardcodes nginx log parsing and HTTP 502/504 thresholds.
 
 ### 3. Platform Adapters & Static Snapshot Collectors (`src/nexus/graph/platform/`)
+
 * **`src/nexus/graph/platform/aws_target.py`, `aws_snapshot.py`, `aws_telemetry.py`, `aws.py`**:
   * `aws_target.py` only parses targets for a handful of hardcoded AWS resource types (Lambda, DynamoDB, ECS). Any incident on RDS, SQS, ALB/ELB, API Gateway, S3, Step Functions, ElastiCache, CloudFront, or Route53 fails target resolution.
   * `aws_telemetry.py` and `aws_snapshot.py` pre-fetch a static dictionary of specific CloudWatch metric names before the LLM even runs, rather than letting the agent query CloudWatch Metrics, Logs Insights, and CloudTrail dynamically.
 * **`src/nexus/graph/platform/k8s_target.py`, `k8s_snapshot.py`, `k8s_telemetry.py`, `k8s.py`**: Hardcodes target resolution to `namespace/deployment/pod` and dumps a fixed snapshot into `collect.py`.
 
 ### 4. Correlation, Confidence & Validation Heuristics (`src/nexus/reasoning/`)
+
 * **`src/nexus/reasoning/correlator_rules.py` & `event_correlator.py`**: Uses a hardcoded lookup table of `EventType` pairs to correlate events.
 * **`src/nexus/reasoning/confidence_constants.py` & `confidence_scorer.py`**: Computes confidence scores from static weights tied to predefined agent names and enum types.
 * **`src/nexus/reasoning/validator/consistency.py` & `downgrade.py`**: Downgrades valid LLM diagnoses if they do not match hardcoded keyword/enum expectations.
 
 ### 5. Single-Shot RCA & Template Planners (`src/nexus/graph/nodes/` & `src/nexus/graph/rca/`)
+
 * **`src/nexus/graph/nodes/collect.py`**: Forces upfront static telemetry collection instead of iterative tool use.
 * **`src/nexus/graph/rca/synthesis_rules.py`, `multi_agent_rca.py`, `log_analyst.py`, `metrics_analyst.py`, `topology_analyst.py`**: Runs a single-pass prompt over static text and overrides the LLM with deterministic `if/else` rules in `synthesis_rules.py`.
 * **`src/nexus/graph/nodes/default_planner.py`, `k8s_plan_helpers.py`, `adaptive_recovery.py`**: Hardcodes `incident_type -> tool_name` mappings (`restart_pod`, `scale_deployment`, `rollback_deployment`, `update_table_capacity`).
 
 ### 6. Narrow, Duplicated Tool Implementations (`src/nexus/tools/` & `src/nexus/agents/k8s_tools/`)
+
 * **Duplicated K8s Tools**: K8s tools are split across `src/nexus/agents/k8s_tools/` and `src/nexus/tools/k8s/` and only wrap fixed `CoreV1Api` / `AppsV1Api` methods for Pods and Deployments.
 * **Narrow AWS Tools (`src/nexus/tools/aws/observe_tools.py`, `mutate_tools.py`, `schemas.py`)**: Only wraps a few specific AWS operations (such as DynamoDB capacity and Lambda concurrency), leaving 98% of AWS services without tools.
 
 ### 7. Hardcoded Governance, Live-State Checkers & KB Seed Patterns (`src/nexus/governance/` & `src/nexus/learning/`)
+
 * **`deploy/opa/nexus_policies.rego` & `src/nexus/governance/policy_engine.py`**: Matches literal tool/action strings (`restart_pod`, `scale_deployment`).
 * **`src/nexus/governance/action_ladder.py`**: Hardcodes a fixed escalation sequence (`restart -> scale -> rollback`).
 * **`src/nexus/governance/live_state/pod_checker.py`, `deployment_checker.py`, `validator.py`**: Only validates live state for K8s Pods and Deployments; breaks or no-ops on AWS resources or other K8s kinds.
@@ -46,12 +53,10 @@ A full inspection of `src/nexus/` and `deploy/opa/` reveals **7 layers of hardco
 
 Copy everything below and provide it directly to your coding agent (Antigravity IDE, Claude Code, or Cursor):
 
----
-
 ### PROMPT START
 
 You are a Principal Autonomous Systems & SRE Architect refactoring the NEXUS self-healing engine (`src/nexus/`).
-Your goal is to remove all hardcoded failure detection enums, static telemetry snapshots, narrow platform target parsers, heuristic RCA rules, hardcoded remediation planners, and action-name-locked OPA policies. You will replace them with a **provider-agnostic, tool-calling Agentic Workflow in LangGraph** that supports **any AWS service** and **any Kubernetes resource/CRD** dynamically.
+Your goal is to remove all hardcoded failure detection enums, static telemetry snapshots, narrow platform target parsers, heuristic RCA rules, hardcoded remediation planners, and action-name-locked OPA policies. You will replace them with a **provider-agnostic, tool-calling Agentic Workflow in LangGraph** that supports **any AWS service** and **any Kubernetes resource/CRD** dynamically, gated by a **mandatory 1-Click Slack Approval** before executing real infrastructure fixes.
 
 ```text
 [Universal Symptom Ingest] (CloudWatch / EventBridge / Alertmanager / OTel / K8s Events)
@@ -68,17 +73,28 @@ Your goal is to remove all hardcoded failure detection enums, static telemetry s
         │
         ▼
 [3. Attribute-Based OPA Governance Gate (govern.py + nexus_policies.rego)]
-    Deterministic Python risk classifier + Rego ABAC policy (evaluates blast_radius, reversibility, service sensitivity, confidence, cost_delta)
+    Deterministic Python risk classifier + Rego ABAC policy:
+    Blocks unsafe/destructive/IAM mutations (`DENY`) and gates all valid plans with `REQUIRE_APPROVAL`
         │
-        ├──► [ALLOW_AUTO] ────────────────────────────────────────┐
-        │                                                         ▼
-        └──► [REQUIRE_APPROVAL] ──► [approval.py (LangGraph interrupt)] ──► [execute.py] ──► [verify.py]
-                                     Sends Slack/Console Approval Card       Runs planned     Runs `verification_checks`
-                                     with RCA Evidence, Plan & Rollback;     tool calls via   read tools; auto-triggers
-                                     resumes on human `/approve`             ToolRegistry     `rollback.py` if unhealthy
+        ├──► [DENY] ──► [escalate.py] (Notifies Slack why OPA blocked the unsafe plan)
+        │
+        └──► [REQUIRE_APPROVAL] ──► [4. 1-Click Slack Approval Gate (approval.py)]
+                                     Sends Slack Block Kit card with RCA Evidence, Plan, Rollback & HMAC Buttons;
+                                     Pauses LangGraph execution via `interrupt()`
+                                              │
+                                    (Human Clicks "✅ Approve & Execute" in Slack)
+                                              │
+                                              ▼
+                                    [5. Dynamic Executor (execute.py)]
+                                     Pre-registers inverse rollback calls in `rollback_registry.py`;
+                                     Executes real AWS Boto3 / K8s DynamicClient mutations via `ToolRegistry`
+                                              │
+                                              ▼
+                                    [6. Closed-Loop Verifier (verify.py)]
+                                     Waits stabilization window, runs read-only `verification_checks`:
+                                     • If Healthy -> Updates Slack thread "✅ Fixed & Verified" -> `learn.py`
+                                     • If Unhealthy -> Auto-runs `rollback.py` -> Updates Slack "⚠️ Rolled Back"
 ```
-
----
 
 #### 1. FILES TO DELETE COMPLETELY
 
@@ -117,11 +133,10 @@ Delete the following hardcoded files and clean up all imports/exports referencin
 * **Duplicate Legacy K8s Tool Package:**
   * `src/nexus/agents/k8s_tools/` (entire directory and `src/nexus/agents/k8s_tools.py`—consolidate into `src/nexus/tools/k8s/`)
 
----
-
 #### 2. LAYER-BY-LAYER IMPLEMENTATION & CODE SPECIFICATIONS
 
 ##### A. Open Symptom Ingestion (`src/nexus/bus/events/enums.py` & `src/nexus/bus/events/event.py`)
+
 Replace failure root-cause enums with open symptom envelopes so any AWS service or Kubernetes resource anomaly can enter the bus without schema rejection.
 
 ```python
@@ -182,9 +197,8 @@ class SymptomSignal(BaseModel):
 * **Update `src/nexus/telemetry/log_parser.py`**: Instead of regex-matching hardcoded failure names, detect any log record with `level in ("ERROR", "CRITICAL", "FATAL")` or HTTP status `>= 500` or unhandled exception tracebacks, group bursts by `resource_urn`, and emit a `SymptomSignal(kind=SignalKind.ERROR_LOG_BURST)` with the raw log lines in `raw_payload`.
 * **Update `src/nexus/agents/k8s/agent.py`**: Replace `pod_checker.py` and `deployment_checker.py` with a single generic K8s event watcher that watches `v1.Event` where `type == "Warning"` across **all** `involvedObject.kind` types (`Pod`, `Deployment`, `StatefulSet`, `DaemonSet`, `Job`, `Node`, `PersistentVolumeClaim`, `Ingress`, CRDs) and emits a `SymptomSignal(kind=SignalKind.STATE_TRANSITION)`.
 
----
-
 ##### B. Universal AWS Tool Bridge (`src/nexus/tools/aws/universal.py`)
+
 Replace narrow AWS tools with three schema-validated, service-agnostic Boto3 tools capable of inspecting, querying telemetry, and mutating **any** AWS service (Lambda, RDS, ECS, EKS, SQS, SNS, DynamoDB, ALB/ELB, API Gateway, S3, ElastiCache, Step Functions, EC2, AutoScaling).
 
 ```python
@@ -312,9 +326,8 @@ def execute_aws_mutate(args: AWSMutateInput) -> str:
     return json.dumps(response, default=str)[:8000]
 ```
 
----
-
 ##### C. Universal Kubernetes Dynamic Tool Bridge (`src/nexus/tools/k8s/universal.py`)
+
 Replace Pod/Deployment-only K8s tools with Kubernetes `DynamicClient` tools that can inspect, fetch logs/events, patch, scale, or restart **any** Kubernetes resource (`Pod`, `Deployment`, `StatefulSet`, `DaemonSet`, `Job`, `Service`, `Ingress`, `ConfigMap`, `HorizontalPodAutoscaler`, `PersistentVolumeClaim`, or custom CRDs).
 
 ```python
@@ -436,17 +449,16 @@ def execute_k8s_mutate(dyn_client: DynamicClient, args: K8sMutateResourceInput) 
     return json.dumps(res.to_dict(), default=str)[:6000]
 ```
 
----
-
 ##### D. Unified Tool Registry with Read/Write Separation (`src/nexus/tools/registry.py`)
+
 Refactor `ToolRegistry` so every tool has explicit metadata (`is_mutating: bool`, `provider: str`) and expose:
+
 * `registry.get_read_only_tools_as_langchain() -> list[StructuredTool]` (Bound exclusively to the Investigator Agent in `diagnose.py` and Verifier Agent in `verify.py`).
-* `registry.get_mutating_tool_schemas() -> list[dict]` (Schemas passed to the Planner Agent in `plan.py`; executed only by `execute.py` and `rollback.py` after OPA + Human Approval).
+* `registry.get_mutating_tool_schemas() -> list[dict]` (Schemas passed to the Planner Agent in `plan.py`; executed only by `execute.py` and `rollback.py` after OPA validation + 1-Click Human Approval in Slack).
 * Add an optional MCP loader method `registry.load_mcp_tools(mcp_servers_config)` so external AWS/Kubernetes/GitHub/Postgres MCP servers can be plugged in without writing Python wrappers.
 
----
-
 ##### E. Hypothesis-Driven ReAct Investigator Loop (`src/nexus/graph/rca/result.py` & `src/nexus/graph/nodes/diagnose.py`)
+
 Replace the static `collect -> multi_agent_rca` pipeline with an iterative ReAct loop where the LLM calls read-only tools until it proves the root cause.
 
 ```python
@@ -554,9 +566,8 @@ async def rca_tool_executor_node(state: IncidentState, registry: ToolRegistry) -
     return {"rca_messages": messages, "investigation_trace": trace}
 ```
 
----
-
 ##### F. Dynamic Schema-Driven Remediation Planner (`src/nexus/graph/nodes/plan.py`)
+
 Delete all hardcoded `incident_type` planners. Have the Planner LLM synthesize a `RemediationPlan` directly from the `RCAReport`, `investigation_trace`, and registered mutating/read tool schemas.
 
 ```python
@@ -631,12 +642,12 @@ async def plan_node(state: IncidentState, llm, registry: ToolRegistry) -> dict:
     return {"remediation_plan": plan.model_dump()}
 ```
 
----
+##### G. Attribute-Based OPA Governance with Mandatory 1-Click Approval (`src/nexus/governance/policy_engine.py` & `deploy/opa/nexus_policies.rego`)
 
-##### G. Attribute-Based OPA Governance (`src/nexus/governance/policy_engine.py` & `deploy/opa/nexus_policies.rego`)
-Replace tool-name checks with a **two-layer defense**:
-1. **Deterministic Python Risk Classifier (`policy_engine.py`)**: Inspects the raw `tool_arguments` (service name, operation verb, K8s kind) so the LLM cannot spoof a destructive operation as "low risk".
-2. **Attribute-Based Rego Policy (`deploy/opa/nexus_policies.rego`)**: Evaluates the risk envelope without referencing any hardcoded tool or incident names.
+Replace tool-name checks with a **two-layer defense** that blocks unsafe/destructive plans (`DENY`) and routes **100% of valid remediation plans to `REQUIRE_APPROVAL`** for 1-click Slack approval before execution:
+
+1. **Deterministic Python Risk Classifier (`policy_engine.py`)**: Inspects the raw `tool_arguments` (service name, operation verb, K8s kind) so the LLM cannot spoof a destructive operation as safe.
+2. **Attribute-Based Rego Policy (`deploy/opa/nexus_policies.rego`)**: Evaluates the risk envelope without referencing any hardcoded tool or incident names, enforcing `DENY` on unsafe operations and `REQUIRE_APPROVAL` on all valid plans.
 
 ```python
 # src/nexus/governance/policy_engine.py
@@ -720,27 +731,223 @@ deny_reasons contains "Circuit breaker is tripped for target resource" if {
     input.circuit_breaker_tripped == true
 }
 
-# Autonomous execution tier: zero deny reasons, reversible, pod/instance blast radius, high confidence
-decision := "ALLOW_AUTO" if {
-    count(deny_reasons) == 0
-    input.reversible == true
-    input.action_category in {"restart", "scale"}
-    input.blast_radius == "pod_or_instance"
-    input.rca_confidence >= 0.85
-    input.cooldown_active == false
-    input.estimated_cost_delta_pct <= 25.0
+deny_reasons contains "Resource is currently in remediation cooldown window" if {
+    input.cooldown_active == true
 }
 
-# Human-in-the-loop tier: safe to propose, but requires explicit operator approval via Slack/Console
+# Mandatory 1-Click Slack Approval Tier:
+# Every valid plan that passes OPA safety guardrails requires 1-click human approval in Slack before execution.
 decision := "REQUIRE_APPROVAL" if {
     count(deny_reasons) == 0
-    not decision == "ALLOW_AUTO"
 }
 ```
 
----
+##### H. 1-Click Slack Approval Card, LangGraph Interrupt, Dynamic Executor & Closed-Loop Verifier
 
-##### H. LangGraph Workflow Wiring, Human Approval Interrupt, Execution & Closed-Loop Verification (`src/nexus/graph/`)
+Wire the complete 1-click Slack approval and auto-execution pipeline across `src/nexus/integration/slack_action_templates.py`, `src/nexus/graph/nodes/approval.py`, `src/nexus/graph/workflow_approval.py`, `src/nexus/graph/nodes/execute.py`, `src/nexus/graph/nodes/verify.py`, and `src/nexus/graph/builder.py`:
+
+```python
+# src/nexus/integration/slack_action_templates.py
+from __future__ import annotations
+import json
+from typing import Any
+from src.nexus.integration.token_utils import generate_approval_token
+
+
+def build_slack_approval_blocks(
+    incident_id: str,
+    rca_report: dict[str, Any],
+    remediation_plan: dict[str, Any],
+    signing_secret: str,
+) -> list[dict[str, Any]]:
+    approve_token = generate_approval_token(incident_id, "approve", signing_secret)
+    reject_token = generate_approval_token(incident_id, "reject", signing_secret)
+
+    evidence_lines = "\n".join(
+        f"• `{ev['tool_name']}`: {ev['key_finding']}"
+        for ev in rca_report.get("evidence_chain", [])[:4]
+    )
+    action_lines = "\n".join(
+        f"*Step {act['step_number']}:* `{act['tool_name']}` on `{act['target_resource_urn']}`\n"
+        f"  • *Args:* `{json.dumps(act['tool_arguments'])}`\n"
+        f"  • *Auto-Rollback:* `{act['rollback_tool_name']}({json.dumps(act['rollback_arguments'])})`"
+        for act in remediation_plan.get("actions", [])
+    )
+
+    return [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"🚨 NEXUS RCA & 1-Click Fix Plan [{incident_id}]",
+            },
+        },
+        {
+            "type": "section",
+            "fields": [
+                {"type": "mrkdwn", "text": f"*Resource:*\n`{rca_report.get('affected_resource_urn')}`"},
+                {"type": "mrkdwn", "text": f"*Confidence:*\n`{rca_report.get('confidence', 0.0):.0%}`"},
+            ],
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Root Cause Summary:*\n{rca_report.get('root_cause_summary')}\n\n*Verified Tool Evidence:*\n{evidence_lines}",
+            },
+        },
+        {"type": "divider"},
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Proposed Remediation Plan:*\n{remediation_plan.get('summary')}\n\n{action_lines}",
+            },
+        },
+        {
+            "type": "actions",
+            "block_id": f"approval_actions_{incident_id}",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "✅ Approve & Auto-Fix Now"},
+                    "style": "primary",
+                    "action_id": "nexus_approve_fix",
+                    "value": json.dumps(
+                        {"incident_id": incident_id, "decision": "approve", "token": approve_token}
+                    ),
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "❌ Reject & Escalate"},
+                    "style": "danger",
+                    "action_id": "nexus_reject_fix",
+                    "value": json.dumps(
+                        {"incident_id": incident_id, "decision": "reject", "token": reject_token}
+                    ),
+                },
+            ],
+        },
+    ]
+```
+
+```python
+# src/nexus/graph/nodes/approval.py
+from __future__ import annotations
+from langgraph.types import interrupt
+from src.nexus.graph.state import IncidentState
+from src.nexus.integration.notifier import Notifier
+
+
+async def approval_node(state: IncidentState, notifier: Notifier) -> dict:
+    incident_id = state["incident_id"]
+    rca_report = state["rca_report"]
+    remediation_plan = state["remediation_plan"]
+
+    # 1. Send interactive 1-click approval card to Slack and Console
+    await notifier.send_approval_request(
+        incident_id=incident_id,
+        rca_report=rca_report,
+        remediation_plan=remediation_plan,
+    )
+
+    # 2. Pause LangGraph thread at checkpoint until human clicks Approve or Reject in Slack
+    human_decision = interrupt(
+        {
+            "incident_id": incident_id,
+            "rca_report": rca_report,
+            "remediation_plan": remediation_plan,
+            "status": "WAITING_FOR_SLACK_APPROVAL",
+        }
+    )
+
+    approved = bool(human_decision.get("approved", False))
+    approver = human_decision.get("approver", "slack_operator")
+    return {
+        "human_approved": approved,
+        "approved_by": approver,
+    }
+```
+
+```python
+# src/nexus/graph/workflow_approval.py (Resuming LangGraph on 1-Click Slack Interaction)
+from __future__ import annotations
+from langgraph.types import Command
+
+
+async def handle_slack_button_click(
+    compiled_graph,
+    incident_id: str,
+    approved: bool,
+    approver_name: str,
+) -> dict:
+    """Called immediately when the operator clicks Approve or Reject in Slack."""
+    config = {"configurable": {"thread_id": incident_id}}
+    result = await compiled_graph.ainvoke(
+        Command(resume={"approved": approved, "approver": approver_name}),
+        config=config,
+    )
+    return result
+```
+
+```python
+# src/nexus/graph/nodes/execute.py (Executes the Approved Plan via ToolRegistry)
+from __future__ import annotations
+from src.nexus.governance.rollback_registry import RollbackRegistry
+from src.nexus.graph.state import IncidentState
+from src.nexus.integration.notifier import Notifier
+from src.nexus.tools.registry import ToolRegistry
+
+
+async def execute_node(
+    state: IncidentState,
+    registry: ToolRegistry,
+    rollback_registry: RollbackRegistry,
+    notifier: Notifier,
+) -> dict:
+    incident_id = state["incident_id"]
+    plan = state["remediation_plan"]
+    execution_results = []
+
+    try:
+        for action in plan.get("actions", []):
+            # 1. Pre-register exact inverse rollback call BEFORE mutating the resource
+            rollback_registry.register(
+                incident_id=incident_id,
+                step_number=action["step_number"],
+                tool_name=action["rollback_tool_name"],
+                tool_arguments=action["rollback_arguments"],
+            )
+            # 2. Execute the approved mutating tool call (AWS Boto3 or K8s DynamicClient)
+            output = await registry.execute_mutating(
+                action["tool_name"], action["tool_arguments"]
+            )
+            execution_results.append(
+                {
+                    "step_number": action["step_number"],
+                    "tool_name": action["tool_name"],
+                    "status": "SUCCESS",
+                    "output": output,
+                }
+            )
+
+        await notifier.send_status_update(
+            incident_id=incident_id,
+            message=f"⚙️ Executed {len(execution_results)} approved remediation step(s). Running closed-loop verification checks...",
+        )
+        return {"execution_results": execution_results, "execution_failed": False}
+
+    except Exception as exc:
+        await notifier.send_status_update(
+            incident_id=incident_id,
+            message=f"⚠️ Execution failed at step ({exc}). Triggering automatic rollback...",
+        )
+        return {
+            "execution_results": execution_results,
+            "execution_failed": True,
+            "execution_error": str(exc),
+        }
+```
 
 ```python
 # src/nexus/graph/builder.py
@@ -759,17 +966,21 @@ def route_after_rca_reasoner(state: IncidentState) -> str:
 
 def route_after_govern(state: IncidentState) -> str:
     decision = state.get("governance_decision", "DENY")
-    if decision == "DENY":
-        return "escalate"
-    if decision == "ALLOW_AUTO":
-        return "execute"
-    return "approval"
+    if decision == "REQUIRE_APPROVAL":
+        return "approval"
+    return "escalate"
 
 
 def route_after_approval(state: IncidentState) -> str:
     if state.get("human_approved") is True:
         return "execute"
     return "escalate"
+
+
+def route_after_execute(state: IncidentState) -> str:
+    if state.get("execution_failed") is True:
+        return "rollback"
+    return "verify"
 
 
 def route_after_verify(state: IncidentState) -> str:
@@ -810,7 +1021,6 @@ def build_nexus_agent_graph(nodes: dict, checkpointer=None):
         "govern",
         route_after_govern,
         {
-            "execute": "execute",
             "approval": "approval",
             "escalate": "escalate",
         },
@@ -823,7 +1033,14 @@ def build_nexus_agent_graph(nodes: dict, checkpointer=None):
             "escalate": "escalate",
         },
     )
-    graph.add_edge("execute", "verify")
+    graph.add_conditional_edges(
+        "execute",
+        route_after_execute,
+        {
+            "verify": "verify",
+            "rollback": "rollback",
+        },
+    )
     graph.add_conditional_edges(
         "verify",
         route_after_verify,
@@ -839,22 +1056,11 @@ def build_nexus_agent_graph(nodes: dict, checkpointer=None):
     return graph.compile(checkpointer=checkpointer)
 ```
 
-* **`src/nexus/graph/nodes/approval.py`**:
-  * Sends an interactive notification via `notifier.py` (Slack Block Kit + Console UI) containing the `RCAReport` evidence chain, the `RemediationPlan` tool calls, and the rollback guarantee.
-  * Calls LangGraph `interrupt({"incident_id": state["incident_id"], "rca_report": state["rca_report"], "remediation_plan": state["remediation_plan"]})` to pause execution until the human clicks Approve or Reject.
-* **`src/nexus/graph/nodes/execute.py`**:
-  * Registers each `PlannedToolAction.rollback_tool_name` and `rollback_arguments` in `rollback_registry.py`.
-  * Executes each `PlannedToolAction.tool_name` with `tool_arguments` via `ToolRegistry.execute_mutating()`.
-* **`src/nexus/graph/nodes/verify.py`**:
-  * Waits `stabilization_wait_seconds` (mockable in tests), runs every read-only `VerificationCheck` in `remediation_plan["verification_checks"]`, and evaluates whether `expected_healthy_condition` is satisfied. If `False`, routes to `rollback.py` to execute the inverse tool calls automatically.
-
----
-
 #### 3. VERIFICATION & TEST REQUIREMENTS
 
-1. Update `tests/unit/nexus/governance/test_zero_trust_opa.py` and `tests/unit/nexus/test_policy_engine.py` to test the attribute-based Rego rules and Python verb overrides (`delete_db_instance` -> `DENY`, `modify_db_instance` -> `REQUIRE_APPROVAL`, `k8s_mutate_resource` pod restart -> `ALLOW_AUTO`).
+1. Update `tests/unit/nexus/governance/test_zero_trust_opa.py` and `tests/unit/nexus/test_policy_engine.py` to test the attribute-based Rego rules and Python verb overrides (`delete_db_instance` -> `DENY`, IAM mutation -> `DENY`, missing rollback -> `DENY`, and all valid AWS/K8s remediation plans -> `REQUIRE_APPROVAL`).
 2. Update `tests/unit/nexus/graph/test_multi_agent_rca.py` to test the multi-turn `rca_reasoner <-> rca_tool_executor` loop across both AWS (`aws_inspect_resource`, `aws_query_telemetry`) and Kubernetes (`k8s_inspect_resource`, `k8s_get_logs`), including self-correction when Boto3 raises `ParamValidationError`.
-3. Update `tests/unit/nexus/graph/test_plan_and_verify.py` and `tests/unit/nexus/graph/test_approval_interrupt.py` to verify dynamic `RemediationPlan` synthesis, `interrupt()` approval pause/resume, verification check execution, and automatic rollback when verification fails.
+3. Update `tests/unit/nexus/graph/test_plan_and_verify.py` and `tests/unit/nexus/graph/test_approval_interrupt.py` to verify dynamic `RemediationPlan` synthesis, Slack `interrupt()` approval pause, resuming via `Command(resume={"approved": True})` on 1-click Slack approval, automatic tool execution in `execute.py`, verification check execution in `verify.py`, and automatic rollback when verification fails.
 4. Update `tests/integration/test_nexus_cross_provider_pipeline.py` to test arbitrary AWS incidents (e.g., RDS connection exhaustion, SQS DLQ spike, Lambda concurrency throttle) and Kubernetes incidents (e.g., StatefulSet PVC full, Bad ConfigMap rollout) end-to-end without a single hardcoded failure enum.
 5. Run `pytest` and `python scripts/check_loc.py` and ensure 100% of unit and integration tests pass with zero line-count violations.
 

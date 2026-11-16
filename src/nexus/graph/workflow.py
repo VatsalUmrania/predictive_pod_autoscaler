@@ -14,25 +14,17 @@ from typing import Any, cast
 from nexus.graph.builder import build_incident_graph
 from nexus.graph.checkpointer import GraphCheckpointStore
 from nexus.graph.routes import (
-    route_after_approval,
-    route_after_diagnose,
-    route_after_execute,
-    route_after_govern,
-    route_after_verify,
+    route_after_approval, route_after_diagnose, route_after_execute,
+    route_after_govern, route_after_verify,
 )
 from nexus.graph.workflow_approval import (
-    create_pending_approval_entry,
-    notify_incident_rejected_helper,
-    publish_pending_approval,
-    resume_incident_execution,
+    create_pending_approval_entry, notify_incident_rejected_helper,
+    publish_pending_approval, resume_incident_execution,
 )
 from nexus.graph.workflow_completion import handle_workflow_completion
 from nexus.graph.workflow_events import (
-    build_cluster_event_dicts,
-    build_initial_state,
-    handle_incoming_event,
-    run_flush_loop,
-    setup_event_subscriptions,
+    build_cluster_event_dicts, build_initial_state, handle_incoming_event,
+    run_flush_loop, setup_event_subscriptions,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,6 +56,7 @@ class IncidentWorkflow:
         if correlator is None:
             try:
                 from nexus.reasoning.event_correlator import EventCorrelator
+
                 correlator = EventCorrelator()
             except Exception:
                 pass
@@ -87,15 +80,13 @@ class IncidentWorkflow:
             events = build_cluster_event_dicts(cluster)
             inc_id = getattr(cluster, "cluster_id", str(uuid.uuid4()))
             sev = getattr(cluster, "highest_severity", "warning")
-            await self.run_incident({"incident_id": inc_id, "events": events, "severity": sev}, thread_id=inc_id)
+            await self.run_incident(
+                {"incident_id": inc_id, "events": events, "severity": sev},
+                thread_id=inc_id,
+            )
         except Exception as exc:
             cid = getattr(cluster, "cluster_id", "unknown")
-            logger.error(
-                "[IncidentWorkflow] Error processing cluster %s: %s",
-                cid,
-                exc,
-                exc_info=True,
-            )
+            logger.error("[IncidentWorkflow] Error processing cluster %s: %s", cid, exc, exc_info=True)
 
     async def notify_incident_rejected(
         self, target_key: str, incident_id: str, reason: str = ""
@@ -156,7 +147,11 @@ class IncidentWorkflow:
         inc_id = incident_data.get("incident_id") or str(uuid.uuid4())
         tid = thread_id or inc_id
         config = {"configurable": {"thread_id": tid}}
-        logger.info("[IncidentWorkflow] Starting workflow for incident %s (thread=%s)", inc_id, tid)
+        logger.info(
+            "[IncidentWorkflow] Starting workflow for incident %s (thread=%s)",
+            inc_id,
+            tid,
+        )
 
         result = await self._compiled_graph.ainvoke(
             build_initial_state(incident_data, inc_id), config=config

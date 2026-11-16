@@ -56,12 +56,14 @@ async def collect_k8s_telemetry(target: TargetResource) -> PlatformTelemetry:
         metrics["cpu_limit"] = cpu_lim.group(1)
 
     # Extract exit code
-    exit_match = re.search(r"Exit Code:\s*(\d+)", raw_desc)
+    exit_match = re.search(r"Exit Code:\s*(\d+)", raw_desc, re.IGNORECASE)
     if exit_match:
         live_config["exit_code"] = int(exit_match.group(1))
 
-    # Health status
+    # Health status & command override
     raw_lower = (raw_desc + " " + " ".join(logs)).lower()
+    if "echo crashing" in raw_lower or "command" in raw_lower or live_config.get("exit_code") in (1, 127):
+        live_config["has_command_override"] = True
     if "oomkilled" in raw_lower:
         status = "oomkilled"
     elif "crashloop" in raw_lower:

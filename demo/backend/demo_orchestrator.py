@@ -63,7 +63,7 @@ _RCA_RULES = [
     {
         "signals":    ["route_error", "error_rate_injected"],
         "class":      "bad_deploy",
-        "runbook":    "runbook_high_error_rate_post_deploy_v1",
+        "runbook":    "k8s_rollback_deployment",
         "level":      2,
         "confidence": 0.88,
         "action":     "rollback_deployment",
@@ -72,7 +72,7 @@ _RCA_RULES = [
     {
         "signals":    ["db_query", "db_spike_injected"],
         "class":      "db_pressure",
-        "runbook":    "runbook_db_connection_exhaustion_v1",
+        "runbook":    "reset_connection_pool",
         "level":      1,
         "confidence": 0.82,
         "action":     "reset_connection_pool",
@@ -81,7 +81,7 @@ _RCA_RULES = [
     {
         "signals":    ["env_contract_violation", "missing_env"],
         "class":      "config_error",
-        "runbook":    "runbook_missing_env_key_v1",
+        "runbook":    "k8s_patch_env",
         "level":      0,
         "confidence": 0.99,
         "action":     "block_deploy",
@@ -90,7 +90,7 @@ _RCA_RULES = [
     {
         "signals":    ["secret_committed"],
         "class":      "security_violation",
-        "runbook":    "runbook_secret_leaked_v1",
+        "runbook":    "revoke_credentials",
         "level":      3,
         "confidence": 0.97,
         "action":     "revoke_and_alert",
@@ -99,7 +99,7 @@ _RCA_RULES = [
     {
         "signals":    ["dns_error_injected", "failed_fetch"],
         "class":      "network_error",
-        "runbook":    "runbook_dns_resolution_failure_v1",
+        "runbook":    "flush_dns_cache",
         "level":      1,
         "confidence": 0.79,
         "action":     "dns_flush",
@@ -108,7 +108,7 @@ _RCA_RULES = [
     {
         "signals":    ["oom_injected", "function_error"],
         "class":      "resource_exhaustion",
-        "runbook":    "runbook_pod_crashloop_v1",
+        "runbook":    "k8s_restart_pod",
         "level":      1,
         "confidence": 0.85,
         "action":     "restart_and_resize",
@@ -117,7 +117,7 @@ _RCA_RULES = [
     {
         "signals":    ["config_drift_detected", "bad_config"],
         "class":      "config_drift",
-        "runbook":    "runbook_missing_env_key_v1",
+        "runbook":    "revert_config",
         "level":      0,
         "confidence": 0.91,
         "action":     "revert_config",
@@ -126,7 +126,7 @@ _RCA_RULES = [
     {
         "signals":    ["code_quality_warning"],
         "class":      "code_risk",
-        "runbook":    "runbook_high_error_rate_post_deploy_v1",
+        "runbook":    "flag_code_review",
         "level":      0,
         "confidence": 0.70,
         "action":     "flag_for_review",

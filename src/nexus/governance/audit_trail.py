@@ -82,12 +82,12 @@ class AuditTrail:
                 runbook_id,
                 int(healing_level),
                 target,
-                json.dumps(pre_check_results or {}),
+                json.dumps(pre_check_results or {}, default=str),
                 execution_outcome,
-                json.dumps(post_check_results or {}),
+                json.dumps(post_check_results or {}, default=str),
                 bool(rollback_triggered),
                 str(incident_id) if incident_id else None,
-                json.dumps(action_results or []),
+                json.dumps(action_results or [], default=str),
             )
 
         logger.info(
@@ -127,9 +127,9 @@ class AuditTrail:
             await conn.execute(
                 sql,
                 execution_outcome,
-                json.dumps(post_check_results or {}),
+                json.dumps(post_check_results or {}, default=str),
                 bool(rollback_triggered),
-                json.dumps(action_results or []),
+                json.dumps(action_results or [], default=str),
                 rec_uuid,
             )
 

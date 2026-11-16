@@ -48,13 +48,18 @@ async def learn_node(state: IncidentGraphState) -> dict[str, Any]:
     try:
         from nexus.governance.audit_trail import AuditTrail
 
+        plan_dict = state.get("plan") or {}
+        action_name = (
+            plan_dict.get("failure_mode")
+            or plan_dict.get("action_type")
+            or plan_dict.get("runbook_id")
+            or "dynamic_remediation"
+        )
         trail = AuditTrail()
         await trail.initialize()
         await trail.write(
             triggered_by=f"nexus:workflow:{platform}",
-            runbook_id=str(
-                (state.get("plan") or {}).get("runbook_id") or "autonomous_remediation"
-            ),
+            runbook_id=str(action_name),
             healing_level=1,
             target=str(target_service),
             pre_check_results={"rca": diagnosis},

@@ -4,9 +4,19 @@ Utility functions and row formatters for TokenStore.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import os
 import secrets
 from datetime import datetime
 from typing import Any
+
+
+def generate_approval_token(incident_id: str, action: str, secret: str = "") -> str:
+    """Generate HMAC signature token for 1-click Slack interactive button payloads."""
+    sec = secret or os.environ.get("SLACK_SIGNING_SECRET", "nexus_secret")
+    msg = f"{incident_id}:{action}".encode()
+    return hmac.new(sec.encode(), msg, hashlib.sha256).hexdigest()
 
 
 def generate_token() -> str:

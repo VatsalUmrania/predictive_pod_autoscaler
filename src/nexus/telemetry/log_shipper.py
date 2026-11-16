@@ -129,7 +129,6 @@ class NginxLogShipper:
                             rps=rps,
                             window_seconds=self.window_seconds,
                         ).model_dump(),
-                        suggested_runbook="runbook_high_error_rate_post_deploy_v1",
                         suggested_healing_level=2,
                     )
                 )

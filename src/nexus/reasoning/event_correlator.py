@@ -31,14 +31,7 @@ _IMMEDIATE_EMIT = frozenset(
 
 
 class EventCorrelator:
-    """
-    Clusters temporally related IncidentEvents into IncidentClusters.
-
-    Args:
-        correlation_window_s:  Events within this window of the last event are correlated (default 60s).
-        quorum_events:         Cluster emits when this many events arrive (default 3).
-        flush_timeout_s:       Cluster is force-emitted after this many seconds (default 45s).
-    """
+    """Clusters temporally related IncidentEvents into IncidentClusters."""
 
     def __init__(
         self,

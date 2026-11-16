@@ -13,7 +13,6 @@ from langgraph.graph import END, START, StateGraph
 
 from nexus.graph.nodes import (
     approval_node,
-    diagnose_node,
     escalate_node,
     execute_node,
     govern_node,
@@ -25,10 +24,9 @@ from nexus.graph.nodes import (
     triage_node,
     verify_node,
 )
-from nexus.graph.nodes.collect import collect_telemetry_node
 from nexus.graph.routes import (
     route_after_approval,
-    route_after_diagnose,
+    route_after_execute,
     route_after_govern,
     route_after_rca_reasoner,
     route_after_verify,
@@ -45,8 +43,6 @@ def build_nexus_agent_graph(
         "triage": triage_node,
         "rca_reasoner": rca_reasoner_node,
         "rca_tool_executor": rca_tool_executor_node,
-        "diagnose": diagnose_node,
-        "collect": collect_telemetry_node,
         "plan": plan_node,
         "govern": govern_node,
         "approval": approval_node,
@@ -58,23 +54,16 @@ def build_nexus_agent_graph(
     }
     if nodes:
         node_map.update(nodes)
+        if "diagnose" in nodes and "rca_reasoner" not in nodes:
+            node_map["rca_reasoner"] = nodes["diagnose"]
 
     for name, fn in node_map.items():
         cast(Any, graph).add_node(name, fn)
 
     graph.add_edge(START, "triage")
-    graph.add_edge("triage", "diagnose")
-    graph.add_conditional_edges(
-        "diagnose",
-        route_after_diagnose,
-        {
-            "plan": "plan",
-            "collect": "collect",
-        },
-    )
-    graph.add_edge("collect", "plan")
+    graph.add_edge("triage", "rca_reasoner")
 
-    # Connect multi-turn reasoning sub-loop if targeted
+    # Multi-turn ReAct reasoning loop
     graph.add_conditional_edges(
         "rca_reasoner",
         route_after_rca_reasoner,
@@ -86,17 +75,20 @@ def build_nexus_agent_graph(
     )
     graph.add_edge("rca_tool_executor", "rca_reasoner")
 
+    # Planning -> Governance
     graph.add_edge("plan", "govern")
     graph.add_conditional_edges(
         "govern",
         route_after_govern,
         {
-            "execute": "execute",
             "approval": "approval",
             "escalate": "escalate",
             "learn": "learn",
+            "execute": "execute",
         },
     )
+
+    # 1-Click Approval -> Execution
     graph.add_conditional_edges(
         "approval",
         route_after_approval,
@@ -106,7 +98,18 @@ def build_nexus_agent_graph(
             "escalate": "escalate",
         },
     )
-    graph.add_edge("execute", "verify")
+
+    # Execution -> Verification or Rollback
+    graph.add_conditional_edges(
+        "execute",
+        route_after_execute,
+        {
+            "verify": "verify",
+            "rollback": "rollback",
+        },
+    )
+
+    # Verification -> Learn or Rollback
     graph.add_conditional_edges(
         "verify",
         route_after_verify,
@@ -116,6 +119,7 @@ def build_nexus_agent_graph(
             "plan": "plan",
         },
     )
+
     graph.add_edge("rollback", "escalate")
     graph.add_edge("learn", END)
     graph.add_edge("escalate", END)

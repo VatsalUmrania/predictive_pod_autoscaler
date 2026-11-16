@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 async def execute_node(state: IncidentGraphState) -> dict[str, Any]:
     """Execute remediation steps through the platform adapter with rollback snapshots."""
     incident_id = state["incident_id"]
-    plan = state.get("plan") or {}
-    steps = plan.get("steps", [])
+    plan = state.get("plan") or state.get("remediation_plan") or {}
+    steps = plan.get("steps") or plan.get("actions") or []
     target_dict = state.get("target") or {}
     target = (
         TargetResource(**target_dict) if isinstance(target_dict, dict) else target_dict
@@ -171,6 +171,7 @@ async def execute_node(state: IncidentGraphState) -> dict[str, Any]:
 
         return {
             "execution_records": records,
+            "execution_failed": not overall_success,
             "fsm_state": next_fsm,
             "error_message": error_msg,
             "audit_log": [audit_entry],

@@ -101,4 +101,3 @@ async def test_k8s_agent_warning_event_watcher():
     assert len(events) == 1
     assert events[0].resource_name == "redis-cluster"
     assert events[0].severity in ("high", Severity.HIGH)
-

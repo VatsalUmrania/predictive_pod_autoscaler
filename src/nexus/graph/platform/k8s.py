@@ -74,6 +74,11 @@ class K8sPlatformAdapter(BasePlatformAdapter):
     ) -> NexusToolResult:
         if tool_name in self._tools:
             return await self._tools[tool_name].execute(**parameters)
+        from nexus.tools.registry import default_registry
+
+        reg_tool = default_registry.get(tool_name)
+        if reg_tool:
+            return await default_registry.execute_tool(tool_name, parameters)
         return NexusToolResult(
             success=True, data={"tool_name": tool_name, "parameters": parameters}
         )
@@ -81,7 +86,7 @@ class K8sPlatformAdapter(BasePlatformAdapter):
     async def capture_snapshot(
         self, target: TargetResource, tool_name: str, parameters: dict[str, Any]
     ) -> RollbackSnapshot | None:
-        prev_replicas = 4
+        prev_replicas = int(parameters.get("replicas", 1))
         try:
             from nexus.agents import k8s_tools
 
@@ -115,16 +120,52 @@ class K8sPlatformAdapter(BasePlatformAdapter):
     async def verify_health(
         self, target: TargetResource, plan_step: dict[str, Any]
     ) -> HealthCheckResult:
+        from nexus.agents import k8s_tools
+
+        dep_name = None
+        if target.kind.lower() in ("pod", "po"):
+            m = re.match(r"^(.*?)-[0-9a-f]{8,10}-[0-9a-z]{5}$", target.name)
+            if m:
+                dep_name = m.group(1)
+
         desc = ""
         try:
-            from nexus.agents import k8s_tools
-
             desc = k8s_tools.describe_resource(
                 namespace=target.namespace,
                 resource_kind=target.kind,
                 resource_name=target.name,
             )
-        except Exception:
-            pass
-        ok = not ("crashloop" in desc.lower() or "error" in desc.lower())
-        return HealthCheckResult(healthy=ok, slo_restored=ok, details=desc)
+        except Exception as exc:
+            desc = f"Error: {exc}"
+
+        if dep_name and (not desc or desc.startswith("Error") or "not found" in desc.lower()):
+            try:
+                dep_desc = k8s_tools.describe_resource(
+                    namespace=target.namespace, resource_kind="deployment", resource_name=dep_name
+                )
+                if dep_desc and not dep_desc.startswith("Error"):
+                    dl = dep_desc.lower()
+                    bad = any(b in dl for b in ("crashloop", "error", "backoff", "unavailable=1", "unavailable=2", "ready=0/"))
+                    if not bad and any(ok in dl for ok in ("1 available", "available", "ready: 1", "ready")):
+                        return HealthCheckResult(healthy=True, slo_restored=True, details=f"Parent deployment {dep_name} healthy")
+            except Exception:
+                pass
+
+        if not desc or desc.startswith("Error"):
+            return HealthCheckResult(healthy=False, slo_restored=False, details=desc or "Empty describe")
+
+        d_lower = desc.lower()
+        has_failure = any(
+            bad in d_lower for bad in ("crashloop", "error", "backoff", "ready=0/", "unavailable=1", "unavailable=2")
+        )
+        if has_failure:
+            return HealthCheckResult(healthy=False, slo_restored=False, details=desc)
+
+        if dep_name:
+            dep_desc = k8s_tools.describe_resource(
+                namespace=target.namespace, resource_kind="deployment", resource_name=dep_name
+            )
+            if any(bad in dep_desc.lower() for bad in ("unavailable=1", "unavailable=2", "ready=0", "error")):
+                return HealthCheckResult(healthy=False, slo_restored=False, details=f"{desc} | {dep_desc}")
+
+        return HealthCheckResult(healthy=True, slo_restored=True, details=desc)

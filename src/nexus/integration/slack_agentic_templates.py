@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
+
+from nexus.integration.slack_log_helpers import (
+    build_diagnostic_logs_block,
+    build_yaml_manifest_block,
+)
+from nexus.integration.token_utils import generate_approval_token
 
 
 def build_agentic_approval_payload(
@@ -19,10 +26,7 @@ def build_agentic_approval_payload(
     blocks: list[dict[str, Any]] = [
         {
             "type": "header",
-            "text": {
-                "type": "plain_text",
-                "text": f"🚨 NEXUS Remediation Approval Required: {target_service}",
-            },
+            "text": {"type": "plain_text", "text": f"🚨 NEXUS Remediation Approval Required: {target_service}"},
         },
         {
             "type": "section",
@@ -35,93 +39,23 @@ def build_agentic_approval_payload(
         },
         {
             "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*Causal Diagnosis / Hypothesis:*\n{causal_rationale}",
-            },
+            "text": {"type": "mrkdwn", "text": f"*Causal Diagnosis / Hypothesis:*\n{causal_rationale}"},
         },
     ]
 
-    steps_lines = []
-    for idx, step in enumerate(proposed_steps):
-        tname = step.get("tool_name", "unknown")
-        bradius = step.get("blast_radius", "service")
-        destr_tag = " ⚠️ *DESTRUCTIVE*" if step.get("is_destructive") else ""
-        steps_lines.append(
-            f"*{idx + 1}. `{tname}`* (Blast Radius: `{bradius}`{destr_tag})\nParameters: `{step.get('parameters', {})}`"
-        )
-    if steps_lines:
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*Proposed Tool Steps:*\n" + "\n".join(steps_lines),
-                },
-            }
-        )
+    from nexus.graph.manifest_formatter import plan_to_yaml_manifest
 
-    rollback_lines = []
-    if rollback_plan:
-        for idx, rb in enumerate(rollback_plan):
-            rollback_lines.append(
-                f"*{idx + 1}. `{rb.get('tool_name', 'unknown')}`*\nParameters: `{rb.get('parameters', {})}`"
-            )
-    else:
-        for idx, step in enumerate(proposed_steps):
-            if step.get("rollback_tool"):
-                rollback_lines.append(
-                    f"*{idx + 1}. `{step['rollback_tool']}`*\nParameters: `{step.get('rollback_parameters', {})}`"
-                )
+    manifest = plan_to_yaml_manifest({"actions": proposed_steps}, target=target_service)
+    blocks.append(build_yaml_manifest_block(manifest))
 
-    if rollback_lines:
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*Rollback Plan:*\n" + "\n".join(rollback_lines),
-                },
-            }
-        )
-    else:
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*Rollback Plan:*\n_None (unbacked rollback permitted or self-contained)_",
-                },
-            }
-        )
-
-    blocks.append(
-        {
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "Approve"},
-                    "style": "primary",
-                    "action_id": "nexus_approve",
-                    "value": aid,
-                },
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "Edit Arguments"},
-                    "action_id": "nexus_edit",
-                    "value": aid,
-                },
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "Reject"},
-                    "style": "danger",
-                    "action_id": "nexus_reject",
-                    "value": aid,
-                },
-            ],
-        }
-    )
+    blocks.append({
+        "type": "actions",
+        "elements": [
+            {"type": "button", "text": {"type": "plain_text", "text": "Approve"}, "style": "primary", "action_id": "nexus_approve", "value": aid},
+            {"type": "button", "text": {"type": "plain_text", "text": "Edit Arguments"}, "action_id": "nexus_edit", "value": aid},
+            {"type": "button", "text": {"type": "plain_text", "text": "Reject"}, "style": "danger", "action_id": "nexus_reject", "value": aid},
+        ],
+    })
 
     return {
         "attachments": [
@@ -132,3 +66,68 @@ def build_agentic_approval_payload(
             }
         ]
     }
+
+
+def build_slack_approval_blocks(
+    incident_id: str,
+    rca_report: dict[str, Any],
+    remediation_plan: dict[str, Any],
+    signing_secret: str = "",
+) -> list[dict[str, Any]]:
+    """Build the official 1-Click Slack approval Block Kit card with HMAC buttons."""
+    approve_tok = generate_approval_token(incident_id, "approve", signing_secret)
+    reject_tok = generate_approval_token(incident_id, "reject", signing_secret)
+
+    evidence_lines = "\n".join(
+        f"• `{ev.get('tool_name', 'tool')}`: {ev.get('key_finding', '')}"
+        for ev in rca_report.get("evidence_chain", [])[:4]
+    ) or "• _Verified by telemetry inspection_"
+
+    from nexus.graph.manifest_formatter import extract_diagnostic_logs, plan_to_yaml_manifest
+
+    urn = str(rca_report.get("affected_resource_urn", "unknown"))
+    conf = float(rca_report.get("confidence", 0.0))
+
+    blocks: list[dict[str, Any]] = [
+        {"type": "header", "text": {"type": "plain_text", "text": f"🚨 NEXUS RCA & 1-Click Fix Plan [{incident_id}]"}},
+        {
+            "type": "section",
+            "fields": [
+                {"type": "mrkdwn", "text": f"*Resource:*\n`{urn}`"},
+                {"type": "mrkdwn", "text": f"*Confidence:*\n`{conf:.0%}`"},
+            ],
+        },
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*Root Cause Summary:*\n{rca_report.get('root_cause_summary', 'Root cause identified')}\n\n*Verified Tool Evidence:*\n{evidence_lines}"},
+        },
+    ]
+
+    diag_logs = extract_diagnostic_logs(rca_report)
+    if diag_logs:
+        blocks.append(build_diagnostic_logs_block(diag_logs))
+
+    manifest_yaml = plan_to_yaml_manifest(remediation_plan, target=urn)
+    blocks.append(build_yaml_manifest_block(manifest_yaml))
+
+    blocks.append({
+        "type": "actions",
+        "block_id": f"approval_actions_{incident_id}",
+        "elements": [
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "✅ Approve & Auto-Fix Now"},
+                "style": "primary",
+                "action_id": "nexus_approve_fix",
+                "value": json.dumps({"incident_id": incident_id, "decision": "approve", "token": approve_tok}),
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "❌ Reject & Escalate"},
+                "style": "danger",
+                "action_id": "nexus_reject_fix",
+                "value": json.dumps({"incident_id": incident_id, "decision": "reject", "token": reject_tok}),
+            },
+        ],
+    })
+    return blocks
