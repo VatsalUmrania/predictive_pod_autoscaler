@@ -47,12 +47,54 @@ class K8sPlatformAdapter(BasePlatformAdapter):
             "prometheus",
         )
 
+    def _resolve_owner(self, namespace: str, pod_name: str) -> tuple[str, str] | None:
+        """Resolve top-level workload controller for an ephemeral pod via ownerReferences."""
+        try:
+            from nexus.agents import k8s_tools
+
+            core = k8s_tools._get_api()
+            if not core:
+                return None
+            pod = core.read_namespaced_pod(name=pod_name, namespace=namespace)
+            owners = getattr(pod.metadata, "owner_references", []) or []
+            for owner in owners:
+                o_kind = getattr(owner, "kind", "")
+                o_name = getattr(owner, "name", "")
+                if o_kind == "ReplicaSet":
+                    apps = k8s_tools._get_apps_api()
+                    if apps:
+                        rs = apps.read_namespaced_replica_set(
+                            name=o_name, namespace=namespace
+                        )
+                        rs_owners = getattr(rs.metadata, "owner_references", []) or []
+                        for rs_owner in rs_owners:
+                            if getattr(rs_owner, "kind", "") == "Deployment":
+                                return getattr(rs_owner, "name", ""), "deployment"
+                    m = re.match(r"^(.*?)-[0-9a-f]{8,10}$", o_name)
+                    if m:
+                        return m.group(1), "deployment"
+                elif o_kind in ("Deployment", "StatefulSet", "DaemonSet", "Job"):
+                    return o_name, o_kind.lower()
+        except Exception as exc:
+            logger.debug(
+                "[K8sAdapter] Could not resolve owner for pod %s: %s", pod_name, exc
+            )
+        return None
+
     def detect_target(self, events: list[dict[str, Any]]) -> TargetResource:
-        ev = events[0] if events else {}
+        ev = events[-1] if events else {}
         name = ev.get("resource_name") or ev.get("target_service") or "k8s-workload"
         ns = ev.get("namespace") or ev.get("region_or_namespace") or "default"
         sig = str(ev.get("signal_type", "")).lower()
-        kind = ev.get("resource_kind") or ("pod" if "pod" in sig else "deployment")
+        kind = (
+            ev.get("resource_kind") or ("pod" if "pod" in sig else "deployment")
+        ).lower()
+
+        if kind in ("pod", "po"):
+            owner = self._resolve_owner(ns, name)
+            if owner:
+                name, kind = owner
+
         urn = ev.get("resource_urn") or f"k8s://{ns}/apps/v1/{kind}/{name}"
         return TargetResource(
             platform="kubernetes", namespace=ns, name=name, kind=kind, arn_or_uri=urn
@@ -122,12 +164,42 @@ class K8sPlatformAdapter(BasePlatformAdapter):
     ) -> HealthCheckResult:
         from nexus.agents import k8s_tools
 
-        dep_name = None
+        dep_name = (
+            target.name if target.kind.lower() in ("deployment", "deploy") else None
+        )
         if target.kind.lower() in ("pod", "po"):
             m = re.match(r"^(.*?)-[0-9a-f]{8,10}-[0-9a-z]{5}$", target.name)
             if m:
                 dep_name = m.group(1)
 
+        # 1. If target or owner is a deployment, perform strict multi-replica verification
+        if dep_name:
+            dep_desc = k8s_tools.describe_resource(
+                namespace=target.namespace,
+                resource_kind="deployment",
+                resource_name=dep_name,
+            )
+            dl = dep_desc.lower()
+            unavail_match = re.search(r"unavailable=(\d+)", dl)
+            unavail_count = int(unavail_match.group(1)) if unavail_match else 0
+            has_dep_failure = any(
+                bad in dl
+                for bad in (
+                    "crashloop",
+                    "oomkilled",
+                    "error",
+                    "backoff",
+                    "ready=0/",
+                )
+            ) or (unavail_count > 0)
+            if has_dep_failure:
+                return HealthCheckResult(
+                    healthy=False,
+                    slo_restored=False,
+                    details=f"Deployment {dep_name} verification failed: {dep_desc}",
+                )
+
+        # 2. Inspect specific target resource
         desc = ""
         try:
             desc = k8s_tools.describe_resource(
@@ -182,6 +254,7 @@ class K8sPlatformAdapter(BasePlatformAdapter):
             bad in d_lower
             for bad in (
                 "crashloop",
+                "oomkilled",
                 "error",
                 "backoff",
                 "ready=0/",
@@ -189,7 +262,7 @@ class K8sPlatformAdapter(BasePlatformAdapter):
                 "unavailable=2",
             )
         )
-        if has_failure:
+        if has_failure or desc.startswith("Error"):
             return HealthCheckResult(healthy=False, slo_restored=False, details=desc)
 
         if dep_name:
@@ -206,4 +279,8 @@ class K8sPlatformAdapter(BasePlatformAdapter):
                     healthy=False, slo_restored=False, details=f"{desc} | {dep_desc}"
                 )
 
-        return HealthCheckResult(healthy=True, slo_restored=True, details=desc)
+        return HealthCheckResult(
+            healthy=True,
+            slo_restored=True,
+            details=dep_desc if dep_name else desc,
+        )

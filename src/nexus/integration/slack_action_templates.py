@@ -32,19 +32,24 @@ def build_heal_payload(
     target: str | None = None,
 ) -> dict[str, Any]:
     color = "#83ef48" if outcome == "success" else "#ff0000"
+    status_badge = "🟢 Success" if outcome == "success" else "🔴 Failed"
+    fallback = f"NEXUS healed {app_name}: {description}"
     return {
+        "text": fallback,
         "attachments": [
             {
                 "color": color,
-                "fallback": f"NEXUS healed {app_name}: {description}",
+                "fallback": fallback,
                 "blocks": [
                     {
-                        "type": "section",
+                        "type": "header",
                         "text": {
-                            "type": "mrkdwn",
-                            "text": f"*NEXUS Healing Action — `{app_name}`*",
+                            "type": "plain_text",
+                            "text": f"NEXUS Healing Action — {app_name}",
+                            "emoji": True,
                         },
                     },
+                    {"type": "divider"},
                     {
                         "type": "section",
                         "fields": [
@@ -54,11 +59,25 @@ def build_heal_payload(
                                 "type": "mrkdwn",
                                 "text": f"*Target:*\n`{target or 'unknown'}`",
                             },
+                            {
+                                "type": "mrkdwn",
+                                "text": f"*Status:*\n`{status_badge}`",
+                            },
+                        ],
+                    },
+                    {"type": "divider"},
+                    {
+                        "type": "context",
+                        "elements": [
+                            {
+                                "type": "mrkdwn",
+                                "text": f"🤖 *NEXUS Autonomous Engine* | Runbook: `{runbook_id}`",
+                            }
                         ],
                     },
                 ],
             }
-        ]
+        ],
     }
 
 
@@ -75,49 +94,110 @@ def build_prescale_payload(
     table_clause = (
         f" — DB spike on {', '.join(f'`{t}`' for t in tables[:3])}" if tables else ""
     )
+    fallback = f"NEXUS pre-scaling {deployment}"
+    blocks = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"📈 NEXUS Pre-Scale — {deployment}",
+                "emoji": True,
+            },
+        },
+        {"type": "divider"},
+        {
+            "type": "section",
+            "fields": [
+                {"type": "mrkdwn", "text": f"*Deployment:*\n`{deployment}`"},
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Traffic Spike:*\n*{mult:.1f}x* ({current_rps:.0f} → {predicted_rps:.0f} RPS)",
+                },
+                {"type": "mrkdwn", "text": f"*Horizon:*\n~{horizon_min} min"},
+                {"type": "mrkdwn", "text": f"*Confidence:*\n*{confidence:.0%}*"},
+            ],
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"Predicted *{mult:.1f}x* traffic in ~{horizon_min} min ({current_rps:.0f} → {predicted_rps:.0f} RPS){table_clause}.\nConfidence: *{confidence:.0%}*",
+            },
+        },
+        {"type": "divider"},
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "🤖 *NEXUS AI Predictor* • Proactive scaling initiated",
+                }
+            ],
+        },
+    ]
     return {
+        "text": fallback,
         "attachments": [
             {
                 "color": "#ECB22E",
-                "fallback": f"NEXUS pre-scaling {deployment}",
-                "blocks": [
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"*NEXUS Pre-Scale — `{deployment}`*",
-                        },
-                    },
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"Predicted *{mult:.1f}x* traffic in ~{horizon_min} min ({current_rps:.0f} → {predicted_rps:.0f} RPS){table_clause}.\nConfidence: *{confidence:.0%}*",
-                        },
-                    },
-                ],
+                "fallback": fallback,
+                "blocks": blocks,
             }
-        ]
+        ],
     }
 
 
 def build_escalation_payload(app_name: str, failed_attempts: int) -> dict[str, Any]:
+    fallback = f"NEXUS: {app_name} requires human review"
+    blocks = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"🚨 SRE Escalation — {app_name}",
+                "emoji": True,
+            },
+        },
+        {"type": "divider"},
+        {
+            "type": "section",
+            "fields": [
+                {"type": "mrkdwn", "text": f"*Application:*\n`{app_name}`"},
+                {"type": "mrkdwn", "text": "*Status:*\n`AUTONOMOUS HALT`"},
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Failed Attempts:*\n*{failed_attempts}* attempts",
+                },
+                {"type": "mrkdwn", "text": "*Severity:*\n`P1 / HIGH`"},
+            ],
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*SRE Escalation — `{app_name}` requires human review*\n\nNEXUS has made *{failed_attempts}* failed healing attempts and has stopped autonomous action.\nRun `nexus audit --n 10` to see full history.\nApprove or reject at: `nexus approvals`",
+            },
+        },
+        {"type": "divider"},
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "⚠️ *Requires on-call SRE intervention* | Escalate via on-call channel",
+                }
+            ],
+        },
+    ]
     return {
+        "text": fallback,
         "attachments": [
             {
                 "color": "#e01e5a",
-                "fallback": f"NEXUS: {app_name} requires human review",
-                "blocks": [
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"*SRE Escalation — `{app_name}` requires human review*\n\nNEXUS has made *{failed_attempts}* failed healing attempts and has stopped autonomous action.\nRun `nexus audit --n 10` to see full history.\nApprove or reject at: `nexus approvals`",
-                        },
-                    },
-                ],
+                "fallback": fallback,
+                "blocks": blocks,
             }
-        ]
+        ],
     }
 
 
@@ -132,14 +212,19 @@ def build_approval_required_payload(
 ) -> dict[str, Any]:
     ctx = context or {}
     rca, event = ctx.get("rca", {}), ctx.get("event", {})
+    fallback = (
+        f"NEXUS L{healing_level} Action Requires Approval: {runbook_id} for {target}"
+    )
     blocks: list[dict[str, Any]] = [
         {
-            "type": "section",
+            "type": "header",
             "text": {
-                "type": "mrkdwn",
-                "text": f"*NEXUS L{healing_level} Action Requires Approval*",
+                "type": "plain_text",
+                "text": f"🛡️ NEXUS L{healing_level} Action Requires Approval",
+                "emoji": True,
             },
         },
+        {"type": "divider"},
         {
             "type": "section",
             "fields": [
@@ -150,32 +235,6 @@ def build_approval_required_payload(
             ],
         },
     ]
-    if rca:
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"*Root Cause Analysis*\n*Class:* {rca.get('failure_class', 'Unknown')}\n*Root Cause:* {str(rca.get('root_cause', 'Unknown'))[:300]}",
-                },
-            }
-        )
-    diag_logs = ctx.get("diagnostic_logs")
-    if not diag_logs:
-        from nexus.graph.manifest_formatter import extract_diagnostic_logs
-
-        diag_logs = extract_diagnostic_logs(ctx)
-    if diag_logs:
-        blocks.append(build_diagnostic_logs_block(diag_logs))
-
-    rem_yaml = ctx.get("remediation_yaml")
-    if not rem_yaml:
-        from nexus.graph.manifest_formatter import plan_to_yaml_manifest
-
-        rem_yaml = plan_to_yaml_manifest(ctx.get("plan"), target)
-    if rem_yaml:
-        blocks.append(build_yaml_manifest_block(rem_yaml))
-
     if event:
         blocks.append(
             {
@@ -200,6 +259,37 @@ def build_approval_required_payload(
                 ],
             }
         )
+    if rca:
+        blocks.append({"type": "divider"})
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Root Cause Analysis*\n*Class:* {rca.get('failure_class', 'Unknown')}\n*Root Cause:* {str(rca.get('root_cause', 'Unknown'))[:300]}",
+                },
+            }
+        )
+
+    diag_logs = ctx.get("diagnostic_logs")
+    if not diag_logs:
+        from nexus.graph.manifest_formatter import extract_diagnostic_logs
+
+        diag_logs = extract_diagnostic_logs(ctx)
+    if diag_logs:
+        blocks.append({"type": "divider"})
+        blocks.append(build_diagnostic_logs_block(diag_logs))
+
+    rem_yaml = ctx.get("remediation_yaml")
+    if not rem_yaml:
+        from nexus.graph.manifest_formatter import plan_to_yaml_manifest
+
+        rem_yaml = plan_to_yaml_manifest(ctx.get("plan"), target)
+    if rem_yaml:
+        blocks.append({"type": "divider"})
+        blocks.append(build_yaml_manifest_block(rem_yaml))
+
+    blocks.append({"type": "divider"})
     blocks.append(
         {
             "type": "section",
@@ -210,12 +300,25 @@ def build_approval_required_payload(
         }
     )
     blocks.append(approval_buttons_block(approval_id))
+    blocks.append({"type": "divider"})
+    blocks.append(
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": f"🤖 *NEXUS Governance Engine* • Target: `{target}` • Approval ID: `{approval_id}`",
+                }
+            ],
+        }
+    )
     return {
+        "text": fallback,
         "attachments": [
             {
                 "color": "#ff9900",
-                "fallback": f"NEXUS L{healing_level} Action Requires Approval: {runbook_id} for {target}",
+                "fallback": fallback,
                 "blocks": blocks,
             }
-        ]
+        ],
     }

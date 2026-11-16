@@ -35,11 +35,11 @@ RUN groupadd -r nexus && useradd -r -g nexus nexus
 
 # Runtime deps only
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget curl git \
+    wget curl git ca-certificates \
+    && ARCH=$(dpkg --print-architecture) \
+    && curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/${ARCH}/kubectl" \
+    && chmod +x /usr/local/bin/kubectl \
     && rm -rf /var/lib/apt/lists/*
-
-COPY deploy/nexus/kubectl /usr/local/bin/kubectl
-RUN chmod +x /usr/local/bin/kubectl
 
 WORKDIR /app
 

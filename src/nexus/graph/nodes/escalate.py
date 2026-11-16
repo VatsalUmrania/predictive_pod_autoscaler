@@ -48,16 +48,65 @@ async def escalate_node(state: IncidentGraphState) -> dict[str, Any]:
     )
 
     # Dispatch Slack webhook if configured
-    webhook_url = os.getenv("SLACK_WEBHOOK_URL")
+    webhook_url = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("SLACK_WEBHOOK")
     if webhook_url:
         try:
             import httpx
 
+            fallback = f"🚨 NEXUS Incident Alert: Incident {incident_id} Escalated for {target.get('name') or 'unknown'}"
+            blocks = [
+                {
+                    "type": "header",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "🚨 NEXUS Incident Escalation Alert",
+                        "emoji": True,
+                    },
+                },
+                {"type": "divider"},
+                {
+                    "type": "section",
+                    "fields": [
+                        {"type": "mrkdwn", "text": f"*Incident ID:*\n`{incident_id}`"},
+                        {
+                            "type": "mrkdwn",
+                            "text": f"*Target:*\n`{target.get('name') or 'unknown'}`",
+                        },
+                        {"type": "mrkdwn", "text": f"*Platform:*\n`{platform}`"},
+                        {
+                            "type": "mrkdwn",
+                            "text": f"*Rollback Applied:*\n`{rollback_executed}`",
+                        },
+                    ],
+                },
+                {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Escalation Reason:*\n{err_msg}",
+                    },
+                },
+                {"type": "divider"},
+                {
+                    "type": "context",
+                    "elements": [
+                        {
+                            "type": "mrkdwn",
+                            "text": f"⚠️ *NEXUS Escalation Engine* • Timestamp: {now_iso}",
+                        }
+                    ],
+                },
+            ]
             payload = {
-                "text": f"*[NEXUS Alert]* Incident `{incident_id}` Escalated\n"
-                f"*Target:* `{target.get('name')}` ({platform})\n"
-                f"*Reason:* {err_msg}\n"
-                f"*Rollback Applied:* {rollback_executed}",
+                "text": fallback,
+                "attachments": [
+                    {
+                        "color": "#dc2626",
+                        "fallback": fallback,
+                        "blocks": blocks,
+                    }
+                ],
             }
             async with httpx.AsyncClient(timeout=5.0) as client:
                 await client.post(webhook_url, json=payload)

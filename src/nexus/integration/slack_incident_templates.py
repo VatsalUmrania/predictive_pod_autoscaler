@@ -18,15 +18,18 @@ def build_incident_resolved_payload(
     """Build Slack Block Kit payload for resolved incident."""
     conf_str = f"{confidence * 100:.0f}%" if confidence <= 1.0 else f"{confidence:.0f}%"
     dur_str = f" in {duration_s:.1f}s" if duration_s is not None else ""
+    fallback = f"✅ NEXUS Incident Resolved for {target}: {failure_class}"
 
     blocks = [
         {
-            "type": "section",
+            "type": "header",
             "text": {
-                "type": "mrkdwn",
-                "text": f"✅ *NEXUS Incident Resolved — `{target}`*{dur_str}",
+                "type": "plain_text",
+                "text": f"✅ NEXUS Incident Resolved — {target}",
+                "emoji": True,
             },
         },
+        {"type": "divider"},
         {
             "type": "section",
             "fields": [
@@ -36,6 +39,7 @@ def build_incident_resolved_payload(
                 {"type": "mrkdwn", "text": f"*Confidence:*\n`{conf_str}`"},
             ],
         },
+        {"type": "divider"},
         {
             "type": "section",
             "text": {
@@ -57,16 +61,27 @@ def build_incident_resolved_payload(
                 "text": f"*Health & SLO Verification:*\n`{verification_details[:350]}`",
             },
         },
+        {"type": "divider"},
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": f"🤖 *NEXUS Autonomous Healing* • Resolved{dur_str} • Verified healthy",
+                }
+            ],
+        },
     ]
 
     return {
+        "text": fallback,
         "attachments": [
             {
                 "color": "#059669",
-                "fallback": f"✅ NEXUS Incident Resolved for {target}: {failure_class}",
+                "fallback": fallback,
                 "blocks": blocks,
             }
-        ]
+        ],
     }
 
 
@@ -78,14 +93,17 @@ def build_incident_escalated_payload(
     root_cause: str,
 ) -> dict[str, Any]:
     """Build Slack Block Kit payload for escalated incident."""
-    blocks = [
+    fallback = f"🚨 NEXUS Incident Escalated for {target}: {reason}"
+    blocks: list[dict[str, Any]] = [
         {
-            "type": "section",
+            "type": "header",
             "text": {
-                "type": "mrkdwn",
-                "text": f"🚨 *NEXUS Incident Escalation — `{target}` requires human intervention*",
+                "type": "plain_text",
+                "text": f"🚨 NEXUS Incident Escalation — {target}",
+                "emoji": True,
             },
         },
+        {"type": "divider"},
         {
             "type": "section",
             "fields": [
@@ -95,6 +113,7 @@ def build_incident_escalated_payload(
                 {"type": "mrkdwn", "text": "*Status:*\n`ESCALATED`"},
             ],
         },
+        {"type": "divider"},
         {
             "type": "section",
             "text": {"type": "mrkdwn", "text": f"*Escalation Reason:*\n{reason[:350]}"},
@@ -110,14 +129,27 @@ def build_incident_escalated_payload(
                 },
             }
         )
+    blocks.append({"type": "divider"})
+    blocks.append(
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "⚠️ *Requires Human Intervention* • Escalated to on-call engineering team",
+                }
+            ],
+        }
+    )
     return {
+        "text": fallback,
         "attachments": [
             {
                 "color": "#dc2626",
-                "fallback": f"🚨 NEXUS Incident Escalated for {target}: {reason}",
+                "fallback": fallback,
                 "blocks": blocks,
             }
-        ]
+        ],
     }
 
 
@@ -128,13 +160,23 @@ def build_report_ready_payload(
     report_url: str,
 ) -> dict[str, Any]:
     """Build Slack Block Kit payload for post-incident report."""
-    blocks = [
+    fallback = f"NEXUS post-incident report ready for {target} ({outcome})"
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"📄 NEXUS Post-Incident Report — {target}",
+                "emoji": True,
+            },
+        },
+        {"type": "divider"},
         {
             "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"📄 *NEXUS Post-Incident Report — `{target}`*",
-            },
+            "fields": [
+                {"type": "mrkdwn", "text": f"*Target:*\n`{target}`"},
+                {"type": "mrkdwn", "text": f"*Outcome:*\n`{outcome.upper()}`"},
+            ],
         },
     ]
     if summary:
@@ -148,18 +190,46 @@ def build_report_ready_payload(
             }
         )
     if report_url:
+        blocks.append({"type": "divider"})
         blocks.append(
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": f"<{report_url}|Open full report>"},
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Detailed Report:*\n<{report_url}|Open full report>",
+                },
+                "accessory": {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "📊 Open Full Report",
+                        "emoji": True,
+                    },
+                    "url": report_url,
+                    "style": "primary",
+                    "action_id": "open_report_link",
+                },
             }
         )
+    blocks.append({"type": "divider"})
+    blocks.append(
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": f"🤖 *NEXUS Observability Engine* • Report Generated • Target: `{target}`",
+                }
+            ],
+        }
+    )
     return {
+        "text": fallback,
         "attachments": [
             {
                 "color": "#0891b2",
-                "fallback": f"NEXUS post-incident report ready for {target} ({outcome})",
+                "fallback": fallback,
                 "blocks": blocks,
             }
-        ]
+        ],
     }

@@ -19,7 +19,6 @@ from nexus.graph.llm import get_llm
 from nexus.graph.nodes.diagnose_builders import build_rca_success, parsed_to_rca_dict
 from nexus.graph.nodes.diagnose_helpers import (
     get_hardened_diagnostic_tools,
-    infer_symptom_fallback,
     parse_rca_json,
     truncate_observation,
 )
@@ -30,14 +29,16 @@ from nexus.tools.registry import ToolRegistry, default_registry
 
 logger = logging.getLogger(__name__)
 RCAEngine = RCALeadSynthesizer
-MAX_RCA_STEPS = 2
+MAX_RCA_STEPS = 5
 
 RCA_SYSTEM_PROMPT = """You are the NEXUS Autonomous SRE Investigator.
 Follow this strict scientific ReAct investigation protocol:
-1. OBSERVE: Call read-only inspection and telemetry tools.
-2. HYPOTHESIZE: Formulate 2-3 specific technical hypotheses.
-3. TEST & FALSIFY: Gather evidence proving one and falsifying others.
-4. CONCLUDE: Call RCAReport structured output tool once proven. Never invent tool outputs."""
+1. OBSERVE: Call read-only inspection tools (e.g. k8s_inspect_resource, k8s_get_logs, aws_inspect_resource).
+   - In Kubernetes, use k8s_inspect_resource to inspect Pods and parent Deployments/ReplicaSets. Check metadata.ownerReferences and status.containerStatuses (including lastState for OOMKilled or exit code 137).
+   - If a pod crashed, use k8s_get_logs with previous=true to read crashed container logs.
+2. HYPOTHESIZE: Formulate specific technical hypotheses based on observed cluster state.
+3. TEST & FALSIFY: Gather evidence proving one hypothesis and falsifying others.
+4. CONCLUDE: Call the RCAReport structured output tool once proven with failure_class, root_cause, confidence, and suggested_action. Never invent tool outputs."""
 
 __all__ = [
     "RCAEngine",
@@ -128,47 +129,81 @@ async def rca_reasoner_node(
             messages, response, rep_dict, steps, state, model, telemetry=telem
         )
 
-    if steps >= MAX_RCA_STEPS or not tool_calls:
-        tname = (
-            state.get("target", {}).get("name")
-            or sig.get("resource_name")
-            or "workload"
-        )
-        prov = str(state.get("platform") or sig.get("provider") or "kubernetes")
-        urn = str(sig.get("resource_urn") or f"{prov}://default/{tname}")
-        if state.get("incident_id") == "inc-fallback-e2e-01":
-            fb_dict = {
-                "root_cause_summary": f"Investigation completed for {tname}; no root cause conclusively proven",
-                "affected_resource_urn": urn,
-                "provider": prov,
-                "confidence": 0.0,
-                "hypotheses_evaluated": [],
-                "evidence_chain": [],
-                "pre_incident_resource_state": {},
-                "requires_remediation": False,
-                "failure_class": "unknown",
-                "suggested_action": None,
-                "action_params": {},
-            }
-        else:
-            fb_dict = infer_symptom_fallback(
-                sig=sig,
-                telem=telem,
-                raw_content=str(getattr(response, "content", "")),
-                tname=tname,
-                prov=prov,
-                urn=urn,
-            )
-        return build_rca_success(
-            messages, response, fb_dict, steps, state, model, telemetry=telem
-        )
+    # Continue multi-turn ReAct if model invoked read-only tools
+    if steps < MAX_RCA_STEPS and tool_calls:
+        return {
+            "rca_messages": [*messages, response],
+            "rca_steps": steps,
+            "rca_complete": False,
+            "fsm_state": IncidentState.DIAGNOSING.value,
+        }
 
-    return {
-        "rca_messages": [*messages, response],
-        "rca_steps": steps,
-        "rca_complete": False,
-        "fsm_state": IncidentState.DIAGNOSING.value,
+    # Max steps reached or no further tool calls: try final structured synthesis
+    trace = list(state.get("investigation_trace", []))
+    if trace and hasattr(model, "with_structured_output"):
+        try:
+            synth = model.with_structured_output(RCAReport)
+            synth_call = synth.ainvoke(
+                [
+                    *messages,
+                    response,
+                    HumanMessage(
+                        content="Synthesize the investigation findings and produce the final RCAReport."
+                    ),
+                ]
+            )
+            final_report = (
+                await synth_call if hasattr(synth_call, "__await__") else synth_call
+            )
+            if isinstance(final_report, RCAReport):
+                return build_rca_success(
+                    messages,
+                    response,
+                    final_report.model_dump(),
+                    steps,
+                    state,
+                    model,
+                    telemetry=telem,
+                )
+            if isinstance(final_report, dict) and (
+                "root_cause" in final_report or "root_cause_summary" in final_report
+            ):
+                return build_rca_success(
+                    messages,
+                    response,
+                    final_report,
+                    steps,
+                    state,
+                    model,
+                    telemetry=telem,
+                )
+        except Exception as synth_exc:
+            logger.debug(
+                "[Diagnose] Final structured synthesis exception: %s", synth_exc
+            )
+
+    tname = (
+        state.get("target", {}).get("name") or sig.get("resource_name") or "workload"
+    )
+    prov = str(state.get("platform") or sig.get("provider") or "kubernetes")
+    urn = str(sig.get("resource_urn") or f"{prov}://default/{tname}")
+
+    inconclusive_dict = {
+        "root_cause_summary": f"Investigation completed for {tname}; no root cause conclusively proven",
+        "affected_resource_urn": urn,
+        "provider": prov,
+        "confidence": 0.0,
+        "hypotheses_evaluated": [],
+        "evidence_chain": trace,
+        "pre_incident_resource_state": {},
+        "requires_remediation": False,
+        "failure_class": "unknown",
+        "suggested_action": None,
+        "action_params": {},
     }
+    return build_rca_success(
+        messages, response, inconclusive_dict, steps, state, model, telemetry=telem
+    )
 
 
 async def rca_tool_executor_node(

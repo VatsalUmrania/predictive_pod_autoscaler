@@ -7,6 +7,7 @@ for the human-in-the-loop approval workflow.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -41,28 +42,69 @@ async def send_approval_request(
     try:
         import httpx
 
-        blocks = [
+        fallback = f"NEXUS Self-Healing: Approval Required for {app_name or 'service'}"
+        blocks: list[dict[str, Any]] = [
             {
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": "NEXUS Self-Healing: Approval Required",
+                    "text": "🛡️ NEXUS Self-Healing: Approval Required",
+                    "emoji": True,
                 },
             },
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": f"*Context:*\n```{context}```"},
-            },
+            {"type": "divider"},
+        ]
+
+        if isinstance(context, dict) and context:
+            fields = []
+            for k in ("app", "target", "severity", "signal_type", "platform"):
+                if k in context and context[k]:
+                    fields.append(
+                        {
+                            "type": "mrkdwn",
+                            "text": f"*{k.replace('_', ' ').title()}:*\n`{context[k]}`",
+                        }
+                    )
+            if fields:
+                blocks.append({"type": "section", "fields": fields[:10]})
+            else:
+                formatted_ctx = (
+                    json.dumps(context, indent=2)
+                    if isinstance(context, dict)
+                    else str(context)
+                )
+                if len(formatted_ctx) > 800:
+                    formatted_ctx = formatted_ctx[:800] + "..."
+                blocks.append(
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*Context:*\n```{formatted_ctx}```",
+                        },
+                    }
+                )
+        else:
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"*Context:*\n```{context}```"},
+                }
+            )
+
+        blocks.append({"type": "divider"})
+        blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
                     "text": f"*Diagnosis & Proposal:*\n{diagnosis}",
                 },
-            },
-        ]
+            }
+        )
 
         if approval_id:
+            blocks.append({"type": "divider"})
             blocks.append(_approval_buttons_block(approval_id))
             if not SLACK_INTERACTIVE_URL:
                 blocks.append(
@@ -75,8 +117,24 @@ async def send_approval_request(
                     }
                 )
 
+        blocks.append({"type": "divider"})
+        blocks.append(
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"🤖 *NEXUS ChatOps* • Application: `{app_name or 'system'}` • Action ID: `{approval_id or 'none'}`",
+                    }
+                ],
+            }
+        )
+
         async with httpx.AsyncClient() as client:
-            response = await client.post(webhook, json={"blocks": blocks})
+            response = await client.post(
+                webhook,
+                json={"text": fallback, "blocks": blocks},
+            )
             response.raise_for_status()
             logger.info("Successfully sent approval request to Slack.")
             return True

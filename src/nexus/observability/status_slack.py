@@ -18,22 +18,134 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["governance"])
 
 
-def _slack_replace(text: str) -> dict[str, Any]:
-    return {"replace_original": True, "text": text}
+def _slack_replace(
+    text: str,
+    *,
+    status_title: str | None = None,
+    is_approved: bool | None = None,
+    approval_id: str | None = None,
+    user: str | None = None,
+) -> dict[str, Any]:
+    response: dict[str, Any] = {"replace_original": True, "text": text}
+    if status_title or is_approved is not None:
+        emoji = "✅" if is_approved else "❌"
+        title = (
+            status_title
+            or f"{emoji} NEXUS Action {'Approved' if is_approved else 'Rejected'}"
+        )
+        color = "#10B981" if is_approved else "#EF4444"
+        fields = []
+        if approval_id:
+            fields.append(
+                {"type": "mrkdwn", "text": f"*Approval ID:*\n`{approval_id}`"}
+            )
+        if user:
+            fields.append({"type": "mrkdwn", "text": f"*Operator:*\n@{user}"})
+        fields.append(
+            {
+                "type": "mrkdwn",
+                "text": f"*Decision:*\n`{'APPROVED' if is_approved else 'REJECTED'}`",
+            }
+        )
+
+        blocks: list[dict[str, Any]] = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": title[:150],
+                    "emoji": True,
+                },
+            },
+            {"type": "divider"},
+            {"type": "section", "fields": fields[:10]},
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*Status Update:*\n{text}"},
+            },
+            {"type": "divider"},
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": "🛡️ *NEXUS Governance Audit* • Decision recorded • Action buttons deactivated",
+                    }
+                ],
+            },
+        ]
+        response["blocks"] = blocks
+        response["attachments"] = [{"color": color, "fallback": text, "blocks": blocks}]
+    return response
 
 
-async def _slack_replace_via_response_url(response_url: str | None, text: str) -> None:
+async def _slack_replace_via_response_url(
+    response_url: str | None,
+    text: str,
+    *,
+    status_title: str | None = None,
+    is_approved: bool | None = None,
+    approval_id: str | None = None,
+    user: str | None = None,
+) -> None:
     if not response_url:
         return
     try:
         import httpx
 
+        payload = _slack_replace(
+            text,
+            status_title=status_title,
+            is_approved=is_approved,
+            approval_id=approval_id,
+            user=user,
+        )
         async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(
-                response_url, json={"replace_original": True, "text": text}
-            )
+            await client.post(response_url, json=payload)
     except Exception as exc:
         logger.warning(f"Failed to push delayed outcome to Slack response_url: {exc}")
+
+
+async def _async_workflow_resume(
+    workflow: Any,
+    audit_trail: Any,
+    approval_id: str,
+    decision: str,
+    user: str,
+    response_url: str | None = None,
+) -> None:
+    try:
+        if audit_trail:
+            if decision == "approved":
+                await audit_trail.record_approval(approval_id, f"slack:{user}")
+            else:
+                await audit_trail.record_rejection(approval_id, f"slack:{user}")
+    except Exception as exc:
+        logger.warning(f"Failed to record audit trail in background: {exc}")
+
+    outcome = None
+    try:
+        outcome = await workflow.resume_incident(approval_id, decision)
+    except Exception as exc:
+        logger.error(f"Workflow resume failed for {approval_id}: {exc}")
+
+    if response_url:
+        is_ok = decision == "approved" and (
+            outcome.get("resolved") if isinstance(outcome, dict) else True
+        )
+        msg = (
+            f"Remediation `{approval_id}` executed successfully (authorized by @{user})."
+            if is_ok
+            else f"Remediation `{approval_id}` processed with decision '{decision}' (by @{user})."
+        )
+        await _slack_replace_via_response_url(
+            response_url=response_url,
+            text=msg,
+            status_title=f"{'✅' if is_ok else 'ℹ️'} Remediation {'Completed' if is_ok else 'Finished'} — {approval_id}",
+            is_approved=is_ok,
+            approval_id=approval_id,
+            user=user,
+        )
 
 
 async def _slack_dispatch_approved(
@@ -49,10 +161,21 @@ async def _slack_dispatch_approved(
             f"Approved `{approval_id}` by @{user} → {outcome['status']} "
             f"(audit {outcome.get('action_id')})"
         )
+        is_ok = outcome.get("status") in ("success", "executed", "ok")
+        title = f"{'✅' if is_ok else '⚠️'} Execution Result: {outcome.get('status', 'complete')} — {approval_id}"
     except Exception as exc:
         logger.error(f"Slack approve dispatch failed: {exc}")
         text = f"Approved `{approval_id}` by @{user} but dispatch errored: {exc}"
-    await _slack_replace_via_response_url(response_url, text)
+        title = f"❌ Execution Failed — {approval_id}"
+        is_ok = False
+    await _slack_replace_via_response_url(
+        response_url,
+        text,
+        status_title=title,
+        is_approved=is_ok,
+        approval_id=approval_id,
+        user=user,
+    )
 
 
 @router.post("/slack/interactive")
@@ -111,20 +234,38 @@ async def slack_interactive(
     ):
         if action_id == "nexus_approve":
             background_tasks.add_task(
-                context.workflow.resume_incident, approval_id, "approved"
+                _async_workflow_resume,
+                context.workflow,
+                context.audit_trail,
+                approval_id,
+                "approved",
+                user,
+                response_url,
             )
-            if context.audit_trail:
-                await context.audit_trail.record_approval(approval_id, f"slack:{user}")
             return _slack_replace(
-                f"Approved `{approval_id}` by @{user} — executing remediation…"
+                f"Approved `{approval_id}` by @{user} — executing remediation…",
+                status_title=f"✅ Remediation Approved — {approval_id}",
+                is_approved=True,
+                approval_id=approval_id,
+                user=user,
             )
         elif action_id == "nexus_reject":
             background_tasks.add_task(
-                context.workflow.resume_incident, approval_id, "rejected"
+                _async_workflow_resume,
+                context.workflow,
+                context.audit_trail,
+                approval_id,
+                "rejected",
+                user,
+                response_url,
             )
-            if context.audit_trail:
-                await context.audit_trail.record_rejection(approval_id, f"slack:{user}")
-            return _slack_replace(f"Rejected `{approval_id}` by @{user}.")
+            return _slack_replace(
+                f"Rejected `{approval_id}` by @{user}.",
+                status_title=f"❌ Remediation Rejected — {approval_id}",
+                is_approved=False,
+                approval_id=approval_id,
+                user=user,
+            )
 
     orc = _require(context.orchestrator, "NexusOrchestrator")
     try:
@@ -134,7 +275,13 @@ async def slack_interactive(
 
     if action_id == "nexus_approve":
         if queue.is_approved(approval_id):
-            return _slack_replace(f"Action `{approval_id}` was already approved.")
+            return _slack_replace(
+                f"Action `{approval_id}` was already approved.",
+                status_title=f"ℹ️ Action Already Approved — {approval_id}",
+                is_approved=True,
+                approval_id=approval_id,
+                user=user,
+            )
         pending_item = next(
             (p for p in queue.pending_list() if p.approval_id == approval_id), None
         )
@@ -144,7 +291,11 @@ async def slack_interactive(
             await context.audit_trail.record_approval(approval_id, f"slack:{user}")
         if pending_item is None:
             return _slack_replace(
-                f"Approved `{approval_id}` by @{user} (staged snapshot lost — queued only)."
+                f"Approved `{approval_id}` by @{user} (staged snapshot lost — queued only).",
+                status_title=f"⚠️ Action Approved (Queued Only) — {approval_id}",
+                is_approved=True,
+                approval_id=approval_id,
+                user=user,
             )
         background_tasks.add_task(
             _slack_dispatch_approved,
@@ -154,10 +305,22 @@ async def slack_interactive(
             user,
             response_url,
         )
-        return _slack_replace(f"Approved `{approval_id}` by @{user} — executing…")
+        return _slack_replace(
+            f"Approved `{approval_id}` by @{user} — executing…",
+            status_title=f"✅ Remediation Approved — {approval_id}",
+            is_approved=True,
+            approval_id=approval_id,
+            user=user,
+        )
 
     if queue.is_rejected(approval_id):
-        return _slack_replace(f"Action `{approval_id}` was already rejected.")
+        return _slack_replace(
+            f"Action `{approval_id}` was already rejected.",
+            status_title=f"ℹ️ Action Already Rejected — {approval_id}",
+            is_approved=False,
+            approval_id=approval_id,
+            user=user,
+        )
     pending_item = queue.get(approval_id)
     if not queue.reject(approval_id):
         return _slack_replace(f"Action `{approval_id}` not found.")
@@ -173,4 +336,10 @@ async def slack_interactive(
         )
         if asyncio.iscoroutine(res):
             await res
-    return _slack_replace(f"Rejected `{approval_id}` by @{user}.")
+    return _slack_replace(
+        f"Rejected `{approval_id}` by @{user}.",
+        status_title=f"❌ Remediation Rejected — {approval_id}",
+        is_approved=False,
+        approval_id=approval_id,
+        user=user,
+    )

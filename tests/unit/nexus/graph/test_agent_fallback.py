@@ -401,6 +401,14 @@ async def test_e2e_workflow_successful_react_skips_collect_node():
     with (
         patch("nexus.graph.nodes.diagnose.get_llm", return_value=mock_model),
         patch(
+            "nexus.agents.k8s_tools.describe_resource",
+            return_value="State: OOMKilled\nReplicas: 2",
+        ),
+        patch(
+            "nexus.agents.k8s_tools.get_pod_logs",
+            return_value="fatal memory limit exceeded",
+        ),
+        patch(
             "nexus.agents.k8s_tools.restart_deployment",
             return_value="restarted deployment",
         ),

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from nexus.graph.workflow import IncidentWorkflow
+from tests.unit.nexus.graph.test_workflow import MockWorkflowK8sModel
 
 
 @pytest.mark.asyncio
@@ -29,11 +30,22 @@ async def test_shop_demo_crashloop_requires_approval_and_rolls_back():
 
     workflow = IncidentWorkflow(nats_client=mock_nats)
 
-    # 1. Run incident initially - should pause at approval gate, NOT auto-resolve
-    result = await workflow.run_incident(
-        {"incident_id": "inc-shop-demo-test", "events": events, "severity": "error"},
-        thread_id="thread-shop-demo-test",
-    )
+    # 1. Run incident initially with diagnosed CrashLoop - should pause at approval gate, NOT auto-resolve
+    with patch(
+        "nexus.graph.nodes.diagnose.get_llm",
+        return_value=MockWorkflowK8sModel(
+            root_cause="CrashLoopBackOff after bad deployment",
+            suggested_action="k8s_rollback_deployment",
+        ),
+    ):
+        result = await workflow.run_incident(
+            {
+                "incident_id": "inc-shop-demo-test",
+                "events": events,
+                "severity": "error",
+            },
+            thread_id="thread-shop-demo-test",
+        )
 
     # Must NOT be marked resolved without approval
     assert result.get("resolved") is not True

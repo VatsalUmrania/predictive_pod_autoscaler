@@ -88,8 +88,10 @@ def plan_to_yaml_manifest(plan: dict[str, Any] | None, target: str = "") -> str:
     actions = plan.get("actions") or plan.get("steps") or []
     if not actions:
         summary = plan.get("summary") or "Remediation plan"
-        return yaml.safe_dump(
-            {"summary": summary, "status": "no_mutations_needed"}, sort_keys=False
+        return str(
+            yaml.safe_dump(
+                {"summary": summary, "status": "no_mutations_needed"}, sort_keys=False
+            )
         )
 
     rendered_docs: list[dict[str, Any]] = []
@@ -126,8 +128,8 @@ def plan_to_yaml_manifest(plan: dict[str, Any] | None, target: str = "") -> str:
             )
 
     if len(rendered_docs) == 1:
-        return yaml.safe_dump(rendered_docs[0], sort_keys=False)
-    return yaml.safe_dump_all(rendered_docs, sort_keys=False)
+        return str(yaml.safe_dump(rendered_docs[0], sort_keys=False))
+    return str(yaml.safe_dump_all(rendered_docs, sort_keys=False))
 
 
 def extract_diagnostic_logs(state_or_rca: dict[str, Any], max_lines: int = 25) -> str:

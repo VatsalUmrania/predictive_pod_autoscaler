@@ -24,7 +24,10 @@ def _load_k8s_client(api_cls: str) -> Any:
             _cfg.load_incluster_config()
         except Exception:
             _cfg.load_kube_config()
-        return getattr(_c, api_cls)()
+        conf = _c.Configuration.get_default_copy()
+        conf.retries = 1
+        api_client = _c.ApiClient(configuration=conf)
+        return getattr(_c, api_cls)(api_client=api_client)
     except Exception:
         return None
 
@@ -45,7 +48,10 @@ def get_pod_logs(
         try:
             return str(
                 api.read_namespaced_pod_log(
-                    name=pod_name, namespace=namespace, tail_lines=tail_lines
+                    name=pod_name,
+                    namespace=namespace,
+                    tail_lines=tail_lines,
+                    _request_timeout=2.0,
                 )
             )
         except Exception as exc:
@@ -65,14 +71,50 @@ def describe_resource(
         if apps:
             try:
                 dep = apps.read_namespaced_deployment(
-                    name=resource_name, namespace=namespace
+                    name=resource_name, namespace=namespace, _request_timeout=2.0
                 )
                 st = dep.status
                 unavail = getattr(st, "unavailable_replicas", 0) or 0
+                rep = getattr(st, "replicas", 0) or 0
+                ready = getattr(st, "ready_replicas", 0) or 0
+                avail = getattr(st, "available_replicas", 0) or 0
+                upd = getattr(st, "updated_replicas", 0) or 0
+                pod_issues: list[str] = []
+                core = _get_api()
+                if core:
+                    try:
+                        pods = core.list_namespaced_pod(
+                            namespace=namespace, _request_timeout=2.0
+                        ).items
+                        for p in pods:
+                            p_name = getattr(p.metadata, "name", "")
+                            owners = getattr(p.metadata, "owner_references", []) or []
+                            if p_name.startswith(resource_name) or any(
+                                getattr(r, "name", "").startswith(resource_name)
+                                for r in owners
+                            ):
+                                for cs in (
+                                    getattr(p.status, "container_statuses", []) or []
+                                ):
+                                    w = getattr(cs.state, "waiting", None)
+                                    if w and getattr(w, "reason", None):
+                                        pod_issues.append(f"{p_name}:{w.reason}")
+                                    last_t = getattr(
+                                        getattr(cs, "last_state", None),
+                                        "terminated",
+                                        None,
+                                    )
+                                    if last_t and getattr(last_t, "reason", None):
+                                        pod_issues.append(
+                                            f"{p_name}:LastState:{last_t.reason}(exit {getattr(last_t, 'exit_code', None)})"
+                                        )
+                    except Exception:
+                        pass
+                issues_str = f" [{', '.join(pod_issues[:3])}]" if pod_issues else ""
                 return (
-                    f"Deployment {resource_name}: replicas={getattr(st, 'replicas', 0)}, "
-                    f"ready={getattr(st, 'ready_replicas', 0)}, available={getattr(st, 'available_replicas', 0)}, "
-                    f"unavailable={unavail}"
+                    f"Deployment {resource_name}: replicas={rep}, "
+                    f"ready={ready}, available={avail}, "
+                    f"unavailable={unavail}, updated={upd}{issues_str}"
                 )
             except Exception as exc:
                 return f"Error describing {resource_name}: {exc}"
@@ -93,6 +135,13 @@ def describe_resource(
                         reasons.append(
                             f"{getattr(t, 'reason', 'Terminated')} (Exit Code: {getattr(t, 'exit_code', None)})"
                         )
+                    last_t = getattr(
+                        getattr(cs, "last_state", None), "terminated", None
+                    )
+                    if last_t:
+                        last_r = getattr(last_t, "reason", "Terminated")
+                        last_c = getattr(last_t, "exit_code", None)
+                        reasons.append(f"LastState:{last_r} (Exit Code: {last_c})")
                 r_str = f" [{', '.join(reasons)}]" if reasons else ""
                 ready_c = sum(1 for cs in c_statuses if getattr(cs, "ready", False))
                 return f"Pod {resource_name}: phase={phase}, ready={ready_c}/{len(c_statuses)}{r_str}"

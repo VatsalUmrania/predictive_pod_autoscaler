@@ -383,14 +383,23 @@ async def test_e2e_workflow_adaptive_ladder_pause_and_resume():
             healthy=True, slo_restored=True, details="Deployment healthy and ready"
         )
 
+    rolled_back = False
+
+    def mock_rollback(*args: Any, **kwargs: Any) -> str:
+        nonlocal rolled_back
+        rolled_back = True
+        return "rolled_back"
+
+    def mock_describe(*args: Any, **kwargs: Any) -> str:
+        if rolled_back:
+            return "Replicas: 1\nState: Running\nReady: 1/1"
+        return "Replicas: 1\nState: CrashLoopBackOff"
+
     with (
         patch("nexus.graph.nodes.diagnose.get_llm", return_value=MockHarnessK8sModel()),
-        patch(
-            "nexus.agents.k8s_tools.describe_resource",
-            return_value="Replicas: 1\nState: CrashLoopBackOff",
-        ),
+        patch("nexus.agents.k8s_tools.describe_resource", side_effect=mock_describe),
         patch("nexus.agents.k8s_tools.restart_deployment", return_value="restarted"),
-        patch("nexus.agents.k8s_tools.rollback_deployment", return_value="rolled_back"),
+        patch("nexus.agents.k8s_tools.rollback_deployment", side_effect=mock_rollback),
         patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05),
         patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01),
         patch.object(adapter, "verify_health", side_effect=mock_health_check),

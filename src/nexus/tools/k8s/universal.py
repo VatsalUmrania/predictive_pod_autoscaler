@@ -27,7 +27,46 @@ def get_default_k8s_clients() -> tuple[DynamicClient, client.CoreV1Api]:
     return DynamicClient(api_client), client.CoreV1Api(api_client)
 
 
+def _resolve_api_version(kind: str, current_api_version: str) -> str:
+    """Auto-resolve api_version if generic default 'v1' is provided for apps resources."""
+    k_lower = kind.lower()
+    if current_api_version in ("v1", ""):
+        if k_lower in (
+            "deployment",
+            "replicaset",
+            "statefulset",
+            "daemonset",
+            "controllerrevision",
+        ):
+            return "apps/v1"
+        if k_lower in ("horizontalpodautoscaler", "hpa"):
+            return "autoscaling/v2"
+        if k_lower in ("job", "cronjob"):
+            return "batch/v1"
+        if k_lower in ("ingress",):
+            return "networking.k8s.io/v1"
+    return current_api_version or "v1"
+
+
+def _clean_k8s_manifest(data: Any) -> Any:
+    """Strip verbose metadata (e.g. managedFields) to ensure status and ownerReferences fit."""
+    if isinstance(data, dict):
+        cleaned = {}
+        for k, v in data.items():
+            if k == "managedFields":
+                continue
+            cleaned[k] = _clean_k8s_manifest(v)
+        return cleaned
+    elif isinstance(data, list):
+        return [_clean_k8s_manifest(x) for x in data]
+    return data
+
+
 class K8sInspectResourceInput(BaseModel):
+    """Inspect or list any Kubernetes resource or custom resource (Pod, Deployment, ReplicaSet, etc.).
+    Returns metadata with ownerReferences and status with containerStatuses/lastState.
+    """
+
     api_version: str = Field(
         default="v1", description="e.g. 'v1', 'apps/v1', 'batch/v1'"
     )
@@ -42,6 +81,8 @@ class K8sInspectResourceInput(BaseModel):
 
 
 class K8sGetLogsInput(BaseModel):
+    """Fetch logs from any pod or previous container instance."""
+
     pod_name: str
     namespace: str = Field(default="default")
     container: str | None = Field(default=None)
@@ -52,6 +93,8 @@ class K8sGetLogsInput(BaseModel):
 
 
 class K8sMutateResourceInput(BaseModel):
+    """Execute generic mutations on any Kubernetes resource."""
+
     api_version: str = Field(default="apps/v1", description="e.g. 'v1', 'apps/v1'")
     kind: str = Field(
         description="e.g. 'Deployment', 'StatefulSet', 'ConfigMap', 'Pod'"
@@ -59,7 +102,11 @@ class K8sMutateResourceInput(BaseModel):
     name: str
     namespace: str = Field(default="default")
     mutation_type: Literal[
-        "strategic_merge_patch", "scale_replicas", "rollout_restart", "delete_pod"
+        "strategic_merge_patch",
+        "scale_replicas",
+        "rollout_restart",
+        "delete_pod",
+        "rollback",
     ]
     patch_body: dict[str, Any] = Field(
         default_factory=dict, description="Patch dictionary"
@@ -69,22 +116,23 @@ class K8sMutateResourceInput(BaseModel):
 def execute_k8s_inspect(
     args: K8sInspectResourceInput, dyn_client: DynamicClient | None = None
 ) -> str:
-    """Inspect or list any Kubernetes resource or custom resource."""
+    """Inspect or list any Kubernetes resource, retaining ownerReferences and status with lastState."""
     try:
         if dyn_client is None:
             dyn_client, _ = get_default_k8s_clients()
-        resource_api = dyn_client.resources.get(
-            api_version=args.api_version, kind=args.kind
-        )
+        api_ver = _resolve_api_version(args.kind, args.api_version)
+        resource_api = dyn_client.resources.get(api_version=api_ver, kind=args.kind)
         if args.name:
             obj = resource_api.get(name=args.name, namespace=args.namespace)
             data = obj.to_dict() if hasattr(obj, "to_dict") else obj
-            return json.dumps(data, default=str)[:12000]
+            cleaned = _clean_k8s_manifest(data)
+            return json.dumps(cleaned, default=str)[:16000]
         items = resource_api.get(
             namespace=args.namespace, label_selector=args.label_selector
         )
         data = items.to_dict() if hasattr(items, "to_dict") else items
-        return json.dumps(data, default=str)[:12000]
+        cleaned = _clean_k8s_manifest(data)
+        return json.dumps(cleaned, default=str)[:16000]
     except Exception as exc:
         return json.dumps({"error": str(exc)})
 
@@ -111,18 +159,17 @@ def execute_k8s_get_logs(
 def execute_k8s_mutate(
     args: K8sMutateResourceInput, dyn_client: DynamicClient | None = None
 ) -> str:
-    """Execute dynamic mutations on any Kubernetes resource."""
+    """Execute dynamic mutations on any Kubernetes resource (patch limits, scale, restart, rollback)."""
     try:
         if dyn_client is None:
             dyn_client, _ = get_default_k8s_clients()
-        resource_api = dyn_client.resources.get(
-            api_version=args.api_version, kind=args.kind
-        )
+        api_ver = _resolve_api_version(args.kind, args.api_version)
+        resource_api = dyn_client.resources.get(api_version=api_ver, kind=args.kind)
 
-        if args.mutation_type == "delete_pod" and args.kind == "Pod":
+        if args.mutation_type == "delete_pod" and args.kind.lower() in ("pod", "po"):
             res = resource_api.delete(name=args.name, namespace=args.namespace)
             data = res.to_dict() if hasattr(res, "to_dict") else res
-            return json.dumps(data, default=str)[:6000]
+            return json.dumps(_clean_k8s_manifest(data), default=str)[:6000]
 
         if args.mutation_type == "scale_replicas":
             replicas = int(args.patch_body["replicas"])
@@ -134,7 +181,7 @@ def execute_k8s_mutate(
                 content_type="application/merge-patch+json",
             )
             data = res.to_dict() if hasattr(res, "to_dict") else res
-            return json.dumps(data, default=str)[:6000]
+            return json.dumps(_clean_k8s_manifest(data), default=str)[:6000]
 
         if args.mutation_type == "rollout_restart":
             now = datetime.now(timezone.utc).isoformat()
@@ -154,8 +201,24 @@ def execute_k8s_mutate(
                 content_type="application/strategic-merge-patch+json",
             )
             data = res.to_dict() if hasattr(res, "to_dict") else res
-            return json.dumps(data, default=str)[:6000]
+            return json.dumps(_clean_k8s_manifest(data), default=str)[:6000]
 
+        if args.mutation_type == "rollback":
+            from nexus.agents import k8s_tools
+
+            rev = args.patch_body.get("revision") or args.patch_body.get(
+                "target_revision"
+            )
+            res_str = k8s_tools.rollback_deployment(
+                namespace=args.namespace,
+                deployment_name=args.name,
+                target_revision=int(rev) if rev is not None else None,
+            )
+            return json.dumps(
+                {"status": res_str, "action": "rollback", "deployment": args.name}
+            )
+
+        # strategic_merge_patch (e.g. for patching limits/resources or config)
         res = resource_api.patch(
             name=args.name,
             namespace=args.namespace,
@@ -163,6 +226,6 @@ def execute_k8s_mutate(
             content_type="application/strategic-merge-patch+json",
         )
         data = res.to_dict() if hasattr(res, "to_dict") else res
-        return json.dumps(data, default=str)[:6000]
+        return json.dumps(_clean_k8s_manifest(data), default=str)[:6000]
     except Exception as exc:
         return json.dumps({"error": str(exc)})

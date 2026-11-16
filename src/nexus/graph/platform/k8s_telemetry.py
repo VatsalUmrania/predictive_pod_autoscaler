@@ -26,10 +26,48 @@ async def collect_k8s_telemetry(target: TargetResource) -> PlatformTelemetry:
             resource_kind=target.kind or "deployment",
             resource_name=target.name,
         )
+
+        active_pod = target.name
+        (target.kind or "deployment").lower()
+        core = k8s_tools._get_api()
+
+        if core:
+            try:
+                pods = core.list_namespaced_pod(
+                    namespace=target.namespace, _request_timeout=2.0
+                ).items
+                matching = []
+                for p in pods:
+                    p_name = getattr(p.metadata, "name", "")
+                    owners = getattr(p.metadata, "owner_references", []) or []
+                    if p_name.startswith(target.name) or any(
+                        getattr(r, "name", "").startswith(target.name) for r in owners
+                    ):
+                        matching.append(p)
+                if matching:
+                    failing = [
+                        p
+                        for p in matching
+                        if any(
+                            getattr(cs, "restart_count", 0) > 0
+                            or not getattr(cs, "ready", True)
+                            for cs in (
+                                getattr(p.status, "container_statuses", []) or []
+                            )
+                        )
+                    ]
+                    active_pod = (
+                        failing[0].metadata.name
+                        if failing
+                        else matching[-1].metadata.name
+                    )
+            except Exception:
+                pass
+
         pod_log = k8s_tools.get_pod_logs(
-            namespace=target.namespace, pod_name=target.name
+            namespace=target.namespace, pod_name=active_pod
         )
-        if pod_log:
+        if pod_log and not pod_log.startswith("Error fetching logs"):
             logs.append(pod_log)
     except Exception as exc:
         logger.warning("[K8s Telemetry] Failed to query live cluster: %s", exc)
@@ -68,11 +106,16 @@ async def collect_k8s_telemetry(target: TargetResource) -> PlatformTelemetry:
         or live_config.get("exit_code") in (1, 127)
     ):
         live_config["has_command_override"] = True
-    if "oomkilled" in raw_lower:
+    if (
+        "oomkilled" in raw_lower
+        or "exit code 137" in raw_lower
+        or "exit code: 137" in raw_lower
+    ):
         status = "oomkilled"
-    elif "crashloop" in raw_lower:
+        live_config["exit_code"] = 137
+    elif "crashloop" in raw_lower or "backoff" in raw_lower:
         status = "crashloopbackoff"
-    elif "error" in raw_lower or "failed" in raw_lower:
+    elif "error" in raw_lower or "failed" in raw_lower or "unavailable" in raw_lower:
         status = "degraded"
     else:
         status = "healthy"

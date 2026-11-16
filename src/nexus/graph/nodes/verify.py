@@ -17,11 +17,20 @@ from typing import Any
 
 from nexus.engine.fsm import IncidentState
 from nexus.graph.nodes.verify_helpers import (
+    evaluate_verification_condition,
+    execute_plan_verification_checks,
+    extract_metric_value,
     verify_step_conditions,
 )
 from nexus.graph.platform import TargetResource, get_platform_registry
 from nexus.graph.state import IncidentGraphState
 from nexus.tools.registry import default_registry
+
+__all__ = [
+    "verify_node",
+    "evaluate_verification_condition",
+    "extract_metric_value",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +93,25 @@ async def verify_node(state: IncidentGraphState) -> dict[str, Any]:
                     if details and cond_details
                     else ("; ".join(cond_details) or details)
                 )
+                # Also execute any LLM-defined VerificationCheck items
+                checks = plan.get("verification_checks") or []
+                vchecks_ok, vcheck_details, v_fail = (
+                    await execute_plan_verification_checks(checks, default_registry)
+                )
+                if not vchecks_ok:
+                    healthy, slo_restored, details, failure_reason = (
+                        False,
+                        False,
+                        v_fail,
+                        v_fail,
+                    )
+                else:
+                    all_details = cond_details + vcheck_details
+                    details = (
+                        f"{details} | {'; '.join(all_details)}"
+                        if details and all_details
+                        else ("; ".join(all_details) or details)
+                    )
             else:
                 healthy, slo_restored, details, failure_reason = (
                     False,

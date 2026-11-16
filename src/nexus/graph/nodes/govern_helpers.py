@@ -80,7 +80,7 @@ async def check_live_validation(
             k8s_apps=None,
         )
         if live_report.verdict == "self_healed":
-            return True, live_report.evidence
+            return True, str(live_report.evidence)
     except Exception as lsv_err:
         logger.debug("[Govern] Live state validation skipped: %s", lsv_err)
     return False, ""
@@ -90,7 +90,9 @@ async def evaluate_steps_opa(
     steps: list, confidence: float, cb_open: bool, cooldown_active: bool
 ) -> tuple[bool, bool, list[str]]:
     engine = get_policy_engine()
-    allowed, requires_approval, reasons = True, False, []
+    allowed: bool = True
+    requires_approval: bool = False
+    reasons: list[str] = []
     for raw_step in steps:
         step = (
             raw_step

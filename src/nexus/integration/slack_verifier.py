@@ -80,23 +80,49 @@ def approval_buttons_block(approval_id: str) -> dict[str, Any]:
         notifier_mod, "SLACK_INTERACTIVE_URL", SLACK_INTERACTIVE_URL
     )
     if not interactive_url:
-        return {"type": "context", "elements": [{"type": "mrkdwn", "text": ""}]}
+        return {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "🔒 _Interactive buttons require SLACK_INTERACTIVE_URL configuration._",
+                }
+            ],
+        }
     return {
         "type": "actions",
         "elements": [
             {
                 "type": "button",
-                "text": {"type": "plain_text", "text": "Approve"},
+                "text": {"type": "plain_text", "text": "Approve", "emoji": True},
                 "style": "primary",
                 "action_id": "nexus_approve",
                 "value": approval_id,
             },
             {
                 "type": "button",
-                "text": {"type": "plain_text", "text": "Reject"},
+                "text": {"type": "plain_text", "text": "Reject", "emoji": True},
                 "style": "danger",
                 "action_id": "nexus_reject",
                 "value": approval_id,
+                "confirm": {
+                    "title": {
+                        "type": "plain_text",
+                        "text": "Reject Remediation?",
+                        "emoji": True,
+                    },
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": "Are you sure you want to reject this automated remediation plan? It will escalate to on-call SREs.",
+                    },
+                    "confirm": {
+                        "type": "plain_text",
+                        "text": "Reject & Escalate",
+                        "emoji": True,
+                    },
+                    "deny": {"type": "plain_text", "text": "Cancel", "emoji": True},
+                    "style": "danger",
+                },
             },
         ],
     }

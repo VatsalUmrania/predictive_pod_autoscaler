@@ -81,6 +81,7 @@ def get_hardened_diagnostic_tools(timeout_s: float = 5.0) -> list[StructuredTool
 
 
 def parse_rca_json(raw_text: str) -> dict[str, Any] | None:
+    """Parse JSON object containing root cause analysis from raw LLM text."""
     raw = raw_text.strip()
     match = re.search(r"\{[\s\S]*\}", raw)
     if not match:
@@ -90,68 +91,3 @@ def parse_rca_json(raw_text: str) -> dict[str, Any] | None:
         return data if isinstance(data, dict) else None
     except json.JSONDecodeError:
         return None
-
-
-def infer_symptom_fallback(
-    sig: dict[str, Any],
-    telem: dict[str, Any],
-    raw_content: str,
-    tname: str,
-    prov: str,
-    urn: str,
-) -> dict[str, Any]:
-    raw_str = f"{json.dumps(sig, default=str)} {json.dumps(telem, default=str)} {raw_content}".lower()
-    is_oom = any(
-        w in raw_str for w in ("oom", "exit code 137", "oomkilled", "out of memory")
-    )
-    is_crash = any(
-        w in raw_str
-        for w in ("crashloop", "backoff", "exit code 1", "failed container", "error")
-    )
-    is_traffic = any(
-        w in raw_str for w in ("traffic_spike", "high_traffic", "429", "throttl")
-    )
-
-    if is_oom:
-        return {
-            "root_cause_summary": f"Pod {tname} container terminated due to OOM memory exhaustion.",
-            "affected_resource_urn": urn,
-            "provider": prov,
-            "confidence": 0.88,
-            "requires_remediation": True,
-            "failure_class": "resource_exhaustion",
-            "suggested_action": "k8s_patch_resource_limits",
-            "action_params": {},
-        }
-    if is_crash:
-        return {
-            "root_cause_summary": f"Pod {tname} is in CrashLoopBackOff due to deployment error.",
-            "affected_resource_urn": urn,
-            "provider": prov,
-            "confidence": 0.88,
-            "requires_remediation": True,
-            "failure_class": "bad_deploy",
-            "suggested_action": "k8s_rollback_deployment",
-            "action_params": {},
-        }
-    if is_traffic:
-        return {
-            "root_cause_summary": f"Service {tname} experiencing traffic surge.",
-            "affected_resource_urn": urn,
-            "provider": prov,
-            "confidence": 0.85,
-            "requires_remediation": True,
-            "failure_class": "cascading_failure",
-            "suggested_action": "k8s_scale_resource",
-            "action_params": {},
-        }
-    return {
-        "root_cause_summary": f"Investigation completed for {tname}; no root cause conclusively proven",
-        "affected_resource_urn": urn,
-        "provider": prov,
-        "confidence": 0.0,
-        "requires_remediation": False,
-        "failure_class": "unknown",
-        "suggested_action": None,
-        "action_params": {},
-    }

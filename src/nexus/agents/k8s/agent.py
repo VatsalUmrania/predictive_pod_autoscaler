@@ -149,13 +149,15 @@ class K8sAgent(BaseAgent):
                 events_list = res.items
 
             for ev in events_list:
-                uid = (
+                raw_uid = (
                     getattr(ev.metadata, "uid", None)
-                    or f"{ev.involved_object.name}-{ev.reason}"
+                    or f"{getattr(ev.involved_object, 'name', 'unknown')}-{getattr(ev, 'reason', 'unknown')}"
                 )
-                if uid in self._seen_event_uids:
+                count = getattr(ev, "count", 1) or 1
+                dedup_key = f"{raw_uid}:{count}"
+                if dedup_key in self._seen_event_uids:
                     continue
-                self._seen_event_uids.add(uid)
+                self._seen_event_uids.add(dedup_key)
                 if len(self._seen_event_uids) > self._max_seen_cache:
                     self._seen_event_uids.clear()
 
