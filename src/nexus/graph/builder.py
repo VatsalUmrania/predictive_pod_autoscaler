@@ -18,6 +18,7 @@ from nexus.graph.nodes import (
     govern_node,
     learn_node,
     plan_node,
+    plan_validator_node,
     rca_reasoner_node,
     rca_tool_executor_node,
     rollback_node,
@@ -28,6 +29,7 @@ from nexus.graph.routes import (
     route_after_approval,
     route_after_execute,
     route_after_govern,
+    route_after_plan_validator,
     route_after_rca_reasoner,
     route_after_verify,
 )
@@ -44,6 +46,7 @@ def build_nexus_agent_graph(
         "rca_reasoner": rca_reasoner_node,
         "rca_tool_executor": rca_tool_executor_node,
         "plan": plan_node,
+        "plan_validator": plan_validator_node,
         "govern": govern_node,
         "approval": approval_node,
         "execute": execute_node,
@@ -75,8 +78,16 @@ def build_nexus_agent_graph(
     )
     graph.add_edge("rca_tool_executor", "rca_reasoner")
 
-    # Planning -> Governance
-    graph.add_edge("plan", "govern")
+    # Planning -> Pre-Flight Validation -> Governance
+    graph.add_edge("plan", "plan_validator")
+    graph.add_conditional_edges(
+        "plan_validator",
+        route_after_plan_validator,
+        {
+            "govern": "govern",
+            "escalate": "escalate",
+        },
+    )
     graph.add_conditional_edges(
         "govern",
         route_after_govern,

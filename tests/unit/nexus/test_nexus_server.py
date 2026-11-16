@@ -68,54 +68,54 @@ async def test_create_wires_all_components():
         with patch("nexus.server.Prescaler", return_value=mock_prescaler):
             with patch("nexus.server.PpaOutcomeTracker", return_value=mock_tracker):
                 with patch("nexus.server.Notifier", return_value=mock_notifier):
+                    with patch(
+                        "nexus.server.NexusOrchestrator",
+                        return_value=mock_orchestrator,
+                    ):
                         with patch(
-                            "nexus.server.NexusOrchestrator",
-                            return_value=mock_orchestrator,
+                            "nexus.server.RCAEngine", return_value=mock_rca_engine
                         ):
                             with patch(
-                                "nexus.server.RCAEngine", return_value=mock_rca_engine
+                                "nexus.server.AuditTrail",
+                                return_value=_awaitable_magicmock(),
                             ):
                                 with patch(
-                                    "nexus.server.AuditTrail",
+                                    "nexus.server.PolicyEngine",
                                     return_value=_awaitable_magicmock(),
                                 ):
                                     with patch(
-                                        "nexus.server.PolicyEngine",
+                                        "nexus.server.CooldownStore",
                                         return_value=_awaitable_magicmock(),
                                     ):
                                         with patch(
-                                            "nexus.server.CooldownStore",
+                                            "nexus.server.GovernanceCircuitBreaker",
                                             return_value=_awaitable_magicmock(),
                                         ):
                                             with patch(
-                                                "nexus.server.GovernanceCircuitBreaker",
-                                                return_value=_awaitable_magicmock(),
+                                                "nexus.server.HumanApprovalQueue",
+                                                return_value=MagicMock(),
                                             ):
                                                 with patch(
-                                                    "nexus.server.HumanApprovalQueue",
+                                                    "nexus.server.RunbookExecutor",
                                                     return_value=MagicMock(),
                                                 ):
                                                     with patch(
-                                                        "nexus.server.RunbookExecutor",
-                                                        return_value=MagicMock(),
+                                                        "nexus.server.OutcomeStore",
+                                                        return_value=_awaitable_magicmock(),
                                                     ):
                                                         with patch(
-                                                            "nexus.server.OutcomeStore",
+                                                            "nexus.server.KnowledgeBase",
                                                             return_value=_awaitable_magicmock(),
                                                         ):
                                                             with patch(
-                                                                "nexus.server.KnowledgeBase",
-                                                                return_value=_awaitable_magicmock(),
+                                                                "nexus.server.build_feedback_loop",
+                                                                new=AsyncMock(
+                                                                    return_value=_awaitable_magicmock()
+                                                                ),
                                                             ):
-                                                                with patch(
-                                                                    "nexus.server.build_feedback_loop",
-                                                                    new=AsyncMock(
-                                                                        return_value=_awaitable_magicmock()
-                                                                    ),
-                                                                ):
-                                                                    server = await NexusServer.create(
-                                                                        nats_url="nats://mock:4222"
-                                                                    )
+                                                                server = await NexusServer.create(
+                                                                    nats_url="nats://mock:4222"
+                                                                )
 
         assert server.nats_client is mock_nats
         assert server.prescaler is mock_prescaler
@@ -152,50 +152,48 @@ async def test_create_does_not_call_outcome_tracker_start():
                     with patch("nexus.server.Notifier") as mock_notifier_cls:
                         mock_notifier_cls.return_value.start_background = MagicMock()
                         mock_notifier_cls.return_value.stop = MagicMock()
-                        with patch(
-                            "nexus.server.RCAEngine", return_value=MagicMock()
-                        ):
+                        with patch("nexus.server.RCAEngine", return_value=MagicMock()):
+                            with patch(
+                                "nexus.server.AuditTrail",
+                                return_value=_awaitable_magicmock(),
+                            ):
                                 with patch(
-                                    "nexus.server.AuditTrail",
+                                    "nexus.server.PolicyEngine",
                                     return_value=_awaitable_magicmock(),
                                 ):
                                     with patch(
-                                        "nexus.server.PolicyEngine",
+                                        "nexus.server.CooldownStore",
                                         return_value=_awaitable_magicmock(),
                                     ):
                                         with patch(
-                                            "nexus.server.CooldownStore",
+                                            "nexus.server.GovernanceCircuitBreaker",
                                             return_value=_awaitable_magicmock(),
                                         ):
                                             with patch(
-                                                "nexus.server.GovernanceCircuitBreaker",
-                                                return_value=_awaitable_magicmock(),
+                                                "nexus.server.HumanApprovalQueue",
+                                                return_value=MagicMock(),
                                             ):
                                                 with patch(
-                                                    "nexus.server.HumanApprovalQueue",
+                                                    "nexus.server.RunbookExecutor",
                                                     return_value=MagicMock(),
                                                 ):
                                                     with patch(
-                                                        "nexus.server.RunbookExecutor",
-                                                        return_value=MagicMock(),
+                                                        "nexus.server.OutcomeStore",
+                                                        return_value=_awaitable_magicmock(),
                                                     ):
                                                         with patch(
-                                                            "nexus.server.OutcomeStore",
+                                                            "nexus.server.KnowledgeBase",
                                                             return_value=_awaitable_magicmock(),
                                                         ):
                                                             with patch(
-                                                                "nexus.server.KnowledgeBase",
-                                                                return_value=_awaitable_magicmock(),
+                                                                "nexus.server.build_feedback_loop",
+                                                                new=AsyncMock(
+                                                                    return_value=_awaitable_magicmock()
+                                                                ),
                                                             ):
-                                                                with patch(
-                                                                    "nexus.server.build_feedback_loop",
-                                                                    new=AsyncMock(
-                                                                        return_value=_awaitable_magicmock()
-                                                                    ),
-                                                                ):
-                                                                    await NexusServer.create(
-                                                                        nats_url="nats://mock:4222"
-                                                                    )
+                                                                await NexusServer.create(
+                                                                    nats_url="nats://mock:4222"
+                                                                )
 
         # outcome_tracker.start() must NOT be called in create()
         mock_tracker.start.assert_not_called()
@@ -232,9 +230,7 @@ async def test_start_calls_outcome_tracker():
                         "nexus.server.NexusOrchestrator",
                         return_value=mock_orchestrator,
                     ):
-                        with patch(
-                            "nexus.server.RCAEngine", return_value=MagicMock()
-                        ):
+                        with patch("nexus.server.RCAEngine", return_value=MagicMock()):
                             with patch(
                                 "nexus.server.AuditTrail",
                                 return_value=_awaitable_magicmock(),
@@ -314,9 +310,7 @@ async def test_stop_cleans_up_all_subsystems():
                         "nexus.server.NexusOrchestrator",
                         return_value=mock_orchestrator,
                     ):
-                        with patch(
-                            "nexus.server.RCAEngine", return_value=MagicMock()
-                        ):
+                        with patch("nexus.server.RCAEngine", return_value=MagicMock()):
                             with patch(
                                 "nexus.server.AuditTrail",
                                 return_value=_awaitable_magicmock(),

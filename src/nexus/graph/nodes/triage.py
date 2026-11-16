@@ -14,7 +14,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
-from nexus.engine.fsm import IncidentState
+from nexus.db.models import IncidentState
 from nexus.graph.platform import get_platform_registry
 from nexus.graph.platform.base import TargetResource
 from nexus.graph.state import IncidentGraphState

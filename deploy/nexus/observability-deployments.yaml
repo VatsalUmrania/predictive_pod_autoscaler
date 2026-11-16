@@ -41,6 +41,14 @@ data:
             cors:
               allowed_origins: ["*"]
 
+      # Plane 1: Native Kubernetes Event Watcher (Warning events)
+      k8sobjects:
+        auth_type: serviceAccount
+        objects:
+          - name: events
+            mode: watch
+            field_selector: type=Warning
+
       # Scrape existing PPA operator + test-app + NATS self-metrics
       prometheus:
         config:
@@ -116,6 +124,14 @@ data:
         tls:
           insecure: true
 
+      # Plane 1 -> Plane 2 Ingestion Webhook
+      otlphttp/nexus:
+        endpoint: "http://nexus-api:8080/api/v1/ingest/otlp/events"
+        encoding: json
+        compression: none
+        tls:
+          insecure: true
+
       # Traces → Tempo
       otlp/tempo:
         endpoint: "tempo:4317"
@@ -150,11 +166,54 @@ data:
           processors: [memory_limiter, batch, resource]
           exporters:  [otlphttp/loki, debug]
 
+        # ── Kubernetes Events pipeline (Plane 1 -> Plane 2) ──────────────────────
+        logs/events:
+          receivers:  [k8sobjects]
+          processors: [batch]
+          exporters:  [otlphttp/nexus]
+
         # ── Traces pipeline ──────────────────────────────────────────────────────
         traces:
           receivers:  [otlp]
           processors: [memory_limiter, batch, resource]
           exporters:  [otlp/tempo, debug]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+  namespace: nexus
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: telemetry
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: otel-collector
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: telemetry
+rules:
+  - apiGroups: [""]
+    resources: ["events", "pods", "namespaces", "nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: otel-collector
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: telemetry
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: otel-collector
+subjects:
+  - kind: ServiceAccount
+    name: otel-collector
+    namespace: nexus
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -175,6 +234,7 @@ spec:
       labels:
         app: otel-collector
     spec:
+      serviceAccountName: otel-collector
       containers:
         - name: otel-collector
           image: otel/opentelemetry-collector-contrib:0.113.0

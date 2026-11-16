@@ -14,7 +14,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.prebuilt import create_react_agent
 
-from nexus.engine.fsm import IncidentState
+from nexus.db.models import IncidentState
 from nexus.graph.llm import get_llm
 from nexus.graph.nodes.diagnose_builders import (
     build_rca_success,

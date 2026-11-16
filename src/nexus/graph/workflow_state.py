@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from nexus.engine.fsm import IncidentState
+from nexus.db.models import IncidentState
 from nexus.graph.state import IncidentGraphState
 
 

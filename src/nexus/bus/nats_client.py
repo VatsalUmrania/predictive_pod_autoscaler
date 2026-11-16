@@ -14,8 +14,11 @@ from nexus.bus.nats import (
     NATSClient,
 )
 
+NatsClient = NATSClient
+
 __all__ = [
     "NATSClient",
+    "NatsClient",
     "NEXUS_STREAM",
     "NEXUS_SUBJECT",
     "NEXUS_SUBJECTS",

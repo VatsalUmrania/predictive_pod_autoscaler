@@ -21,6 +21,14 @@ BEGIN
             'rolled_back', 'rejected', 'escalated', 'failed'
         );
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'incident_status') THEN
+        CREATE TYPE incident_status AS ENUM (
+            'RECEIVED', 'CORRELATED', 'INVESTIGATING', 'PLANNED', 
+            'VALIDATING', 'AWAITING_APPROVAL', 'APPROVED', 'REJECTED', 
+            'EXECUTING', 'EXECUTION_FAILED', 'VERIFYING', 'VALIDATION_FAILED', 
+            'ROLLBACK_REQUIRED', 'ROLLED_BACK', 'EXPIRED', 'RESOLVED'
+        );
+    END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'agent_run_status') THEN
         CREATE TYPE agent_run_status AS ENUM ('running', 'completed', 'failed', 'timed_out', 'cancelled');
     END IF;
@@ -53,15 +61,39 @@ CREATE TABLE IF NOT EXISTS incidents (
     trigger_payload     JSONB NOT NULL DEFAULT '{}',
     root_cause_summary  TEXT,
     confidence_score    NUMERIC(4, 3),
+    workload_urn        VARCHAR(255),
+    status              incident_status NOT NULL DEFAULT 'RECEIVED',
+    plan_hash           VARCHAR(64),
+    execution_id        VARCHAR(64) UNIQUE,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     resolved_at         TIMESTAMPTZ
 );
 
+-- Idempotent column migrations for pre-existing incidents tables
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'incidents' AND column_name = 'status') THEN
+        ALTER TABLE incidents ADD COLUMN status incident_status NOT NULL DEFAULT 'RECEIVED';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'incidents' AND column_name = 'workload_urn') THEN
+        ALTER TABLE incidents ADD COLUMN workload_urn VARCHAR(255);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'incidents' AND column_name = 'plan_hash') THEN
+        ALTER TABLE incidents ADD COLUMN plan_hash VARCHAR(64);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'incidents' AND column_name = 'execution_id') THEN
+        ALTER TABLE incidents ADD COLUMN execution_id VARCHAR(64) UNIQUE;
+    END IF;
+END$$;
+
 CREATE INDEX IF NOT EXISTS idx_incidents_fingerprint ON incidents(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_incidents_state ON incidents(current_state);
+CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
 CREATE INDEX IF NOT EXISTS idx_incidents_created ON incidents(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_incidents_target ON incidents(target_resource);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_active_incident_per_urn ON incidents (workload_urn) 
+WHERE status IN ('INVESTIGATING', 'PLANNED', 'VALIDATING', 'AWAITING_APPROVAL', 'APPROVED', 'EXECUTING');
 
 -- 2. State Transitions
 CREATE TABLE IF NOT EXISTS incident_state_transitions (

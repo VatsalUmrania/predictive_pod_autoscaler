@@ -30,3 +30,23 @@ def get_k8s_client(api_cls: str = "CoreV1Api") -> Any:
     except Exception as exc:
         logger.debug("[K8sClient] Could not load client %s: %s", api_cls, exc)
         return None
+
+
+def get_dynamic_client() -> Any:
+    """Instantiate and return a Kubernetes DynamicClient instance."""
+    try:
+        from kubernetes import client as _c
+        from kubernetes import config as _cfg
+        from kubernetes.dynamic import DynamicClient
+
+        try:
+            _cfg.load_incluster_config()
+        except Exception:
+            _cfg.load_kube_config()
+        conf = _c.Configuration.get_default_copy()
+        conf.retries = 1
+        api_client = _c.ApiClient(configuration=conf)
+        return DynamicClient(api_client)
+    except Exception as exc:
+        logger.debug("[K8sClient] Could not load DynamicClient: %s", exc)
+        return None

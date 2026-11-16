@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 from urllib.parse import parse_qs
 
@@ -179,6 +180,7 @@ async def _slack_dispatch_approved(
 
 
 @router.post("/slack/interactive")
+@router.post("/api/v1/slack/interactive")
 async def slack_interactive(
     request: Request, background_tasks: BackgroundTasks
 ) -> dict[str, Any]:
@@ -217,14 +219,79 @@ async def slack_interactive(
 
     action = actions[0]
     action_id = action.get("action_id")
-    approval_id = action.get("value")
+    raw_value = action.get("value")
     user = data.get("user", {}).get("username") or data.get("user", {}).get(
         "id", "unknown"
     )
+    user_id = data.get("user", {}).get("id") or user
     response_url = data.get("response_url")
 
-    if not approval_id or action_id not in ("nexus_approve", "nexus_reject"):
+    valid_actions = (
+        "nexus_approve",
+        "nexus_reject",
+        "approve_plan",
+        "reject_plan",
+    )
+    if not raw_value or action_id not in valid_actions:
         raise HTTPException(status_code=400, detail="malformed action")
+
+    is_approval = action_id in ("nexus_approve", "approve_plan")
+
+    # Check for structured JSON value (Plane 4)
+    action_data = None
+    if isinstance(raw_value, str) and raw_value.strip().startswith("{"):
+        try:
+            action_data = json.loads(raw_value)
+        except Exception:
+            action_data = None
+
+    if isinstance(action_data, dict):
+        incident_id = action_data.get("incident_id")
+        plan_hash = action_data.get("plan_hash")
+        expires_at = action_data.get("expires_at")
+
+        if expires_at is not None:
+            try:
+                if time.time() > float(expires_at):
+                    return _slack_replace(
+                        "⏳ Approval request has expired. Incident requires re-planning.",
+                        status_title="⏳ Approval Expired",
+                        is_approved=False,
+                    )
+            except Exception:
+                pass
+
+        if incident_id:
+            from nexus.bus.nats.client import NATSClient
+
+            nats_client = NATSClient.get_instance()
+            resume_payload = {
+                "incident_id": incident_id,
+                "plan_hash": plan_hash,
+                "approved_by": user_id,
+                "user": user,
+                "decision": "approved" if is_approval else "rejected",
+                "timestamp": time.time(),
+            }
+            if nats_client and getattr(nats_client, "is_connected", False):
+                background_tasks.add_task(
+                    nats_client.publish,
+                    f"nexus.workflow.resume.{incident_id}",
+                    resume_payload,
+                )
+
+            if is_approval:
+                return {
+                    "replace_original": True,
+                    "text": "⚡ Approval verified. Resuming workflow...",
+                }
+            else:
+                return {
+                    "replace_original": True,
+                    "text": "❌ Remediation plan rejected.",
+                }
+
+    approval_id = raw_value
 
     if (
         context.workflow

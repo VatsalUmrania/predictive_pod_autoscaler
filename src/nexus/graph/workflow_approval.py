@@ -10,7 +10,7 @@ from typing import Any, cast
 
 from langgraph.types import Command
 
-from nexus.engine.fsm import IncidentState
+from nexus.db.models import IncidentState
 from nexus.graph.manifest_formatter import (
     extract_diagnostic_logs,
     plan_to_yaml_manifest,

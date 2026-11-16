@@ -13,6 +13,8 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from nexus.api.ingest import ingest_otlp_events
+from nexus.api.ingest import router as ingest_router
 from nexus.observability import status_context as _sc
 from nexus.observability.status_context import (
     NexusContext,
@@ -74,6 +76,8 @@ app.add_middleware(
 app.include_router(core_router)
 app.include_router(governance_router)
 app.include_router(slack_router)
+app.include_router(ingest_router)
+app.add_api_route("/v1/logs", ingest_otlp_events, methods=["POST"], tags=["ingest"])
 _include_integration_routers(app)
 
 

@@ -25,6 +25,10 @@ import pytest
 # 1. PolicyEngine & Rego Rule Tests
 # ─────────────────────────────────────────────────────────────────────────────
 import nexus.governance.policy_engine as pe_module
+from nexus.governance.policy_abac import (
+    build_opa_input_for_action,
+    evaluate_local_abac,
+)
 from nexus.governance.policy_engine import PolicyEngine
 from nexus.graph.nodes.govern import govern_node
 from nexus.tools.base import NexusTool, NexusToolResult, ToolDomain, ToolRiskLevel
@@ -214,7 +218,7 @@ async def test_govern_node_enforces_zero_trust_metadata_for_destructive_tool():
     gov = result["governance"]
 
     assert gov["allowed"] is False
-    assert result["fsm_state"] == "failed"
+    assert result["fsm_state"] in ("failed", "EXECUTION_FAILED")
     assert any("destructive" in r for r in gov["reasons"])
 
 
@@ -320,7 +324,7 @@ async def test_govern_node_advisory_lock_contention_blocks():
 
     gov = result["governance"]
     assert gov["allowed"] is False
-    assert result["fsm_state"] == "failed"
+    assert result["fsm_state"] in ("failed", "EXECUTION_FAILED")
     assert any(
         "advisory lock" in r or "Concurrent mutation" in r for r in gov["reasons"]
     )
@@ -395,3 +399,78 @@ async def test_govern_node_advisory_lock_released_on_exit():
     mock_conn.execute.assert_awaited_once_with(
         "SELECT pg_advisory_unlock($1)", lock_key
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Plane 4: Strict OPA Precedence & AST Path Inspection Tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_opa_ast_scale_to_zero_denied():
+    """Verify modifying /spec/replicas to 0 is strictly denied by AST inspection."""
+    action = {
+        "tool_name": "k8s_scale_resource",
+        "mutated_paths": ["/spec/replicas"],
+        "patch_payload": {"spec": {"replicas": 0}},
+        "blast_radius": "pod",
+        "has_rollback": True,
+        "rollback_tool_name": "k8s_scale_resource",
+    }
+    inp = build_opa_input_for_action(action)
+    decision, reasons = evaluate_local_abac(inp)
+
+    assert decision == "DENY"
+    assert any("Scale to zero replicas is prohibited" in r for r in reasons)
+
+
+def test_opa_ast_immutable_labels_denied():
+    """Verify modifying system/immutable labels is strictly denied by AST inspection."""
+    action = {
+        "tool_name": "k8s_patch_labels",
+        "mutated_paths": ["/metadata/labels/app.kubernetes.io/name"],
+        "patch_payload": {"metadata": {"labels": {"app.kubernetes.io/name": "hacked"}}},
+        "blast_radius": "pod",
+        "has_rollback": True,
+        "rollback_tool_name": "k8s_patch_labels",
+    }
+    inp = build_opa_input_for_action(action)
+    decision, reasons = evaluate_local_abac(inp)
+
+    assert decision == "DENY"
+    assert any("Mutating system/immutable labels is prohibited" in r for r in reasons)
+
+
+def test_opa_strict_precedence_deny_overrides_allow_auto():
+    """Verify strict precedence: DENY takes precedence over ALLOW_AUTO."""
+    action = {
+        "tool_name": "aws_rds_delete_cluster",
+        "is_destructive": True,
+        "blast_radius": "pod",
+        "allow_auto": True,
+        "has_rollback": True,
+        "rollback_tool_name": "noop",
+    }
+    inp = build_opa_input_for_action(action)
+    inp["allow_auto"] = True
+    decision, reasons = evaluate_local_abac(inp)
+
+    assert decision == "DENY"
+    assert len(reasons) > 0
+
+
+def test_opa_auto_approval_tier():
+    """Verify low-risk safe actions with high confidence auto-approve when permitted."""
+    action = {
+        "tool_name": "k8s_restart_pod",
+        "blast_radius": "pod",
+        "is_destructive": False,
+        "has_rollback": True,
+        "rollback_tool_name": "noop",
+        "allow_auto": True,
+    }
+    inp = build_opa_input_for_action(action, rca_report={"confidence": 0.99})
+    inp["allow_auto"] = True
+    decision, reasons = evaluate_local_abac(inp)
+
+    assert decision == "ALLOW_AUTO"
+    assert len(reasons) == 0

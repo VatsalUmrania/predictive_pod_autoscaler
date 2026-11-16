@@ -16,13 +16,19 @@ from datetime import datetime, timezone
 from typing import Any
 
 from nexus.db import get_database_client
-from nexus.engine.fsm import IncidentState
+from nexus.db.models import IncidentState, IncidentStatus
 from nexus.graph.platform import TargetResource, get_platform_registry
 from nexus.graph.state import ExecutionRecord, IncidentGraphState
 from nexus.tools.base import NexusToolResult
 from nexus.tools.registry import default_registry
 
 logger = logging.getLogger(__name__)
+
+
+class ConcurrencyError(RuntimeError):
+    """Raised when an Optimistic Concurrency Control (OCC) lock detects resourceVersion drift."""
+
+    pass
 
 
 async def execute_node(state: IncidentGraphState) -> dict[str, Any]:
@@ -58,6 +64,7 @@ async def execute_node(state: IncidentGraphState) -> dict[str, Any]:
     )
 
     # 1. PostgreSQL Advisory Locking (guard against concurrent mutation execution)
+    db_client = None
     conn = None
     conn_ctx = None
     lock_acquired = False
@@ -93,8 +100,67 @@ async def execute_node(state: IncidentGraphState) -> dict[str, Any]:
     except Exception as lock_err:
         logger.debug("[Execute] Advisory locking skipped/unsupported: %s", lock_err)
 
+    # 2. Database Execution Idempotency Claim
+    plan_hash = str(
+        plan.get("plan_hash") or (steps[0].get("plan_hash") if steps else "") or ""
+    )
+    if (
+        plan_hash
+        and db_client is not None
+        and hasattr(db_client, "claim_execution_idempotent")
+    ):
+        claimed, exec_id = await db_client.claim_execution_idempotent(
+            incident_id, plan_hash
+        )
+        if not claimed:
+            logger.warning(
+                "[Execute] Idempotency abort: execution for incident %s plan %s already claimed or invalid state",
+                incident_id,
+                plan_hash,
+            )
+            return {
+                "execution_records": [],
+                "fsm_state": IncidentStatus.EXECUTION_FAILED.value,
+                "error_message": "Execution aborted: already claimed or plan hash mismatch",
+                "execution_idempotent_aborted": True,
+            }
+
     try:
         for step in steps:
+            # 2. OCC Verification
+            req_version = step.get("required_resource_version")
+            if req_version and platform_id == "kubernetes":
+                try:
+                    from nexus.tools.k8s.client import get_dynamic_client
+
+                    d_client = get_dynamic_client()
+                    if d_client:
+                        api_v = step.get("api_version", "apps/v1")
+                        k_kind = step.get("kind", "Deployment")
+                        r_api = d_client.resources.get(api_version=api_v, kind=k_kind)
+                        s_name = (
+                            step.get("name")
+                            or step.get("resource_name")
+                            or target_service
+                        )
+                        s_ns = step.get("namespace", "default")
+                        cur_obj = r_api.get(name=s_name, namespace=s_ns)
+                        live_ver = str(
+                            getattr(
+                                getattr(cur_obj, "metadata", None),
+                                "resourceVersion",
+                                "",
+                            )
+                        )
+                        if live_ver and live_ver != str(req_version):
+                            raise ConcurrencyError(
+                                f"Resource '{s_name}' modified concurrently: expected resourceVersion {req_version}, found {live_ver}"
+                            )
+                except ConcurrencyError:
+                    raise
+                except Exception as occ_err:
+                    logger.debug("[Execute] OCC live verification skipped: %s", occ_err)
+
             tool_name = step.get("tool_name", "")
             params = step.get("parameters", {})
             step_idx = step.get("step_index", 0)

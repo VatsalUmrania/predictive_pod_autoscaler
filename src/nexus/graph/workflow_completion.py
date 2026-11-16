@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from nexus.engine.fsm import IncidentState
+from nexus.db.models import IncidentState
 
 logger = logging.getLogger(__name__)
 

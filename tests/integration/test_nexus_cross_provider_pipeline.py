@@ -18,7 +18,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 from nexus.bus.events.event import AnomalySignal
-from nexus.engine.fsm import IncidentState
+from nexus.db.models import IncidentState
 from nexus.graph.nodes.execute import execute_node
 from nexus.graph.platform import (
     HealthCheckResult,

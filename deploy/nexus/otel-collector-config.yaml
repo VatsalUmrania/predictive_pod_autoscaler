@@ -28,6 +28,14 @@ receivers:
         cors:
           allowed_origins: ["*"]
 
+  # Plane 1: Native Kubernetes Event Watcher (Warning events)
+  k8sobjects:
+    auth_type: serviceAccount
+    objects:
+      - name: events
+        mode: watch
+        field_selector: type=Warning
+
   # Scrape existing PPA operator + test-app + NATS self-metrics
   prometheus:
     config:
@@ -103,6 +111,14 @@ exporters:
     tls:
       insecure: true
 
+  # Plane 1 -> Plane 2 Ingestion Webhook
+  otlphttp/nexus:
+    endpoint: "http://nexus-api:8080/api/v1/ingest/otlp/events"
+    encoding: json
+    compression: none
+    tls:
+      insecure: true
+
   # Traces → Tempo
   otlp/tempo:
     endpoint: "tempo:4317"
@@ -136,6 +152,12 @@ service:
       receivers:  [otlp]
       processors: [memory_limiter, batch, resource]
       exporters:  [otlphttp/loki, debug]
+
+    # ── Kubernetes Events pipeline (Plane 1 -> Plane 2) ──────────────────────
+    logs/events:
+      receivers:  [k8sobjects]
+      processors: [batch]
+      exporters:  [otlphttp/nexus]
 
     # ── Traces pipeline ──────────────────────────────────────────────────────
     traces:

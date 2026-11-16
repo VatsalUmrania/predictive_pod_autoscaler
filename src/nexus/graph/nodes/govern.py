@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from nexus.db import get_database_client
-from nexus.engine.fsm import IncidentState
+from nexus.db.models import IncidentState
 from nexus.governance.cooldown_store import CooldownStore
 from nexus.graph.nodes.govern_helpers import evaluate_steps_opa
 from nexus.graph.platform import TargetResource

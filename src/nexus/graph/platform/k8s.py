@@ -109,7 +109,9 @@ class K8sPlatformAdapter(BasePlatformAdapter):
             resource_name=target.name,
         )
         logs_str = get_pod_logs(namespace=target.namespace, pod_name=target.name)
-        logs = [line for line in logs_str.splitlines() if line.strip()] if logs_str else []
+        logs = (
+            [line for line in logs_str.splitlines() if line.strip()] if logs_str else []
+        )
         h_status = "crashloopbackoff" if "crashloop" in desc.lower() else "unknown"
         return PlatformTelemetry(
             target=target,

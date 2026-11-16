@@ -17,6 +17,10 @@ from nexus.graph.nodes.execute import execute_node
 from nexus.graph.nodes.govern import govern_node
 from nexus.graph.nodes.learn import learn_node
 from nexus.graph.nodes.plan import plan_node, plan_remediation_node
+from nexus.graph.nodes.plan_validator import (
+    plan_validator_node,
+    validate_and_seal_plan,
+)
 from nexus.graph.nodes.rollback import rollback_node
 from nexus.graph.nodes.triage import triage_node
 from nexus.graph.nodes.verify import verify_node
@@ -28,6 +32,8 @@ __all__ = [
     "rca_tool_executor_node",
     "plan_node",
     "plan_remediation_node",
+    "plan_validator_node",
+    "validate_and_seal_plan",
     "govern_node",
     "approval_node",
     "execute_node",

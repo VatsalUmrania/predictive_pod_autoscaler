@@ -45,7 +45,9 @@ class GetMetricsSchema(BaseModel):
         default="pod", description="Resource kind: pod, deployment"
     )
     resource_name: str = Field(default="", description="Target resource name")
-    pod_name: str | None = Field(default=None, description="Optional alias for resource_name")
+    pod_name: str | None = Field(
+        default=None, description="Optional alias for resource_name"
+    )
 
     @model_validator(mode="before")
     @classmethod

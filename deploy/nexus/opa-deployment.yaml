@@ -20,7 +20,7 @@ data:
 
     import rego.v1
 
-    default decision := "DENY"
+    default decision := "REQUIRE_APPROVAL"
     default allow := false
     default require_human_approval := false
     default valid_input := false
@@ -70,6 +70,7 @@ data:
 
     deny_reasons contains "Mutating action is missing an explicit rollback tool call" if {
         input.has_rollback_plan == false
+        input.allows_unbacked_rollback != true
     }
 
     deny_reasons contains "Circuit breaker is tripped for target resource" if {
@@ -80,14 +81,35 @@ data:
         input.cooldown_active == true
     }
 
-    # Mandatory 1-Click Slack Approval Tier:
-    # Every valid plan that passes OPA safety guardrails requires 1-click human approval in Slack before execution.
-    decision := "REQUIRE_APPROVAL" if {
-        count(deny_reasons) == 0
+    # AST path inspection rules (Plane 4)
+    deny_reasons contains "Scale to zero replicas is prohibited" if {
+        some path in input.mutated_paths
+        startswith(path, "/spec/replicas")
+        input.patch_payload.spec.replicas == 0
     }
 
+    deny_reasons contains "Mutating system/immutable labels is prohibited" if {
+        some path in input.mutated_paths
+        startswith(path, "/metadata/labels/")
+    }
+
+    # Auto-approval conditions
+    allow_auto_conditions_met if {
+        input.allow_auto == true
+        input.blast_radius == "pod"
+        input.rca_confidence >= 0.95
+        input.is_destructive == false
+    }
+
+    # Strict Precedence: DENY > ALLOW_AUTO > REQUIRE_APPROVAL
+    decision := "DENY" if {
+        count(deny_reasons) > 0
+    } else := "ALLOW_AUTO" if {
+        allow_auto_conditions_met
+    } else := "REQUIRE_APPROVAL"
+
     allow if {
-        decision == "REQUIRE_APPROVAL"
+        decision in ["REQUIRE_APPROVAL", "ALLOW_AUTO"]
     }
 
     require_human_approval if {

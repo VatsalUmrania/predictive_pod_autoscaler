@@ -7,9 +7,16 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from nexus.engine.fsm import IncidentState
+from nexus.db.models import IncidentState
 
 logger = logging.getLogger(__name__)
+
+
+def route_after_plan_validator(state: dict[str, Any]) -> str:
+    """Route after pre-flight plan validation: govern on success, escalate on failure."""
+    if state.get("validation_passed") is False:
+        return "escalate"
+    return "govern"
 
 
 def route_after_rca_reasoner(state: dict[str, Any]) -> str:

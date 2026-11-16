@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from nexus.db import get_database_client
-from nexus.engine.fsm import IncidentState
+from nexus.db.models import IncidentState
 from nexus.graph.state import IncidentGraphState
 
 logger = logging.getLogger(__name__)

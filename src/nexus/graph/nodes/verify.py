@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from nexus.engine.fsm import IncidentState
+from nexus.db.models import IncidentState
 from nexus.graph.nodes.verify_helpers import (
     evaluate_verification_condition,
     execute_plan_verification_checks,

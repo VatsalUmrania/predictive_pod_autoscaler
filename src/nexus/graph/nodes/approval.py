@@ -14,7 +14,7 @@ from typing import Any
 
 from langgraph.types import interrupt
 
-from nexus.engine.fsm import IncidentState
+from nexus.db.models import IncidentState
 from nexus.graph.state import IncidentGraphState
 
 logger = logging.getLogger(__name__)

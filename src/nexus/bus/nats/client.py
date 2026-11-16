@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from typing import Any
 
 import nats
 from nats.aio.client import Client as NATSConnection
@@ -32,6 +33,8 @@ logger = logging.getLogger(__name__)
 class NATSClient:
     """Async NATS JetStream client for the NEXUS incident event bus."""
 
+    _instance: NATSClient | None = None
+
     def __init__(
         self,
         nats_url: str = "nats://localhost:4222",
@@ -44,6 +47,14 @@ class NATSClient:
         self._nc: NATSConnection | None = None
         self._js: JetStreamContext | None = None
         self._subscribers: list[asyncio.Task] = []
+        NATSClient._instance = self
+
+    @classmethod
+    def get_instance(cls) -> NATSClient:
+        """Return the active singleton instance or create a default instance."""
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
 
     async def connect(self) -> None:
         """Connect to NATS and ensure the JetStream streams exist."""
@@ -77,29 +88,62 @@ class NATSClient:
     async def __aexit__(self, *_) -> None:
         await self.close()
 
-    async def publish(self, event: IncidentEvent) -> None:
-        """Publish an IncidentEvent to the NATS JetStream bus."""
+    async def publish(
+        self,
+        event_or_subject: Any = None,
+        payload: Any = None,
+        headers: dict[str, str] | None = None,
+        subject: str | None = None,
+    ) -> None:
+        """Publish an IncidentEvent or raw payload to the NATS JetStream bus."""
         if not self._js:
             raise RuntimeError("NATSClient not connected. Call connect() first.")
-        subject = event.nats_subject()
-        payload = event.to_nats_payload()
-        ack = await self._js.publish(
-            subject, payload, headers={"Nats-Msg-Id": event.event_id}
+
+        target_subj = subject or (
+            event_or_subject if isinstance(event_or_subject, str) else None
         )
-        logger.debug(
-            f"[NATS] Published {subject} seq={ack.seq} event_id={event.event_id}"
-        )
+        if target_subj:
+            data = (
+                payload
+                if isinstance(payload, bytes)
+                else (
+                    json.dumps(payload).encode("utf-8")
+                    if isinstance(payload, dict)
+                    else str(payload).encode("utf-8")
+                )
+            )
+            ack = await self._js.publish(target_subj, data, headers=headers)
+            logger.debug(
+                f"[NATS] Published {target_subj} seq={getattr(ack, 'seq', None)}"
+            )
+            return
+
+        event = event_or_subject
+        subj = event.nats_subject()
+        body = event.to_nats_payload()
+        hdr = headers or {"Nats-Msg-Id": getattr(event, "event_id", "msg")}
+        ack = await self._js.publish(subj, body, headers=hdr)
+        logger.debug(f"[NATS] Published {subj} seq={getattr(ack, 'seq', None)}")
 
     async def publish_incident(self, event: IncidentEvent) -> None:
         await self.publish(event)
 
-    async def publish_raw(self, subject: str, payload: dict) -> None:
-        """Publish a raw dict payload to a non-IncidentEvent subject on the bus."""
+    async def publish_raw(
+        self, subject: str, payload: dict | bytes, headers: dict[str, str] | None = None
+    ) -> None:
+        """Publish a raw dict or bytes payload with optional headers to JetStream."""
         if not self._js:
             raise RuntimeError("NATSClient not connected. Call connect() first.")
-        data = json.dumps(payload).encode("utf-8")
-        ack = await self._js.publish(subject, data, stream=NEXUS_STREAM)
-        logger.debug(f"[NATS] Published raw {subject} seq={ack.seq}")
+        data = (
+            payload
+            if isinstance(payload, bytes)
+            else json.dumps(payload).encode("utf-8")
+        )
+        pub_kwargs: dict[str, Any] = {"stream": NEXUS_STREAM}
+        if headers:
+            pub_kwargs["headers"] = headers
+        ack = await self._js.publish(subject, data, **pub_kwargs)
+        logger.debug(f"[NATS] Published raw {subject} seq={getattr(ack, 'seq', None)}")
 
     async def subscribe(
         self,

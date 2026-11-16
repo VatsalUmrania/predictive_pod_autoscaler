@@ -142,6 +142,14 @@ def build_opa_input_for_action(
         "cooldown_active": cooldown_active,
         "circuit_breaker_tripped": circuit_breaker_tripped,
         "estimated_cost_delta_pct": cost_delta_pct,
+        "mutated_paths": list(action.get("mutated_paths") or []),
+        "patch_payload": dict(
+            action.get("patch_payload")
+            or action.get("parameters")
+            or action.get("tool_arguments")
+            or {}
+        ),
+        "allow_auto": bool(action.get("allow_auto", False)),
     }
 
 
@@ -170,7 +178,41 @@ def evaluate_local_abac(inp: dict[str, Any]) -> tuple[str, list[str]]:
         deny_reasons.append("Resource is currently in remediation cooldown window")
     if not (inp.get("has_rollback_plan") or inp.get("allows_unbacked_rollback")):
         deny_reasons.append("Mutating action is missing an explicit rollback tool call")
+
+    # AST path validations (Plane 4)
+    mutated_paths = inp.get("mutated_paths") or []
+    patch_payload = inp.get("patch_payload") or {}
+
+    for path in mutated_paths:
+        if path.startswith("/spec/replicas"):
+            replicas = None
+            if isinstance(patch_payload, dict):
+                spec = patch_payload.get("spec")
+                if isinstance(spec, dict):
+                    replicas = spec.get("replicas")
+                elif "replicas" in patch_payload:
+                    replicas = patch_payload.get("replicas")
+            if replicas == 0 or replicas == "0":
+                deny_reasons.append("Scale to zero replicas is prohibited")
+                break
+
+    for path in mutated_paths:
+        if path.startswith("/metadata/labels/"):
+            deny_reasons.append("Mutating system/immutable labels is prohibited")
+            break
+
+    # Strict precedence ordering: DENY > ALLOW_AUTO > REQUIRE_APPROVAL
     if deny_reasons:
         return "DENY", deny_reasons
+
+    # Check auto-approval condition
+    allow_auto = (
+        inp.get("allow_auto") is True
+        and inp.get("blast_radius") in ("pod", "pod_or_instance")
+        and float(inp.get("rca_confidence", 0.0)) >= 0.95
+        and not inp.get("is_destructive", False)
+    )
+    if allow_auto:
+        return "ALLOW_AUTO", []
 
     return "REQUIRE_APPROVAL", []

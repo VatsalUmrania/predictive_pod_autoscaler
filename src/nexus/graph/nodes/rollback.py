@@ -12,7 +12,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from nexus.engine.fsm import IncidentState
+from nexus.db.models import IncidentState
 from nexus.graph.platform import RollbackSnapshot, TargetResource, get_platform_registry
 from nexus.graph.state import IncidentGraphState
 

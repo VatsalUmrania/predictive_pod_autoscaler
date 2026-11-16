@@ -140,9 +140,7 @@ def drain_node(node_name: str) -> str:
 
 class K8sRestartDeploymentTool(NexusTool):
     name = "k8s_restart_deployment"
-    description = (
-        "Perform a rolling restart of a Kubernetes deployment to clear transient failures."
-    )
+    description = "Perform a rolling restart of a Kubernetes deployment to clear transient failures."
     domain = ToolDomain.K8S
     risk_level = ToolRiskLevel.L1_SAFE
     args_schema = RestartDeploymentSchema

@@ -184,16 +184,23 @@ class MockPostgresClient:
         trigger_source: str = "unknown",
         trigger_payload: dict | None = None,
         incident_id: str | None = None,
+        workload_urn: str | None = None,
+        status: str = "RECEIVED",
     ) -> str:
         inc_id = incident_id or str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         self._incidents[inc_id] = {
             "incident_id": inc_id,
+            "id": inc_id,
             "fingerprint": fingerprint,
             "environment": environment,
             "target_resource": target_resource,
+            "workload_urn": workload_urn or target_resource,
             "severity": severity,
             "current_state": "detected",
+            "status": status.upper() if isinstance(status, str) else str(status),
+            "plan_hash": None,
+            "execution_id": None,
             "trigger_source": trigger_source,
             "trigger_payload": trigger_payload or {},
             "created_at": now,
@@ -213,6 +220,88 @@ class MockPostgresClient:
             }
         )
         return inc_id
+
+    async def create_or_coalesce_incident(
+        self,
+        *,
+        workload_urn: str,
+        fingerprint: str = "fp-default",
+        environment: str = "kubernetes",
+        severity: str = "error",
+        trigger_source: str = "otlp",
+        trigger_payload: dict | None = None,
+        incident_id: str | None = None,
+        initial_status: Any = "RECEIVED",
+    ) -> tuple[str, bool]:
+        for inc in reversed(list(self._incidents.values())):
+            if inc.get("workload_urn") == workload_urn and inc.get("status") in (
+                "INVESTIGATING",
+                "PLANNED",
+                "VALIDATING",
+                "AWAITING_APPROVAL",
+                "APPROVED",
+                "EXECUTING",
+            ):
+                return inc["incident_id"], True
+
+        init_val = getattr(initial_status, "value", str(initial_status)).upper()
+        if "." in init_val:
+            init_val = init_val.split(".")[-1]
+        inc_id = await self.create_incident(
+            fingerprint=fingerprint,
+            environment=environment,
+            target_resource=workload_urn,
+            severity=severity,
+            trigger_source=trigger_source,
+            trigger_payload=trigger_payload,
+            incident_id=incident_id,
+            workload_urn=workload_urn,
+            status=init_val,
+        )
+        return inc_id, False
+
+    async def claim_execution_idempotent(
+        self, incident_id: str, plan_hash: str
+    ) -> tuple[bool, str | None]:
+        inc = self._incidents.get(incident_id)
+        if not inc:
+            return False, None
+        if inc.get("execution_id"):
+            return False, inc.get("execution_id")
+        status = str(inc.get("status", "")).upper()
+        if "." in status:
+            status = status.split(".")[-1]
+        if status != "APPROVED" and inc.get("current_state") not in (
+            "approved",
+            "approval_pending",
+        ):
+            return False, None
+        if inc.get("plan_hash") and inc.get("plan_hash") != plan_hash:
+            return False, None
+        exec_id = str(uuid.uuid4())
+        inc["status"] = "EXECUTING"
+        inc["current_state"] = "executing"
+        inc["execution_id"] = exec_id
+        inc["plan_hash"] = plan_hash
+        return True, exec_id
+
+    async def transition_status(
+        self,
+        incident_id: str,
+        to_status: Any,
+        plan_hash: str | None = None,
+        reason: str = "",
+    ) -> bool:
+        inc = self._incidents.get(incident_id)
+        if not inc:
+            return False
+        stat = getattr(to_status, "value", str(to_status)).upper()
+        if "." in stat:
+            stat = stat.split(".")[-1]
+        inc["status"] = stat
+        if plan_hash:
+            inc["plan_hash"] = plan_hash
+        return True
 
     async def transition_state(
         self,

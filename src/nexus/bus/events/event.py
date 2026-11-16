@@ -54,12 +54,66 @@ class SymptomSignal(BaseModel):
     def nats_subject(self) -> str:
         return f"nexus.symptom.{self.provider}.{self.kind}"
 
+    @property
+    def workload_urn(self) -> str:
+        return self.resource_urn
+
+    @property
+    def service_name(self) -> str:
+        if "/" in self.resource_urn:
+            return self.resource_urn.split("/")[-1]
+        if ":" in self.resource_urn:
+            return self.resource_urn.split(":")[-1]
+        return self.resource_urn
+
+    @property
+    def namespace(self) -> str:
+        return self.region_or_namespace
+
+    @property
+    def reason(self) -> str:
+        if ":" in self.symptom_summary:
+            return self.symptom_summary.split(":", 1)[0].strip()
+        return "AnomalyEvent"
+
+    @property
+    def message(self) -> str:
+        return self.symptom_summary
+
     def to_nats_payload(self) -> bytes:
         return self.model_dump_json().encode("utf-8")
 
     @classmethod
     def from_nats_payload(cls, payload: bytes) -> SymptomSignal:
         return cls.model_validate_json(payload)
+
+    def to_incident_event(self) -> IncidentEvent:
+        """Convert SymptomSignal to normalized IncidentEvent for workflow consumption."""
+        parts = self.resource_urn.split("/") if "/" in self.resource_urn else []
+        res_name = parts[-1] if parts else self.service_name
+        res_kind = parts[-2] if len(parts) >= 2 else "Pod"
+        provider = str(getattr(self.provider, "value", self.provider)).lower()
+        agent = "k8s" if provider in ("kubernetes", "k8s") else provider
+        sev = str(getattr(self.severity, "value", self.severity)).lower()
+        if "." in sev:
+            sev = sev.split(".")[-1]
+        kind_str = str(getattr(self.kind, "value", self.kind))
+        return IncidentEvent(
+            event_id=self.signal_id,
+            timestamp=self.timestamp,
+            agent=agent,
+            signal_type=kind_str,
+            severity=sev,
+            namespace=self.region_or_namespace,
+            resource_name=res_name,
+            resource_kind=res_kind,
+            context={
+                "summary": self.symptom_summary,
+                "urn": self.resource_urn,
+                "raw": self.raw_payload,
+            },
+            raw=self.raw_payload,
+        )
 
 
 class IncidentEvent(BaseModel):
@@ -114,8 +168,54 @@ class IncidentEvent(BaseModel):
 
     @classmethod
     def from_nats_payload(cls, payload: bytes) -> IncidentEvent:
-        """Deserializes an event received from NATS."""
-        return cls.model_validate_json(payload)
+        """Deserializes an event received from NATS with SymptomSignal fallback."""
+        try:
+            return cls.model_validate_json(payload)
+        except Exception:
+            import json
+
+            try:
+                data = json.loads(payload.decode("utf-8"))
+            except Exception:
+                raise
+            if (
+                "resource_urn" in data
+                or "symptom_summary" in data
+                or "signal_id" in data
+            ):
+                res_urn = str(data.get("resource_urn", ""))
+                parts = res_urn.split("/") if "/" in res_urn else []
+                res_name = (
+                    parts[-1] if parts else str(data.get("target_service", "unknown"))
+                )
+                res_kind = parts[-2] if len(parts) >= 2 else "Pod"
+                ns = (
+                    data.get("region_or_namespace")
+                    or data.get("namespace")
+                    or "default"
+                )
+                provider = str(data.get("provider", "kubernetes")).lower()
+                agent = "k8s" if provider in ("kubernetes", "k8s") else provider
+                sev = str(data.get("severity", "warning")).lower()
+                if "." in sev:
+                    sev = sev.split(".")[-1]
+                return cls(
+                    event_id=str(data.get("signal_id") or uuid.uuid4()),
+                    timestamp=datetime.now(timezone.utc),
+                    agent=agent,
+                    signal_type=str(data.get("kind", "error_log_burst")),
+                    severity=sev,
+                    namespace=str(ns),
+                    resource_name=res_name,
+                    resource_kind=res_kind,
+                    context={
+                        "summary": str(data.get("symptom_summary", "")),
+                        "urn": res_urn,
+                        "raw": data.get("raw_payload", {}),
+                    },
+                    raw=data.get("raw_payload") or data,
+                )
+            raise
 
     def is_severity_at_least(self, minimum: str) -> bool:
         order = ["info", "warning", "critical", "emergency"]

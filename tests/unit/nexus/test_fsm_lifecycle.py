@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from nexus.engine.fsm import IncidentFSM, IncidentState
+from nexus.db.models import IncidentFSM, IncidentState, IncidentStatus
 from tests.unit.nexus.test_db_helpers import MockPostgresClient
 
 
@@ -72,9 +72,9 @@ async def test_fsm_happy_path_with_db_and_nats():
     assert transitions == [
         "detected",
         "correlated",
-        "diagnosing",
-        "planning",
-        "policy_check",
+        "investigating",
+        "planned",
+        "validating",
         "executing",
         "verifying",
         "resolved",
@@ -137,5 +137,72 @@ async def test_fsm_rollback_and_escalation():
     )
     assert ok is True
     assert fsm.current_state == IncidentState.ESCALATED
+
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_single_flight_coalescing():
+    """Verify that multiple incoming signals for the same workload coalesce into one active incident."""
+    db = MockPostgresClient()
+    await db.initialize()
+
+    urn = "k8s://production/apps/v1/Deployment/payment-service"
+
+    # First event creates the active incident
+    inc_id1, coalesced1 = await db.create_or_coalesce_incident(
+        workload_urn=urn,
+        initial_status=IncidentStatus.RECEIVED,
+    )
+    assert coalesced1 is False
+
+    # Transition to active mutating state
+    await db.transition_status(inc_id1, IncidentStatus.INVESTIGATING)
+
+    # Second event on the same active workload returns the existing incident
+    inc_id2, coalesced2 = await db.create_or_coalesce_incident(
+        workload_urn=urn,
+        initial_status=IncidentStatus.RECEIVED,
+    )
+    assert coalesced2 is True
+    assert inc_id2 == inc_id1
+
+    # After incident is resolved, a new incident can be created
+    await db.transition_status(inc_id1, IncidentStatus.RESOLVED)
+
+    inc_id3, coalesced3 = await db.create_or_coalesce_incident(
+        workload_urn=urn,
+        initial_status=IncidentStatus.RECEIVED,
+    )
+    assert coalesced3 is False
+    assert inc_id3 != inc_id1
+
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_claim_execution_idempotency():
+    """Verify exactly-once execution lock via plan_hash claiming."""
+    db = MockPostgresClient()
+    await db.initialize()
+
+    urn = "k8s://production/apps/v1/Deployment/checkout-service"
+    inc_id, _ = await db.create_or_coalesce_incident(
+        workload_urn=urn,
+        initial_status=IncidentStatus.APPROVED,
+    )
+    await db.transition_status(inc_id, IncidentStatus.APPROVED)
+
+    plan_hash = "abc123canonicalhash"
+
+    # First claim succeeds and issues execution ID
+    claimed1, exec_id1 = await db.claim_execution_idempotent(inc_id, plan_hash)
+    assert claimed1 is True
+    assert exec_id1 is not None
+
+    # Duplicate execution attempt with same or different hash is rejected
+    claimed2, exec_id2 = await db.claim_execution_idempotent(inc_id, plan_hash)
+    assert claimed2 is False
+    assert exec_id2 == exec_id1
 
     await db.close()

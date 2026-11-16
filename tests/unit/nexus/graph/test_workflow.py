@@ -357,7 +357,9 @@ async def test_verification_failure_and_deterministic_rollback():
             "nexus.tools.k8s.observe_tools.describe_resource",
             return_value="Replicas: 2\nState: CrashLoopBackOff",
         ),
-        patch("nexus.tools.k8s.mutate_tools.restart_deployment", return_value="restarted"),
+        patch(
+            "nexus.tools.k8s.mutate_tools.restart_deployment", return_value="restarted"
+        ),
         patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05),
         patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01),
         patch.object(
@@ -553,9 +555,12 @@ async def test_workflow_pending_approvals_and_status_api_integration():
                 suggested_action="k8s_restart_deployment",
             ),
         ),
-        patch("nexus.tools.k8s.observe_tools.describe_resource", side_effect=mock_describe),
         patch(
-            "nexus.tools.k8s.observe_tools.get_pod_logs", return_value="panic: runtime crash"
+            "nexus.tools.k8s.observe_tools.describe_resource", side_effect=mock_describe
+        ),
+        patch(
+            "nexus.tools.k8s.observe_tools.get_pod_logs",
+            return_value="panic: runtime crash",
         ),
         patch(
             "nexus.tools.k8s.mutate_tools.restart_deployment",

@@ -12,7 +12,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-from nexus.engine.fsm import IncidentState
+from nexus.db.models import IncidentState
 from nexus.graph.nodes.approval import approval_node
 from nexus.graph.platform import HealthCheckResult, get_platform_registry
 from nexus.graph.routes import route_after_approval

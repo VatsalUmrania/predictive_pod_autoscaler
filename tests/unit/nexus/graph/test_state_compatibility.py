@@ -9,7 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import StateGraph
 
 from nexus.bus.events.event import AnomalySignal
-from nexus.engine.fsm import IncidentState
+from nexus.db.models import IncidentState
 from nexus.graph.builder import build_incident_graph
 from nexus.graph.nodes.triage import triage_node
 from nexus.graph.state import (

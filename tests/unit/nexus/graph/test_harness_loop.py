@@ -197,9 +197,16 @@ async def test_e2e_workflow_adaptive_ladder_pause_and_resume():
 
     with (
         patch("nexus.graph.nodes.diagnose.get_llm", return_value=MockHarnessK8sModel()),
-        patch("nexus.tools.k8s.observe_tools.describe_resource", side_effect=mock_describe),
-        patch("nexus.tools.k8s.mutate_tools.restart_deployment", return_value="restarted"),
-        patch("nexus.tools.k8s.mutate_tools.rollback_deployment", side_effect=mock_rollback),
+        patch(
+            "nexus.tools.k8s.observe_tools.describe_resource", side_effect=mock_describe
+        ),
+        patch(
+            "nexus.tools.k8s.mutate_tools.restart_deployment", return_value="restarted"
+        ),
+        patch(
+            "nexus.tools.k8s.mutate_tools.rollback_deployment",
+            side_effect=mock_rollback,
+        ),
         patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05),
         patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01),
         patch.object(adapter, "verify_health", side_effect=mock_health_check),

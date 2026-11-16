@@ -13,7 +13,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, cast
 
-from nexus.engine.fsm import IncidentState
+from nexus.db.models import IncidentState
 
 logger = logging.getLogger(__name__)
 
