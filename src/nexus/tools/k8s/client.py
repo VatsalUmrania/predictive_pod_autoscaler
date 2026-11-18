@@ -32,6 +32,16 @@ def get_k8s_client(api_cls: str = "CoreV1Api") -> Any:
         return None
 
 
+def get_k8s_core_api() -> Any:
+    """Instantiate and return a Kubernetes CoreV1Api client."""
+    return get_k8s_client("CoreV1Api")
+
+
+def get_k8s_apps_api() -> Any:
+    """Instantiate and return a Kubernetes AppsV1Api client."""
+    return get_k8s_client("AppsV1Api")
+
+
 def get_dynamic_client() -> Any:
     """Instantiate and return a Kubernetes DynamicClient instance."""
     try:

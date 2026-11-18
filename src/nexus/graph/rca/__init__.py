@@ -1,12 +1,11 @@
-"""NEXUS LangGraph Multi-Agent Root Cause Analysis (RCA) package."""
+"""NEXUS LangGraph Root Cause Analysis (RCA) package."""
 
 from typing import Any
 
 from nexus.graph.rca.result import (
-    VALID_FAILURE_CLASSES,
-    EvidenceCitation,
-    RCAReport,
+    DiscoveredTarget,
     RCAResult,
+    VerificationResult,
 )
 
 
@@ -18,9 +17,8 @@ class RCALeadSynthesizer:
 
 
 __all__ = [
-    "EvidenceCitation",
-    "RCAReport",
+    "DiscoveredTarget",
     "RCAResult",
-    "VALID_FAILURE_CLASSES",
+    "VerificationResult",
     "RCALeadSynthesizer",
 ]

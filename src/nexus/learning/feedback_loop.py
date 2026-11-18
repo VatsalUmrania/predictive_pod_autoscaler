@@ -8,7 +8,7 @@ import os
 import time
 from typing import Any
 
-from nexus.bus.nats_client import NATSClient
+from nexus.bus.nats.client import NATSClient
 from nexus.learning.feedback_factory import build_feedback_loop
 from nexus.learning.feedback_publisher import publish_learning_cycle_summary
 from nexus.learning.feedback_verifier import (

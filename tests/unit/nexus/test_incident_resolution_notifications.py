@@ -220,35 +220,61 @@ async def test_record_incident_resolution_persists_to_db():
 
 @pytest.mark.asyncio
 async def test_workflow_handle_completion_publishes_nats_and_records():
-    """IncidentWorkflow._handle_workflow_completion broadcasts on NATS and persists to DB."""
+    """IncidentWorkflow._handle_workflow_completion broadcasts on NATS, persists to DB, and publishes report."""
+    from nexus.bus.nats.client import NATSClient
     from nexus.graph.workflow import IncidentWorkflow
 
     workflow = IncidentWorkflow.__new__(IncidentWorkflow)
     workflow.nats = MagicMock()
+    workflow.nats.is_connected = True
     workflow.nats.publish_raw = AsyncMock()
 
     result_state = {
-        "resolved": True,
-        "fsm_state": "resolved",
-        "target": {"name": "cart-service", "namespace": "ecommerce"},
-        "diagnosis": {
-            "failure_class": "CrashLoopBackOff",
-            "root_cause": "Config map missing key",
+        "incident_id": "inc-wf-1",
+        "status": "RESOLVED",
+        "namespace": "ecommerce",
+        "resource_kind": "Deployment",
+        "service_name": "cart-service",
+        "target_resource": "ecommerce/Deployment/cart-service",
+        "failure_class": "missing_config_key",
+        "suspected_cause": "Config map missing key",
+        "confidence": 0.9,
+        "rca_result": {
+            "failure_type": "missing_config_key",
+            "root_cause_summary": "Config map missing key",
             "confidence": 0.9,
         },
-        "plan": {
-            "steps": [{"description": "Mounted missing config map key"}],
+        "remediation_plan": {
+            "steps": [
+                {
+                    "step": 1,
+                    "tool_name": "k8s_mutate_resource",
+                    "description": "Mounted missing config map key",
+                }
+            ],
         },
-        "verification": {
-            "healthy": True,
-            "slo_restored": True,
-            "details": "Ready 3/3",
-        },
+        "execution_results": [
+            {
+                "step": 1,
+                "tool_name": "k8s_mutate_resource",
+                "status": "SUCCESS",
+                "output": "Patched",
+            }
+        ],
+        "verification_passed": True,
+        "verification_feedback": "Ready 3/3",
     }
 
-    with patch(
-        "nexus.integration.dashboard.record_incident_resolution", new_callable=AsyncMock
-    ) as mock_rec:
+    with (
+        patch(
+            "nexus.integration.dashboard.record_incident_resolution",
+            new_callable=AsyncMock,
+        ) as mock_rec,
+        patch.object(NATSClient, "_instance", workflow.nats),
+        patch(
+            "nexus.integration.incident_report._store_report", new_callable=AsyncMock
+        ),
+    ):
         await workflow._handle_workflow_completion(
             result=result_state,
             inc_id="inc-wf-1",
@@ -263,17 +289,111 @@ async def test_workflow_handle_completion_publishes_nats_and_records():
         ]
         payload = calls[0].args[1]
         assert payload["incident_id"] == "inc-wf-1"
-        assert payload["target"] == "ecommerce/cart-service"
+        assert payload["target"] == "ecommerce/Deployment/cart-service"
         assert payload["outcome"] == "success"
 
         # 2. Check dashboard DB recording
         mock_rec.assert_awaited_once()
         db_payload = mock_rec.await_args.args[0]
         assert db_payload["incident_id"] == "inc-wf-1"
-        assert db_payload["target"] == "ecommerce/cart-service"
+        assert db_payload["target"] == "ecommerce/Deployment/cart-service"
 
         # 3. Report-ready payload carries the report URL + summary
         report_msg = calls[1].args[1]
         assert report_msg["incident_id"] == "inc-wf-1"
         assert report_msg["report_url"].endswith("/developer/incidents/inc-wf-1/report")
         assert report_msg["summary"]  # template fallback still produces a summary
+
+
+@pytest.mark.asyncio
+async def test_escalation_flow_maps_new_rca_schema_and_avoids_duplicate_slack():
+    """Escalated workflow publishes RCA + proposed fix without Unknown/ESCALATED placeholders or duplicate Slack sends."""
+    from nexus.bus.nats.client import NATSClient
+    from nexus.graph.nodes.escalate import derive_escalation_reason, escalate_node
+    from nexus.graph.workflow_completion import handle_workflow_completion
+
+    state = {
+        "incident_id": "CL-46C15FD3",
+        "platform": "k8s",
+        "namespace": "default",
+        "resource_kind": "Deployment",
+        "service_name": "shop-demo",
+        "target_resource": "default/Deployment/shop-demo",
+        "failure_class": "readiness_probe_startup_race_condition",
+        "suspected_cause": "Container took 10s to bind port 8001 while readinessProbe initialDelaySeconds is 2s.",
+        "confidence": 0.91,
+        "rca_result": {
+            "failure_type": "readiness_probe_startup_race_condition",
+            "root_cause_summary": "Container took 10s to bind port 8001 while readinessProbe initialDelaySeconds is 2s.",
+            "confidence": 0.91,
+            "evidence": ["connect: connection refused on :8001", "initialDelaySeconds: 2"],
+            "can_auto_remediate": False,
+            "recommended_strategy": "Increase readinessProbe.initialDelaySeconds from 2s to 15s on Deployment/shop-demo.",
+        },
+        "remediation_plan": {},
+        "execution_results": [],
+        "status": "DIAGNOSED",
+    }
+
+    reason = derive_escalation_reason(state)
+    assert "can_auto_remediate=False" in reason
+    assert reason != "ESCALATED"
+
+    mock_nats = MagicMock()
+    mock_nats.is_connected = True
+    mock_nats.publish_raw = AsyncMock()
+
+    with (
+        patch.object(NATSClient, "_instance", mock_nats),
+        patch(
+            "nexus.graph.nodes.escalate.sync_discovered_target_identity",
+            new_callable=AsyncMock,
+        ),
+        patch.object(Notifier, "notify_incident_escalated", new_callable=AsyncMock) as mock_direct,
+    ):
+        esc_update = await escalate_node(state)
+        assert esc_update["status"] == "ESCALATED"
+        assert "can_auto_remediate=False" in esc_update["error"]
+        # When NATS is connected, escalate_node must NOT send a duplicate direct Slack message
+        mock_direct.assert_not_awaited()
+
+    final_state = {**state, **esc_update}
+    with patch(
+        "nexus.integration.dashboard.record_incident_resolution",
+        new_callable=AsyncMock,
+    ):
+        await handle_workflow_completion(
+            result=final_state,
+            inc_id="CL-46C15FD3",
+            thread_id="CL-46C15FD3",
+            nats=mock_nats,
+            publish_report=False,
+        )
+
+    mock_nats.publish_raw.assert_awaited_once()
+    subject, published = mock_nats.publish_raw.await_args.args
+    assert subject == "nexus.lifecycle.escalated"
+    assert published["failure_class"] == "readiness_probe_startup_race_condition"
+    assert "initialDelaySeconds" in published["recommended_strategy"]
+    assert published["reason"] != "ESCALATED"
+
+    # Now feed that exact NATS payload into Notifier and verify the single Slack card has RCA + Proposed Fix
+    notifier = Notifier()
+    notifier._send = AsyncMock()
+    with patch(
+        "nexus.integration.dashboard._policy_cache",
+        _policy("default", "https://hooks.slack.test/ESC"),
+    ):
+        await notifier._on_incident_escalated_message(published)
+
+    notifier._send.assert_awaited_once()
+    _, slack_payload, _ = notifier._send.await_args.args
+    blocks_str = str(slack_payload["attachments"][0]["blocks"])
+    assert "readiness_probe_startup_race_condition" in blocks_str
+    assert "Root Cause Analysis (RCA)" in blocks_str
+    assert "Container took 10s to bind port 8001" in blocks_str
+    assert "Proposed Fix / Recommended Strategy" in blocks_str
+    assert "Increase readinessProbe.initialDelaySeconds from 2s to 15s" in blocks_str
+    assert "Observed Evidence" in blocks_str
+    assert "91%" in blocks_str
+    assert "`Unknown`" not in blocks_str

@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any
 
-from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
+from nexus.bus.events import AgentType, IncidentEvent, Severity, SignalType
 from nexus.predictive.models import PrescaleDecision
 
 logger = logging.getLogger(__name__)

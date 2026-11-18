@@ -91,44 +91,107 @@ def build_incident_escalated_payload(
     failure_class: str,
     reason: str,
     root_cause: str,
+    *,
+    confidence: float | None = None,
+    recommended_fix: str | None = None,
+    evidence: list[str] | None = None,
+    proposed_steps: list[dict[str, Any]] | None = None,
+    rollback_applied: bool = False,
 ) -> dict[str, Any]:
-    """Build Slack Block Kit payload for escalated incident."""
-    fallback = f"🚨 NEXUS Incident Escalated for {target}: {reason}"
+    """Build Slack Block Kit payload for escalated incident with RCA & proposed fix."""
+    header_text = f"🚨 NEXUS Incident Escalation — {target}"
+    if len(header_text) > 150:
+        header_text = header_text[:147] + "..."
+    fallback = f"🚨 NEXUS Incident Escalated for {target}: {failure_class} — {reason[:160]}"
+
+    fields: list[dict[str, str]] = [
+        {"type": "mrkdwn", "text": f"*Incident ID:*\n`{incident_id}`"},
+        {"type": "mrkdwn", "text": f"*Target:*\n`{target}`"},
+        {"type": "mrkdwn", "text": f"*Failure Class:*\n`{failure_class}`"},
+        {"type": "mrkdwn", "text": "*Status:*\n`ESCALATED`"},
+    ]
+    if confidence is not None and confidence > 0.0:
+        conf_str = (
+            f"{confidence * 100:.0f}%" if confidence <= 1.0 else f"{confidence:.0f}%"
+        )
+        fields.append({"type": "mrkdwn", "text": f"*RCA Confidence:*\n`{conf_str}`"})
+    fields.append(
+        {"type": "mrkdwn", "text": f"*Rollback Applied:*\n`{rollback_applied}`"}
+    )
+
     blocks: list[dict[str, Any]] = [
         {
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": f"🚨 NEXUS Incident Escalation — {target}",
+                "text": header_text,
                 "emoji": True,
             },
         },
         {"type": "divider"},
         {
             "type": "section",
-            "fields": [
-                {"type": "mrkdwn", "text": f"*Incident ID:*\n`{incident_id}`"},
-                {"type": "mrkdwn", "text": f"*Target:*\n`{target}`"},
-                {"type": "mrkdwn", "text": f"*Failure Class:*\n`{failure_class}`"},
-                {"type": "mrkdwn", "text": "*Status:*\n`ESCALATED`"},
-            ],
+            "fields": fields,
         },
         {"type": "divider"},
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*Escalation Reason:*\n{reason[:350]}"},
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Escalation Reason:*\n{reason[:500]}{'...' if len(reason) > 500 else ''}",
+            },
         },
     ]
+
     if root_cause and root_cause != "Unknown":
         blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*Suspected Cause:*\n{root_cause[:350]}{'...' if len(root_cause) > 350 else ''}",
+                    "text": f"*Root Cause Analysis (RCA):*\n{root_cause[:600]}{'...' if len(root_cause) > 600 else ''}",
                 },
             }
         )
+
+    fix_lines: list[str] = []
+    if recommended_fix and recommended_fix.strip():
+        fix_lines.append(recommended_fix.strip()[:600])
+    if proposed_steps:
+        step_summaries = []
+        for idx, step in enumerate(proposed_steps[:4], start=1):
+            tool_name = step.get("tool_name") or step.get("action") or "step"
+            desc = step.get("description") or str(step.get("tool_args") or "")
+            step_summaries.append(f"{idx}. `{tool_name}` — {desc[:180]}")
+        if step_summaries:
+            fix_lines.append("\n".join(step_summaries))
+
+    if fix_lines:
+        fix_text = "\n".join(fix_lines)
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Proposed Fix / Recommended Strategy:*\n{fix_text[:1000]}{'...' if len(fix_text) > 1000 else ''}",
+                },
+            }
+        )
+
+    if evidence:
+        ev_items = [f"• {str(item)[:200]}" for item in evidence[:4] if str(item).strip()]
+        if ev_items:
+            ev_text = "\n".join(ev_items)
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Observed Evidence:*\n{ev_text[:900]}",
+                    },
+                }
+            )
+
     blocks.append({"type": "divider"})
     blocks.append(
         {

@@ -1,6 +1,6 @@
 """Unit tests for raw_features rendering in IncidentCluster.to_llm_context()."""
 
-from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
+from nexus.bus.events import AgentType, IncidentEvent, Severity, SignalType
 from nexus.reasoning.incident_cluster import IncidentCluster
 
 

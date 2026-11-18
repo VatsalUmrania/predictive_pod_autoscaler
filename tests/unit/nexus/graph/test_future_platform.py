@@ -1,203 +1,152 @@
 """
-Tests demonstrating extensibility for FUTURE PLATFORMS (e.g. GCP, Azure, Bare-Metal).
+Tests demonstrating zero-hardcoding extensibility for FUTURE PLATFORMS (e.g. GCP, Azure).
+Registering a new platform tool in ToolRegistry enables full ReAct diagnosis,
+schema-bound planning, governance, execution, and verification with zero platform-specific
+hardcoding in the graph.
 """
 
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
-from pydantic import BaseModel
+from langchain_core.tools import tool
 
-from nexus.graph.platform import (
-    BasePlatformAdapter,
-    HealthCheckResult,
-    LiveStateSnapshot,
-    PlatformTelemetry,
-    RollbackSnapshot,
-    TargetResource,
-    get_platform_registry,
-)
+from nexus.graph.rca.result import DiscoveredTarget, RCAResult, VerificationResult
 from nexus.graph.workflow import IncidentWorkflow
-from nexus.tools.base import NexusTool, NexusToolResult, ToolDomain, ToolRiskLevel
-
-
-class GCPRestartInstanceSchema(BaseModel):
-    project_id: str = ""
-    zone: str = ""
-    instance_name: str = ""
-
-
-class GCPRestartInstanceTool(NexusTool):
-    name = "gcp_restart_compute_instance"
-    description = "Restart a Google Cloud Compute Engine VM instance"
-    domain = ToolDomain.SYSTEM
-    risk_level = ToolRiskLevel.L1_SAFE
-    args_schema = GCPRestartInstanceSchema
-
-    async def execute(self, **kwargs: Any) -> NexusToolResult:
-        return NexusToolResult(
-            success=True, data={"status": "TERMINATED -> PROVISIONING -> RUNNING"}
-        )
-
-
-class MockFutureGCPModel(BaseChatModel):
-    @property
-    def _llm_type(self) -> str:
-        return "mock-future-gcp"
-
-    def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
-        msg = AIMessage(
-            content="",
-            tool_calls=[
-                {
-                    "name": "RCAReport",
-                    "args": {
-                        "root_cause_summary": "GCP Compute VM memory pressure detected",
-                        "affected_resource_urn": "projects/prod-proj/zones/us-central1-a/instances/payment-worker-v1",
-                        "provider": "gcp",
-                        "confidence": 0.95,
-                        "hypotheses_evaluated": ["memory_pressure"],
-                        "evidence_chain": [
-                            {
-                                "tool_name": "gcp_get_telemetry",
-                                "tool_arguments": {},
-                                "key_finding": "Unreachable",
-                            }
-                        ],
-                        "pre_incident_resource_state": {"status": "RUNNING"},
-                        "requires_remediation": True,
-                        "suggested_action": "gcp_restart_compute_instance",
-                    },
-                    "id": "rca_wf_gcp_1",
-                }
-            ],
-        )
-        return ChatResult(generations=[ChatGeneration(message=msg)])
-
-    def bind_tools(self, *args: Any, **kwargs: Any) -> Any:
-        return self
-
-
-class MockGCPPlatformAdapter(BasePlatformAdapter):
-    def __init__(self) -> None:
-        self._tools = {GCPRestartInstanceTool.name: GCPRestartInstanceTool()}
-        self.restarted = False
-
-    @property
-    def platform_id(self) -> str:
-        return "gcp"
-
-    def can_handle(self, event_or_target: dict[str, Any] | TargetResource) -> bool:
-        if isinstance(event_or_target, TargetResource):
-            return event_or_target.platform.lower() in ("gcp", "google_cloud")
-        if isinstance(event_or_target, dict):
-            return (
-                event_or_target.get("platform") == "gcp"
-                or "gcp" in str(event_or_target.get("namespace", "")).lower()
-            )
-        return False
-
-    def detect_target(self, events: list[dict[str, Any]]) -> TargetResource:
-        evt = events[0] if events else {}
-        res = str(
-            evt.get(
-                "resource_name",
-                "projects/prod-cluster/zones/us-central1/instances/api-gw",
-            )
-        )
-        name = res.split("/")[-1]
-        zone = res.split("/")[3] if len(res.split("/")) > 3 else "us-central1"
-        return TargetResource(
-            platform="gcp",
-            namespace=zone,
-            name=name,
-            kind="compute_instance",
-            arn_or_uri=res,
-        )
-
-    async def collect_telemetry(self, target: TargetResource) -> PlatformTelemetry:
-        return PlatformTelemetry(
-            target=target,
-            metrics={"cpu_utilization": 0.99},
-            recent_logs=["GCP Compute VM memory pressure detected"],
-            health_status="failing",
-        )
-
-    async def inspect_live_state(self, target: TargetResource) -> LiveStateSnapshot:
-        return LiveStateSnapshot(target=target, exists=True, is_failing=True)
-
-    def get_tools(self) -> list[NexusTool]:
-        return list(self._tools.values())
-
-    async def execute_action(
-        self, tool_name: str, parameters: dict[str, Any]
-    ) -> NexusToolResult:
-        self.restarted = True
-        return await self._tools[tool_name].execute(**parameters)
-
-    async def capture_snapshot(
-        self, target: TargetResource, tool_name: str, parameters: dict[str, Any]
-    ) -> RollbackSnapshot | None:
-        return RollbackSnapshot(
-            snapshot_id="gcp-snap-123",
-            target=target,
-            action_name=tool_name,
-            rollback_tool=tool_name,
-            rollback_parameters=parameters,
-            description="Revert GCP restart",
-        )
-
-    async def execute_rollback(self, snapshot: RollbackSnapshot) -> NexusToolResult:
-        return NexusToolResult(success=True, data={"rollback": "gcp_reverted"})
-
-    async def verify_health(
-        self, target: TargetResource, plan_step: dict[str, Any]
-    ) -> HealthCheckResult:
-        return HealthCheckResult(
-            healthy=True, slo_restored=True, details="Instance RUNNING"
-        )
+from nexus.tools.registry import ToolMetadata, get_tool_registry
 
 
 @pytest.mark.asyncio
 async def test_future_platform_registration_and_workflow_execution():
-    registry = get_platform_registry()
-    registry.register(MockGCPPlatformAdapter())
+    executed_calls: list[dict[str, Any]] = []
 
-    event = {
-        "platform": "gcp",
-        "resource_name": "projects/prod-proj/zones/us-central1-a/instances/payment-worker-v1",
-        "severity": "critical",
-        "signal_type": "gcp_vm_unresponsive",
-    }
-    assert registry.resolve_adapter(event).platform_id == "gcp"
+    @tool
+    def gcp_restart_compute_instance(
+        project_id: str, zone: str, instance_name: str
+    ) -> dict[str, Any]:
+        """Restart a Google Cloud Compute Engine VM instance."""
+        executed_calls.append(
+            {"project_id": project_id, "zone": zone, "instance_name": instance_name}
+        )
+        return {"status": "TERMINATED -> PROVISIONING -> RUNNING"}
+
+    registry = get_tool_registry()
+    registry.register_langchain_tool(
+        gcp_restart_compute_instance,
+        mode="mutate",
+        platform="gcp",
+        metadata=ToolMetadata(
+            blast_radius="pod",
+            reversible=True,
+            is_destructive=False,
+            platform="gcp",
+            mode="mutate",
+        ),
+    )
+
+    class _GCPFakeLLM:
+        async def ainvoke(self, messages: Any) -> AIMessage:
+            return AIMessage(content="Observed GCP state.", tool_calls=[])
+
+        def bind_tools(self, tools: list[Any]) -> Any:
+            names = {t.name for t in tools}
+
+            class _Bound:
+                async def ainvoke(self, messages: Any) -> AIMessage:
+                    if "gcp_restart_compute_instance" in names:
+                        return AIMessage(
+                            content="Restarting GCP VM payment-worker-v1.",
+                            tool_calls=[
+                                {
+                                    "id": "call_gcp_1",
+                                    "name": "gcp_restart_compute_instance",
+                                    "args": {
+                                        "project_id": "prod-proj",
+                                        "zone": "us-central1-a",
+                                        "instance_name": "payment-worker-v1",
+                                    },
+                                }
+                            ],
+                        )
+                    return AIMessage(content="Observed.", tool_calls=[])
+
+            return _Bound()
+
+        def with_structured_output(self, schema: Any) -> Any:
+            class _Struct:
+                async def ainvoke(self, messages: Any) -> Any:
+                    if schema is RCAResult:
+                        return RCAResult(
+                            target=DiscoveredTarget(
+                                platform="gcp",
+                                namespace_or_region="us-central1-a",
+                                resource_kind="ComputeInstance",
+                                resource_name="payment-worker-v1",
+                            ),
+                            failure_type="gcp_vm_unresponsive",
+                            root_cause_summary="GCP Compute VM memory pressure detected.",
+                            confidence=0.95,
+                            evidence=["serial console OOM"],
+                            can_auto_remediate=True,
+                            recommended_strategy="Restart GCE instance payment-worker-v1.",
+                        )
+                    if schema is VerificationResult:
+                        return VerificationResult(
+                            verification_passed=True,
+                            observed_state_summary="GCE instance payment-worker-v1 RUNNING.",
+                        )
+                    raise ValueError(schema)
+
+            return _Struct()
 
     workflow = IncidentWorkflow()
-    with patch("nexus.graph.nodes.diagnose.get_llm", return_value=MockFutureGCPModel()):
-        result = await workflow.run_incident(
-            {
-                "incident_id": "inc-gcp-future-001",
-                "platform": "gcp",
-                "events": [event],
-                "approval_decision": "approved",
-            }
-        )
+    llm = _GCPFakeLLM()
+    try:
+        with (
+            patch("nexus.graph.nodes.diagnose.get_chat_model", return_value=llm),
+            patch("nexus.graph.nodes.plan.get_chat_model", return_value=llm),
+            patch("nexus.graph.nodes.verify.get_chat_model", return_value=llm),
+            patch(
+                "nexus.graph.nodes.govern.evaluate_opa_policy",
+                AsyncMock(
+                    return_value={
+                        "allowed": True,
+                        "requires_approval": False,
+                        "reason": "Auto-approved",
+                    }
+                ),
+            ),
+            patch(
+                "nexus.integration.dashboard.record_incident_resolution", AsyncMock()
+            ),
+            patch(
+                "nexus.integration.incident_report.publish_post_incident_report",
+                AsyncMock(),
+            ),
+        ):
+            result = await workflow.run_incident(
+                {
+                    "incident_id": "inc-gcp-future-001",
+                    "platform": "gcp",
+                    "raw_events": [
+                        {
+                            "platform": "gcp",
+                            "resource_name": "payment-worker-v1",
+                            "severity": "critical",
+                        }
+                    ],
+                }
+            )
+    finally:
+        registry.unregister("gcp_restart_compute_instance")
 
-    assert result["resolved"] is True
-    assert result["fsm_state"] == "resolved"
-    stages = [entry["stage"] for entry in result["audit_log"]]
-    for s in [
-        "triage",
-        "collect_telemetry",
-        "diagnose",
-        "plan",
-        "govern",
-        "execute",
-        "verify",
-        "learn",
-    ]:
-        assert s in stages
+    assert result["status"] == "RESOLVED"
+    assert result["platform"] == "gcp"
+    assert (
+        result["target_resource"] == "us-central1-a/ComputeInstance/payment-worker-v1"
+    )
+    assert len(executed_calls) == 1
+    assert executed_calls[0]["instance_name"] == "payment-worker-v1"

@@ -109,7 +109,26 @@ def build_tool_schemas(
 
 def register_legacy_tools(registry: Any) -> None:
     try:
-        from nexus.tools.k8s_adapter import (
+        from nexus.tools.k8s.observe_tools import (
+            fetch_pod_container_logs,
+            inspect_deployment_status,
+            locate_pod_and_owner,
+        )
+
+        for lc_tool in (
+            locate_pod_and_owner,
+            fetch_pod_container_logs,
+            inspect_deployment_status,
+        ):
+            if hasattr(registry, "register_langchain_tool"):
+                registry.register_langchain_tool(
+                    lc_tool, mode="observe", platform="k8s"
+                )
+    except Exception as exc:
+        logger.debug("[ToolRegistry] Could not load agentic k8s observe tools: %s", exc)
+
+    try:
+        from nexus.tools.k8s import (
             K8sDescribeResourceTool,
             K8sGetMetricsTool,
             K8sGetPodLogsTool,
@@ -132,10 +151,10 @@ def register_legacy_tools(registry: Any) -> None:
         ):
             registry.register(cls())
     except Exception as exc:
-        logger.debug("[ToolRegistry] Could not load k8s adapter tools: %s", exc)
+        logger.debug("[ToolRegistry] Could not load k8s tools: %s", exc)
 
     try:
-        from nexus.tools.aws_adapter import (
+        from nexus.tools.aws import (
             AWSGetLogEventsTool,
             AWSGetMetricDataTool,
             AWSReplaySQSDLQTool,
@@ -160,7 +179,7 @@ def register_legacy_tools(registry: Any) -> None:
         ):
             registry.register(aws_cls())
     except Exception as exc:
-        logger.debug("[ToolRegistry] Could not load aws adapter tools: %s", exc)
+        logger.debug("[ToolRegistry] Could not load aws tools: %s", exc)
 
 
 async def execute_tool_with_db(

@@ -15,7 +15,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from nexus.db.postgres import get_database_client
+from nexus.db.client import get_database_client
 from nexus.graph.llm import get_llm
 from nexus.integration.incident_report_builder import (
     build_report_facts,
@@ -55,6 +55,7 @@ __all__ = [
     "build_report_facts",
     "_template_report",
     "generate_post_incident_report",
+    "publish_post_incident_report",
     "get_incident_report",
     "report_url",
     "render_report_html",
@@ -181,3 +182,62 @@ def report_url(incident_id: str) -> str:
     """Absolute URL to the dashboard report page, for Slack cards."""
     base = os.getenv("NEXUS_DASHBOARD_BASE_URL", "http://localhost:8080").rstrip("/")
     return f"{base}/developer/incidents/{incident_id}/report"
+
+
+async def publish_post_incident_report(
+    incident_id: str, final_state: dict[str, Any]
+) -> dict[str, Any]:
+    """
+    Generate, persist, and publish a Post-Incident Report for a completed incident
+    with executed remediation steps.
+    """
+    target_resource = (
+        final_state.get("target_resource")
+        or final_state.get("service_name")
+        or incident_id
+    )
+    payload = {
+        "incident_id": incident_id,
+        "target": target_resource,
+        "namespace": final_state.get("namespace"),
+        "outcome": "success" if final_state.get("status") == "RESOLVED" else "failed",
+        "failure_class": final_state.get("failure_class"),
+        "rca": final_state.get("rca_result") or {},
+        "plan": final_state.get("remediation_plan") or {},
+        "execution_results": final_state.get("execution_results") or [],
+        "verification": {
+            "passed": final_state.get("verification_passed"),
+            "feedback": final_state.get("verification_feedback"),
+        },
+    }
+    report = await generate_post_incident_report(final_state, payload=payload)
+
+    try:
+        from nexus.bus.nats.client import NATSClient
+
+        nats = NATSClient._instance
+        if (
+            nats
+            and getattr(nats, "is_connected", False)
+            and hasattr(nats, "publish_raw")
+        ):
+            summary = (
+                (report.get("report") or {}).get("summary")
+                or final_state.get("suspected_cause")
+                or ""
+            )[:700]
+            await nats.publish_raw(
+                "nexus.lifecycle.report_ready",
+                {
+                    "incident_id": incident_id,
+                    "app": final_state.get("namespace") or "unscoped",
+                    "target": target_resource,
+                    "outcome": payload["outcome"],
+                    "report_url": report_url(incident_id),
+                    "summary": summary,
+                },
+            )
+    except Exception as exc:
+        logger.debug("[IncidentReport] NATS report_ready publish skipped: %s", exc)
+
+    return report

@@ -122,6 +122,9 @@ spec:
             # OPA policy engine — deploy/nexus/opa-deployment.yaml
             - name: NEXUS_OPA_URL
               value: "http://opa.nexus.svc.cluster.local:8181"
+            # Slack interactive callback URL for Approve/Reject Block Kit buttons
+            - name: SLACK_INTERACTIVE_URL
+              value: "http://nexus-api.nexus.svc.cluster.local:8080/api/v1/slack/interactions"
             # LLM Provider configuration (Gemini / OpenAI / Anthropic / none)
             - name: NEXUS_LLM_PROVIDER
               value: "gemini"

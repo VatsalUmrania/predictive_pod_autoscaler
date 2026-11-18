@@ -1,19 +1,19 @@
 """
-Unit tests for NEXUS IncidentGraphState backward compatibility,
-AnomalySignal model serialization, and triage ingestion boundary.
+Unit tests for NEXUS IncidentState schema, AnomalySignal serialization,
+initial state building (without fabricated defaults), and triage node.
 """
 
 from __future__ import annotations
 
-from langchain_core.messages import AIMessage, HumanMessage
+import pytest
 from langgraph.graph import StateGraph
 
 from nexus.bus.events.event import AnomalySignal
-from nexus.db.models import IncidentState
 from nexus.graph.builder import build_incident_graph
 from nexus.graph.nodes.triage import triage_node
 from nexus.graph.state import (
     IncidentGraphState,
+    IncidentState,
     PlannedToolStep,
     PlanStep,
     VerificationCondition,
@@ -22,40 +22,36 @@ from nexus.graph.workflow_events import build_initial_state
 
 
 def test_incident_graph_state_compilation():
-    """Verify StateGraph compiles cleanly with extended IncidentGraphState."""
+    """Verify StateGraph compiles cleanly with IncidentState."""
     graph = build_incident_graph()
     assert graph is not None
+    assert IncidentGraphState is IncidentState
 
 
-def test_build_initial_state_preserves_fsm_and_new_extensions():
-    """Verify build_initial_state preserves legacy FSM fields and initializes autonomous extensions."""
+def test_build_initial_state_preserves_none_identity_and_defaults():
+    """Verify build_initial_state preserves None for unknown identity and initializes loop fields."""
     data = {
-        "events": [
-            {"agent": "k8s", "severity": "warning", "resource_name": "checkout"}
+        "raw_events": [
+            {
+                "agent": "k8s",
+                "severity": "warning",
+                "involved_object_name": "checkout-abc",
+            }
         ],
-        "platform": "kubernetes",
     }
     state = build_initial_state(data, inc_id="inc-test-01")
 
-    # Legacy fields
     assert state["incident_id"] == "inc-test-01"
-    assert state["fsm_state"] == IncidentState.DETECTED.value
-    assert len(state["events"]) == 1
-    assert state["platform"] == "kubernetes"
-    assert state["telemetry"] == {}
-    assert state["diagnosis"] == {}
-    assert state["plan"] is None
-    assert state["governance"] is None
-    assert state["execution_records"] == []
-    assert state["retry_count"] == 0
-    assert state["resolved"] is False
-    assert state["escalated"] is False
-
-    # Autonomous extensions
-    assert state["anomaly_signal"] is None
-    assert state["agentic_rca"] is None
-    assert state["fallback_active"] is False
-    assert state["messages"] == []
+    assert state["status"] == "DETECTED"
+    assert len(state["raw_events"]) == 1
+    assert state["platform"] == "k8s"
+    assert state["namespace"] is None
+    assert state["service_name"] is None
+    assert state["execution_results"] == []
+    assert state["remediation_attempts"] == 0
+    assert state["max_remediation_attempts"] == 2
+    assert state["rollback_available"] is False
+    assert state["rollback_results"] == []
 
 
 def test_anomaly_signal_model_and_nats_serialization():
@@ -74,7 +70,6 @@ def test_anomaly_signal_model_and_nats_serialization():
     assert signal.target_service == "checkout-service"
     assert signal.nats_subject() == "nexus.anomaly.aws.checkout-service"
 
-    # NATS payload serialization roundtrip
     payload = signal.to_nats_payload()
     deserialized = AnomalySignal.from_nats_payload(payload)
     assert deserialized.signal_id == signal.signal_id
@@ -82,72 +77,58 @@ def test_anomaly_signal_model_and_nats_serialization():
     assert deserialized.raw_metrics_or_alert["wcu"] == 50
 
 
-def test_triage_node_with_legacy_events():
-    """Verify triage_node maintains full backward compatibility for standard IncidentEvent streams."""
-    state = {
-        "incident_id": "inc-legacy-01",
-        "fsm_state": IncidentState.DETECTED.value,
-        "events": [
+@pytest.mark.asyncio
+async def test_triage_node_extracts_explicit_hints_without_fabricating_defaults():
+    """Verify triage_node extracts explicit hints and leaves missing fields as None."""
+    state: IncidentState = {
+        "incident_id": "inc-triage-01",
+        "raw_events": [
             {
-                "agent": "k8s",
-                "resource_name": "payment-api",
+                "platform": "kubernetes",
+                "involved_object_name": "payment-api-5d8f-xyz",
                 "namespace": "production",
                 "severity": "critical",
                 "signal_type": "pod_oomkilled",
             }
         ],
-        "anomaly_signal": None,
     }
 
-    result = triage_node(state)
-    assert result["platform"] == "kubernetes"
-    assert result["target"]["name"] == "payment-api"
+    result = await triage_node(state)
+    assert result["platform"] == "k8s"
+    assert result["namespace"] == "production"
+    assert result["service_name"] is None
     assert result["severity"] == "critical"
-    assert result["fsm_state"] == IncidentState.CORRELATED.value
-    assert result["fallback_active"] is False
-    assert len(result["audit_log"]) == 1
+    assert result["triage_status"] == "TRIAGED"
+    assert result["status"] == "TRIAGED"
 
 
-def test_triage_node_with_anomaly_signal():
-    """Verify triage_node correctly extracts target, platform, and initializes messages for AnomalySignal."""
-    signal = AnomalySignal(
-        source="ppa_forecaster",
-        provider="aws",
-        environment="production",
-        target_service="orders-table",
-        symptom_summary="Write capacity saturated causing HTTP 500 spike",
-        raw_metrics_or_alert={"throttles": 340},
-    )
-
-    state = {
-        "incident_id": "inc-anomaly-01",
-        "fsm_state": IncidentState.DETECTED.value,
-        "events": [],
-        "anomaly_signal": signal,
+@pytest.mark.asyncio
+async def test_triage_node_ignores_control_plane_resources():
+    """Verify triage_node drops internal NEXUS/kube-system events to prevent self-healing loops."""
+    state: IncidentState = {
+        "incident_id": "inc-cp-01",
+        "namespace": "nexus",
+        "service_name": "nexus-api",
+        "raw_events": [{"namespace": "nexus", "service_name": "nexus-api"}],
     }
 
-    result = triage_node(state)
-    assert result["platform"] == "aws"
-    assert result["target"]["name"] == "orders-table"
-    assert result["target"]["namespace"] == "production"
-    assert result["severity"] == "critical"
-    assert result["fsm_state"] == IncidentState.CORRELATED.value
-    assert result["fallback_active"] is False
-    assert "messages" in result
-    assert len(result["messages"]) == 1
-    assert "AnomalySignal" in result["messages"][0].content
-    assert "orders-table" in result["messages"][0].content
+    result = await triage_node(state)
+    assert result["triage_status"] == "IGNORED"
+    assert result["status"] == "IGNORED"
 
 
-def test_messages_add_reducer_in_graph_execution():
-    """Verify add_messages reducer appends turns during LangGraph execution without overwriting."""
-    workflow = StateGraph(IncidentGraphState)
+def test_incident_state_propagation_in_graph_execution():
+    """Verify IncidentState TypedDict propagates discovered topology across graph nodes."""
+    workflow = StateGraph(IncidentState)
 
-    def node_a(state: IncidentGraphState):
-        return {"messages": [HumanMessage(content="User observation 1")]}
+    def node_a(state: IncidentState):
+        return {"namespace": "shop-ns", "service_name": "shop-demo"}
 
-    def node_b(state: IncidentGraphState):
-        return {"messages": [AIMessage(content="Agent analysis 1")]}
+    def node_b(state: IncidentState):
+        return {
+            "target_resource": f"{state['namespace']}/Deployment/{state['service_name']}",
+            "status": "DIAGNOSED",
+        }
 
     workflow.add_node("node_a", node_a)
     workflow.add_node("node_b", node_b)
@@ -156,42 +137,9 @@ def test_messages_add_reducer_in_graph_execution():
     workflow.set_finish_point("node_b")
 
     app = workflow.compile()
-    initial_state = {
-        "incident_id": "inc-reducer-01",
-        "fsm_state": IncidentState.DETECTED.value,
-        "events": [],
-        "platform": "kubernetes",
-        "target": {},
-        "severity": "warning",
-        "telemetry": {},
-        "diagnosis": {},
-        "diagnostic_reflections": [],
-        "plan": None,
-        "remediation_history": [],
-        "governance": None,
-        "approval_id": None,
-        "approval_decision": None,
-        "execution_records": [],
-        "rollback_executed": False,
-        "rollback_records": [],
-        "verification": None,
-        "retry_count": 0,
-        "max_retries": 2,
-        "audit_log": [],
-        "messages": [HumanMessage(content="Seed message")],
-        "error_message": None,
-        "resolved": False,
-        "escalated": False,
-        "anomaly_signal": None,
-        "agentic_rca": None,
-        "fallback_active": False,
-    }
-
-    final_state = app.invoke(initial_state)
-    assert len(final_state["messages"]) == 3
-    assert final_state["messages"][0].content == "Seed message"
-    assert final_state["messages"][1].content == "User observation 1"
-    assert final_state["messages"][2].content == "Agent analysis 1"
+    final_state = app.invoke({"incident_id": "inc-prop-01", "namespace": None})
+    assert final_state["target_resource"] == "shop-ns/Deployment/shop-demo"
+    assert final_state["status"] == "DIAGNOSED"
 
 
 def test_planned_tool_step_and_verification_condition_contracts():

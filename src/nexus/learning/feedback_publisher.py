@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
+from nexus.bus.events import AgentType, IncidentEvent, Severity, SignalType
 from nexus.learning.outcome_models import SystemKPIs
 
 logger = logging.getLogger(__name__)

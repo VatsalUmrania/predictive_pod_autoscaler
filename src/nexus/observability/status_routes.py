@@ -105,3 +105,26 @@ def learning_status() -> dict[str, Any]:
     """FeedbackLoop status and latest system KPIs."""
     fl = _require(context.feedback_loop, "FeedbackLoop")
     return cast(dict[str, Any], fl.status)
+
+
+@router.get("/api/v1/status/incidents", tags=["observability"])
+async def status_incidents(
+    n: int = 20,
+    app: str | None = None,
+) -> list[dict[str, Any]]:
+    """Enriched LangGraph incident feed mirroring /developer/incidents."""
+    from nexus.integration.dashboard_incidents import (
+        _in_memory_incidents,
+        make_plain_english,
+        read_incidents,
+    )
+    from nexus.integration.dashboard_queries import fetch_developer_incidents
+
+    return await fetch_developer_incidents(
+        n=n,
+        app=app,
+        ctx=context,
+        read_incidents_fn=read_incidents,
+        in_memory_incidents=_in_memory_incidents,
+        make_plain_english_fn=make_plain_english,
+    )

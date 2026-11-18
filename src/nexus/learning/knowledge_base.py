@@ -11,7 +11,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from nexus.db.postgres import PostgresClient, get_database_client
+from nexus.db.client import PostgresClient, get_database_client
 from nexus.learning.kb_models import (
     AdjustmentRecord,
     compute_delta,

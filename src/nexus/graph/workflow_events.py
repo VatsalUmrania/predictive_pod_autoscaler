@@ -46,9 +46,9 @@ def build_cluster_event_dicts(cluster: Any) -> list[dict[str, Any]]:
                     "severity": getattr(
                         getattr(e, "severity", None), "value", "warning"
                     ),
-                    "namespace": getattr(e, "namespace", "default"),
-                    "resource_name": getattr(e, "resource_name", "unknown"),
-                    "resource_kind": getattr(e, "resource_kind", "Deployment"),
+                    "namespace": getattr(e, "namespace", None),
+                    "resource_name": getattr(e, "resource_name", None),
+                    "resource_kind": getattr(e, "resource_kind", None),
                     "context": getattr(e, "context", {}),
                 }
             )
@@ -66,7 +66,7 @@ def is_control_plane_resource(event: Any) -> bool:
 
 async def handle_incoming_event(workflow: Any, event: Any) -> None:
     """Handler for single incoming IncidentEvent, dropping stale and control plane events."""
-    from nexus.bus.incident_event import IncidentEvent
+    from nexus.bus.events import IncidentEvent
 
     if isinstance(event, IncidentEvent) and event.timestamp:
         age = datetime.now(timezone.utc) - event.timestamp

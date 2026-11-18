@@ -80,7 +80,7 @@ def start(
     logging.getLogger().setLevel(getattr(logging, log_level.upper()))
 
     async def _run() -> NoReturn:
-        from nexus.server import NexusServer
+        from nexus.server_bootstrap import NexusServer
 
         nats_url_val = nats_url() if callable(nats_url) else nats_url
         prom_url_val = prometheus_url() if callable(prometheus_url) else prometheus_url

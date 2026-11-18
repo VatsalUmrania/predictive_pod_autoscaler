@@ -21,23 +21,30 @@ from nexus.graph.llm_limiter import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["get_llm", "LLMQuotaExhaustedError", "RateLimitedChatModel"]
+__all__ = [
+    "get_llm",
+    "get_chat_model",
+    "LLMQuotaExhaustedError",
+    "RateLimitedChatModel",
+]
 
 
 def _init_gemini_model(api_key: str, model_name: str, temperature: float) -> Any:
+    timeout_s = float(os.getenv("NEXUS_LLM_TIMEOUT_S", "45.0"))
     try:
         from langchain_google_genai import ChatGoogleGenerativeAI
 
         logger.info(
-            "[LLM Factory] Initialized ChatGoogleGenerativeAI with model=%s",
+            "[LLM Factory] Initialized ChatGoogleGenerativeAI with model=%s (timeout=%.1fs)",
             model_name,
+            timeout_s,
         )
         return ChatGoogleGenerativeAI(
             model=model_name,
             google_api_key=api_key,
             temperature=temperature,
             max_retries=0,
-            request_timeout=15.0,
+            request_timeout=timeout_s,
         )
     except ImportError:
         try:
@@ -118,14 +125,18 @@ def get_llm(
         try:
             from langchain_openai import ChatOpenAI
 
+            timeout_s = float(os.getenv("NEXUS_LLM_TIMEOUT_S", "45.0"))
             raw_model = ChatOpenAI(
                 model=selected_model or "gpt-4o-mini",
                 temperature=temperature,
-                max_retries=1,
-                timeout=15.0,
+                max_retries=0,
+                timeout=timeout_s,
             )
             return RateLimitedChatModel(raw_model)
         except ImportError:
             return FakeListChatModel(responses=["{}"])
 
     return FakeListChatModel(responses=["{}"])
+
+
+get_chat_model = get_llm

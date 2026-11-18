@@ -211,9 +211,43 @@ def build_approval_required_payload(
     context: dict | None = None,
 ) -> dict[str, Any]:
     ctx = context or {}
-    rca, event = ctx.get("rca", {}), ctx.get("event", {})
+    rca = ctx.get("rca") or ctx.get("rca_result") or {}
+    event = ctx.get("event") or {}
+    rca_target_raw = rca.get("target")
+    rca_target: dict[str, Any] = (
+        dict(rca_target_raw) if isinstance(rca_target_raw, dict) else {}
+    )
+
+    resolved_target = (
+        target
+        or ctx.get("target_resource")
+        or (
+            f"{ctx.get('namespace') or rca_target.get('namespace_or_region', 'unknown')}/"
+            f"{ctx.get('resource_kind') or rca_target.get('resource_kind', 'Deployment')}/"
+            f"{ctx.get('service_name') or rca_target.get('resource_name', 'unknown')}"
+            if (ctx.get("service_name") or rca_target.get("resource_name"))
+            else "unknown"
+        )
+    )
+    failure_type = (
+        rca.get("failure_type")
+        or ctx.get("failure_class")
+        or rca.get("failure_class")
+        or runbook_id
+        or "unclassified_anomaly"
+    )
+    root_cause = (
+        rca.get("root_cause_summary")
+        or ctx.get("suspected_cause")
+        or rca.get("root_cause")
+        or "No root cause summary available."
+    )
+    recommended_strategy = (
+        rca.get("recommended_strategy") or ctx.get("suggested_fix") or ""
+    )
+
     fallback = (
-        f"NEXUS L{healing_level} Action Requires Approval: {runbook_id} for {target}"
+        f"NEXUS L{healing_level} Action Requires Approval: {failure_type} for {resolved_target}"
     )
     blocks: list[dict[str, Any]] = [
         {
@@ -228,7 +262,7 @@ def build_approval_required_payload(
         {
             "type": "section",
             "fields": [
-                {"type": "mrkdwn", "text": f"*Target:*\n`{target}`"},
+                {"type": "mrkdwn", "text": f"*Target:*\n`{resolved_target}`"},
                 {"type": "mrkdwn", "text": f"*Confidence:*\n`{confidence:.2f}`"},
                 {"type": "mrkdwn", "text": f"*Approval ID:*\n`{approval_id}`"},
                 {"type": "mrkdwn", "text": f"*Level:*\n`L{healing_level}`"},
@@ -259,14 +293,21 @@ def build_approval_required_payload(
                 ],
             }
         )
-    if rca:
+    if rca or ctx.get("suspected_cause") or ctx.get("failure_class"):
+        rca_lines = [
+            "*Root Cause Analysis*",
+            f"*Class:* `{failure_type}`",
+            f"*Root Cause:* {str(root_cause)[:500]}",
+        ]
+        if recommended_strategy:
+            rca_lines.append(f"*Recommended Fix:* {str(recommended_strategy)[:400]}")
         blocks.append({"type": "divider"})
         blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*Root Cause Analysis*\n*Class:* {rca.get('failure_class', 'Unknown')}\n*Root Cause:* {str(rca.get('root_cause', 'Unknown'))[:300]}",
+                    "text": "\n".join(rca_lines),
                 },
             }
         )
@@ -284,7 +325,7 @@ def build_approval_required_payload(
     if not rem_yaml:
         from nexus.graph.manifest_formatter import plan_to_yaml_manifest
 
-        rem_yaml = plan_to_yaml_manifest(ctx.get("plan"), target)
+        rem_yaml = plan_to_yaml_manifest(ctx.get("plan"), resolved_target)
     if rem_yaml:
         blocks.append({"type": "divider"})
         blocks.append(build_yaml_manifest_block(rem_yaml))
@@ -307,7 +348,7 @@ def build_approval_required_payload(
             "elements": [
                 {
                     "type": "mrkdwn",
-                    "text": f"🤖 *NEXUS Governance Engine* • Target: `{target}` • Approval ID: `{approval_id}`",
+                    "text": f"🤖 *NEXUS Governance Engine* • Target: `{resolved_target}` • Approval ID: `{approval_id}`",
                 }
             ],
         }

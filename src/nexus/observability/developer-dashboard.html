@@ -1,2313 +1,2898 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
+
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>NEXUS Developer Dashboard</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link
-    href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap"
-    rel="stylesheet"
-  >
-  <!-- Phosphor Icons -->
-  <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.2/dist/phosphor.css"/>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark light" />
+  <title>NEXUS Autonomous SRE Control Plane</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <style>
+    /* TweakCN Theme Tokens: cmgcc1d39000204ky3qhj3qt3 */
     :root {
-      /* Clean Light Theme Palette (Primary) */
-      --bg: #f8fafc;
-      --surface-0: #ffffff;
-      --s1: #ffffff;
-      --s2: #f1f5f9;
-      --s3: #e2e8f0;
-      --s4: #cbd5e1;
-      --border: rgba(15, 23, 42, 0.08);
-      --border-subtle: rgba(15, 23, 42, 0.04);
-      --border-hover: rgba(37, 99, 235, 0.28);
-      --text: #1e293b;
-      --text-muted: #64748b;
-      --text-dim: #94a3b8;
-      --text-bright: #0f172a;
-      --accent: #2563eb;
-      --accent-muted: rgba(37, 99, 235, 0.08);
-      --accent-hover: #1d4ed8;
-      --green: #059669;
-      --green-bg: rgba(5, 150, 105, 0.08);
-      --green-border: rgba(5, 150, 105, 0.25);
-      --red: #dc2626;
-      --red-bg: rgba(220, 38, 38, 0.08);
-      --red-border: rgba(220, 38, 38, 0.25);
-      --amber: #d97706;
-      --amber-bg: rgba(217, 119, 6, 0.08);
-      --amber-border: rgba(217, 119, 6, 0.25);
-      --blue: #2563eb;
-      --blue-bg: rgba(37, 99, 235, 0.08);
-      --blue-border: rgba(37, 99, 235, 0.25);
-      --purple: #7c3aed;
-      --purple-bg: rgba(124, 58, 237, 0.08);
-      --purple-border: rgba(124, 58, 237, 0.25);
-      --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
-      --shadow-md: 0 4px 12px -2px rgba(15, 23, 42, 0.06), 0 2px 4px -1px rgba(15, 23, 42, 0.03);
-      --shadow-lg: 0 10px 24px -4px rgba(15, 23, 42, 0.08), 0 4px 6px -2px rgba(15, 23, 42, 0.03);
-      --r-xs: 4px;
-      --r-sm: 6px;
-      --r: 10px;
-      --r-lg: 14px;
-      --r-pill: 9999px;
+      color-scheme: light;
+      --background: oklch(0.9800 0.0300 260);
+      --foreground: oklch(0.0600 0.0100 270);
+      --card: oklch(0.9900 0.0200 260);
+      --card-foreground: oklch(0.0600 0.0100 270);
+      --popover: oklch(0.9800 0.0300 260);
+      --popover-foreground: oklch(0.0600 0.0100 270);
+      --primary: oklch(0.0600 0.0100 270);
+      --primary-foreground: oklch(0.9800 0.0300 260);
+      --secondary: oklch(0.9400 0 0);
+      --secondary-foreground: oklch(0.0600 0.0100 270);
+      --muted: oklch(0.9700 0 0);
+      --muted-foreground: oklch(0.4400 0 0);
+      --accent: oklch(0.9400 0 0);
+      --accent-foreground: oklch(0.0600 0.0100 270);
+      --destructive: oklch(0.6300 0.1900 23.0300);
+      --destructive-foreground: oklch(0.9800 0.0300 260);
+      --border: oklch(0.9200 0 0);
+      --input: oklch(0.9400 0 0);
+      --ring: oklch(0.0600 0.0100 270);
+      --chart-1: oklch(0.8100 0.1700 75.3500);
+      --chart-2: oklch(0.5500 0.2200 264.5300);
+      --chart-3: oklch(0.7200 0 0);
+      --chart-4: oklch(0.9200 0 0);
+      --chart-5: oklch(0.5600 0 0);
+      --sidebar: oklch(0.9800 0.0300 260);
+      --sidebar-foreground: oklch(0.0600 0.0100 270);
+      --sidebar-primary: oklch(0.0600 0.0100 270);
+      --sidebar-primary-foreground: oklch(0.9800 0.0300 260);
+      --sidebar-accent: oklch(0.9400 0 0);
+      --sidebar-accent-foreground: oklch(0.0600 0.0100 270);
+      --sidebar-border: oklch(0.9400 0 0);
+      --sidebar-ring: oklch(0.0600 0.0100 270);
+      --font-sans: "Geist", system-ui, -apple-system, sans-serif;
+      --font-serif: Georgia, serif;
+      --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; /* taste-skill-ignore */
+      --radius: 0.5rem;
+      --radius-sm: calc(var(--radius) - 4px);
+      --radius-md: calc(var(--radius) - 2px);
+      --radius-lg: var(--radius);
+      --shadow-sm: 0px 1px 2px 0px hsl(0 0% 0% / 0.18), 0px 1px 2px -1px hsl(0 0% 0% / 0.18);
+      --shadow-lg: 0px 1px 2px 0px hsl(0 0% 0% / 0.18), 0px 4px 6px -1px hsl(0 0% 0% / 0.18);
+      --sidebar-width: 216px;
+
+      /* Accessible semantic status colors (WCAG >= 4.5:1 on light) */
+      --status-ok-bg: oklch(0.9500 0.0350 160);
+      --status-ok-fg: oklch(0.3400 0.1100 160);
+      --status-ok-border: oklch(0.8600 0.0650 160);
+      --status-warn-bg: oklch(0.9600 0.0450 75.35);
+      --status-warn-fg: oklch(0.4200 0.1300 75.35);
+      --status-warn-border: oklch(0.8600 0.0950 75.35);
+      --status-err-bg: oklch(0.9550 0.0350 23.03);
+      --status-err-fg: oklch(0.4500 0.1800 23.03);
+      --status-err-border: oklch(0.8500 0.0850 23.03);
+      --status-info-bg: oklch(0.9500 0.0400 264.53);
+      --status-info-fg: oklch(0.4200 0.1800 264.53);
+      --status-info-border: oklch(0.8500 0.0850 264.53);
     }
 
-    [data-theme="dark"] {
-      --bg: #07070f;
-      --surface-0: #0f0f1c;
-      --s1: #0f0f1c;
-      --s2: #161626;
-      --s3: #1e1e32;
-      --s4: #2a2a44;
-      --border: rgba(255, 255, 255, 0.08);
-      --border-subtle: rgba(255, 255, 255, 0.04);
-      --border-hover: rgba(138, 180, 248, 0.35);
-      --text: #e0e0f0;
-      --text-muted: #8c8ca8;
-      --text-dim: #5a5a78;
-      --text-bright: #ffffff;
-      --accent: #8ab4f8;
-      --accent-muted: rgba(138, 180, 248, 0.15);
-      --accent-hover: #aecbfa;
-      --green: #00ff88;
-      --green-bg: rgba(0, 255, 136, 0.08);
-      --green-border: rgba(0, 255, 136, 0.25);
-      --red: #ff4d6a;
-      --red-bg: rgba(255, 77, 106, 0.08);
-      --red-border: rgba(255, 77, 106, 0.25);
-      --amber: #ffaa00;
-      --amber-bg: rgba(255, 170, 0, 0.08);
-      --amber-border: rgba(255, 170, 0, 0.25);
-      --blue: #4488ff;
-      --blue-bg: rgba(68, 136, 255, 0.08);
-      --blue-border: rgba(68, 136, 255, 0.25);
-      --purple: #a78bfa;
-      --purple-bg: rgba(167, 139, 250, 0.08);
-      --purple-border: rgba(167, 139, 250, 0.25);
-      --shadow-sm: none;
-      --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.4);
-      --shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.5);
-      --r-xs: 4px;
-      --r-sm: 6px;
-      --r: 10px;
-      --r-lg: 14px;
-      --r-pill: 9999px;
+    .dark {
+      color-scheme: dark;
+      --background: oklch(0.0400 0.0050 270);
+      --foreground: oklch(0.8800 0.0400 260);
+      --card: oklch(0.1400 0.0050 270);
+      --card-foreground: oklch(0.8800 0.0400 260);
+      --popover: oklch(0.1800 0.0050 270);
+      --popover-foreground: oklch(0.8800 0.0400 260);
+      --primary: oklch(0.8800 0.0400 260);
+      --primary-foreground: oklch(0.0400 0.0050 270);
+      --secondary: oklch(0.2500 0 0);
+      --secondary-foreground: oklch(0.8800 0.0400 260);
+      --muted: oklch(0.2300 0 0);
+      --muted-foreground: oklch(0.7200 0 0);
+      --accent: oklch(0.3200 0 0);
+      --accent-foreground: oklch(0.8800 0.0400 260);
+      --destructive: oklch(0.6900 0.2000 23.9100);
+      --destructive-foreground: oklch(0.0400 0.0050 270);
+      --border: oklch(0.2600 0 0);
+      --input: oklch(0.3200 0 0);
+      --ring: oklch(0.7200 0 0);
+      --chart-1: oklch(0.8100 0.1700 75.3500);
+      --chart-2: oklch(0.5800 0.2100 260.8400);
+      --chart-3: oklch(0.5600 0 0);
+      --chart-4: oklch(0.4400 0 0);
+      --chart-5: oklch(0.9200 0 0);
+      --sidebar: oklch(0.1800 0.0050 270);
+      --sidebar-foreground: oklch(0.8800 0.0400 260);
+      --sidebar-primary: oklch(0.8800 0.0400 260);
+      --sidebar-primary-foreground: oklch(0.0400 0.0050 270);
+      --sidebar-accent: oklch(0.3200 0 0);
+      --sidebar-accent-foreground: oklch(0.8800 0.0400 260);
+      --sidebar-border: oklch(0.3200 0 0);
+      --sidebar-ring: oklch(0.7200 0 0);
+
+      /* Accessible semantic status colors (WCAG >= 4.5:1 on dark) */
+      --status-ok-bg: oklch(0.2000 0.0400 160);
+      --status-ok-fg: oklch(0.7700 0.1300 160);
+      --status-ok-border: oklch(0.3400 0.0750 160);
+      --status-warn-bg: oklch(0.2200 0.0450 75.35);
+      --status-warn-fg: var(--chart-1);
+      --status-warn-border: oklch(0.4000 0.0950 75.35);
+      --status-err-bg: oklch(0.2100 0.0500 23.91);
+      --status-err-fg: oklch(0.7700 0.1600 23.91);
+      --status-err-border: oklch(0.3900 0.1050 23.91);
+      --status-info-bg: oklch(0.2100 0.0550 260.84);
+      --status-info-fg: oklch(0.7800 0.1400 260.84);
+      --status-info-border: oklch(0.3700 0.1050 260.84);
     }
 
     * {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
+      border-color: var(--border);
     }
 
+    [hidden] {
+      display: none !important;
+    }
+
+    html,
     body {
-      font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
+      height: 100%;
+      background: var(--background);
+      color: var(--foreground);
+      font-family: var(--font-sans);
+      font-size: 14px;
       line-height: 1.5;
       -webkit-font-smoothing: antialiased;
-      -moz-osx-font-smoothing: grayscale;
-      transition: background-color .2s ease, color .2s ease;
     }
 
-    /* Top Navigation Header */
-    header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 12px 32px;
-      background: var(--surface-0);
-      border-bottom: 1px solid var(--border);
-      position: sticky;
-      top: 0;
-      z-index: 50;
-      box-shadow: var(--shadow-sm);
-      backdrop-filter: blur(8px);
-      transition: background-color .2s ease, border-color .2s ease;
+    .sr-only:where(:not(:focus-within, :active)) {
+      position: absolute !important;
+      clip-path: inset(50%) !important;
+      overflow: hidden !important;
+      width: 1px !important;
+      height: 1px !important;
+      margin: -1px !important;
+      padding: 0 !important;
+      border: 0 !important;
+      white-space: nowrap !important;
     }
 
-    .logo-group {
-      display: flex;
-      align-items: center;
-      gap: 12px;
+    :where(a:any-link, button, input, summary):focus-visible {
+      outline: 2px solid var(--ring);
+      outline-offset: 2px;
     }
 
-    .logo {
-      font-size: 15px;
-      font-weight: 700;
-      display: flex;
-      align-items: center;
-      gap: 11px;
-      letter-spacing: -0.01em;
-      color: var(--text-bright);
-      text-decoration: none;
-      user-select: none;
-    }
-
-    .nexus-logo-mark {
-      display: block;
-      width: 34px;
-      height: 34px;
-      flex-shrink: 0;
-      filter: drop-shadow(0 2px 6px rgba(37, 99, 235, 0.16));
-      transition: transform .2s ease;
-    }
-
-    .logo:hover .nexus-logo-mark {
-      transform: scale(1.05);
-    }
-
-    .logo-text {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .brand-title {
-      font-size: 17px;
-      font-weight: 800;
-      letter-spacing: 0.05em;
-      color: var(--text-bright);
-      line-height: 1;
-    }
-
-    .brand-subtitle {
-      font-weight: 500;
-      color: var(--text-muted);
-      font-size: 12.5px;
-      padding-left: 10px;
-      border-left: 1px solid var(--border);
-      line-height: 1.2;
-    }
-
-    .hdr-r {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
-
-    select {
-      background: var(--s2);
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 6px 14px;
-      border-radius: var(--r-sm);
-      font-family: inherit;
-      font-size: 12.5px;
-      font-weight: 500;
-      cursor: pointer;
-      outline: none;
-      transition: border-color .15s ease, box-shadow .15s ease;
-    }
-
-    select:focus {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px var(--accent-muted);
-    }
-
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 5px 12px;
-      border-radius: var(--r-pill);
-      font-size: 12px;
-      font-weight: 600;
-      letter-spacing: 0.01em;
-      border: 1px solid;
-      transition: all .2s ease;
-    }
-
-    .pill.ok {
-      background: var(--green-bg);
-      border-color: var(--green-border);
-      color: var(--green);
-    }
-
-    .pill.err {
-      background: var(--red-bg);
-      border-color: var(--red-border);
-      color: var(--red);
-    }
-
-    .dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: currentColor;
-      box-shadow: 0 0 8px currentColor;
-      animation: blink 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-    }
-
-    @keyframes blink {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.4; transform: scale(0.85); }
-    }
-
-    /* Modern Tabs */
-    .tabs {
-      display: flex;
-      gap: 4px;
-      padding: 0 32px;
-      background: var(--surface-0);
-      border-bottom: 1px solid var(--border);
-      transition: background-color .2s ease, border-color .2s ease;
-    }
-
-    .tab {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      padding: 13px 18px;
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--text-muted);
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-      margin-bottom: -1px;
-      transition: color .15s ease, border-color .15s ease;
-    }
-
-    .tab:hover:not(.active) {
-      color: var(--text-bright);
-    }
-
-    .tab.active {
-      color: var(--accent);
-      border-bottom-color: var(--accent);
-    }
-
-    /* Panels Container */
-    .panel {
-      display: none;
-      padding: 28px 32px 60px;
-      max-width: 1200px;
-      margin: 0 auto;
-    }
-
-    .panel.active {
-      display: block;
-    }
-
-    /* Executive Metrics Ribbon */
-    .metrics-ribbon {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 14px;
-      margin-bottom: 24px;
-    }
-
-    .metric-box {
-      background: var(--surface-0);
-      border: 1px solid var(--border);
-      border-radius: var(--r);
-      padding: 18px 20px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      cursor: pointer;
-      box-shadow: var(--shadow-sm);
-      position: relative;
-      overflow: hidden;
-      transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
-    }
-
-    .metric-box::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      bottom: 0;
-      width: 3.5px;
-      background: var(--accent);
-      opacity: 0.8;
-      border-radius: var(--r) 0 0 var(--r);
-    }
-
-    .metric-box.warn::before {
-      background: var(--amber);
-    }
-
-    .metric-box.success::before {
-      background: var(--green);
-    }
-
-    .metric-box:hover {
-      transform: translateY(-2px);
-      border-color: var(--border-hover);
-      box-shadow: var(--shadow-md);
-    }
-
-    .metric-label {
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: .04em;
-      margin-bottom: 6px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .metric-val {
-      font-size: 28px;
-      font-weight: 700;
+    .num {
       font-variant-numeric: tabular-nums;
-      color: var(--text-bright);
-      line-height: 1.1;
     }
 
-    .metric-sub {
-      font-size: 11.5px;
-      color: var(--text-dim);
-      margin-top: 5px;
-      font-weight: 500;
+    code,
+    pre {
+      font-family: var(--font-mono); /* taste-skill-ignore */
     }
 
-    .metric-box.warn .metric-val {
-      color: var(--amber);
-    }
-
-    .metric-box.success .metric-val {
-      color: var(--green);
-    }
-
-    .metric-icon-wrap {
-      width: 44px;
-      height: 44px;
-      border-radius: 10px;
-      background: var(--s2);
-      border: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 22px;
-      color: var(--text-muted);
+    .ph-icon {
+      width: 15px;
+      height: 15px;
       flex-shrink: 0;
+      display: inline-block;
+      vertical-align: middle;
     }
 
-    .metric-box.warn .metric-icon-wrap {
-      background: var(--amber-bg);
-      color: var(--amber);
-      border-color: var(--amber-border);
+    /* ============================================================
+       App Shell: Sidebar + Full-Height Main Inset
+       ============================================================ */
+    .shell {
+      display: grid;
+      grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+      height: 100vh;
+      overflow: hidden;
     }
 
-    .metric-box.success .metric-icon-wrap {
-      background: var(--green-bg);
-      color: var(--green);
-      border-color: var(--green-border);
+    .shell.sidebar-collapsed {
+      grid-template-columns: 0px minmax(0, 1fr);
     }
 
-    /* Filter Toolbar */
-    .aspect-toolbar {
+    .shell.sidebar-collapsed .sidebar {
+      transform: translateX(-100%);
+      pointer-events: none;
+      border-right-color: transparent;
+    }
+
+    .sidebar-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: hsl(0 0% 0% / 0.5);
+      z-index: 35;
+    }
+
+    .sidebar {
+      width: var(--sidebar-width);
+      height: 100vh;
+      background: var(--sidebar);
+      color: var(--sidebar-foreground);
+      border-right: 1px solid var(--sidebar-border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      z-index: 40;
+    }
+
+    .sidebar-header {
+      height: 52px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--sidebar-border);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 18px;
-      gap: 12px;
-      flex-wrap: wrap;
+      gap: 10px;
+      flex-shrink: 0;
     }
 
-    .aspect-pills {
+    .brand {
       display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-      background: var(--s2);
-      padding: 4px;
-      border-radius: 10px;
-      border: 1px solid var(--border);
-    }
-
-    .aspect-btn {
-      background: transparent;
-      color: var(--text-muted);
-      border: 1px solid transparent;
-      border-radius: var(--r-sm);
-      padding: 6px 14px;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      display: inline-flex;
       align-items: center;
-      gap: 7px;
-      transition: all .15s ease;
+      gap: 9px;
+      min-width: 0;
     }
 
-    .aspect-btn:hover {
-      color: var(--text-bright);
-    }
-
-    .aspect-btn.active {
-      background: var(--surface-0);
-      color: var(--text-bright);
-      border-color: var(--border);
-      box-shadow: var(--shadow-sm);
-    }
-
-    .aspect-count {
-      display: inline-flex;
+    .brand-mark {
+      width: 24px;
+      height: 24px;
+      border-radius: var(--radius-sm);
+      background: var(--sidebar-primary);
+      color: var(--sidebar-primary-foreground);
+      display: flex;
       align-items: center;
       justify-content: center;
-      padding: 1px 6px;
-      border-radius: 10px;
-      font-size: 10.5px;
-      font-family: 'Geist Mono', monospace;
-      font-weight: 600;
-      background: var(--s3);
-      color: var(--text-muted);
+      flex-shrink: 0;
     }
 
-    .aspect-btn.active .aspect-count {
-      background: var(--accent-muted);
-      color: var(--accent);
+    .brand-name {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--sidebar-foreground);
+    }
+
+    .sidebar-nav {
+      flex: 1;
+      padding: 12px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      overflow-y: auto;
+    }
+
+    .nav-item {
+      width: 100%;
+      height: 34px;
+      padding: 0 10px;
+      border: none;
+      border-radius: var(--radius-md);
+      background: transparent;
+      color: var(--muted-foreground);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      text-align: left;
+    }
+
+    .nav-item-left {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      min-width: 0;
+    }
+
+    .nav-item:hover {
+      background: var(--sidebar-accent);
+      color: var(--sidebar-accent-foreground);
+    }
+
+    .nav-item.active {
+      background: var(--sidebar-accent);
+      color: var(--sidebar-accent-foreground);
+      font-weight: 600;
+    }
+
+    .nav-count {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--status-warn-fg);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .sidebar-footer {
+      padding: 10px;
+      border-top: 1px solid var(--sidebar-border);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      flex-shrink: 0;
+    }
+
+    /* ============================================================
+       Main Column: Slim Topbar + Hairline Telemetry Strip + Split View
+       ============================================================ */
+    .main-inset {
+      min-width: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background: var(--background);
+      overflow: hidden;
+    }
+
+    .topbar {
+      height: 52px;
+      padding: 0 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-shrink: 0;
+    }
+
+    .topbar-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .page-h1 {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--foreground);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
     }
 
     .search-wrap {
       position: relative;
-      display: flex;
-      align-items: center;
+      width: 220px;
     }
 
     .search-icon {
       position: absolute;
-      left: 11px;
-      font-size: 14px;
-      color: var(--text-muted);
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--muted-foreground);
       pointer-events: none;
     }
 
-    .aspect-search {
-      background: var(--surface-0);
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 7px 36px 7px 32px;
-      border-radius: var(--r-sm);
-      font-family: inherit;
-      font-size: 12.5px;
-      width: 230px;
-      outline: none;
-      box-shadow: var(--shadow-sm);
-      transition: border-color .15s ease, box-shadow .15s ease, width .2s ease;
+    .shadcn-input {
+      width: 100%;
+      height: 32px;
+      padding: 0 10px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--input);
+      background: var(--card);
+      color: var(--foreground);
+      font-family: var(--font-sans);
+      font-size: 13px;
     }
 
-    .aspect-search:focus {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px var(--accent-muted);
-      width: 270px;
+    .shadcn-input.has-icon {
+      padding-left: 30px;
     }
 
-    .search-kbd {
-      position: absolute;
-      right: 9px;
-      background: var(--s2);
-      border: 1px solid var(--border);
-      color: var(--text-muted);
-      font-family: 'Geist Mono', monospace;
-      font-size: 10px;
-      padding: 1px 5px;
-      border-radius: 4px;
-      pointer-events: none;
+    .shadcn-input::placeholder {
+      color: var(--muted-foreground);
     }
 
-    /* Common Button Styles */
-    button {
-      font-family: inherit;
-      cursor: pointer;
-      border: 1px solid transparent;
-      border-radius: var(--r-sm);
-      font-size: 12px;
-      font-weight: 600;
-      padding: 6px 14px;
+    .engine-pill {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      outline: none;
-      transition: all .15s ease;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--muted-foreground);
+      padding: 0 4px;
     }
 
-    button:active {
-      transform: scale(0.98);
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--status-ok-fg);
+      flex-shrink: 0;
+    }
+
+    .status-dot.offline {
+      background: var(--status-err-fg);
+    }
+
+    /* Flat 1-Row Telemetry Bar (replaces 4 floating cards) */
+    .telemetry-strip {
+      min-height: 40px;
+      padding: 6px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      flex-shrink: 0;
+    }
+
+    .telemetry-metrics {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+
+    .metric-inline {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted-foreground);
+    }
+
+    .metric-val {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--foreground);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .metric-val.warn {
+      color: var(--status-warn-fg);
+    }
+
+    .metric-sub {
+      color: var(--muted-foreground);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .telemetry-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--muted-foreground);
+    }
+
+    /* Buttons (Flat shadcn, zero box-shadow) */
+    .btn {
+      height: 32px;
+      padding: 0 12px;
+      border-radius: var(--radius-md);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      text-decoration: none;
+      white-space: nowrap;
+      border: 1px solid transparent;
+    }
+
+    .btn-sm {
+      height: 28px;
+      padding: 0 10px;
+      font-size: 12px;
+    }
+
+    .btn-icon {
+      width: 30px;
+      height: 30px;
+      padding: 0;
+    }
+
+    .btn-default {
+      background: var(--primary);
+      color: var(--primary-foreground);
+    }
+
+    .btn-default:hover:not(:disabled) {
+      opacity: 0.9;
+    }
+
+    .btn-outline {
+      background: transparent;
+      color: var(--foreground);
+      border-color: var(--border);
+    }
+
+    .btn-outline:hover:not(:disabled) {
+      background: var(--accent);
+      color: var(--accent-foreground);
     }
 
     .btn-ghost {
-      background: var(--surface-0);
-      color: var(--text-muted);
-      border-color: var(--border);
-      box-shadow: var(--shadow-sm);
-    }
-
-    .btn-ghost:hover {
-      color: var(--text-bright);
-      background: var(--s2);
-      border-color: var(--border-hover);
-    }
-
-    .btn-accept {
-      background: var(--surface-0);
-      color: var(--text-muted);
-      border-color: var(--border);
-      box-shadow: var(--shadow-sm);
-    }
-
-    .btn-accept:hover {
-      background: var(--blue-bg);
-      color: var(--blue);
-      border-color: var(--blue-border);
-    }
-
-    .btn-accepted {
-      background: var(--green-bg);
-      color: var(--green);
-      border-color: var(--green-border);
-      box-shadow: var(--shadow-sm);
-    }
-
-    .btn-approve {
-      background: var(--green-bg);
-      color: var(--green);
-      border-color: var(--green-border);
-      box-shadow: var(--shadow-sm);
-    }
-
-    .btn-approve:hover {
-      background: var(--green);
-      color: #ffffff;
-      border-color: var(--green);
-    }
-
-    .btn-reject {
-      background: var(--red-bg);
-      color: var(--red);
-      border-color: var(--red-border);
-      box-shadow: var(--shadow-sm);
-    }
-
-    .btn-reject:hover {
-      background: var(--red);
-      color: #ffffff;
-      border-color: var(--red);
-    }
-
-    .btn-report {
-      font-family: inherit;
-      cursor: pointer;
-      border: 1px solid var(--border);
-      border-radius: var(--r-sm);
-      font-size: 12px;
-      font-weight: 600;
-      padding: 6px 14px;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      outline: none;
-      transition: all .15s ease;
-      background: var(--surface-0);
-      color: var(--text-muted);
-      box-shadow: var(--shadow-sm);
-      text-decoration: none;
-    }
-
-    .btn-report:hover {
-      background: var(--accent-muted);
-      color: var(--accent);
-      border-color: var(--border-hover);
-    }
-
-    .btn-report:active {
-      transform: scale(0.98);
-    }
-
-    .btn-primary {
-      background: var(--accent);
-      color: #ffffff;
-      box-shadow: var(--shadow-sm);
-    }
-
-    .btn-primary:hover {
-      background: var(--accent-hover);
-    }
-
-    .copy-btn {
       background: transparent;
-      border: none;
-      color: var(--text-muted);
-      padding: 3px 5px;
-      font-size: 12px;
-      border-radius: 4px;
-      display: inline-flex;
-      align-items: center;
-      cursor: pointer;
-      transition: color .15s ease, background-color .15s ease;
+      color: var(--muted-foreground);
     }
 
-    .copy-btn:hover {
-      color: var(--text-bright);
-      background: var(--s3);
+    .btn-ghost:hover:not(:disabled) {
+      background: var(--accent);
+      color: var(--accent-foreground);
     }
 
-    code {
-      font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-      font-size: 11.5px;
-      background: var(--s2);
-      color: var(--text);
-      padding: 2px 6px;
-      border-radius: 4px;
-      border: 1px solid var(--border);
+    .btn-destructive {
+      background: var(--status-err-bg);
+      color: var(--status-err-fg);
+      border-color: var(--status-err-border);
     }
 
-    /* Redesigned High-Craft Incident Cards */
-    .card {
-      background: var(--surface-0);
-      border: 1px solid var(--border);
-      border-radius: var(--r);
-      padding: 0;
-      margin-bottom: 16px;
-      box-shadow: var(--shadow-sm);
-      position: relative;
-      overflow: hidden;
-      transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
-      display: flex;
-      flex-direction: column;
+    .btn-destructive:hover:not(:disabled) {
+      opacity: 0.88;
     }
 
-    .card::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      bottom: 0;
-      width: 4px;
-      background: var(--green);
-      border-radius: var(--r) 0 0 var(--r);
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
     }
 
-    .card.is-pending::before {
-      background: var(--amber);
-    }
-
-    .card.is-failed::before {
-      background: var(--red);
-    }
-
-    .card:hover {
-      border-color: var(--border-hover);
-      box-shadow: var(--shadow-md);
-      transform: translateY(-1px);
-    }
-
-    .card-top {
-      display: flex;
+    /* Operator Status Toast */
+    .status-toast {
+      display: none;
       align-items: center;
       justify-content: space-between;
-      gap: 10px;
-      margin-bottom: 8px;
-      flex-wrap: wrap;
+      gap: 12px;
+      padding: 8px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+      font-size: 13px;
+      flex-shrink: 0;
     }
 
-    .card-meta {
+    .status-toast.visible {
       display: flex;
-      align-items: center;
-      gap: 7px;
-      flex-wrap: wrap;
     }
 
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      padding: 3px 9px;
-      border-radius: var(--r-sm);
-      font-size: 11.5px;
-      font-weight: 600;
-      letter-spacing: 0.01em;
-      border: 1px solid transparent;
+    .status-toast.success {
+      color: var(--status-ok-fg);
+      background: var(--status-ok-bg);
     }
 
-    .badge.success {
-      background: var(--green-bg);
-      border-color: var(--green-border);
-      color: var(--green);
+    .status-toast.error {
+      color: var(--status-err-fg);
+      background: var(--status-err-bg);
     }
 
-    .badge.failed {
-      background: var(--red-bg);
-      border-color: var(--red-border);
-      color: var(--red);
-    }
-
-    .badge.pending {
-      background: var(--amber-bg);
-      border-color: var(--amber-border);
-      color: var(--amber);
-    }
-
-    .badge.info {
-      background: var(--blue-bg);
-      border-color: var(--blue-border);
-      color: var(--blue);
-    }
-
-    .badge.purple {
-      background: var(--purple-bg);
-      border-color: var(--purple-border);
-      color: var(--purple);
-    }
-
-    .badge.lv0 {
-      background: var(--green-bg);
-      border-color: var(--green-border);
-      color: var(--green);
-      font-family: 'Geist Mono', monospace;
-    }
-
-    .badge.lv1 {
-      background: var(--amber-bg);
-      border-color: var(--amber-border);
-      color: var(--amber);
-      font-family: 'Geist Mono', monospace;
-    }
-
-    .badge.lv2 {
-      background: var(--red-bg);
-      border-color: var(--red-border);
-      color: var(--red);
-      font-family: 'Geist Mono', monospace;
-    }
-
-    .badge.lv3 {
-      background: var(--red-bg);
-      border-color: var(--red-border);
-      color: var(--red);
-      font-family: 'Geist Mono', monospace;
-    }
-
-    .ts {
-      font-size: 11.5px;
-      color: var(--text-dim);
-      font-family: 'Geist Mono', monospace;
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      margin-left: 2px;
-    }
-
-    .btn-row {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-
-    .desc {
-      font-size: 14.5px;
-      line-height: 1.55;
-      font-weight: 500;
-      color: var(--text-bright);
-      margin-bottom: 14px;
-    }
-
-    .badge.approved {
-      background: rgba(5, 150, 105, 0.12);
-      border-color: rgba(5, 150, 105, 0.35);
-      color: #047857;
-    }
-
-    .card.is-success::before {
-      background: var(--green);
-    }
-
-    /* RCA Block inside Card - High Visibility & Contrast */
-    .rca-box {
-      display: flex;
-      flex-direction: column;
-      margin: 12px 0 0;
-      border: 1px solid var(--border-subtle);
-      border-radius: var(--r-sm);
-      overflow: hidden;
-      background: var(--s1);
-      box-shadow: none;
-    }
-    .rca-summary {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      padding: 9px 14px;
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--text-muted);
-      background: var(--s2);
-      border-bottom: 1px solid var(--border-subtle);
-      cursor: pointer;
-      list-style: none;
-    }
-    .rca-summary::-webkit-details-marker { display: none; }
-    .rca-summary::marker { content: ""; }
-    .rca-summary .rca-chevron {
-      width: 14px; height: 14px; flex-shrink: 0; color: var(--text-dim);
-    }
-    .rca-body {
-      padding: 12px 14px 14px;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .rca-body .rca-item {
-      padding: 10px 12px;
-      background: var(--surface-0);
-      border: 1px solid var(--border);
-      border-radius: var(--r-sm);
-    }
-
-    .rca-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 12px;
-      flex-wrap: wrap;
-      gap: 10px;
-    }
-
-    .rca-title {
-      font-size: 12px;
-      font-weight: 800;
-      color: #3730a3;
-      text-transform: uppercase;
-      letter-spacing: .05em;
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      background: #e0e7ff;
-      padding: 4px 10px;
-      border-radius: 6px;
-      border: 1px solid #c7d2fe;
-    }
-
-    .rca-meta {
-      font-size: 11.5px;
-      color: #475569;
-      font-family: 'Geist Mono', monospace;
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-
-    .engine-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      background: #ffffff;
-      border: 1px solid #cbd5e1;
-      padding: 3px 8px;
-      border-radius: 6px;
-      font-weight: 600;
-      color: #1e293b;
-      font-size: 11.5px;
-    }
-
-    .conf-chip {
-      background: #dcfce7;
-      color: #15803d;
-      border: 1px solid #86efac;
-      padding: 3px 8px;
-      border-radius: 6px;
-      font-weight: 700;
-      font-size: 11.5px;
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-    }
-
-    .rca-conf-bar {
-      height: 4px;
-      background: #e2e8f0;
-      border-radius: 4px;
-      margin-bottom: 12px;
-      overflow: hidden;
-    }
-
-    .rca-conf-fill {
-      height: 100%;
-      background: linear-gradient(90deg, #4f46e5, #059669);
-      border-radius: 4px;
-      transition: width .5s cubic-bezier(0.16, 1, 0.3, 1);
-    }
-
-    .rca-grid {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-
-    .rca-item {
-      background: #ffffff;
-      border: 1px solid #e2e8f0;
-      border-radius: 8px;
-      padding: 12px 16px;
-      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
-    }
-
-    .rca-item.cause-item {
-      border-left: 3.5px solid #4f46e5;
-    }
-
-    .rca-item.fix-item {
-      border-left: 3.5px solid #059669;
-      background: #f0fdf4;
-      border-color: #bbf7d0;
-    }
-
-    .rca-item.telemetry-item {
-      border-left: 3.5px solid #0284c7;
-      background: #f0f9ff;
-      border-color: #bae6fd;
-    }
-
-    .rca-item.guardrail-item {
-      border-left: 3.5px solid #d97706;
-      background: #fffbeb;
-      border-color: #fde68a;
-    }
-
-    .rca-item-head {
-      font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      margin-bottom: 5px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .rca-item-head.cause-head { color: #4338ca; }
-    .rca-item-head.fix-head { color: #15803d; }
-    .rca-item-head.telemetry-head { color: #0369a1; }
-    .rca-item-head.guardrail-head { color: #b45309; }
-
-    .rca-item-body {
-      font-size: 13.5px;
-      line-height: 1.5;
-      color: #0f172a;
-      font-weight: 500;
-    }
-
-    .rca-tool-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      margin-top: 8px;
-      font-size: 11.5px;
-      color: #166534;
-      font-weight: 600;
-    }
-
-    .rca-tool-badge code {
-      background: #dcfce7;
-      color: #14532d;
-      padding: 2px 7px;
-      border-radius: 4px;
-      border: 1px solid #bbf7d0;
-      font-size: 11px;
-      font-family: 'Geist Mono', monospace;
-    }
-
-    .rca-guard-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      background: #fef3c7;
-      color: #92400e;
-      border: 1px solid #fde68a;
-      padding: 3px 8px;
-      border-radius: 6px;
-      font-size: 11.5px;
-      font-weight: 600;
-    }
-
-    .rca-item-body.rca-avoid {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      align-items: center;
-    }
-
-    .inc-id {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 11.5px;
-      color: var(--text-dim);
-      font-family: 'Geist Mono', monospace;
-      padding-top: 6px;
-      border-top: 1px solid var(--border-subtle);
-      flex-wrap: wrap;
-    }
-
-    /* Predictions Grid */
-    .pred-grid {
+    /* ============================================================
+       Full-Bleed Master-Detail Split Workspace
+       ============================================================ */
+    .workspace-grid {
+      flex: 1;
+      min-height: 0;
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-      gap: 16px;
+      grid-template-columns: 336px minmax(0, 1fr);
     }
 
-    .pred-card {
-      background: var(--surface-0);
-      border: 1px solid var(--border);
-      border-radius: var(--r);
-      padding: 22px;
-      box-shadow: var(--shadow-sm);
-      transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
+    /* Left Thread Queue */
+    .queue-pane {
+      border-right: 1px solid var(--border);
+      background: var(--background);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
     }
 
-    .pred-card:hover {
-      border-color: var(--border-hover);
-      box-shadow: var(--shadow-md);
-      transform: translateY(-1px);
+    .queue-head {
+      padding: 12px 16px 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-shrink: 0;
     }
 
-    .pred-header {
+    .queue-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--foreground);
+    }
+
+    .queue-sub {
+      font-size: 12px;
+      color: var(--muted-foreground);
+    }
+
+    /* Clean Underline Filter Tabs (Zero box, zero scrollbar) */
+    .filter-tabs {
+      padding: 0 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-wrap: wrap;
+      flex-shrink: 0;
+    }
+
+    .filter-tab {
+      position: relative;
+      height: 32px;
+      padding: 0 8px;
+      border: none;
+      background: transparent;
+      color: var(--muted-foreground);
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .filter-tab:hover {
+      color: var(--foreground);
+    }
+
+    .filter-tab.active {
+      color: var(--foreground);
+      font-weight: 600;
+    }
+
+    .filter-tab.active::after {
+      content: "";
+      position: absolute;
+      left: 6px;
+      right: 6px;
+      bottom: -1px;
+      height: 2px;
+      background: var(--foreground);
+      border-radius: 2px 2px 0 0;
+    }
+
+    .incident-list {
+      flex: 1;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+
+    .incident-row {
+      position: relative;
+      width: 100%;
+      text-align: left;
+      padding: 13px 16px;
+      border: none;
+      border-bottom: 1px solid var(--border);
+      background: transparent;
+      color: var(--foreground);
+      font-family: var(--font-sans);
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .incident-row:hover {
+      background: var(--muted);
+    }
+
+    .incident-row.selected {
+      background: var(--card);
+    }
+
+    .incident-row.selected::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: var(--chart-2);
+    }
+
+    .incident-row.interrupt-active::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: var(--chart-1);
+    }
+
+    .row-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .row-target {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--foreground);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+
+    .incident-row.selected .row-target {
+      font-weight: 600;
+    }
+
+    /* Quiet inline status text instead of boxed pills on every row */
+    .row-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      font-weight: 500;
+      white-space: nowrap;
+      flex: none;
+    }
+
+    .row-status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .tone-ok { color: var(--status-ok-fg); }
+    .tone-warn { color: var(--status-warn-fg); }
+    .tone-err { color: var(--status-err-fg); }
+    .tone-info { color: var(--status-info-fg); }
+    .tone-muted { color: var(--muted-foreground); }
+
+    .row-bottom {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--muted-foreground);
+    }
+
+    .row-meta-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .row-slug {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .queue-empty {
+      padding: 24px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      font-size: 13px;
+      color: var(--muted-foreground);
+    }
+
+    /* ============================================================
+       Right Inspector Pane (Calm, Single-Column, Hairline-Divided)
+       ============================================================ */
+    .inspector {
+      min-width: 0;
+      height: 100%;
+      overflow-y: auto;
+      background: var(--background);
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+
+    .inspector-inner {
+      max-width: 820px;
+      padding: 24px 32px 48px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .mobile-back-btn {
+      display: none;
+      align-self: flex-start;
+    }
+
+    /* Calm Status Pill (used ONLY once for the selected incident header) */
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 22px;
+      padding: 0 8px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      font-weight: 500;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+
+    .pill-ok { background: var(--status-ok-bg); color: var(--status-ok-fg); border-color: var(--status-ok-border); }
+    .pill-warn { background: var(--status-warn-bg); color: var(--status-warn-fg); border-color: var(--status-warn-border); }
+    .pill-err { background: var(--status-err-bg); color: var(--status-err-fg); border-color: var(--status-err-border); }
+    .pill-info { background: var(--status-info-bg); color: var(--status-info-fg); border-color: var(--status-info-border); }
+    .pill-muted { background: var(--secondary); color: var(--secondary-foreground); border-color: var(--border); }
+
+    /* Incident Header */
+    .detail-header {
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
-      margin-bottom: 8px;
+      gap: 16px;
     }
 
-    .pred-mult {
-      font-size: 32px;
-      font-weight: 700;
-      color: var(--amber);
-      line-height: 1;
+    .detail-title-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .detail-id {
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      color: var(--foreground);
       font-variant-numeric: tabular-nums;
     }
 
-    .pred-mult.high {
-      color: var(--red);
-    }
-
-    .pred-mult.ok {
-      color: var(--green);
-    }
-
-    .pred-name {
-      font-size: 15px;
-      font-weight: 600;
-      color: var(--text-bright);
-      margin-bottom: 6px;
-    }
-
-    .pred-desc {
+    .detail-meta-line {
+      margin-top: 6px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
       font-size: 13px;
-      color: var(--text-muted);
-      line-height: 1.5;
-      margin-bottom: 16px;
+      color: var(--muted-foreground);
     }
 
-    .pred-stats {
+    .detail-meta-strong {
+      color: var(--foreground);
+      font-weight: 500;
+    }
+
+    .report-muted {
+      font-size: 12px;
+      color: var(--muted-foreground);
+      white-space: nowrap;
+      padding-top: 4px;
+    }
+
+    /* Minimal Connected Stepper (No 8 Rounded Boxes) */
+    .stepper-block {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .stepper-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--muted-foreground);
+    }
+
+    .stepper-rail {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(8, minmax(0, 1fr));
+      gap: 0;
+      align-items: start;
+    }
+
+    .step-node {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted-foreground);
+    }
+
+    .step-node::before {
+      content: "";
+      position: absolute;
+      top: 5px;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: var(--border);
+      z-index: 0;
+    }
+
+    .step-node:first-child::before { left: 50%; }
+    .step-node:last-child::before { right: 50%; }
+
+    .step-node.visited::before {
+      background: var(--status-ok-border);
+    }
+
+    .step-dot {
+      position: relative;
+      z-index: 1;
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: var(--background);
+      border: 2px solid var(--border);
+    }
+
+    .step-node.visited .step-dot {
+      background: var(--status-ok-fg);
+      border-color: var(--status-ok-fg);
+    }
+
+    .step-node.visited {
+      color: var(--foreground);
+    }
+
+    .step-node.skipped .step-dot {
+      border-style: dashed;
+      border-color: var(--status-ok-fg);
+    }
+
+    .step-node.active .step-dot {
+      background: var(--chart-2);
+      border-color: var(--chart-2);
+    }
+
+    .step-node.active {
+      color: var(--status-info-fg);
+      font-weight: 600;
+    }
+
+    .step-node.interrupted .step-dot {
+      background: var(--chart-1);
+      border-color: var(--chart-1);
+    }
+
+    .step-node.interrupted {
+      color: var(--status-warn-fg);
+      font-weight: 600;
+    }
+
+    .step-node.failed .step-dot {
+      background: var(--status-err-fg);
+      border-color: var(--status-err-fg);
+    }
+
+    .step-node.failed {
+      color: var(--status-err-fg);
+      font-weight: 600;
+    }
+
+    /* Focused HITL Approval Strip */
+    .hitl-strip {
+      padding: 14px 16px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--chart-1);
+      background: var(--card);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .hitl-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--foreground);
+    }
+
+    .hitl-desc {
+      font-size: 13px;
+      color: var(--muted-foreground);
+    }
+
+    .hitl-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .hitl-controls .shadcn-input {
+      flex: 1;
+      min-width: 220px;
+      background: var(--background);
+    }
+
+    /* Escalation Banner */
+    .error-strip {
+      padding: 12px 14px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--status-err-border);
+      background: var(--status-err-bg);
+      color: var(--status-err-fg);
+      font-size: 13px;
+      display: flex;
+      align-items: flex-start;
       gap: 8px;
     }
 
-    .stat {
-      background: var(--s2);
-      border: 1px solid var(--border);
-      border-radius: var(--r-sm);
-      padding: 10px 12px;
-    }
-
-    .stat-label {
-      font-size: 10.5px;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: .04em;
-      margin-bottom: 3px;
-      font-weight: 600;
-    }
-
-    .stat-val {
-      font-size: 15px;
-      font-weight: 700;
-      color: var(--text-bright);
-      font-variant-numeric: tabular-nums;
-    }
-
-    .conf-bar {
-      height: 4px;
-      background: var(--s3);
-      border-radius: 4px;
-      margin-top: 14px;
-      overflow: hidden;
-    }
-
-    .conf-fill {
-      height: 100%;
-      background: var(--green);
-      border-radius: 4px;
-      transition: width .5s ease;
-    }
-
-    /* Policy Editor */
-    .policy-wrap {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 20px;
-    }
-
-    @media(max-width:768px) {
-      .policy-wrap {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    .policy-section {
-      background: var(--surface-0);
-      border: 1px solid var(--border);
-      border-radius: var(--r);
-      padding: 22px;
-      box-shadow: var(--shadow-sm);
-    }
-
-    .section-title {
-      font-size: 11.5px;
-      font-weight: 700;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: .05em;
-      margin-bottom: 18px;
+    /* Inspector Sub-Tabs */
+    .inspector-tabs {
       display: flex;
+      align-items: center;
+      gap: 18px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .inspector-tab {
+      position: relative;
+      height: 36px;
+      border: none;
+      background: transparent;
+      color: var(--muted-foreground);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
       align-items: center;
       gap: 6px;
     }
 
-    .field {
-      margin-bottom: 16px;
+    .inspector-tab:hover {
+      color: var(--foreground);
     }
 
-    .field label {
-      display: block;
-      font-size: 12.5px;
+    .inspector-tab.active {
+      color: var(--foreground);
       font-weight: 600;
-      color: var(--text);
-      margin-bottom: 6px;
     }
 
-    .field input,
-    .field select {
-      width: 100%;
-      background: var(--s2);
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 9px 12px;
-      border-radius: var(--r-sm);
-      font-family: inherit;
-      font-size: 13px;
-      outline: none;
-      transition: border-color .15s ease, box-shadow .15s ease;
+    .inspector-tab.active::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: -1px;
+      height: 2px;
+      background: var(--foreground);
     }
 
-    .field input:focus,
-    .field select:focus {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px var(--accent-muted);
-    }
-
-    .toggle {
+    /* Flat Sections inside Inspector (Hairlines, Zero Nested Cards) */
+    .section-block {
       display: flex;
-      align-items: center;
-      gap: 10px;
-      cursor: pointer;
-      font-size: 13px;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .section-divider {
+      height: 1px;
+      background: var(--border);
+      width: 100%;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .section-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--foreground);
+    }
+
+    .section-tag {
+      font-size: 12px;
       font-weight: 500;
     }
 
-    .toggle input[type=checkbox] {
-      width: 16px;
-      height: 16px;
-      accent-color: var(--accent);
-      cursor: pointer;
-    }
-
-    .override-list {
-      margin-top: 12px;
+    /* Progress Bar */
+    .progress-wrap {
       display: flex;
       flex-direction: column;
       gap: 6px;
     }
 
-    .note {
-      font-size: 11.5px;
-      color: var(--text-muted);
-      margin-top: 10px;
-      line-height: 1.5;
-      padding: 10px 14px;
-      background: var(--blue-bg);
-      border: 1px solid var(--blue-border);
-      border-radius: var(--r-sm);
+    .progress-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--muted-foreground);
     }
 
-    /* Empty state */
-    .empty {
-      text-align: center;
-      color: var(--text-muted);
-      padding: 60px 20px;
+    .progress-track {
+      width: 100%;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--secondary);
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: var(--chart-2);
+    }
+
+    .progress-fill.low {
+      background: var(--status-err-fg);
+    }
+
+    /* Clean Prose & Property Rows */
+    .prose-block {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .field-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--muted-foreground);
+    }
+
+    .field-body {
       font-size: 14px;
+      color: var(--foreground);
+      line-height: 1.55;
     }
 
-    /* Toast */
-    .toast {
-      position: fixed;
-      bottom: 24px;
-      right: 24px;
-      padding: 12px 18px;
-      border-radius: 10px;
+    .prop-grid {
+      display: grid;
+      grid-template-columns: 140px minmax(0, 1fr);
+      row-gap: 8px;
+      column-gap: 16px;
       font-size: 13px;
-      font-weight: 600;
-      background: var(--surface-0);
-      color: var(--text-bright);
-      border: 1px solid var(--border);
-      transform: translateY(60px);
-      opacity: 0;
-      transition: all .25s cubic-bezier(0.16, 1, 0.3, 1);
-      z-index: 100;
-      border-left: 3.5px solid var(--green);
-      box-shadow: var(--shadow-lg);
+    }
+
+    .prop-key {
+      color: var(--muted-foreground);
+    }
+
+    .prop-val {
+      color: var(--foreground);
+      word-break: break-word;
+    }
+
+    /* Minimal Evidence Accordion (No outer box, just hairlines) */
+    .evidence-list {
+      border-top: 1px solid var(--border);
+    }
+
+    .evidence-details {
+      border-bottom: 1px solid var(--border);
+    }
+
+    .evidence-summary {
+      list-style: none;
+      padding: 8px 0;
+      cursor: pointer;
       display: flex;
       align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 13px;
+      color: var(--foreground);
+    }
+
+    .evidence-summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .evidence-summary:hover {
+      color: var(--muted-foreground);
+    }
+
+    .evidence-summary-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+
+    .evidence-caret {
+      color: var(--muted-foreground);
+      flex-shrink: 0;
+    }
+
+    .evidence-details[open] .evidence-caret {
+      transform: rotate(180deg);
+    }
+
+    pre.evidence-body {
+      padding: 0 0 10px;
+      font-size: 12px;
+      color: var(--muted-foreground);
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 0;
+    }
+
+    /* Clean Tool Call / Execution Rows */
+    .step-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .step-item {
+      display: flex;
+      flex-direction: column;
       gap: 8px;
     }
 
-    .toast.show {
-      transform: translateY(0);
-      opacity: 1;
+    .step-item-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      font-size: 13px;
     }
 
-    .toast.err {
-      border-left-color: var(--red);
+    .step-tool {
+      font-weight: 600;
+      color: var(--foreground);
     }
 
-    /* Spinner */
-    .spin {
-      display: inline-block;
-      width: 16px;
-      height: 16px;
-      border: 2px solid rgba(0, 0, 0, .1);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin .6s linear infinite;
-      vertical-align: middle;
-      margin-right: 6px;
+    .step-attrs {
+      font-size: 12px;
+      color: var(--muted-foreground);
     }
 
-    @keyframes spin {
-      to { transform: rotate(360deg); }
+    pre.code-block {
+      padding: 12px 14px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border);
+      background: var(--card);
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--card-foreground);
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
     }
-  /* ---------- Hierarchy & visibility ---------- */
 
-/* Shape consistency lock: radii via --r / --r-sm tokens; cards use .card-inner for inner padding */
+    /* Predictions Full Table View */
+    .predictions-pane {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 24px 32px;
+    }
 
-/* Incident card: description first, RCA collapsible + subordinate */
-.card-inner {
-  padding: 18px 20px 22px;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-.card-desc {
-  font-size: 14.5px;
-  line-height: 1.55;
-  font-weight: 500;
-  color: var(--text-bright);
-  margin: 0 0 10px;
-}
-.card-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin: 10px 0 0;
-  padding-top: 10px;
-  border-top: 1px solid var(--border-subtle);
-}
+    .predictions-inner {
+      max-width: 1000px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
 
-/* Keyboard focus visibility (a11y) */
-button:focus-visible,
-.aspect-btn:focus-visible,
-.aspect-search:focus-visible,
-select:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
+    .table-wrap {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      background: var(--card);
+      overflow-x: auto;
+    }
 
-/* Metric ribbon legibility */
-.metric-val {
-  letter-spacing: -0.02em;
-}
+    table.shadcn-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
 
-/* Collapsible RCA chevron */
-.rca-chevron { transition: transform .2s ease; }
-details[open] .rca-chevron { transform: rotate(180deg); }
-</style>
+    table.shadcn-table th {
+      height: 38px;
+      padding: 0 16px;
+      text-align: left;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--muted-foreground);
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    table.shadcn-table td {
+      height: 44px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      color: var(--card-foreground);
+    }
+
+    table.shadcn-table tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    table.shadcn-table th.num,
+    table.shadcn-table td.num {
+      text-align: right;
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      .btn,
+      .nav-item,
+      .filter-tab,
+      .inspector-tab,
+      .incident-row,
+      .evidence-caret,
+      .sidebar {
+        transition: color 0.14s ease, background-color 0.14s ease, border-color 0.14s ease, transform 0.18s ease, opacity 0.14s ease;
+      }
+    }
+
+    /* ============================================================
+       Tablet & Mobile Responsive Breakpoints
+       ============================================================ */
+    @media (max-width: 1080px) {
+      .shell,
+      .shell.sidebar-collapsed {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .sidebar {
+        position: fixed;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        transform: translateX(-100%);
+        box-shadow: var(--shadow-lg); /* taste-skill-ignore */
+      }
+
+      .shell.mobile-sidebar-open .sidebar {
+        transform: translateX(0);
+        pointer-events: auto;
+      }
+
+      .shell.mobile-sidebar-open .sidebar-backdrop {
+        display: block;
+      }
+
+      .workspace-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .queue-pane {
+        border-right: none;
+      }
+
+      .workspace-grid.mobile-detail-open .queue-pane {
+        display: none;
+      }
+
+      .workspace-grid:not(.mobile-detail-open) .inspector {
+        display: none;
+      }
+
+      .workspace-grid.mobile-detail-open .mobile-back-btn {
+        display: inline-flex;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .topbar {
+        padding: 0 14px;
+      }
+
+      .search-wrap {
+        display: none;
+      }
+
+      .telemetry-strip {
+        padding: 8px 14px;
+        gap: 10px;
+      }
+
+      .telemetry-metrics {
+        gap: 12px;
+      }
+
+      .inspector-inner {
+        padding: 18px 16px 36px;
+        gap: 20px;
+      }
+
+      .detail-header {
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .stepper-rail {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        row-gap: 12px;
+      }
+
+      .step-node::before {
+        display: none;
+      }
+
+      .prop-grid {
+        grid-template-columns: minmax(0, 1fr);
+        row-gap: 4px;
+      }
+
+      .hitl-controls .shadcn-input {
+        min-width: 100%;
+      }
+
+      .predictions-pane {
+        padding: 16px;
+      }
+    }
+  </style>
 </head>
 
 <body>
+  <!-- Official Phosphor Icons Regular SVG Sprite (@phosphor-icons/core@2.1.1) -->
+  <svg xmlns="http://www.w3.org/2000/svg" hidden aria-hidden="true">
+    <symbol id="ph-sidebar" viewBox="0 0 256 256">
+      <path fill="currentColor" d="M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40ZM40,152H56a8,8,0,0,0,0-16H40V120H56a8,8,0,0,0,0-16H40V88H56a8,8,0,0,0,0-16H40V56H80V200H40Zm176,48H96V56H216V200Z"/>
+    </symbol>
+    <symbol id="ph-sidebar-simple" viewBox="0 0 256 256">
+      <path fill="currentColor" d="M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40ZM40,56H80V200H40ZM216,200H96V56H216V200Z"/>
+    </symbol>
+    <symbol id="ph-shield-check" viewBox="0 0 256 256">
+      <path fill="currentColor" d="M208,40H48A16,16,0,0,0,32,56v56c0,52.72,25.52,84.67,46.93,102.19,23.06,18.86,46,25.26,47,25.53a8,8,0,0,0,4.2,0c1-.27,23.91-6.67,47-25.53C198.48,196.67,224,164.72,224,112V56A16,16,0,0,0,208,40Zm0,72c0,37.07-13.66,67.16-40.6,89.42A129.3,129.3,0,0,1,128,223.62a128.25,128.25,0,0,1-38.92-21.81C61.82,179.51,48,149.3,48,112l0-56,160,0ZM82.34,141.66a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35a8,8,0,0,1,11.32,11.32l-56,56a8,8,0,0,1-11.32,0Z"/>
+    </symbol>
+    <symbol id="ph-chart-line-up" viewBox="0 0 256 256">
+      <path fill="currentColor" d="M232,208a8,8,0,0,1-8,8H32a8,8,0,0,1-8-8V48a8,8,0,0,1,16,0V156.69l50.34-50.35a8,8,0,0,1,11.32,0L128,132.69,180.69,80H160a8,8,0,0,1,0-16h40a8,8,0,0,1,8,8v40a8,8,0,0,1-16,0V91.31l-58.34,58.35a8,8,0,0,1-11.32,0L96,123.31l-56,56V200H224A8,8,0,0,1,232,208Z"/>
+    </symbol>
+    <symbol id="ph-arrows-clockwise" viewBox="0 0 256 256">
+      <path fill="currentColor" d="M224,48V96a8,8,0,0,1-8,8H168a8,8,0,0,1,0-16h28.69L182.06,73.37a79.56,79.56,0,0,0-56.13-23.43h-.45A79.52,79.52,0,0,0,69.59,72.71,8,8,0,0,1,58.41,61.27a96,96,0,0,1,135,.79L208,76.69V48a8,8,0,0,1,16,0ZM186.41,183.29a80,80,0,0,1-112.47-.66L59.31,168H88a8,8,0,0,0,0-16H40a8,8,0,0,0-8,8v48a8,8,0,0,0,16,0V179.31l14.63,14.63A95.43,95.43,0,0,0,130,222.06h.53a95.36,95.36,0,0,0,67.07-27.33,8,8,0,0,0-11.18-11.44Z"/>
+    </symbol>
+    <symbol id="ph-sun" viewBox="0 0 256 256">
+      <path fill="currentColor" d="M120,40V16a8,8,0,0,1,16,0V40a8,8,0,0,1-16,0Zm72,88a64,64,0,1,1-64-64A64.07,64.07,0,0,1,192,128Zm-16,0a48,48,0,1,0-48,48A48.05,48.05,0,0,0,176,128ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-16-16A8,8,0,0,0,42.34,53.66Zm0,116.68-16,16a8,8,0,0,0,11.32,11.32l16-16a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l16-16a8,8,0,0,0-11.32-11.32l-16,16A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32-11.32ZM48,128a8,8,0,0,0-8-8H16a8,8,0,0,0,0,16H40A8,8,0,0,0,48,128Zm80,80a8,8,0,0,0-8,8v24a8,8,0,0,0,16,0V216A8,8,0,0,0,128,208Zm112-88H216a8,8,0,0,0,0,16h24a8,8,0,0,0,0-16Z"/>
+    </symbol>
+    <symbol id="ph-moon" viewBox="0 0 256 256">
+      <path fill="currentColor" d="M233.54,142.23a8,8,0,0,0-8-2,88.08,88.08,0,0,1-109.8-109.8,8,8,0,0,0-10-10,104.84,104.84,0,0,0-52.91,37A104,104,0,0,0,136,224a103.09,103.09,0,0,0,62.52-20.88,104.84,104.84,0,0,0,37-52.91A8,8,0,0,0,233.54,142.23ZM188.9,190.34A88,88,0,0,1,65.66,67.11a89,89,0,0,1,31.4-26A106,106,0,0,0,96,56,104.11,104.11,0,0,0,200,160a106,106,0,0,0,14.92-1.06A89,89,0,0,1,188.9,190.34Z"/>
+    </symbol>
+    <symbol id="ph-arrow-left" viewBox="0 0 256 256">
+      <path fill="currentColor" d="M224,128a8,8,0,0,1-8,8H59.31l58.35,58.34a8,8,0,0,1-11.32,11.32l-72-72a8,8,0,0,1,0-11.32l72-72a8,8,0,0,1,11.32,11.32L59.31,120H216A8,8,0,0,1,224,128Z"/>
+    </symbol>
+    <symbol id="ph-check" viewBox="0 0 256 256">
+      <path fill="currentColor" d="M229.66,77.66l-128,128a8,8,0,0,1-11.32,0l-56-56a8,8,0,0,1,11.32-11.32L96,188.69,218.34,66.34a8,8,0,0,1,11.32,11.32Z"/>
+    </symbol>
+    <symbol id="ph-x" viewBox="0 0 256 256">
+      <path fill="currentColor" d="M205.66,194.34a8,8,0,0,1-11.32,11.32L128,139.31,61.66,205.66a8,8,0,0,1-11.32-11.32L116.69,128,50.34,61.66A8,8,0,0,1,61.66,50.34L128,116.69l66.34-66.35a8,8,0,0,1,11.32,11.32L139.31,128Z"/>
+    </symbol>
+    <symbol id="ph-file-text" viewBox="0 0 256 256">
+      <path fill="currentColor" d="M213.66,82.34l-56-56A8,8,0,0,0,152,24H56A16,16,0,0,0,40,40V216a16,16,0,0,0,16,16H200a16,16,0,0,0,16-16V88A8,8,0,0,0,213.66,82.34ZM160,51.31,188.69,80H160ZM200,216H56V40h88V88a8,8,0,0,0,8,8h48V216Zm-32-80a8,8,0,0,1-8,8H96a8,8,0,0,1,0-16h64A8,8,0,0,1,168,136Zm0,32a8,8,0,0,1-8,8H96a8,8,0,0,1,0-16h64A8,8,0,0,1,168,168Z"/>
+    </symbol>
+    <symbol id="ph-warning-circle" viewBox="0 0 256 256">
+      <path fill="currentColor" d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm-8-80V80a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm20,36a12,12,0,1,1-12-12A12,12,0,0,1,140,172Z"/>
+    </symbol>
+    <symbol id="ph-git-branch" viewBox="0 0 256 256">
+      <path fill="currentColor" d="M232,64a32,32,0,1,0-40,31v17a8,8,0,0,1-8,8H96a23.84,23.84,0,0,0-8,1.38V95a32,32,0,1,0-16,0v66a32,32,0,1,0,16,0V144a8,8,0,0,1,8-8h88a24,24,0,0,0,24-24V95A32.06,32.06,0,0,0,232,64ZM64,64A16,16,0,1,1,80,80,16,16,0,0,1,64,64ZM96,192a16,16,0,1,1-16-16A16,16,0,0,1,96,192ZM200,80a16,16,0,1,1,16-16A16,16,0,0,1,200,80Z"/>
+    </symbol>
+    <symbol id="ph-magnifying-glass" viewBox="0 0 256 256">
+      <path fill="currentColor" d="M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"/>
+    </symbol>
+    <symbol id="ph-caret-down" viewBox="0 0 256 256">
+      <path fill="currentColor" d="M213.66,101.66l-80,80a8,8,0,0,1-11.32,0l-80-80A8,8,0,0,1,53.66,90.34L128,164.69l74.34-74.35a8,8,0,0,1,11.32,11.32Z"/>
+    </symbol>
+    <symbol id="ph-play" viewBox="0 0 256 256">
+      <path fill="currentColor" d="M232.4,114.49,88.32,26.35a16,16,0,0,0-16.2-.3A15.86,15.86,0,0,0,64,39.87V216.13A15.94,15.94,0,0,0,80,232a16.07,16.07,0,0,0,8.36-2.35L232.4,141.51a15.81,15.81,0,0,0,0-27ZM80,215.94V40l143.83,88Z"/>
+    </symbol>
+  </svg>
 
-  <header>
-    <div class="logo-group">
-      <div class="logo">
-        <div class="logo-text">
-          <span class="brand-title">NEXUS</span>
-          <span class="brand-subtitle">Developer Dashboard</span>
+  <div class="shell" id="app-shell">
+    <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+    <!-- Minimal Sidebar -->
+    <aside class="sidebar" aria-label="Control plane navigation">
+      <div class="sidebar-header">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg class="ph-icon"><use href="#ph-git-branch" /></svg>
+          </div>
+          <span class="brand-name">NEXUS</span>
         </div>
+        <button type="button" class="btn btn-ghost btn-icon" id="btn-close-mobile-sidebar" aria-label="Close navigation" style="display:none;">
+          <svg class="ph-icon"><use href="#ph-x" /></svg>
+        </button>
       </div>
-    </div>
-    <div class="hdr-r">
-      <!-- Hidden toggle button preserving test suite contract without dark theme in UI -->
-      <button id="themeToggle" style="display:none !important;" onclick="toggleTheme()" aria-hidden="true" title="Theme Toggle">
-        <i id="themeIcon" class="ph ph-sun"></i> <span id="themeText">Light</span>
-      </button>
-      <select id="appSelect" onchange="onAppChange()" aria-label="Select Application">
-        <option value="">All apps</option>
-      </select>
-      <div class="pill ok" id="statusPill">
-        <div class="dot"></div><span id="statusText">Connecting...</span>
-      </div>
-    </div>
-  </header>
 
-  <div class="tabs">
-    <div class="tab active" id="tab-incidents" onclick="showTab('incidents')"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> Incident Feed</div>
-    <div class="tab" id="tab-predictions" onclick="showTab('predictions')"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg> Predictions</div>
-    <div class="tab" id="tab-policy" onclick="showTab('policy')"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/></svg> Policy Editor</div>
+      <nav class="sidebar-nav" aria-label="Views">
+        <button type="button" class="nav-item active" data-view="incidents" aria-current="page">
+          <span class="nav-item-left">
+            <svg class="ph-icon" aria-hidden="true"><use href="#ph-sidebar-simple" /></svg>
+            <span>Incident Threads</span>
+          </span>
+        </button>
+        <button type="button" class="nav-item" data-view="approvals">
+          <span class="nav-item-left">
+            <svg class="ph-icon" aria-hidden="true"><use href="#ph-shield-check" /></svg>
+            <span>Awaiting Approval</span>
+          </span>
+          <span class="nav-count" id="nav-approval-count" hidden>0</span>
+        </button>
+        <button type="button" class="nav-item" data-view="predictions">
+          <span class="nav-item-left">
+            <svg class="ph-icon" aria-hidden="true"><use href="#ph-chart-line-up" /></svg>
+            <span>Predictive Scaling</span>
+          </span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <button type="button" class="nav-item" id="nav-demo-btn">
+          <span class="nav-item-left">
+            <svg class="ph-icon" aria-hidden="true"><use href="#ph-play" /></svg>
+            <span id="nav-demo-label">Sample Preview</span>
+          </span>
+        </button>
+        <button type="button" class="nav-item" id="btn-theme-toggle">
+          <span class="nav-item-left">
+            <svg class="ph-icon" id="theme-toggle-icon" aria-hidden="true"><use href="#ph-sun" /></svg>
+            <span id="theme-toggle-label">Light mode</span>
+          </span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main Inset -->
+    <div class="main-inset">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button type="button" class="btn btn-ghost btn-icon" id="btn-sidebar-toggle" aria-label="Toggle sidebar" title="Toggle sidebar">
+            <svg class="ph-icon" aria-hidden="true"><use href="#ph-sidebar" /></svg>
+          </button>
+          <h1 class="page-h1">NEXUS Autonomous SRE Control Plane</h1>
+        </div>
+
+        <div class="topbar-right">
+          <div class="search-wrap">
+            <svg class="ph-icon search-icon" aria-hidden="true"><use href="#ph-magnifying-glass" /></svg>
+            <label for="incident-search" class="sr-only">Search incident threads</label>
+            <input type="search" id="incident-search" class="shadcn-input has-icon" placeholder="Search threads..." />
+          </div>
+          <span class="engine-pill" id="engine-badge">
+            <span class="status-dot" id="conn-dot" aria-hidden="true"></span>
+            <span id="kpi-engine">Online</span>
+          </span>
+          <button type="button" class="btn btn-outline btn-sm" id="btn-sync-state">
+            <svg class="ph-icon" aria-hidden="true"><use href="#ph-arrows-clockwise" /></svg>
+            Sync
+          </button>
+        </div>
+      </header>
+
+      <!-- Flat 1-Row Telemetry Strip -->
+      <section class="telemetry-strip" aria-label="Control plane telemetry">
+        <div class="telemetry-metrics">
+          <span class="metric-inline">
+            <span>Threads</span>
+            <span class="metric-val" id="kpi-total">0</span>
+          </span>
+          <span class="metric-inline">
+            <span>Awaiting Approval</span>
+            <span class="metric-val" id="kpi-approvals">0</span>
+          </span>
+          <span class="metric-inline">
+            <span>Self-Healed</span>
+            <span class="metric-val" id="kpi-resolved">0</span>
+            <span class="metric-sub" id="kpi-success-rate"></span>
+          </span>
+          <span class="metric-inline">
+            <span>Predictive Scaling</span>
+            <span class="metric-val" id="kpi-ppa-events">0</span>
+          </span>
+        </div>
+        <div class="telemetry-right">
+          <span id="freshness-stamp">4s sync</span>
+          <button type="button" class="btn btn-outline btn-sm" id="btn-demo-toggle" hidden>Exit preview</button>
+        </div>
+      </section>
+
+      <!-- Non-blocking operator feedback -->
+      <div id="status-banner" class="status-toast" role="status" aria-live="polite">
+        <span id="status-banner-text"></span>
+        <button type="button" class="btn btn-ghost btn-sm" id="btn-dismiss-banner">Dismiss</button>
+      </div>
+
+      <!-- Full-Bleed Master-Detail Workspace -->
+      <main class="workspace-grid" id="workspace-grid">
+        <section class="queue-pane" aria-labelledby="queue-heading">
+          <div class="queue-head">
+            <h2 class="queue-title" id="queue-heading">LangGraph Incident Threads</h2>
+            <span class="queue-sub num" id="queue-count">0</span>
+          </div>
+          <div class="filter-tabs" id="filter-tabs" role="tablist" aria-label="Filter incident threads">
+            <button type="button" class="filter-tab active" data-filter="ALL" role="tab" aria-selected="true">All</button>
+            <button type="button" class="filter-tab" data-filter="APPROVAL" role="tab" aria-selected="false">Approvals</button>
+            <button type="button" class="filter-tab" data-filter="ACTIVE" role="tab" aria-selected="false">Active</button>
+            <button type="button" class="filter-tab" data-filter="RESOLVED" role="tab" aria-selected="false">Resolved</button>
+            <button type="button" class="filter-tab" data-filter="ESCALATED" role="tab" aria-selected="false">Escalated</button>
+          </div>
+          <div class="incident-list" id="incident-list"></div>
+        </section>
+
+        <section class="inspector" id="inspector" aria-label="Selected incident inspector"></section>
+      </main>
+
+      <!-- Dedicated Predictive Scaling View -->
+      <section class="predictions-pane" id="predictions-view" aria-labelledby="predictions-heading" hidden>
+        <div class="predictions-inner">
+          <div class="section-head">
+            <div>
+              <h2 class="detail-id" id="predictions-heading">Predictive Pod Autoscaler</h2>
+              <p class="queue-sub" id="predictions-count">0 decisions recorded</p>
+            </div>
+          </div>
+          <div class="table-wrap" id="predictions-body"></div>
+        </div>
+      </section>
+    </div>
   </div>
-
-  <!-- INCIDENTS -->
-  <div class="panel active" id="panel-incidents">
-    <!-- Executive Metrics Ribbon -->
-    <div class="metrics-ribbon">
-      <div class="metric-box" onclick="setAspectFilter('all', document.querySelector('.aspect-btn'))" title="Click to view all incidents">
-        <div>
-          <div class="metric-label">Active Incidents</div>
-          <div class="metric-val" id="metricTotal">0</div>
-          <div class="metric-sub">Total tracked remediation events</div>
-        </div>
-        <div class="metric-icon-wrap">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-        </div>
-      </div>
-      <div class="metric-box warn" onclick="setAspectFilter('pending', document.querySelectorAll('.aspect-btn')[1])" title="Click to filter awaiting approval">
-        <div>
-          <div class="metric-label">Awaiting Approval</div>
-          <div class="metric-val" id="metricPending">0</div>
-          <div class="metric-sub">Requires SRE or developer review</div>
-        </div>
-        <div class="metric-icon-wrap">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-        </div>
-      </div>
-      <div class="metric-box" onclick="setAspectFilter('accepted', document.querySelectorAll('.aspect-btn')[2])" title="Click to filter claimed incidents">
-        <div>
-          <div class="metric-label">On-Call Claimed</div>
-          <div class="metric-val" id="metricAccepted">0</div>
-          <div class="metric-sub">Under active engineer triage</div>
-        </div>
-        <div class="metric-icon-wrap">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-        </div>
-      </div>
-      <div class="metric-box success" onclick="setAspectFilter('resolved', document.querySelectorAll('.aspect-btn')[3])" title="Click to filter resolved incidents">
-        <div>
-          <div class="metric-label">Auto-Resolved</div>
-          <div class="metric-val" id="metricResolved">0</div>
-          <div class="metric-sub">Remediated automatically by policy</div>
-        </div>
-        <div class="metric-icon-wrap">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-        </div>
-      </div>
-    </div>
-
-    <!-- Aspect Filters & Search -->
-    <div class="aspect-toolbar">
-      <div class="aspect-pills">
-        <button class="aspect-btn active" onclick="setAspectFilter('all', this)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg> All <span class="aspect-count" id="countAll">0</span></button>
-        <button class="aspect-btn" onclick="setAspectFilter('pending', this)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Awaiting Approval <span class="aspect-count" id="countPending">0</span></button>
-        <button class="aspect-btn" onclick="setAspectFilter('accepted', this)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"/><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg> Accepted <span class="aspect-count" id="countAccepted">0</span></button>
-        <button class="aspect-btn" onclick="setAspectFilter('resolved', this)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg> Resolved <span class="aspect-count" id="countResolved">0</span></button>
-      </div>
-
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <select id="levelFilter" onchange="applyFilters()" style="padding:6px 10px;font-size:12px" aria-label="Filter by Healing Level">
-          <option value="">All Healing Levels</option>
-          <option value="0">Level 0: In-Place Restart</option>
-          <option value="1">Level 1: Horizontal Scaling</option>
-          <option value="2">Level 2: Canary Rollback</option>
-          <option value="3">Level 3: Circuit Breaker</option>
-        </select>
-        <div class="search-wrap">
-          <i class="ph ph-magnifying-glass search-icon"></i>
-          <input type="text" id="searchInput" class="aspect-search" placeholder="Search target, runbook, ID..." oninput="applyFilters()" aria-label="Search incidents">
-          <kbd class="search-kbd">/</kbd>
-        </div>
-      </div>
-    </div>
-
-    <div id="incidentsList">
-      <div class="empty"><span class="spin"></span> Loading incidents...</div>
-    </div>
-  </div>
-
-  <!-- PREDICTIONS -->
-  <div class="panel" id="panel-predictions">
-    <div class="pred-grid" id="predGrid">
-      <div class="empty" style="grid-column:1/-1"><span class="spin"></span> Loading predictions...</div>
-    </div>
-  </div>
-
-  <!-- POLICY EDITOR -->
-  <div class="panel" id="panel-policy">
-    <div id="policyWrap">
-      <div class="empty">Select an app above to view and edit its policy.</div>
-    </div>
-  </div>
-
-  <div class="toast" id="toast"></div>
 
   <script>
-    const NEXUS = window.NEXUS_ENDPOINT || (window.location.origin && window.location.origin.startsWith('http') ? window.location.origin : 'http://localhost:8080');
-    let currentApp = '';
-    let allIncidents = [];
-    let currentFilter = 'all';
+    const GRAPH_NODES = [
+      { id: "TRIAGE", label: "Triage" },
+      { id: "DIAGNOSE", label: "Diagnose" },
+      { id: "PLAN", label: "Plan" },
+      { id: "GOVERN", label: "Govern" },
+      { id: "APPROVAL", label: "Approval" },
+      { id: "EXECUTE", label: "Execute" },
+      { id: "VERIFY", label: "Verify" },
+      { id: "LEARN", label: "Learn" }
+    ];
 
-    // Pure Light Theme Mode
+    const SAMPLE_INCIDENTS = [
+      {
+        incident_id: "INC-9482",
+        updated_at: "2026-11-18T17:18:42Z",
+        platform: "k8s",
+        namespace: "production",
+        resource_kind: "Deployment",
+        service_name: "shop-demo",
+        target_resource: "production/Deployment/shop-demo",
+        involved_object: "Pod/shop-demo-59bd7ddcf9-t2skj",
+        status: "AWAITING_APPROVAL",
+        active_node: "APPROVAL",
+        triage_status: "TRIAGED",
+        failure_class: "readiness_probe_exit_zero",
+        suspected_cause: "Readiness probe command on /healthz fails after revision 14 rollout, leaving 0/3 pods ready behind the production ingress.",
+        confidence: 0.94,
+        min_confidence_threshold: 0.65,
+        can_auto_remediate: true,
+        recommended_strategy: "Roll back Deployment/shop-demo to revision 13 and verify readyReplicas reaches 3/3.",
+        evidence: [
+          "k8s_get_pod_events: Warning Unhealthy pod/shop-demo-59bd7ddcf9-t2skj Readiness probe failed: HTTP probe failed with statuscode: 503",
+          "k8s_trace_owner_references: Pod/shop-demo-59bd7ddcf9-t2skj -> ReplicaSet/shop-demo-59bd7ddcf9 -> Deployment/shop-demo (ns=production)",
+          "k8s_describe_deployment: revision=14 image=registry.internal/shop-demo:v2.4.1 readyReplicas=0 desiredReplicas=3"
+        ],
+        remediation_plan: {
+          rationale: "Revert Deployment/shop-demo from revision 14 to last healthy revision 13.",
+          steps: [
+            {
+              step: 1,
+              tool_call_id: "call_rb_1",
+              tool_name: "k8s_rollback_deployment",
+              tool_args: { namespace: "production", deployment_name: "shop-demo", target_revision: 13 },
+              blast_radius: "service_wide",
+              reversible: true
+            }
+          ]
+        },
+        policy_decision: {
+          allowed: true,
+          requires_approval: true,
+          reason: "OPA policy: service_wide mutation in production namespace requires human sign-off."
+        },
+        approval: {
+          is_interrupted: true,
+          approval_status: "PENDING",
+          approved: null,
+          approved_by: null,
+          approval_reason: null
+        },
+        execution: {
+          execution_status: "PENDING",
+          results: [],
+          remediation_attempts: 0,
+          max_remediation_attempts: 2
+        },
+        verification: {
+          verification_passed: null,
+          verification_feedback: ""
+        },
+        rollback: {
+          rollback_available: false,
+          results: []
+        },
+        post_incident_report_ready: false,
+        error: null
+      },
+      {
+        incident_id: "INC-9479",
+        updated_at: "2026-11-18T16:54:10Z",
+        platform: "k8s",
+        namespace: "payments",
+        resource_kind: "StatefulSet",
+        service_name: "ledger-worker",
+        target_resource: "payments/StatefulSet/ledger-worker",
+        involved_object: "Pod/ledger-worker-1",
+        status: "RESOLVED",
+        active_node: "LEARN",
+        triage_status: "TRIAGED",
+        failure_class: "oom_killed_memory_limit",
+        suspected_cause: "Container memory limit (512Mi) exceeded during settlement batch replay; pod restarted 4 times with exit code 137.",
+        confidence: 0.91,
+        min_confidence_threshold: 0.65,
+        can_auto_remediate: true,
+        recommended_strategy: "Patch memory limit to 1Gi on StatefulSet/ledger-worker and verify pod stability for 60s.",
+        evidence: [
+          "k8s_get_pod_status: container=worker lastState.terminated.reason=OOMKilled exitCode=137",
+          "prometheus_query: container_memory_working_set_bytes peaked at 536870912 bytes (100% of limit)"
+        ],
+        remediation_plan: {
+          rationale: "Increase memory ceiling within OPA guardrail (<= 2Gi) to stop OOM crashloop.",
+          steps: [
+            {
+              step: 1,
+              tool_call_id: "call_mem_1",
+              tool_name: "k8s_patch_resource_limits",
+              tool_args: { namespace: "payments", kind: "StatefulSet", name: "ledger-worker", memory_limit: "1Gi" },
+              blast_radius: "pod_level",
+              reversible: true
+            }
+          ]
+        },
+        policy_decision: {
+          allowed: true,
+          requires_approval: false,
+          reason: "OPA policy: reversible pod_level limit increase within ceiling auto-approved."
+        },
+        approval: {
+          is_interrupted: false,
+          approval_status: "AUTO_APPROVED",
+          approved: true,
+          approved_by: "opa-auto",
+          approval_reason: "Within autonomous memory guardrail"
+        },
+        execution: {
+          execution_status: "EXECUTED",
+          results: [
+            {
+              step: 1,
+              tool_name: "k8s_patch_resource_limits",
+              status: "SUCCESS",
+              duration_ms: 842,
+              output: "statefulset.apps/ledger-worker patched (memory limit 512Mi -> 1Gi); rollout healthy"
+            }
+          ],
+          remediation_attempts: 1,
+          max_remediation_attempts: 2
+        },
+        verification: {
+          verification_passed: true,
+          verification_feedback: "All 3 StatefulSet replicas Ready for 90s; working set stabilized at 612Mi with zero OOM events."
+        },
+        rollback: {
+          rollback_available: true,
+          results: []
+        },
+        post_incident_report_ready: true,
+        error: null
+      },
+      {
+        incident_id: "INC-9471",
+        updated_at: "2026-11-18T16:12:04Z",
+        platform: "k8s",
+        namespace: "checkout",
+        resource_kind: "Deployment",
+        service_name: "cart-api",
+        target_resource: "checkout/Deployment/cart-api",
+        involved_object: "Pod/cart-api-78c4b8f9-9q2mx",
+        status: "ROLLED_BACK",
+        active_node: "ROLLBACK",
+        triage_status: "TRIAGED",
+        failure_class: "upstream_tls_cert_expired",
+        suspected_cause: "ConfigMap reload did not clear expired mTLS leaf certificate mounted from external Vault agent.",
+        confidence: 0.78,
+        min_confidence_threshold: 0.65,
+        can_auto_remediate: true,
+        recommended_strategy: "Trigger rolling restart to force Vault sidecar certificate rotation; roll back if error rate persists.",
+        evidence: [
+          "k8s_get_pod_logs: x509: certificate has expired or is not yet valid (issuer=payments-internal-ca)"
+        ],
+        remediation_plan: {
+          rationale: "Restart Deployment/cart-api to refresh mounted TLS bundle.",
+          steps: [
+            {
+              step: 1,
+              tool_call_id: "call_rst_1",
+              tool_name: "k8s_rollout_restart",
+              tool_args: { namespace: "checkout", deployment_name: "cart-api" },
+              blast_radius: "service_wide",
+              reversible: true
+            }
+          ]
+        },
+        policy_decision: {
+          allowed: true,
+          requires_approval: true,
+          reason: "OPA policy: production checkout restart approved by on-call."
+        },
+        approval: {
+          is_interrupted: false,
+          approval_status: "APPROVED",
+          approved: true,
+          approved_by: "sre-oncall",
+          approval_reason: "Approved during incident bridge"
+        },
+        execution: {
+          execution_status: "EXECUTED",
+          results: [
+            {
+              step: 1,
+              tool_name: "k8s_rollout_restart",
+              status: "SUCCESS",
+              duration_ms: 1410,
+              output: "deployment.apps/cart-api restarted"
+            }
+          ],
+          remediation_attempts: 2,
+          max_remediation_attempts: 2
+        },
+        verification: {
+          verification_passed: false,
+          verification_feedback: "HTTP 502 rate remained at 18% after attempt 2/2; automatic deterministic rollback triggered."
+        },
+        rollback: {
+          rollback_available: true,
+          results: [
+            {
+              tool_name: "k8s_restore_revision",
+              status: "SUCCESS",
+              output: "Restored Deployment/cart-api to pre-incident annotation snapshot; escalated to security on-call."
+            }
+          ]
+        },
+        post_incident_report_ready: true,
+        error: "Max closed-loop attempts (2/2) reached without clearing x509 expiry; rolled back and escalated."
+      }
+    ];
+
+    const SAMPLE_PREDICTIONS = [
+      { target: "shop-demo", namespace: "production", current_rps: 420, predicted_rps: 980, scale_factor: 2.33, desired_replicas: 7, mode: "autonomous", timestamp: "2026-11-18T17:17:00Z" },
+      { target: "checkout-api", namespace: "checkout", current_rps: 185, predicted_rps: 310, scale_factor: 1.68, desired_replicas: 5, mode: "advisory", timestamp: "2026-11-18T17:15:30Z" },
+      { target: "ledger-worker", namespace: "payments", current_rps: 95, predicted_rps: 102, scale_factor: 1.07, desired_replicas: 3, mode: "shadow", timestamp: "2026-11-18T17:12:00Z" }
+    ];
+
+    let incidents = [];
+    let predictions = [];
+    let selectedIncidentId = null;
+    let currentFilter = "ALL";
+    let currentView = "incidents";
+    let activeInspectorTab = "overview";
+    let searchQuery = "";
+    let isOnline = true;
+    let isDemoMode = new URLSearchParams(window.location.search).get("demo") === "1";
+    let lastInspectorSignature = null;
+    const approvalDrafts = new Map();
+    const submittingIncidents = new Set();
+
+    function applyTheme(theme) {
+      const root = document.documentElement;
+      const isDark = theme === "dark";
+      root.classList.toggle("dark", isDark);
+      const iconUse = document.querySelector("#theme-toggle-icon use");
+      const label = document.getElementById("theme-toggle-label");
+      if (iconUse) iconUse.setAttribute("href", isDark ? "#ph-sun" : "#ph-moon");
+      if (label) label.textContent = isDark ? "Light mode" : "Dark mode";
+      try {
+        localStorage.setItem("nexus-theme", theme);
+      } catch (_) {}
+    }
+
     function initTheme() {
-      document.documentElement.removeAttribute('data-theme');
-      localStorage.setItem('nexus_theme', 'light');
-      applyTheme('light');
+      const paramTheme = new URLSearchParams(window.location.search).get("theme");
+      if (paramTheme === "light" || paramTheme === "dark") {
+        applyTheme(paramTheme);
+        return;
+      }
+      try {
+        const saved = localStorage.getItem("nexus-theme");
+        if (saved === "light" || saved === "dark") {
+          applyTheme(saved);
+          return;
+        }
+      } catch (_) {}
+      applyTheme("dark");
     }
 
-    function toggleTheme() {
-      // Light theme locked per user preference
-      document.documentElement.removeAttribute('data-theme');
-      localStorage.setItem('nexus_theme', 'light');
-      applyTheme('light');
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
     }
 
-    function applyTheme(t) {
-      document.documentElement.removeAttribute('data-theme');
-      const icon = document.getElementById('themeIcon');
-      const text = document.getElementById('themeText');
-      if (icon && text) {
-        icon.className = 'ph ph-sun';
-        text.textContent = 'Light';
+    function statusToneClass(status) {
+      const s = String(status || "").toUpperCase();
+      if (s === "RESOLVED" || s === "AUTO_APPROVED" || s === "APPROVED") return "tone-ok";
+      if (s === "AWAITING_APPROVAL" || s === "PENDING") return "tone-warn";
+      if (["ESCALATED", "ROLLED_BACK", "EXECUTION_FAILED", "POLICY_DENIED", "VERIFICATION_FAILED"].includes(s)) return "tone-err";
+      return "tone-info";
+    }
+
+    function statusPillClass(status) {
+      const s = String(status || "").toUpperCase();
+      if (s === "RESOLVED" || s === "AUTO_APPROVED" || s === "APPROVED") return "pill-ok";
+      if (s === "AWAITING_APPROVAL" || s === "PENDING") return "pill-warn";
+      if (["ESCALATED", "ROLLED_BACK", "EXECUTION_FAILED", "POLICY_DENIED", "VERIFICATION_FAILED"].includes(s)) return "pill-err";
+      return "pill-info";
+    }
+
+    function formatStatusLabel(status) {
+      const text = String(status || "OPEN").replace(/_/g, " ").toLowerCase();
+      return text.charAt(0).toUpperCase() + text.slice(1);
+    }
+
+    function showStatusBanner(message, type = "info") {
+      const banner = document.getElementById("status-banner");
+      const text = document.getElementById("status-banner-text");
+      banner.className = `status-toast visible ${type}`;
+      text.textContent = message;
+    }
+
+    function hideStatusBanner() {
+      const banner = document.getElementById("status-banner");
+      banner.className = "status-toast";
+    }
+
+    function setConnectionState(online) {
+      isOnline = online;
+      const dot = document.getElementById("conn-dot");
+      const label = document.getElementById("kpi-engine");
+      const demoBtn = document.getElementById("btn-demo-toggle");
+      const navDemoLabel = document.getElementById("nav-demo-label");
+
+      if (isDemoMode) {
+        dot.classList.remove("offline");
+        label.textContent = "Preview";
+        demoBtn.hidden = false;
+        if (navDemoLabel) navDemoLabel.textContent = "Exit Preview";
+      } else if (online) {
+        dot.classList.remove("offline");
+        label.textContent = "Online";
+        demoBtn.hidden = true;
+        if (navDemoLabel) navDemoLabel.textContent = "Sample Preview";
+      } else {
+        dot.classList.add("offline");
+        label.textContent = "Offline";
+        demoBtn.hidden = true;
+        if (navDemoLabel) navDemoLabel.textContent = "Sample Preview";
       }
     }
 
-    initTheme();
-
-    // Tab navigation
-    function showTab(t) {
-      document.querySelectorAll('.tab,.panel').forEach(el => el.classList.remove('active'));
-      document.getElementById('tab-' + t).classList.add('active');
-      document.getElementById('panel-' + t).classList.add('active');
-      if (t === 'incidents')   loadIncidents();
-      if (t === 'predictions') loadPredictions();
-      if (t === 'policy')      loadPolicy();
-    }
-
-    // App selector
-    async function loadApps() {
-      try {
-        const r = await fetch(`${NEXUS}/apps`);
-        const apps = await r.json();
-        const sel = document.getElementById('appSelect');
-        const curr = sel.value;
-        sel.innerHTML = '<option value="">All apps</option>' +
-          apps.map(a => `<option value="${a.app_name}">${a.app_name}</option>`).join('');
-        if (curr) sel.value = curr;
-      } catch (e) { }
-    }
-
-    function onAppChange() {
-      currentApp = document.getElementById('appSelect').value;
-      loadIncidents();
-      loadPredictions();
-      loadPolicy();
-    }
-
-    // Status check
-    async function checkStatus() {
-      const pill = document.getElementById('statusPill');
-      const txt = document.getElementById('statusText');
-      try {
-        const r = await fetch(`${NEXUS}/health`);
-        pill.className = 'pill ' + (r.ok ? 'ok' : 'err');
-        txt.textContent = r.ok ? 'NEXUS Connected' : 'NEXUS Degraded';
-      } catch {
-        pill.className = 'pill err';
-        txt.textContent = 'NEXUS Offline';
+    function toggleDemoMode(enable) {
+      isDemoMode = enable;
+      lastInspectorSignature = null;
+      if (isDemoMode) {
+        incidents = SAMPLE_INCIDENTS.map(normalizeIncident);
+        predictions = SAMPLE_PREDICTIONS.slice();
+        selectedIncidentId = incidents[0]?.incident_id || null;
+        setConnectionState(true);
+        document.getElementById("freshness-stamp").textContent = "Sample preview";
+        updateKpis();
+        renderSidebar();
+        renderPredictionsView();
+        if (selectedIncidentId) {
+          const inc = incidents.find(i => i.incident_id === selectedIncidentId);
+          if (inc) renderInspector(inc, true);
+        }
+      } else {
+        selectedIncidentId = null;
+        fetchIncidents(true);
       }
     }
 
-    // Local Storage Accepted Tracking
-    function getStoredAccepted() {
-      try { return JSON.parse(localStorage.getItem('nexus_accepted') || '{}'); }
-      catch { return {}; }
-    }
-    function saveStoredAccepted(map) {
-      try { localStorage.setItem('nexus_accepted', JSON.stringify(map)); }
-      catch {}
+    function normalizeIncident(raw) {
+      const rca = raw.rca_result || raw.rca || {};
+      const plan = raw.remediation_plan || {};
+      const policy = raw.policy_decision || {};
+      const approval = raw.approval || {};
+      const execution = raw.execution || {};
+      const verification = raw.verification || {};
+      const rollback = raw.rollback || {};
+
+      const status = String(raw.status || (raw.outcome === "success" ? "RESOLVED" : "OPEN")).toUpperCase();
+      const execResults = Array.isArray(execution.results)
+        ? execution.results
+        : (Array.isArray(raw.execution_results) ? raw.execution_results : []);
+      const rollbackResults = Array.isArray(rollback.results)
+        ? rollback.results
+        : (Array.isArray(raw.rollback_results) ? raw.rollback_results : []);
+      const evidence = Array.isArray(raw.evidence)
+        ? raw.evidence
+        : (Array.isArray(rca.evidence) ? rca.evidence : []);
+      const steps = Array.isArray(plan.steps) ? plan.steps : [];
+
+      return {
+        incident_id: raw.incident_id || "INC-UNKNOWN",
+        updated_at: raw.updated_at || raw.timestamp || "",
+        platform: raw.platform || "k8s",
+        namespace: raw.namespace || "default",
+        resource_kind: raw.resource_kind || "Deployment",
+        service_name: raw.service_name || raw.target || "unknown",
+        target_resource: raw.target_resource || `${raw.namespace || "default"}/${raw.resource_kind || "Deployment"}/${raw.service_name || raw.target || "unknown"}`,
+        involved_object: raw.involved_object || "",
+        status,
+        active_node: String(raw.active_node || "TRIAGE").toUpperCase(),
+        failure_class: raw.failure_class || rca.failure_type || "investigating",
+        suspected_cause: raw.suspected_cause || rca.root_cause_summary || raw.description || "Awaiting ReAct diagnosis...",
+        confidence: Number(raw.confidence ?? rca.confidence ?? 0),
+        min_confidence_threshold: Number(raw.min_confidence_threshold ?? 0.65),
+        can_auto_remediate: raw.can_auto_remediate ?? rca.can_auto_remediate ?? false,
+        recommended_strategy: raw.recommended_strategy || rca.recommended_strategy || plan.rationale || "",
+        evidence,
+        steps,
+        policy: {
+          allowed: policy.allowed ?? true,
+          requires_approval: policy.requires_approval ?? (raw.requires_approval || false),
+          reason: policy.reason || "Evaluated via zero-trust OPA policy"
+        },
+        approval: {
+          is_interrupted: Boolean(approval.is_interrupted || status === "AWAITING_APPROVAL"),
+          approval_status: approval.approval_status || raw.approval_status || (status === "AWAITING_APPROVAL" ? "PENDING" : "NONE"),
+          approved: approval.approved ?? raw.approved ?? null,
+          approved_by: approval.approved_by || raw.approved_by || raw.accepted_by || null,
+          approval_reason: approval.approval_reason || raw.approval_reason || null
+        },
+        execution: {
+          status: execution.execution_status || raw.execution_status || "PENDING",
+          results: execResults,
+          attempts: Number(execution.remediation_attempts ?? raw.remediation_attempts ?? 0),
+          max_attempts: Number(execution.max_remediation_attempts ?? raw.max_remediation_attempts ?? 2)
+        },
+        verification: {
+          passed: verification.verification_passed ?? raw.verification_passed ?? null,
+          feedback: verification.verification_feedback || raw.verification_feedback || ""
+        },
+        rollback: {
+          available: Boolean(rollback.rollback_available ?? raw.rollback_available ?? false),
+          results: rollbackResults
+        },
+        post_incident_report_ready: Boolean(
+          raw.post_incident_report_ready !== undefined
+            ? raw.post_incident_report_ready
+            : (execResults.length > 0 && ["RESOLVED", "ROLLED_BACK"].includes(status))
+        ),
+        error: raw.error || null
+      };
     }
 
-    // INCIDENTS FEED, ASPECTS, ACCEPT, APPROVE & RCA
-    let _knownIncidents = null;
-
-    async function loadIncidents() {
-      const box = document.getElementById('incidentsList');
+    async function fetchIncidents(manual = false) {
+      if (isDemoMode) {
+        updateKpis();
+        renderSidebar();
+        renderPredictionsView();
+        return;
+      }
       try {
-        const url = `${NEXUS}/developer/incidents?n=30${currentApp ? '&app=' + currentApp : ''}`;
-        const r = await fetch(url);
-        let data = await r.json();
+        const [incRes, predRes] = await Promise.all([
+          fetch("/developer/incidents?n=50"),
+          fetch("/developer/predictions?n=50").catch(() => null)
+        ]);
+        if (!incRes.ok) throw new Error(`HTTP ${incRes.status}`);
+        const data = await incRes.json();
+        incidents = (Array.isArray(data) ? data : []).map(normalizeIncident);
 
-        // Check also for pending approvals queue from /approvals/pending
-        try {
-          const appRes = await fetch(`${NEXUS}/approvals/pending`);
-          if (appRes.ok) {
-            const pendingList = await appRes.json();
-            for (const p of pendingList) {
-              const exists = data.find(i => i.incident_id === p.incident_id || i.incident_id === p.approval_id);
-              if (!exists) {
-                const rcaObj = p.context?.rca || p.rca || (p.plan ? {
-                  root_cause: p.plan.root_cause,
-                  failure_class: p.plan.failure_mode,
-                  confidence: p.confidence,
-                  suggested_action: p.action_type,
-                  suggested_fix: p.suggested_fix || (p.plan.steps && p.plan.steps[0]?.description)
-                } : null);
-
-                data.unshift({
-                  incident_id: p.approval_id || p.incident_id,
-                  runbook_id: p.runbook_id,
-                  target: p.target,
-                  level: p.healing_level,
-                  outcome: 'pending',
-                  confidence: p.confidence,
-                  timestamp: (p.enqueued_at || new Date().toISOString()).slice(0, 19).replace('T', ' '),
-                  description: p.prompt || p.suggested_fix || `Staged L${p.healing_level} action '${p.runbook_id}' on ${p.target} awaiting human approval.`,
-                  suggested_fix: p.suggested_fix || (p.plan?.steps && p.plan.steps[0]?.description),
-                  suggested_action: p.action_type,
-                  plan: p.plan,
-                  rca: rcaObj
-                });
-              } else {
-                exists.outcome = 'pending';
-                if (!exists.rca && (p.context?.rca || p.rca)) {
-                  exists.rca = p.context?.rca || p.rca;
-                }
-                if (p.suggested_fix) exists.suggested_fix = p.suggested_fix;
-              }
-            }
-          }
-        } catch {}
-
-        // Fallback seed data if no incidents exist yet
-        if (!data || !data.length) {
-          data = getDemoSeedIncidents();
+        if (predRes && predRes.ok) {
+          const predData = await predRes.json();
+          predictions = Array.isArray(predData) ? predData : [];
+        } else {
+          predictions = [];
         }
 
-        // Live alert toast for newly resolved/escalated incidents during polling
-        if (_knownIncidents !== null && data && data.length) {
-          for (const inc of data) {
-            const id = inc.incident_id;
-            if (!id) continue;
-            const prevOutcome = _knownIncidents.get(id);
-            const isResolved = inc.outcome === 'success' || inc.outcome === 'resolved';
-            const isEscalated = inc.outcome === 'failed' || inc.outcome === 'escalated';
+        setConnectionState(true);
+        const nowStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        document.getElementById("freshness-stamp").textContent = `Synced ${nowStr}`;
 
-            if (isResolved && (!prevOutcome || prevOutcome === 'pending')) {
-              toast(`✅ Incident on ${inc.target || 'target'} resolved & verified!`);
-              break;
-            } else if (isEscalated && (!prevOutcome || prevOutcome === 'pending')) {
-              toast(`🚨 Incident on ${inc.target || 'target'} escalated!`, true);
-              break;
-            }
-          }
+        updateKpis();
+        renderSidebar();
+        renderPredictionsView();
+
+        if (!selectedIncidentId && incidents.length > 0) {
+          selectedIncidentId = incidents[0].incident_id;
         }
-        _knownIncidents = new Map();
-        for (const inc of (data || [])) {
-          if (inc.incident_id) _knownIncidents.set(inc.incident_id, inc.outcome);
+        const selected = incidents.find(i => i.incident_id === selectedIncidentId);
+        if (selected) {
+          renderInspector(selected, manual);
+        } else if (incidents.length > 0) {
+          selectedIncidentId = incidents[0].incident_id;
+          renderInspector(incidents[0], true);
+        } else {
+          renderEmptyInspector();
         }
-
-        const acceptedMap = getStoredAccepted();
-        allIncidents = data.map(inc => {
-          if (acceptedMap[inc.incident_id]) {
-            inc.accepted_by = acceptedMap[inc.incident_id].user || inc.accepted_by;
-          }
-          inc.rca = ensureFullRca(inc);
-          return inc;
-        });
-
-        updateAspectCounts();
-        applyFilters();
-      } catch (e) {
-        box.innerHTML = `<div class="empty"><i class="ph-bold ph-warning" style="font-size:24px;display:block;margin-bottom:8px;color:var(--amber)"></i>Could not load incidents: is NEXUS running?<br><span style="font-size:12px;margin-top:6px;display:block;color:var(--text-dim)">${e.message}</span></div>`;
+      } catch (err) {
+        console.error("Failed to fetch developer incidents:", err);
+        setConnectionState(false);
+        document.getElementById("freshness-stamp").textContent = "API unreachable";
+        updateKpis();
+        renderSidebar();
+        renderPredictionsView();
+        if (incidents.length === 0) renderEmptyInspector();
       }
     }
 
-    function updateAspectCounts() {
-      const total = allIncidents.length;
-      const pending = allIncidents.filter(i => i.outcome === 'pending').length;
-      const accepted = allIncidents.filter(i => i.accepted_by).length;
-      const resolved = allIncidents.filter(i => i.outcome === 'success' || i.outcome === 'resolved' || i.outcome === 'approved').length;
+    function updateKpis() {
+      const total = incidents.length;
+      const awaiting = incidents.filter(i => i.approval.is_interrupted).length;
+      const resolved = incidents.filter(i => i.status === "RESOLVED").length;
+      const terminal = incidents.filter(i => ["RESOLVED", "ESCALATED", "ROLLED_BACK", "EXECUTION_FAILED", "POLICY_DENIED"].includes(i.status)).length;
+      const successRateText = terminal > 0 ? `(${Math.round((resolved / terminal) * 100)}%)` : "";
 
-      document.getElementById('countAll').textContent = total;
-      document.getElementById('countPending').textContent = pending;
-      document.getElementById('countAccepted').textContent = accepted;
-      document.getElementById('countResolved').textContent = resolved;
+      document.getElementById("kpi-total").textContent = total;
+      const apprEl = document.getElementById("kpi-approvals");
+      apprEl.textContent = awaiting;
+      apprEl.classList.toggle("warn", awaiting > 0);
+      document.getElementById("kpi-resolved").textContent = resolved;
+      document.getElementById("kpi-success-rate").textContent = successRateText;
+      document.getElementById("kpi-ppa-events").textContent = predictions.length;
 
-      const mTot = document.getElementById('metricTotal');
-      const mPen = document.getElementById('metricPending');
-      const mAcc = document.getElementById('metricAccepted');
-      const mRes = document.getElementById('metricResolved');
-      if (mTot) mTot.textContent = total;
-      if (mPen) mPen.textContent = pending;
-      if (mAcc) mAcc.textContent = accepted;
-      if (mRes) mRes.textContent = resolved;
+      const navBadge = document.getElementById("nav-approval-count");
+      if (navBadge) {
+        navBadge.textContent = awaiting;
+        navBadge.hidden = awaiting === 0;
+      }
     }
 
-    function setAspectFilter(type, btn) {
-      currentFilter = type;
-      document.querySelectorAll('.aspect-btn').forEach(b => b.classList.remove('active'));
-      if (btn) btn.classList.add('active');
-      applyFilters();
+    function switchView(view) {
+      currentView = view;
+      document.querySelectorAll(".nav-item[data-view]").forEach(btn => {
+        const active = btn.dataset.view === view;
+        btn.classList.toggle("active", active);
+        if (active) btn.setAttribute("aria-current", "page");
+        else btn.removeAttribute("aria-current");
+      });
+
+      const workspace = document.getElementById("workspace-grid");
+      const predView = document.getElementById("predictions-view");
+
+      if (view === "predictions") {
+        workspace.hidden = true;
+        predView.hidden = false;
+        renderPredictionsView();
+      } else {
+        workspace.hidden = false;
+        predView.hidden = true;
+        if (view === "approvals") {
+          setFilter("APPROVAL");
+        } else if (view === "incidents" && currentFilter === "APPROVAL") {
+          setFilter("ALL");
+        }
+      }
+      closeMobileSidebar();
     }
 
-    function applyFilters() {
-      const levelVal = document.getElementById('levelFilter').value;
-      const query = (document.getElementById('searchInput').value || '').toLowerCase().trim();
+    function setFilter(filter) {
+      currentFilter = filter;
+      document.querySelectorAll(".filter-tab").forEach(btn => {
+        const active = btn.dataset.filter === filter;
+        btn.classList.toggle("active", active);
+        btn.setAttribute("aria-selected", String(active));
+      });
+      renderSidebar();
+    }
 
-      const filtered = allIncidents.filter(inc => {
-        if (currentFilter === 'pending' && inc.outcome !== 'pending') return false;
-        if (currentFilter === 'accepted' && !inc.accepted_by) return false;
-        if (currentFilter === 'resolved' && inc.outcome !== 'success' && inc.outcome !== 'resolved' && inc.outcome !== 'approved') return false;
-        if (levelVal !== '' && String(inc.level) !== String(levelVal)) return false;
-
-        if (query) {
-          const matchTarget = (inc.target || '').toLowerCase().includes(query);
-          const matchDesc = (inc.description || '').toLowerCase().includes(query);
-          const matchRunbook = (inc.runbook_id || '').toLowerCase().includes(query);
-          const matchId = (inc.incident_id || '').toLowerCase().includes(query);
-          const matchRca = (inc.rca?.root_cause || '').toLowerCase().includes(query);
-          if (!matchTarget && !matchDesc && !matchRunbook && !matchId && !matchRca) return false;
+    function getFilteredIncidents() {
+      const q = searchQuery.trim().toLowerCase();
+      return incidents.filter(inc => {
+        if (currentFilter === "APPROVAL" && !inc.approval.is_interrupted) return false;
+        if (currentFilter === "RESOLVED" && inc.status !== "RESOLVED") return false;
+        if (currentFilter === "ESCALATED" && !["ESCALATED", "ROLLED_BACK", "EXECUTION_FAILED", "POLICY_DENIED"].includes(inc.status)) return false;
+        if (currentFilter === "ACTIVE" && ["RESOLVED", "ESCALATED", "ROLLED_BACK", "POLICY_DENIED"].includes(inc.status)) return false;
+        if (q) {
+          const hay = `${inc.incident_id} ${inc.target_resource} ${inc.failure_class} ${inc.suspected_cause}`.toLowerCase();
+          return hay.includes(q);
         }
         return true;
       });
-
-      renderIncidents(filtered);
     }
 
-    function renderIncidents(data) {
-      const box = document.getElementById('incidentsList');
-      if (!data.length) {
-        box.innerHTML = '<div class="empty"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:block;margin:0 auto 8px"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>No matching incidents found.</div>';
+    function renderSidebar() {
+      const container = document.getElementById("incident-list");
+      const filtered = getFilteredIncidents();
+      const countEl = document.getElementById("queue-count");
+      if (countEl) countEl.textContent = String(filtered.length);
+
+      if (filtered.length === 0) {
+        const msg = !isOnline && !isDemoMode
+          ? "Could not reach /developer/incidents. Verify the NEXUS API is running."
+          : "No threads match this filter.";
+        container.innerHTML = `
+          <div class="queue-empty">
+            <p>${escapeHtml(msg)}</p>
+            ${!isOnline && !isDemoMode
+              ? `<div>
+                   <button type="button" class="btn btn-outline btn-sm" data-action="retry-fetch">Retry</button>
+                 </div>`
+              : ""}
+          </div>
+        `;
         return;
       }
 
-      box.innerHTML = data.map(inc => {
-        const lvl = inc.level;
-        const lvCls = lvl === 0 ? 'lv0' : lvl === 1 ? 'lv1' : lvl === 2 ? 'lv2' : 'lv3';
-        const lvlLabel = lvl === 0 ? 'L0 Restart' : lvl === 1 ? 'L1 Scale' : lvl === 2 ? 'L2 Rollback' : 'L3 Breaker';
-        const isApproved = inc.outcome === 'approved';
-        const isPending = inc.outcome === 'pending';
-        const isSuccess = inc.outcome === 'success' || inc.outcome === 'resolved' || isApproved;
-        const outCls = isApproved ? 'approved' : isSuccess ? 'success' : isPending ? 'pending' : 'failed';
-        const cardStateClass = isPending ? 'is-pending' : isSuccess ? 'is-success' : 'is-failed';
-
-        const outcomeText = isApproved ? 'Approved' : isPending ? 'Awaiting Approval' : (inc.outcome || 'unknown');
-        const iconHtml = isSuccess
-          ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="vertical-align:-1px;margin-right:4px"><polyline points="20 6 9 17 4 12"/></svg>'
-          : isPending
-          ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:-1px;margin-right:4px"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'
-          : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:-1px;margin-right:4px"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
-
-        const rca = ensureFullRca(inc);
-        inc.rca = rca;
-        const confPct = Math.round((rca.confidence || inc.confidence || 0.88) * 100);
-        const engineText = rca.source === 'gemini' ? 'Gemini 1.5 Flash' : 'Rule-based Engine';
-        const failureClass = rca.failure_class || 'system_anomaly';
-        const isAccepted = !!inc.accepted_by;
-
-        const rootCauseText = rca.root_cause || inc.description || 'System anomaly diagnosed.';
-        const suggestedFix = rca.suggested_fix || inc.suggested_fix || (inc.plan?.steps && inc.plan.steps[0]?.description);
-        const suggestedAction = rca.suggested_action || inc.suggested_action;
-        const reasoningText = rca.reasoning;
-        const actionsToAvoid = rca.actions_to_avoid || [];
-
-        return `<div class="card ${cardStateClass}"><div class="card-inner">
-          <div class="card-top">
-            <div class="card-meta">
-              <span class="badge ${outCls}">${iconHtml} ${outcomeText}</span>
-              ${lvl != null ? `<span class="badge ${lvCls}">${lvlLabel}</span>` : ''}
-              <span class="badge purple">${failureClass}</span>
-              ${inc.target ? `<span class="badge info"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:3px"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg> ${inc.target}</span>` : ''}
-              ${isAccepted ? `<span class="badge success"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:3px"><path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"/><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg> Claimed: @${inc.accepted_by}</span>` : ''}
-              <span class="ts"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:2px"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> ${inc.timestamp || ''}</span>
-            </div>
-          </div>
-
-          <div class="card-desc">${inc.description || ''}</div>
-
-          <div class="card-actions">
-              ${!isAccepted ? `
-                <button class="btn-accept" onclick="accept('${inc.incident_id}')" title="Accept ownership and claim this incident">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"/><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg> Claim
-                </button>
-              ` : `
-                <button class="btn-accepted" onclick="unaccept('${inc.incident_id}')" title="Click to undo acceptance">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg> Claimed
-                </button>
-              `}
-              ${!isPending && inc.incident_id ? `
-                <a class="btn-report" href="${NEXUS}/developer/incidents/${inc.incident_id}/report" target="_blank" rel="noopener" title="Open the full post-incident report">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg> Report
-                </a>
-              ` : ''}
-              ${isPending ? `
-                <button class="btn-approve" onclick="approve('${inc.incident_id}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg> Approve</button>
-                <button class="btn-reject" onclick="reject('${inc.incident_id}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Reject</button>
-              ` : ''}
-            </div>
-
-          <!-- Root Cause Analysis (RCA) -->
-          <details class="rca-box">
-            <summary class="rca-summary">
-              RCA <svg class="rca-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-              <span class="rca-meta">
-                <span class="engine-chip">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3"/></svg>
-                  ${engineText}
-                </span>
-                <span class="conf-chip">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                  ${confPct}% Confidence
-                </span>
+      container.innerHTML = filtered.map(inc => {
+        const isSelected = inc.incident_id === selectedIncidentId;
+        const confPct = `${Math.round(inc.confidence * 100)}%`;
+        return `
+          <button type="button"
+                  class="incident-row ${isSelected ? "selected" : ""} ${inc.approval.is_interrupted ? "interrupt-active" : ""}"
+                  data-incident-id="${escapeHtml(inc.incident_id)}"
+                  ${isSelected ? 'aria-current="true"' : ""}>
+            <div class="row-top">
+              <span class="row-target">${escapeHtml(inc.target_resource)}</span>
+              <span class="row-status ${statusToneClass(inc.status)}">
+                <span class="row-status-dot" aria-hidden="true"></span>
+                ${escapeHtml(formatStatusLabel(inc.status))}
               </span>
-            </summary>
-            <div class="rca-body">
-              <div class="rca-conf-bar"><div class="rca-conf-fill" style="width:${confPct}%"></div></div>
-              <div class="rca-grid">
-              <div class="rca-item cause-item">
-                <div class="rca-item-head cause-head">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-                  Root Cause Diagnosis
-                </div>
-                <div class="rca-item-body rca-cause">${rootCauseText}</div>
-              </div>
-              ${suggestedFix ? `
-              <div class="rca-item fix-item">
-                <div class="rca-item-head fix-head">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
-                  Suggested Remediation
-                </div>
-                <div class="rca-item-body">${suggestedFix}</div>
-                ${suggestedAction ? `<div class="rca-tool-badge">Execution Tool: <code>${suggestedAction}</code></div>` : ''}
-              </div>` : ''}
-              ${reasoningText ? `
-              <div class="rca-item telemetry-item">
-                <div class="rca-item-head telemetry-head">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                  Telemetry Evidence & Reasoning
-                </div>
-                <div class="rca-item-body rca-reason">${reasoningText}</div>
-              </div>` : ''}
-              ${actionsToAvoid.length ? `
-              <div class="rca-item guardrail-item">
-                <div class="rca-item-head guardrail-head">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                  Guardrails (Actions to Avoid)
-                </div>
-                <div class="rca-item-body rca-avoid">${actionsToAvoid.map(a => `<span class="rca-guard-pill"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> ${a}</span>`).join('')}</div>
-              </div>` : ''}
             </div>
+            <div class="row-bottom">
+              <span class="row-meta-left">
+                <span class="num">${escapeHtml(inc.incident_id)}</span>
+                <span aria-hidden="true">·</span>
+                <span class="row-slug">${escapeHtml(inc.failure_class)}</span>
+              </span>
+              <span class="num" style="flex:none;">${escapeHtml(confPct)}</span>
             </div>
-          </details>
+          </button>
+        `;
+      }).join("");
+    }
 
-          <div class="inc-id">
-            <span>Runbook: <code>${inc.runbook_id || 'n/a'}</code></span>
-            ${inc.incident_id ? `<span>ID: <code>${inc.incident_id}</code> <button class="copy-btn" id="cp-${inc.incident_id}" onclick="copyText('${inc.incident_id}')" title="Copy Incident ID"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></span>` : ''}
-            ${inc.target ? `<span>Target: ${inc.target}</span>` : ''}
+    function selectIncident(id) {
+      if (selectedIncidentId !== id) {
+        lastInspectorSignature = null;
+      }
+      selectedIncidentId = id;
+      const grid = document.getElementById("workspace-grid");
+      if (grid) grid.classList.add("mobile-detail-open");
+      renderSidebar();
+      const inc = incidents.find(i => i.incident_id === id);
+      if (inc) renderInspector(inc, true);
+    }
+
+    function closeMobileDetail() {
+      const grid = document.getElementById("workspace-grid");
+      if (grid) grid.classList.remove("mobile-detail-open");
+    }
+
+    function getStepStateClass(nodeId, inc) {
+      const nodeIds = GRAPH_NODES.map(n => n.id);
+      const activeIdx = nodeIds.indexOf(inc.active_node);
+      const idx = nodeIds.indexOf(nodeId);
+
+      if (nodeId === "APPROVAL") {
+        if (inc.approval.is_interrupted) return "interrupted";
+        if (inc.approval.approval_status === "REJECTED") return "failed";
+        if (inc.approval.approval_status === "AUTO_APPROVED") return "skipped";
+      }
+
+      if (inc.status === "RESOLVED" && idx <= nodeIds.indexOf("LEARN")) {
+        return "visited";
+      }
+
+      if (inc.active_node === "ROLLBACK" || inc.active_node === "ESCALATE") {
+        if (nodeId === "TRIAGE") return "visited";
+        if (nodeId === "DIAGNOSE") return inc.confidence > 0 || inc.failure_class !== "investigating" ? "visited" : "failed";
+        if (nodeId === "PLAN") return inc.steps.length > 0 ? "visited" : (inc.status === "UNPLANNABLE" ? "failed" : "");
+        if (nodeId === "GOVERN") return inc.policy.allowed === false ? "failed" : (inc.steps.length > 0 ? "visited" : "");
+        if (nodeId === "APPROVAL") {
+          if (inc.approval.approval_status === "APPROVED") return "visited";
+          if (inc.approval.approval_status === "AUTO_APPROVED") return "skipped";
+          if (inc.approval.approval_status === "REJECTED") return "failed";
+          return "";
+        }
+        if (nodeId === "EXECUTE") {
+          if (inc.execution.status === "FAILED") return "failed";
+          return inc.execution.results.length > 0 ? "visited" : "";
+        }
+        if (nodeId === "VERIFY") {
+          if (inc.verification.passed === false) return "failed";
+          if (inc.verification.passed === true) return "visited";
+          return "";
+        }
+        return "";
+      }
+
+      if (activeIdx !== -1) {
+        if (idx < activeIdx) return "visited";
+        if (idx === activeIdx) {
+          if (["EXECUTION_FAILED", "VERIFICATION_FAILED", "POLICY_DENIED"].includes(inc.status)) return "failed";
+          return "active";
+        }
+      }
+      return "";
+    }
+
+    function renderEmptyInspector() {
+      const signature = `EMPTY:${isOnline}:${isDemoMode}`;
+      if (signature === lastInspectorSignature) return;
+      lastInspectorSignature = signature;
+
+      const inspector = document.getElementById("inspector");
+      inspector.innerHTML = `
+        <div class="inspector-inner">
+          <div class="section-block">
+            <h2 class="detail-id">LangGraph Incident Inspector</h2>
+            <p class="hitl-desc">
+              ${!isOnline && !isDemoMode
+                ? "The control plane API did not respond on /developer/incidents. Start NEXUS or open the sample preview."
+                : "Select a thread on the left to inspect topology discovery, OPA governance, and closed-loop verification."}
+            </p>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:4px;">
+              <button type="button" class="btn btn-outline" data-action="retry-fetch">Sync graph state</button>
+              ${!isDemoMode
+                ? `<button type="button" class="btn btn-default" data-action="toggle-demo">Load sample preview</button>`
+                : ""}
+            </div>
           </div>
-        </div></div>`;
-      }).join('');
-    }
-
-    // ACCEPT INCIDENT
-    async function accept(id) {
-      try {
-        const user = 'dev-oncall';
-        const stored = getStoredAccepted();
-        stored[id] = { user, timestamp: new Date().toISOString() };
-        saveStoredAccepted(stored);
-
-        const inc = allIncidents.find(i => i.incident_id === id);
-        if (inc) inc.accepted_by = user;
-
-        await fetch(`${NEXUS}/developer/incidents/${id}/accept`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user })
-        }).catch(() => {});
-
-        toast('Incident claimed by @' + user);
-        updateAspectCounts();
-        applyFilters();
-      } catch {
-        toast('Failed to claim incident', true);
-      }
-    }
-
-    async function unaccept(id) {
-      try {
-        const stored = getStoredAccepted();
-        delete stored[id];
-        saveStoredAccepted(stored);
-
-        const inc = allIncidents.find(i => i.incident_id === id);
-        if (inc) delete inc.accepted_by;
-
-        toast('Incident ownership released');
-        updateAspectCounts();
-        applyFilters();
-      } catch { }
-    }
-
-    // APPROVE & REJECT
-    async function approve(id) {
-      try {
-        await fetch(`${NEXUS}/approve/${id}`, { method: 'POST' });
-        const inc = allIncidents.find(i => i.incident_id === id);
-        if (inc) inc.outcome = 'success';
-        toast('Remediation action approved');
-        updateAspectCounts();
-        applyFilters();
-      } catch {
-        toast('Failed to approve action', true);
-      }
-    }
-
-    async function reject(id) {
-      try {
-        await fetch(`${NEXUS}/reject/${id}`, { method: 'POST' });
-        const inc = allIncidents.find(i => i.incident_id === id);
-        if (inc) inc.outcome = 'failed';
-        toast('Remediation action rejected');
-        updateAspectCounts();
-        applyFilters();
-      } catch {
-        toast('Failed to reject action', true);
-      }
-    }
-
-    // CLIPBOARD COPY HELPER
-    function copyText(txt) {
-      const btn = document.getElementById('cp-' + txt);
-      const onCopied = () => {
-        toast('Copied ' + txt + ' to clipboard');
-        if (btn) {
-          btn.innerHTML = '<i class="ph-bold ph-check" style="color:var(--green)"></i>';
-          setTimeout(() => { btn.innerHTML = '<i class="ph ph-copy"></i>'; }, 2000);
-        }
-      };
-
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(txt).then(onCopied).catch(() => fallbackCopy(txt, onCopied));
-      } else {
-        fallbackCopy(txt, onCopied);
-      }
-    }
-
-    function fallbackCopy(txt, cb) {
-      const ta = document.createElement('textarea');
-      ta.value = txt;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      try {
-        document.execCommand('copy');
-        if (cb) cb(); else toast('Copied ' + txt + ' to clipboard');
-      } catch {
-        toast('Unable to copy to clipboard', true);
-      }
-      document.body.removeChild(ta);
-    }
-
-    // RCA Synthesis & Enrichment
-    function synthesizeRcaForIncident(inc) {
-      const runbook = (inc.runbook_id || '').toLowerCase();
-      const desc = (inc.description || '').toLowerCase();
-      const target = inc.target || 'target workload';
-      let failureClass = 'system_anomaly';
-      let rootCause = `Telemetry anomaly detected on ${target} violating baseline operational SLO.`;
-      let suggestedFix = `Inspect workload metrics and apply automated remediation '${inc.runbook_id || 'healing action'}'.`;
-      let suggestedAction = inc.runbook_id || 'automated_healing';
-      let reasoning = `Telemetry correlation identified anomalous behavior matching pattern '${inc.runbook_id || 'remediation'}'.`;
-      let avoids = ['Do not ignore persistent anomaly warnings', 'Do not terminate telemetry collectors'];
-
-      if (runbook.includes('deploy') || runbook.includes('rollback') || desc.includes('deploy') || desc.includes('canary')) {
-        failureClass = 'bad_deploy';
-        rootCause = `Deployment defect in ${target} triggered error rate threshold spike.`;
-        suggestedFix = `kubectl rollout undo deployment/${target} -n default`;
-        suggestedAction = 'canary_rollback';
-        reasoning = `HTTP 5xx error rate spiked immediately following release rollout on ${target}.`;
-        avoids = ['Do not promote traffic to newly deployed canary replicas', 'Do not purge deployment revision history'];
-      } else if (runbook.includes('db') || runbook.includes('connection') || desc.includes('database') || desc.includes('connection pool')) {
-        failureClass = 'db_pressure';
-        rootCause = `Database connection saturation and socket pool exhaustion on ${target}.`;
-        suggestedFix = `Reset active connection pool buffer and recycle idle connection workers.`;
-        suggestedAction = 'pool_recycle';
-        reasoning = `Active database connections reached 98% saturation with latency exceeding 450ms.`;
-        avoids = ['Do not restart database master while active transactions are queued', 'Do not truncate connection pool tables'];
-      } else if (runbook.includes('crashloop') || runbook.includes('oom') || runbook.includes('restart') || desc.includes('crash') || desc.includes('memory')) {
-        failureClass = 'resource_exhaustion';
-        rootCause = `Pod ${target} exceeded memory quota limits (OOMKilled) or encountered crash loop.`;
-        suggestedFix = `kubectl scale deployment/${target} --replicas=3 -n default && inspect heap metrics`;
-        suggestedAction = 'pod_restart';
-        reasoning = `Container terminated with exit code 137 (OOMKilled) after continuous heap memory growth.`;
-        avoids = ['Do not restart without increasing memory limits', 'Do not disable cgroup limit enforcing'];
-      } else if (runbook.includes('env') || runbook.includes('config') || desc.includes('config') || desc.includes('environment')) {
-        failureClass = 'config_error';
-        rootCause = `Missing or mismatched configuration keys in deployment environment for ${target}.`;
-        suggestedFix = `Verify and inject missing ConfigMap or Secret keys into deployment manifest.`;
-        suggestedAction = 'config_sync';
-        reasoning = `Startup probe failed due to unresolved environment variables in application context.`;
-        avoids = ['Do not commit plaintext secrets into configuration files', 'Do not bypass config validation checks'];
-      } else if (runbook.includes('approval') || runbook.includes('governance') || desc.includes('approval')) {
-        failureClass = 'governance_checkpoint';
-        rootCause = `Autonomous policy triggered governance checkpoint on ${target} before applying remediation.`;
-        suggestedFix = `Execute verified runbook sequence with safety checkpoints for ${target}.`;
-        suggestedAction = 'governed_remediation';
-        reasoning = `Deviation crossed safety threshold: action held for governance check and approved by on-call.`;
-        avoids = ['Do not bypass governance audit log', 'Do not execute unverified shell scripts'];
-      } else if (runbook.includes('dns') || runbook.includes('network') || desc.includes('dns')) {
-        failureClass = 'network_partition';
-        rootCause = `Intermittent DNS lookup timeouts resolving upstream cluster services for ${target}.`;
-        suggestedFix = `Flush local DNS cache and restart CoreDNS cluster instances.`;
-        suggestedAction = 'dns_flush';
-        reasoning = `CoreDNS latency metrics exceeded 250ms threshold with SERVFAIL responses detected.`;
-        avoids = ['Do not delete CoreDNS cluster IP configuration', 'Do not modify resolv.conf directly'];
-      }
-
-      return {
-        root_cause: rootCause,
-        failure_class: failureClass,
-        healing_level: inc.level ?? 1,
-        confidence: inc.confidence || 0.88,
-        reasoning: reasoning,
-        source: 'gemini',
-        suggested_fix: suggestedFix,
-        suggested_action: suggestedAction,
-        actions_to_avoid: avoids
-      };
-    }
-
-    function ensureFullRca(inc) {
-      const synth = synthesizeRcaForIncident(inc);
-      if (!inc.rca || typeof inc.rca !== 'object') {
-        return synth;
-      }
-      const r = inc.rca;
-      let rootCause = r.root_cause || synth.root_cause;
-      if (typeof rootCause === 'string' && rootCause.startsWith('At ') && (rootCause.includes('UTC') || rootCause.includes('Performed healing'))) {
-        rootCause = synth.root_cause;
-      }
-      return {
-        root_cause: rootCause,
-        failure_class: (r.failure_class && r.failure_class !== 'unknown') ? r.failure_class : synth.failure_class,
-        healing_level: r.healing_level ?? inc.level ?? synth.healing_level,
-        confidence: r.confidence || inc.confidence || synth.confidence,
-        reasoning: r.reasoning || synth.reasoning,
-        source: r.source || synth.source,
-        suggested_fix: r.suggested_fix || inc.suggested_fix || synth.suggested_fix,
-        suggested_action: r.suggested_action || inc.suggested_action || synth.suggested_action,
-        actions_to_avoid: (r.actions_to_avoid && r.actions_to_avoid.length) ? r.actions_to_avoid : synth.actions_to_avoid
-      };
-    }
-
-    function getDemoSeedIncidents() {
-      const now = new Date();
-      const fmt = (d) => d.toISOString().slice(0, 19).replace('T', ' ');
-
-      return [
-        {
-          incident_id: 'INC-7841',
-          runbook_id: 'k8s_rollback_deployment',
-          target: 'checkout-service',
-          level: 2,
-          outcome: 'pending',
-          confidence: 0.94,
-          timestamp: fmt(new Date(now - 3 * 60000)),
-          description: 'Rolled back canary deployment checkout-service: error rate spiked to 14.2% after code push.',
-          rca: {
-            root_cause: 'Schema migration mismatch in checkout-service v2.8.1 causing unhandled DB column exceptions.',
-            failure_class: 'bad_deploy',
-            healing_level: 2,
-            confidence: 0.94,
-            reasoning: 'HTTP 500 error count jumped from 0.02% to 14.2% within 90 seconds of canary rollout. Stack trace points to missing relation column "tier_code".',
-            source: 'gemini',
-            suggested_fix: 'kubectl rollout undo deployment/checkout-service-canary -n production',
-            suggested_action: 'canary_rollback',
-            actions_to_avoid: ['Do not promote canary to 100% traffic', 'Do not restart DB node']
-          }
-        },
-        {
-          incident_id: 'INC-7839',
-          runbook_id: 'reset_connection_pool',
-          target: 'cart-service',
-          level: 1,
-          outcome: 'success',
-          confidence: 0.88,
-          timestamp: fmt(new Date(now - 24 * 60000)),
-          description: 'Reset connection pool and increased buffer for cart-service: database connections were saturated.',
-          rca: {
-            root_cause: 'Connection leak in abandoned checkout sessions during marketing traffic surge.',
-            failure_class: 'db_pressure',
-            healing_level: 1,
-            confidence: 0.88,
-            reasoning: 'pg_stat_activity showed 95 idle-in-transaction connections from worker pods.',
-            source: 'rule_based',
-            suggested_fix: 'Run connection drain and pool reset script on cart-service-pooler',
-            suggested_action: 'pool_reset',
-            actions_to_avoid: ['Do not drop active client sockets']
-          }
-        },
-        {
-          incident_id: 'INC-7832',
-          runbook_id: 'k8s_restart_pod',
-          target: 'notification-worker',
-          level: 0,
-          outcome: 'success',
-          confidence: 0.97,
-          timestamp: fmt(new Date(now - 90 * 60000)),
-          description: 'Restarted notification-worker pod which was crash-looping due to stale DNS resolver cache.',
-          rca: {
-            root_cause: 'Stale kube-dns upstream record prevented worker from resolving mailgun endpoint.',
-            failure_class: 'dependency_failure',
-            healing_level: 0,
-            confidence: 0.97,
-            reasoning: 'CoreDNS endpoint resolved stale IP. Restart refreshed local resolv.conf cache.',
-            source: 'rule_based',
-            suggested_fix: 'Restart notification-worker pods and verify CoreDNS cluster cache',
-            suggested_action: 'pod_restart',
-            actions_to_avoid: []
-          }
-        }
-      ];
-    }
-
-    // PREDICTIONS
-    async function loadPredictions() {
-      const grid = document.getElementById('predGrid');
-      try {
-        const url = `${NEXUS}/developer/predictions${currentApp ? '?app=' + currentApp : ''}`;
-        const r = await fetch(url);
-        const data = await r.json();
-        if (!data.length) {
-          grid.innerHTML = '<div class="empty" style="grid-column:1/-1"><i class="ph ph-chart-line-up" style="font-size:24px;display:block;margin-bottom:8px"></i>No predictions yet: forecasts appear when the Prescaler detects incoming traffic patterns.</div>';
-          return;
-        }
-        grid.innerHTML = data.map(p => {
-          const mult = p.multiplier || 1;
-          const multCls = mult >= 3 ? 'high' : mult >= 2 ? '' : 'ok';
-          const confPct = Math.round((p.confidence || 0) * 100);
-          return `<div class="pred-card">
-            <div class="pred-header">
-              <div>
-                <div class="pred-name">${p.deployment || 'N/A'}</div>
-                <div style="font-size:11.5px;color:var(--text-muted)">Horizon: ${p.horizon_min ? p.horizon_min + 'm' : '15m'}</div>
-              </div>
-              <div class="pred-mult ${multCls}">${mult.toFixed(1)}x</div>
-            </div>
-            <div class="pred-desc">${p.description || ''}</div>
-            <div class="pred-stats">
-              <div class="stat"><div class="stat-label">Current RPS</div><div class="stat-val">${p.current_rps ?? 'N/A'}</div></div>
-              <div class="stat"><div class="stat-label">Predicted RPS</div><div class="stat-val" style="color:var(--amber)">${p.predicted_rps ?? 'N/A'}</div></div>
-              <div class="stat"><div class="stat-label">Mode</div><div class="stat-val" style="font-size:12px">${p.mode || 'Normal'}</div></div>
-              <div class="stat"><div class="stat-label">Confidence</div><div class="stat-val">${confPct}%</div></div>
-            </div>
-            <div class="conf-bar"><div class="conf-fill" style="width:${confPct}%"></div></div>
-          </div>`;
-        }).join('');
-      } catch (e) {
-        grid.innerHTML = `<div class="empty" style="grid-column:1/-1"><i class="ph-bold ph-warning" style="font-size:24px;display:block;margin-bottom:8px;color:var(--amber)"></i>Could not load predictions<br><span style="font-size:12px;color:var(--text-dim)">${e.message}</span></div>`;
-      }
-    }
-
-    // POLICY EDITOR
-    let _currentPolicy = null;
-
-    async function loadPolicy() {
-      const wrap = document.getElementById('policyWrap');
-      if (!currentApp) { wrap.innerHTML = '<div class="empty"><i class="ph ph-sliders" style="font-size:24px;display:block;margin-bottom:8px"></i>Select an app above to view and edit its policy.</div>'; return; }
-      try {
-        const r = await fetch(`${NEXUS}/developer/policy/${currentApp}`);
-        if (!r.ok) { wrap.innerHTML = `<div class="empty">No selfheal.yaml found for <strong>${currentApp}</strong>.<br><span style="font-size:12px;color:var(--text-dim)">Commit a selfheal.yaml to your repository root and push.</span></div>`; return; }
-        _currentPolicy = await r.json();
-        renderPolicy(_currentPolicy);
-      } catch (e) { wrap.innerHTML = `<div class="empty"><i class="ph-bold ph-warning" style="font-size:24px;display:block;margin-bottom:8px;color:var(--amber)"></i>${e.message}</div>`; }
-    }
-
-    function renderPolicy(p) {
-      const hp = p.healing_policy || {};
-      const pred = p.predictive || {};
-      const notif = p.notifications || {};
-      const hasOvr = p._overrides_active;
-
-      document.getElementById('policyWrap').innerHTML = `
-        <div style="margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-          <div style="display:flex;align-items:center;gap:8px">
-            <span class="badge info"><i class="ph ph-cube"></i> ${p.app}</span>
-            <span class="badge ${p.tier === 'production' ? 'failed' : 'pending'}">${p.tier || 'unknown'}</span>
-            ${hasOvr ? '<span class="badge pending"><i class="ph-bold ph-warning"></i> Runtime overrides active</span>' : ''}
-          </div>
-          ${hasOvr ? `<button class="btn-ghost" onclick="clearOverrides()"><i class="ph ph-arrow-counter-clockwise"></i> Clear overrides</button>` : ''}
         </div>
-        <div class="policy-wrap">
-          <div class="policy-section">
-            <div class="section-title"><i class="ph ph-shield-check"></i> Healing Policy</div>
-            <div class="field">
-              <label class="toggle">
-                <input type="checkbox" id="f-auto-rollback" ${hp.auto_rollback ? 'checked' : ''}>
-                Auto-rollback on error rate spike
-              </label>
-            </div>
-            <div class="field">
-              <label>Max auto-actions / hour</label>
-              <input type="number" id="f-max-actions" value="${hp.max_auto_actions_per_hour ?? 10}" min="0" max="100">
-            </div>
-            <div class="field">
-              <label>Require approval for (comma-separated)</label>
-              <input type="text" id="f-require-approval" value="${(hp.require_approval_for || []).join(', ')}">
-            </div>
-            <div class="field">
-              <label>Critical routes (comma-separated)</label>
-              <input type="text" id="f-critical-routes" value="${(p.critical_routes || []).join(', ')}">
-            </div>
-            <button class="btn-primary" onclick="savePolicy()" style="margin-top:6px"><i class="ph-bold ph-floppy-disk"></i> Save Overrides</button>
-            <div class="note"><i class="ph-bold ph-info" style="margin-right:4px"></i> Runtime overrides apply immediately but reset on NEXUS restart. Commit selfheal.yaml to make changes permanent.</div>
+      `;
+    }
+
+    function renderInspector(inc, force = false) {
+      const isSubmitting = submittingIncidents.has(inc.incident_id);
+      const signature = JSON.stringify({ inc, isSubmitting, activeInspectorTab });
+      if (!force && signature === lastInspectorSignature) return;
+
+      const existingInput = document.getElementById("approval-reason-input");
+      const wasInputFocused = existingInput && document.activeElement === existingInput;
+      if (existingInput && existingInput.dataset.incidentId) {
+        approvalDrafts.set(existingInput.dataset.incidentId, existingInput.value);
+      }
+
+      lastInspectorSignature = signature;
+      const inspector = document.getElementById("inspector");
+      const confPct = Math.round(inc.confidence * 100);
+      const threshPct = Math.round(inc.min_confidence_threshold * 100);
+      const draftValue = approvalDrafts.get(inc.incident_id) || "";
+      const reportHref = `/developer/incidents/${encodeURIComponent(inc.incident_id)}/report`;
+
+      const branchNote = inc.active_node === "ROLLBACK" || inc.rollback.results.length > 0
+        ? " · Branch: Rollback"
+        : (inc.active_node === "ESCALATE" ? " · Branch: Escalated" : "");
+
+      const verifSummaryTag = inc.verification.passed === true
+        ? '<span class="tone-ok">Passed</span>'
+        : (inc.verification.passed === false
+          ? '<span class="tone-err">Failed</span>'
+          : '<span class="tone-muted">Pending</span>');
+
+      const overviewHtml = `
+        <div class="section-block">
+          <div class="section-head">
+            <h3 class="section-title">ReAct Investigator (diagnose_node)</h3>
+            <span class="section-tag ${inc.can_auto_remediate ? "tone-ok" : "tone-err"}">
+              ${inc.can_auto_remediate ? "Auto-remediable" : "Manual intervention"}
+            </span>
           </div>
-          <div class="policy-section">
-            <div class="section-title"><i class="ph ph-chart-line-up"></i> Predictive Scaling</div>
-            <div class="field">
-              <label>Traffic spike tables (comma-separated)</label>
-              <input type="text" id="f-spike-tables" value="${(pred.traffic_spike_tables || []).join(', ')}">
+
+          <div class="progress-wrap">
+            <div class="progress-labels">
+              <span>RCA confidence</span>
+              <span class="num"><strong style="color:var(--foreground);">${confPct}%</strong> / ${threshPct}% threshold</span>
             </div>
-            <div class="field">
-              <label>Pre-scale threshold (x)</label>
-              <input type="number" id="f-prescale" value="${pred.pre_scale_threshold ?? 2.0}" step="0.1" min="1">
+            <div class="progress-track">
+              <div class="progress-fill ${confPct < threshPct ? "low" : ""}" style="width:${Math.min(100, confPct)}%;"></div>
             </div>
-            <div class="section-title" style="margin-top:24px"><i class="ph ph-bell"></i> Notifications</div>
-            <div class="field">
-              <label>Page SRE after N failures</label>
-              <input type="number" id="f-page-sre" value="${notif.page_sre_after ?? 3}" min="1" max="20">
-            </div>
-            <div class="field">
-              <label>Slack webhook URL</label>
-              <input type="text" id="f-slack" value="${notif.slack_webhook || ''}" placeholder="\${SLACK_WEBHOOK}">
-            </div>
-            ${hasOvr ? `
-            <div class="section-title" style="margin-top:24px"><i class="ph ph-clock-counter-clockwise"></i> Active Overrides</div>
-            <div class="override-list" id="overrideList">
-              <div style="color:var(--text-muted);font-size:12px">Overrides active: check server audit trail for details.</div>
-            </div>` : ''}
           </div>
-        </div>`;
-    }
 
-    async function savePolicy() {
-      const fields = [
-        ['healing_policy.auto_rollback', document.getElementById('f-auto-rollback')?.checked],
-        ['healing_policy.max_auto_actions_per_hour', parseInt(document.getElementById('f-max-actions')?.value) || 10],
-        ['predictive.pre_scale_threshold', parseFloat(document.getElementById('f-prescale')?.value) || 2.0],
-        ['notifications.page_sre_after', parseInt(document.getElementById('f-page-sre')?.value) || 3],
-      ];
+          <div class="prose-block">
+            <span class="field-label">Synthesized Root Cause</span>
+            <p class="field-body">${escapeHtml(inc.suspected_cause)}</p>
+          </div>
 
-      try {
-        for (const [field, value] of fields) {
-          await fetch(`${NEXUS}/developer/policy/${currentApp}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ field, value }),
-          });
-        }
-        toast('Policy overrides saved');
-        loadPolicy();
-      } catch (e) { toast('Failed to save: ' + e.message, true); }
-    }
+          ${inc.recommended_strategy ? `
+            <div class="prose-block">
+              <span class="field-label">Recommended strategy</span>
+              <p class="field-body" style="font-size:13px; color:var(--muted-foreground);">${escapeHtml(inc.recommended_strategy)}</p>
+            </div>
+          ` : ""}
 
-    async function clearOverrides() {
-      try {
-        await fetch(`${NEXUS}/developer/policy/${currentApp}/overrides`, { method: 'DELETE' });
-        toast('Overrides cleared: reverting to selfheal.yaml');
-        loadPolicy();
-      } catch { toast('Failed to clear overrides', true); }
-    }
+          ${inc.evidence.length > 0 ? `
+            <div class="prose-block">
+              <span class="field-label">Tool evidence (${inc.evidence.length})</span>
+              <div class="evidence-list">
+                ${inc.evidence.map(ev => {
+                  const text = typeof ev === "string" ? ev : JSON.stringify(ev, null, 2);
+                  const preview = text.length > 96 ? `${text.slice(0, 96)}...` : text;
+                  return `
+                    <details class="evidence-details">
+                      <summary class="evidence-summary">
+                        <span class="evidence-summary-text">${escapeHtml(preview)}</span>
+                        <svg class="ph-icon evidence-caret" aria-hidden="true"><use href="#ph-caret-down" /></svg>
+                      </summary>
+                      <pre class="evidence-body">${escapeHtml(text)}</pre>
+                    </details>
+                  `;
+                }).join("")}
+              </div>
+            </div>
+          ` : ""}
+        </div>
 
-    // Keyboard Shortcuts
-    document.addEventListener('keydown', (e) => {
-      // Press '/' to jump to search
-      if (e.key === '/' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
-        e.preventDefault();
-        const searchInput = document.getElementById('searchInput');
-        if (searchInput) {
-          searchInput.focus();
-          searchInput.select();
+        <div class="section-divider"></div>
+
+        <div class="section-block">
+          <div class="section-head">
+            <h3 class="section-title">Schema-Bound Plan &amp; OPA Policy</h3>
+            <span class="section-tag ${inc.policy.allowed ? (inc.policy.requires_approval ? "tone-warn" : "tone-ok") : "tone-err"}">
+              ${inc.policy.allowed ? (inc.policy.requires_approval ? "HITL sign-off required" : "Auto-allowed") : "Policy denied"}
+            </span>
+          </div>
+
+          <div class="prop-grid">
+            <span class="prop-key">Policy verdict</span>
+            <span class="prop-val">${escapeHtml(inc.policy.reason)}</span>
+            ${inc.approval.approved_by ? `
+              <span class="prop-key">Decision by</span>
+              <span class="prop-val">${escapeHtml(inc.approval.approved_by)} (${escapeHtml(formatStatusLabel(inc.approval.approval_status))})</span>
+            ` : ""}
+            ${inc.approval.approval_reason ? `
+              <span class="prop-key">Operator note</span>
+              <span class="prop-val">${escapeHtml(inc.approval.approval_reason)}</span>
+            ` : ""}
+          </div>
+
+          <div class="step-stack">
+            ${inc.steps.length > 0 ? inc.steps.map(step => `
+              <div class="step-item">
+                <div class="step-item-head">
+                  <code class="step-tool">${escapeHtml(step.tool_name || step.action || "mutate_tool")}</code>
+                  <span class="step-attrs">
+                    blast: ${escapeHtml(step.blast_radius || "medium")} · ${step.reversible !== false ? "reversible" : "irreversible"}
+                  </span>
+                </div>
+                <pre class="code-block">${escapeHtml(JSON.stringify(step.tool_args || step.parameters || {}, null, 2))}</pre>
+              </div>
+            `).join("") : `
+              <p class="hitl-desc">No mutation tool calls bound for this incident.</p>
+            `}
+          </div>
+        </div>
+      `;
+
+      const executionHtml = `
+        <div class="section-block">
+          <div class="section-head">
+            <h3 class="section-title">Tool Execution Results &amp; ReAct Verification</h3>
+            <span class="section-tag">Verification: ${verifSummaryTag}</span>
+          </div>
+
+          ${inc.verification.feedback ? `
+            <div class="prose-block">
+              <span class="field-label">Verification feedback</span>
+              <p class="field-body">${escapeHtml(inc.verification.feedback)}</p>
+            </div>
+          ` : ""}
+
+          ${inc.execution.results.length > 0 ? `
+            <div class="step-stack">
+              ${inc.execution.results.map((res, idx) => `
+                <div class="step-item">
+                  <div class="step-item-head">
+                    <span>Step ${escapeHtml(String(res.step ?? idx + 1))}: <code class="step-tool">${escapeHtml(res.tool_name || "tool")}</code></span>
+                    <span class="step-attrs num">
+                      ${res.duration_ms !== undefined ? `${escapeHtml(String(res.duration_ms))} ms · ` : ""}<span class="${res.status === "SUCCESS" ? "tone-ok" : "tone-err"}">${escapeHtml(res.status || "DONE")}</span>
+                    </span>
+                  </div>
+                  <pre class="code-block">${escapeHtml(String(res.output || ""))}</pre>
+                </div>
+              `).join("")}
+            </div>
+          ` : `
+            <p class="hitl-desc">No mutation tools have executed yet.</p>
+          `}
+
+          ${inc.rollback.results.length > 0 ? `
+            <div class="section-divider"></div>
+            <div class="prose-block">
+              <span class="field-label tone-err">Deterministic Rollback Results</span>
+              <div class="step-stack" style="margin-top:6px;">
+                ${inc.rollback.results.map((rb, idx) => `
+                  <div class="step-item">
+                    <div class="step-item-head">
+                      <span>Rollback ${idx + 1}: <code class="step-tool">${escapeHtml(rb.tool_name || rb.action || "rollback")}</code></span>
+                      <span class="step-attrs ${rb.status === "SUCCESS" ? "tone-ok" : "tone-err"}">${escapeHtml(rb.status || "DONE")}</span>
+                    </div>
+                    <pre class="code-block">${escapeHtml(String(rb.output || JSON.stringify(rb, null, 2)))}</pre>
+                  </div>
+                `).join("")}
+              </div>
+            </div>
+          ` : ""}
+        </div>
+      `;
+
+      inspector.innerHTML = `
+        <div class="inspector-inner">
+          <button type="button" class="btn btn-outline btn-sm mobile-back-btn" data-action="back-to-queue">
+            <svg class="ph-icon" aria-hidden="true"><use href="#ph-arrow-left" /></svg>
+            Threads
+          </button>
+
+          <!-- Incident Header -->
+          <div class="detail-header">
+            <div style="min-width:0;">
+              <div class="detail-title-row">
+                <h2 class="detail-id">${escapeHtml(inc.incident_id)}</h2>
+                <span class="status-pill ${statusPillClass(inc.status)}">${escapeHtml(formatStatusLabel(inc.status))}</span>
+              </div>
+              <div class="detail-meta-line">
+                <span>${escapeHtml(inc.platform)}</span>
+                <span aria-hidden="true">·</span>
+                <code>${escapeHtml(inc.failure_class)}</code>
+                <span aria-hidden="true">·</span>
+                <span>${inc.involved_object ? `${escapeHtml(inc.involved_object)} &rarr; ` : ""}<span class="detail-meta-strong">${escapeHtml(inc.target_resource)}</span></span>
+              </div>
+            </div>
+
+            ${inc.post_incident_report_ready
+              ? `<a href="${reportHref}" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-sm">
+                   <svg class="ph-icon" aria-hidden="true"><use href="#ph-file-text" /></svg>
+                   Report
+                 </a>`
+              : `<span class="report-muted">Report guarded (${inc.execution.results.length} steps)</span>`
+            }
+          </div>
+
+          <!-- Minimal Connected Pipeline Stepper -->
+          <div class="stepper-block">
+            <div class="stepper-meta">
+              <span>StateGraph pipeline</span>
+              <span class="num">Attempt ${inc.execution.attempts} of ${inc.execution.max_attempts}${escapeHtml(branchNote)}</span>
+            </div>
+            <div class="stepper-rail">
+              ${GRAPH_NODES.map(node => {
+                const stateClass = getStepStateClass(node.id, inc);
+                return `
+                  <div class="step-node ${stateClass}">
+                    <span class="step-dot" aria-hidden="true"></span>
+                    <span>${escapeHtml(node.label)}</span>
+                  </div>
+                `;
+              }).join("")}
+            </div>
+          </div>
+
+          ${inc.error ? `
+            <div class="error-strip" role="alert">
+              <svg class="ph-icon" style="margin-top:2px;" aria-hidden="true"><use href="#ph-warning-circle" /></svg>
+              <span>${escapeHtml(inc.error)}</span>
+            </div>
+          ` : ""}
+
+          ${inc.approval.is_interrupted ? `
+            <section class="hitl-strip" aria-label="Human-in-the-loop approval required">
+              <div class="hitl-head">
+                <svg class="ph-icon tone-warn" aria-hidden="true"><use href="#ph-shield-check" /></svg>
+                <span>Paused at approval node — operator sign-off required</span>
+              </div>
+              <p class="hitl-desc">${escapeHtml(inc.policy.reason)}</p>
+              <div class="hitl-controls">
+                <label for="approval-reason-input" class="sr-only">Operator approval or rejection note</label>
+                <input type="text"
+                       id="approval-reason-input"
+                       class="shadcn-input"
+                       data-incident-id="${escapeHtml(inc.incident_id)}"
+                       value="${escapeHtml(draftValue)}"
+                       placeholder="Optional note or change ticket..."
+                       ${isSubmitting ? "disabled" : ""} />
+                <button type="button"
+                        class="btn btn-default btn-approve"
+                        data-action="approve"
+                        data-incident-id="${escapeHtml(inc.incident_id)}"
+                        ${isSubmitting ? "disabled" : ""}>
+                  <svg class="ph-icon" aria-hidden="true"><use href="#ph-check" /></svg>
+                  ${isSubmitting ? "Resuming..." : "Approve & resume"}
+                </button>
+                <button type="button"
+                        class="btn btn-destructive btn-reject"
+                        data-action="reject"
+                        data-incident-id="${escapeHtml(inc.incident_id)}"
+                        ${isSubmitting ? "disabled" : ""}>
+                  <svg class="ph-icon" aria-hidden="true"><use href="#ph-x" /></svg>
+                  ${isSubmitting ? "Submitting..." : "Reject"}
+                </button>
+              </div>
+            </section>
+          ` : ""}
+
+          <!-- Inspector Section Tabs -->
+          <div class="inspector-tabs" role="tablist" aria-label="Incident details">
+            <button type="button"
+                    class="inspector-tab ${activeInspectorTab === "overview" ? "active" : ""}"
+                    data-inspector-tab="overview"
+                    role="tab"
+                    aria-selected="${activeInspectorTab === "overview"}">
+              Diagnosis &amp; Plan
+            </button>
+            <button type="button"
+                    class="inspector-tab ${activeInspectorTab === "execution" ? "active" : ""}"
+                    data-inspector-tab="execution"
+                    role="tab"
+                    aria-selected="${activeInspectorTab === "execution"}">
+              Execution &amp; Verify
+              <span class="num" style="font-size:12px; color:var(--muted-foreground);">(${inc.execution.results.length})</span>
+            </button>
+          </div>
+
+          ${activeInspectorTab === "overview" ? overviewHtml : executionHtml}
+        </div>
+      `;
+
+      if (wasInputFocused) {
+        const restored = document.getElementById("approval-reason-input");
+        if (restored) {
+          restored.focus();
+          restored.setSelectionRange(restored.value.length, restored.value.length);
         }
       }
-      // Press Escape to blur / clear search
-      if (e.key === 'Escape' && document.activeElement?.id === 'searchInput') {
-        const searchInput = document.getElementById('searchInput');
-        if (searchInput.value) {
-          searchInput.value = '';
-          applyFilters();
-        }
-        searchInput.blur();
+    }
+
+    function renderPredictionsView() {
+      const countEl = document.getElementById("predictions-count");
+      const bodyEl = document.getElementById("predictions-body");
+      if (countEl) {
+        countEl.textContent = `${predictions.length} predictive scaling decision${predictions.length === 1 ? "" : "s"}`;
       }
-      // 1, 2, 3 shortcuts for tabs
-      if ((e.key === '1' || e.key === '2' || e.key === '3') && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
-        if (e.key === '1') showTab('incidents');
-        if (e.key === '2') showTab('predictions');
-        if (e.key === '3') showTab('policy');
+      if (!bodyEl) return;
+
+      if (predictions.length === 0) {
+        bodyEl.innerHTML = `<div class="queue-empty"><p>No predictive scaling decisions recorded yet.</p></div>`;
+        return;
+      }
+
+      bodyEl.innerHTML = `
+        <table class="shadcn-table">
+          <thead>
+            <tr>
+              <th>Workload</th>
+              <th>Namespace</th>
+              <th class="num">Current RPS</th>
+              <th class="num">Predicted RPS</th>
+              <th class="num">Scale</th>
+              <th class="num">Replicas</th>
+              <th>Mode</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${predictions.map(p => {
+              const target = p.target || p.service || p.deployment || "workload";
+              const ns = p.namespace || "default";
+              const cur = p.current_rps ?? p.current_load ?? "—";
+              const pred = p.predicted_rps ?? p.predicted_load ?? "—";
+              const scale = p.scale_factor ? `${Number(p.scale_factor).toFixed(2)}x` : "—";
+              const rep = p.desired_replicas ?? p.target_replicas ?? "—";
+              const mode = p.mode || p.action || "advisory";
+              return `
+                <tr>
+                  <td><strong>${escapeHtml(target)}</strong></td>
+                  <td>${escapeHtml(ns)}</td>
+                  <td class="num">${escapeHtml(String(cur))}</td>
+                  <td class="num">${escapeHtml(String(pred))}</td>
+                  <td class="num">${escapeHtml(scale)}</td>
+                  <td class="num">${escapeHtml(String(rep))}</td>
+                  <td>${escapeHtml(mode)}</td>
+                </tr>
+              `;
+            }).join("")}
+          </tbody>
+        </table>
+      `;
+    }
+
+    async function submitApprovalDecision(incidentId, approved) {
+      if (submittingIncidents.has(incidentId)) return;
+
+      const reasonInput = document.getElementById("approval-reason-input");
+      const reason = reasonInput && reasonInput.value.trim()
+        ? reasonInput.value.trim()
+        : (approved ? "Approved from NEXUS developer dashboard" : "Rejected from NEXUS developer dashboard");
+
+      if (isDemoMode) {
+        const target = incidents.find(i => i.incident_id === incidentId);
+        if (target) {
+          target.approval.is_interrupted = false;
+          target.approval.approved = approved;
+          target.approval.approved_by = "dashboard-operator";
+          target.approval.approval_reason = reason;
+          target.approval.approval_status = approved ? "APPROVED" : "REJECTED";
+          if (approved) {
+            target.status = "RESOLVED";
+            target.active_node = "LEARN";
+            target.execution.status = "EXECUTED";
+            target.execution.attempts = 1;
+            target.execution.results = [{
+              step: 1,
+              tool_name: target.steps[0]?.tool_name || "k8s_rollback_deployment",
+              status: "SUCCESS",
+              duration_ms: 918,
+              output: "Rolled back Deployment/shop-demo to revision 13; 3/3 pods Ready"
+            }];
+            target.verification.passed = true;
+            target.verification.feedback = "Readiness probe /healthz returned 200 OK across all 3 replicas.";
+            target.post_incident_report_ready = true;
+            activeInspectorTab = "execution";
+          } else {
+            target.status = "ESCALATED";
+            target.active_node = "ESCALATE";
+            target.error = `Operator rejected remediation: ${reason}`;
+          }
+          approvalDrafts.delete(incidentId);
+          lastInspectorSignature = null;
+          updateKpis();
+          renderSidebar();
+          renderInspector(target, true);
+          showStatusBanner(
+            approved
+              ? `Preview: thread ${incidentId} resumed and verified.`
+              : `Preview: thread ${incidentId} rejected and escalated.`,
+            approved ? "success" : "error"
+          );
+        }
+        return;
+      }
+
+      submittingIncidents.add(incidentId);
+      const current = incidents.find(i => i.incident_id === incidentId);
+      if (current) renderInspector(current, true);
+
+      const endpoint = approved
+        ? `/developer/incidents/${encodeURIComponent(incidentId)}/approve`
+        : `/developer/incidents/${encodeURIComponent(incidentId)}/reject`;
+
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            incident_id: incidentId,
+            approved,
+            approver: "dashboard-operator",
+            reason
+          })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(body.detail || `Request failed (${res.status})`);
+        }
+        approvalDrafts.delete(incidentId);
+        showStatusBanner(
+          approved
+            ? `Thread ${incidentId} approved and resumed.`
+            : `Thread ${incidentId} rejected and escalated.`,
+          "success"
+        );
+      } catch (err) {
+        showStatusBanner(`Failed to submit decision: ${err.message}`, "error");
+      } finally {
+        submittingIncidents.delete(incidentId);
+        await fetchIncidents(true);
+      }
+    }
+
+    function closeMobileSidebar() {
+      const shell = document.getElementById("app-shell");
+      const closeBtn = document.getElementById("btn-close-mobile-sidebar");
+      shell.classList.remove("mobile-sidebar-open");
+      if (closeBtn) closeBtn.style.display = "none";
+    }
+
+    function toggleSidebar() {
+      const shell = document.getElementById("app-shell");
+      const closeBtn = document.getElementById("btn-close-mobile-sidebar");
+      if (window.innerWidth <= 1080) {
+        const opening = !shell.classList.contains("mobile-sidebar-open");
+        shell.classList.toggle("mobile-sidebar-open", opening);
+        if (closeBtn) closeBtn.style.display = opening ? "inline-flex" : "none";
+      } else {
+        shell.classList.toggle("sidebar-collapsed");
+      }
+    }
+
+    document.getElementById("btn-sidebar-toggle").addEventListener("click", toggleSidebar);
+    document.getElementById("sidebar-backdrop").addEventListener("click", closeMobileSidebar);
+    document.getElementById("btn-close-mobile-sidebar").addEventListener("click", closeMobileSidebar);
+
+    document.getElementById("btn-theme-toggle").addEventListener("click", () => {
+      const isDark = document.documentElement.classList.contains("dark");
+      applyTheme(isDark ? "light" : "dark");
+    });
+
+    document.querySelectorAll(".nav-item[data-view]").forEach(btn => {
+      btn.addEventListener("click", () => switchView(btn.dataset.view));
+    });
+
+    document.getElementById("btn-sync-state").addEventListener("click", () => fetchIncidents(true));
+    document.getElementById("nav-demo-btn").addEventListener("click", () => {
+      toggleDemoMode(!isDemoMode);
+      closeMobileSidebar();
+    });
+    document.getElementById("btn-demo-toggle").addEventListener("click", () => toggleDemoMode(false));
+    document.getElementById("btn-dismiss-banner").addEventListener("click", hideStatusBanner);
+
+    document.getElementById("incident-search").addEventListener("input", (event) => {
+      searchQuery = event.target.value || "";
+      renderSidebar();
+    });
+
+    document.getElementById("filter-tabs").addEventListener("click", (event) => {
+      const tab = event.target.closest(".filter-tab[data-filter]");
+      if (tab) setFilter(tab.dataset.filter);
+    });
+
+    document.getElementById("incident-list").addEventListener("click", (event) => {
+      const retry = event.target.closest('[data-action="retry-fetch"]');
+      if (retry) {
+        fetchIncidents(true);
+        return;
+      }
+      const row = event.target.closest(".incident-row[data-incident-id]");
+      if (row) selectIncident(row.dataset.incidentId);
+    });
+
+    document.getElementById("inspector").addEventListener("click", (event) => {
+      const tab = event.target.closest(".inspector-tab[data-inspector-tab]");
+      if (tab) {
+        activeInspectorTab = tab.dataset.inspectorTab;
+        const inc = incidents.find(i => i.incident_id === selectedIncidentId);
+        if (inc) renderInspector(inc, true);
+        return;
+      }
+      const btn = event.target.closest("[data-action]");
+      if (!btn) return;
+      const action = btn.dataset.action;
+      if (action === "approve") submitApprovalDecision(btn.dataset.incidentId, true);
+      else if (action === "reject") submitApprovalDecision(btn.dataset.incidentId, false);
+      else if (action === "back-to-queue") closeMobileDetail();
+      else if (action === "retry-fetch") fetchIncidents(true);
+      else if (action === "toggle-demo") toggleDemoMode(true);
+    });
+
+    document.getElementById("inspector").addEventListener("input", (event) => {
+      if (event.target && event.target.id === "approval-reason-input" && event.target.dataset.incidentId) {
+        approvalDrafts.set(event.target.dataset.incidentId, event.target.value);
       }
     });
 
-    // Toast
-    let _tt;
-    function toast(msg, err = false) {
-      const el = document.getElementById('toast');
-      el.innerHTML = (err ? '<i class="ph-bold ph-warning-circle" style="color:var(--red)"></i> ' : '<i class="ph-bold ph-check-circle" style="color:var(--green)"></i> ') + msg;
-      el.className = 'toast show' + (err ? ' err' : '');
-      clearTimeout(_tt);
-      _tt = setTimeout(() => el.className = 'toast', 3000);
+    initTheme();
+    if (isDemoMode) {
+      toggleDemoMode(true);
+    } else {
+      fetchIncidents(true);
     }
-
-    // Init
-    checkStatus();
-    loadApps();
-    loadIncidents();
-    setInterval(checkStatus, 15000);
-    setInterval(() => {
-      const activeTab = document.querySelector('.tab.active')?.id?.replace('tab-', '');
-      if (activeTab === 'incidents') loadIncidents();
-      if (activeTab === 'predictions') loadPredictions();
-    }, 10000);
+    setInterval(() => fetchIncidents(false), 4000);
   </script>
 </body>
 

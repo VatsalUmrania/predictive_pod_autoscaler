@@ -11,8 +11,8 @@ import logging
 from collections import deque
 from datetime import datetime, timezone
 
-from nexus.bus.incident_event import IncidentEvent, SignalType
-from nexus.reasoning.incident_cluster import IncidentCluster
+from nexus.bus.events import IncidentEvent, SignalType
+from nexus.reasoning.incident_cluster import IncidentCluster, extract_event_identity_key
 
 logger = logging.getLogger(__name__)
 
@@ -166,8 +166,18 @@ class EventCorrelator:
 
     @staticmethod
     def _cluster_key(event: IncidentEvent) -> str:
-        """Correlation key — events in the same namespace are clustered together."""
-        return event.namespace if event.namespace else f"global:{event.agent}"
+        """
+        Correlation key — groups events by namespace and service/resource identity.
+        When namespace or service_name/resource_name is None, falls back to
+        involved_object_name from raw_payload/context so distinct pods never
+        merge into a single 'None/None' bucket.
+        """
+        identity = extract_event_identity_key(event)
+        if event.namespace:
+            return f"{event.namespace}/{identity}" if identity else event.namespace
+        if identity:
+            return f"unscoped:{identity}"
+        return f"global:{event.agent}:{event.event_id}"
 
     def _emit(self, cluster: IncidentCluster) -> IncidentCluster:
         self._emitted.add(cluster.cluster_id)

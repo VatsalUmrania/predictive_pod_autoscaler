@@ -1,208 +1,118 @@
-"""
-NEXUS Post-Execution Verification Node
-======================================
-Verifies target SLO and health following remediation execution:
-  - healthy   → record_post_check_success + cooldown
-  - unhealthy → record_post_check_failure (retry or trigger rollback)
-"""
-
-from __future__ import annotations
-
-import asyncio
+import json
 import logging
-import os
-import time
-from datetime import datetime, timezone
 from typing import Any
 
-from nexus.db.models import IncidentState
-from nexus.graph.nodes.verify_helpers import (
-    evaluate_verification_condition,
-    execute_plan_verification_checks,
-    extract_metric_value,
-    verify_step_conditions,
-)
-from nexus.graph.platform import TargetResource, get_platform_registry
-from nexus.graph.state import IncidentGraphState
-from nexus.tools.registry import default_registry
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
-__all__ = [
-    "verify_node",
-    "evaluate_verification_condition",
-    "extract_metric_value",
-]
+from nexus.graph.llm import get_chat_model
+from nexus.graph.nodes.diagnose_builders import truncate_observation
+from nexus.graph.rca.result import VerificationResult
+from nexus.graph.state import IncidentState
+from nexus.tools.registry import get_tool_registry
 
 logger = logging.getLogger(__name__)
 
-VERIFY_TIMEOUT_S = float(os.getenv("NEXUS_VERIFY_TIMEOUT_S", "120"))
-VERIFY_POLL_INTERVAL_S = float(os.getenv("NEXUS_VERIFY_POLL_INTERVAL_S", "5"))
+VERIFY_SYSTEM_PROMPT = """You are the NEXUS Post-Remediation Verification Agent.
+Remediation tool calls have just been executed on the target workload.
+Use your read-only observation tools to inspect the live state of the target workload (`namespace`, `resource_kind`, `service_name`):
+1. Check if pods/instances are Running and passing their Readiness/Liveness probes.
+2. Verify that `readyReplicas` matches desired replicas and no new CrashLoopBackOff or probe failure events are occurring.
+3. Synthesize a structured VerificationResult indicating whether the remediation succeeded (`verification_passed = True`) or failed (`verification_passed = False` with detailed `failure_feedback`)."""
 
 
-def _get_ladder() -> Any:
-    try:
-        from nexus.observability.status_api import context
+async def verify_node(state: IncidentState) -> dict[str, Any]:
+    incident_id = state.get("incident_id", "unknown")
+    registry = get_tool_registry()
+    observe_tools = registry.get_tools(mode="observe", platform=state.get("platform"))
+    tool_map = {t.name: t for t in observe_tools}
 
-        return context.action_ladder
-    except Exception:
-        return None
+    llm = get_chat_model(temperature=0.0)
+    llm_with_tools = llm.bind_tools(observe_tools) if observe_tools else llm
 
+    verify_context = {
+        "incident_id": incident_id,
+        "target": {
+            "platform": state.get("platform"),
+            "namespace": state.get("namespace"),
+            "resource_kind": state.get("resource_kind"),
+            "service_name": state.get("service_name"),
+        },
+        "root_cause": state.get("suspected_cause"),
+        "executed_steps": state.get("execution_results", []),
+    }
 
-async def verify_node(state: IncidentGraphState) -> dict[str, Any]:
-    target_dict = dict(state.get("target") or {})
-    platform_id = state.get("platform", "kubernetes")
-    if "platform" not in target_dict:
-        target_dict["platform"] = platform_id
-    target = (
-        TargetResource(**target_dict)
-        if isinstance(target_dict, dict) and "name" in target_dict
-        else TargetResource(
-            platform=platform_id, namespace="default", name="unknown", kind="unknown"
-        )
-    )
-    plan = state.get("plan") or state.get("remediation_plan") or {}
-    reg = get_platform_registry()
-    adapter = reg.get(platform_id) or reg.resolve_adapter(state.get("events", []))
+    messages: list[Any] = [
+        SystemMessage(content=VERIFY_SYSTEM_PROMPT),
+        HumanMessage(content=json.dumps(verify_context, default=str)),
+    ]
+    collected_observations: list[dict[str, Any]] = []
+    verifier_notes = ""
 
-    healthy, slo_restored, details, failure_reason, attempts = False, False, "", "", 0
-    deadline = time.monotonic() + VERIFY_TIMEOUT_S
+    for step_idx in range(1, 5):
+        ai_msg = await llm_with_tools.ainvoke(messages)
+        messages.append(ai_msg)
 
-    while True:
-        attempts += 1
-        verif_result = None
-        try:
-            verif_result = await adapter.verify_health(target, plan)
-            healthy, slo_restored = verif_result.healthy, verif_result.slo_restored
-            details = verif_result.details or ""
-            failure_reason = verif_result.failure_reason or ""
-        except Exception as exc:
-            healthy, slo_restored, details, failure_reason = (
-                False,
-                False,
-                f"Exception: {exc}",
-                str(exc),
-            )
+        if getattr(ai_msg, "content", None):
+            verifier_notes = str(ai_msg.content)
 
-        if healthy and slo_restored:
-            steps = plan.get("steps") or []
-            conds_ok, cond_details, c_fail = await verify_step_conditions(
-                steps, default_registry, verif_result, state.get("telemetry")
-            )
-            if conds_ok:
-                details = (
-                    f"{details} | {'; '.join(cond_details)}"
-                    if details and cond_details
-                    else ("; ".join(cond_details) or details)
-                )
-                # Also execute any LLM-defined VerificationCheck items
-                checks = plan.get("verification_checks") or []
-                vchecks_ok, vcheck_details, v_fail = (
-                    await execute_plan_verification_checks(checks, default_registry)
-                )
-                if not vchecks_ok:
-                    healthy, slo_restored, details, failure_reason = (
-                        False,
-                        False,
-                        v_fail,
-                        v_fail,
-                    )
-                else:
-                    all_details = cond_details + vcheck_details
-                    details = (
-                        f"{details} | {'; '.join(all_details)}"
-                        if details and all_details
-                        else ("; ".join(all_details) or details)
-                    )
-            else:
-                healthy, slo_restored, details, failure_reason = (
-                    False,
-                    False,
-                    c_fail,
-                    c_fail,
-                )
-
-        if (healthy and slo_restored) or time.monotonic() >= deadline:
+        if not getattr(ai_msg, "tool_calls", None):
             break
-        await asyncio.sleep(VERIFY_POLL_INTERVAL_S)
 
-    retry_count, max_retries = state.get("retry_count", 0), state.get("max_retries", 2)
-    now_iso = datetime.now(timezone.utc).isoformat()
-    ladder = _get_ladder()
-    t_str = f"{getattr(target, 'namespace', 'default')}/{getattr(target, 'name', 'unknown')}"
-    records = state.get("execution_records") or []
-    action_id = str(records[-1].get("tool_name")) if records else "unknown"
-
-    if healthy and slo_restored:
-        if ladder is not None:
-            try:
-                ladder.record_post_check_success()
-                await ladder.set_cooldown(action_id, t_str)
-            except Exception as cb_exc:
-                logger.warning("[Verify] Ladder update failed: %s", cb_exc)
-        return {
-            "verification": {
-                "healthy": True,
-                "slo_restored": True,
-                "details": details,
-                "attempts": attempts,
-            },
-            "resolved": True,
-            "verification_passed": True,
-            "fsm_state": IncidentState.RESOLVED.value,
-            "audit_log": [
+        for tc in ai_msg.tool_calls:
+            tool_fn = tool_map.get(tc["name"])
+            if tool_fn is None:
+                obs: Any = f"Error: Observation tool '{tc['name']}' not found."
+            else:
+                try:
+                    obs = await tool_fn.ainvoke(tc.get("args") or {})
+                except Exception as exc:
+                    obs = f"Tool error: {exc}"
+            compact_obs = truncate_observation(obs, max_lines=80, max_bytes=4096)
+            collected_observations.append(
                 {
-                    "timestamp": now_iso,
-                    "stage": "verify",
-                    "action": "slo_restored",
-                    "details": details,
+                    "step": step_idx,
+                    "tool": tc["name"],
+                    "args": tc.get("args") or {},
+                    "output": compact_obs,
                 }
-            ],
-        }
+            )
+            messages.append(
+                ToolMessage(
+                    content=str(compact_obs), tool_call_id=tc["id"], name=tc["name"]
+                )
+            )
 
-    if ladder is not None:
-        try:
-            ladder.record_post_check_failure()
-        except Exception:
-            pass
+    synthesis_payload = {
+        "verify_context": verify_context,
+        "tool_observations": collected_observations,
+        "verifier_notes": truncate_observation(
+            verifier_notes, max_lines=40, max_bytes=2048
+        ),
+    }
+    synthesis_messages = [
+        SystemMessage(content=VERIFY_SYSTEM_PROMPT),
+        HumanMessage(
+            content=(
+                "Synthesize the final structured VerificationResult using only the "
+                "context and live tool observations below:\n"
+                + json.dumps(synthesis_payload, default=str)
+            )
+        ),
+    ]
 
-    if retry_count < max_retries:
-        return {
-            "verification": {
-                "healthy": False,
-                "slo_restored": False,
-                "details": details,
-                "failure_reason": failure_reason,
-                "attempts": attempts,
-            },
-            "verification_passed": False,
-            "retry_count": retry_count + 1,
-            "fsm_state": IncidentState.RETRYING.value,
-            "approval_decision": None,
-            "audit_log": [
-                {
-                    "timestamp": now_iso,
-                    "stage": "verify",
-                    "action": "retry_scheduled",
-                    "details": failure_reason,
-                }
-            ],
-        }
+    structured_llm = llm.with_structured_output(VerificationResult)
+    verification: VerificationResult = await structured_llm.ainvoke(synthesis_messages)
+
+    logger.info(
+        "Incident %s verification_passed=%s summary=%s",
+        incident_id,
+        verification.verification_passed,
+        verification.observed_state_summary,
+    )
 
     return {
-        "verification": {
-            "healthy": False,
-            "slo_restored": False,
-            "details": details,
-            "failure_reason": failure_reason,
-            "attempts": attempts,
-        },
-        "verification_passed": False,
-        "fsm_state": IncidentState.ROLLING_BACK.value,
-        "audit_log": [
-            {
-                "timestamp": now_iso,
-                "stage": "verify",
-                "action": "max_retries_exceeded",
-                "details": "Initiating rollback",
-            }
-        ],
+        "verification_passed": verification.verification_passed,
+        "verification_feedback": verification.failure_feedback
+        or verification.observed_state_summary,
+        "status": "RESOLVED" if verification.verification_passed else "VERIFICATION_FAILED",
     }

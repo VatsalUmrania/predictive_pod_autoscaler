@@ -51,6 +51,7 @@ class NexusContext:
     knowledge_base: Any = None
     audit_trail: Any = None
     db_client: Any = None
+    policy_engine: Any = None
     action_ladder: Any = None
     started_at: float = field(default_factory=time.monotonic)
 
@@ -94,7 +95,7 @@ async def _lifespan(app: FastAPI):
     """Initialize async resources on startup, or skip if already pre-populated."""
     global _ppa_outcome_tracker, _nats_client
 
-    if context.orchestrator is not None:
+    if context.orchestrator is not None or context.workflow is not None:
         logger.info("[StatusAPI] NexusContext pre-populated — skipping self-init")
         _ppa_outcome_tracker = context.ppa_outcome_tracker
         _include_integration_routers(app)
@@ -102,7 +103,7 @@ async def _lifespan(app: FastAPI):
         return
 
     try:
-        from nexus.db.postgres import get_database_client
+        from nexus.db.client import get_database_client
 
         context.db_client = await get_database_client()
         logger.info("[StatusAPI] PostgreSQL client connected")
@@ -118,7 +119,7 @@ async def _lifespan(app: FastAPI):
         logger.warning(f"[StatusAPI] TokenStore init skipped: {exc}")
 
     try:
-        from nexus.bus.nats_client import NATSClient
+        from nexus.bus.nats.client import NATSClient
 
         _nats_url = os.environ.get("NATS_URL", "nats://localhost:4222")
         _nats_client = NATSClient(nats_url=_nats_url, reconnect_attempts=10)

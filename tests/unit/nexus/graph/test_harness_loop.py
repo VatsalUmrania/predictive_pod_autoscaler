@@ -1,343 +1,379 @@
 """
-NEXUS Harness Loop Integration & Unit Tests
-===========================================
-Tests the governed Evaluator-Optimizer diagnostic reflection loop,
-the verification-driven adaptive recovery ladder, and pre-flight self-healing.
+NEXUS ReAct Diagnosis, Open Failure Classification, & Closed-Loop Verification Retry Tests.
 """
 
+from __future__ import annotations
+
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
+from langgraph.checkpoint.memory import MemorySaver
 
-from nexus.graph.nodes.plan import plan_remediation_node
-from nexus.graph.platform import HealthCheckResult, get_platform_registry
-from nexus.graph.workflow import IncidentWorkflow
+from nexus.graph.builder import build_incident_graph
+from nexus.graph.nodes.diagnose import diagnose_node
+from nexus.graph.rca.result import DiscoveredTarget, RCAResult, VerificationResult
+from nexus.graph.routes import route_after_diagnose, route_after_verify
+from nexus.graph.workflow import run_incident_workflow
+from nexus.graph.workflow_approval import handle_incident_approval
 
-# ── 1. Verification-Driven Adaptive Recovery Ladder Tests ─────────────────────
 
-
-def test_adaptive_recovery_ladder_escalation_on_k8s_restart_failure():
-    """
-    Tests that on Attempt 1 (retry), if a prior rollout restart failed post-checks
-    for an application crash/bad_deploy, the planner escalates to L3 rollback with approval.
-    """
-    state = {
-        "incident_id": "inc-adaptive-01",
-        "platform": "kubernetes",
-        "target": {"name": "order-service", "namespace": "default"},
-        "diagnosis": {
-            "failure_class": "bad_deploy",
-            "root_cause": "CrashLoopBackOff after release v3.0",
-            "confidence": 0.88,
-        },
-        "retry_count": 1,
-        "verification": {
-            "healthy": False,
-            "failure_reason": "Pod order-service CrashLoopBackOff: exit code 1",
-        },
-        "execution_records": [
+def test_route_after_diagnose_uses_confidence_and_can_auto_remediate_not_enums():
+    """Open failure slugs never force escalation when can_auto_remediate=True and confidence >= threshold."""
+    assert (
+        route_after_diagnose(
             {
-                "step_index": 0,
-                "tool_name": "k8s_restart_deployment",
-                "success": True,
+                "failure_class": "readiness_probe_container_exit_zero",
+                "confidence": 0.91,
+                "min_confidence_threshold": 0.65,
+                "rca_result": {"can_auto_remediate": True, "confidence": 0.91},
             }
-        ],
-    }
-
-    result = plan_remediation_node(state)
-    plan = result["plan"]
-
-    # Must escalate to rollback deployment
-    assert len(plan["steps"]) == 1
-    step = plan["steps"][0]
-    assert step["tool_name"] == "k8s_rollback_deployment"
-    assert plan["requires_approval"] is True
-    assert "Adaptive Recovery" in plan["approval_reason"]
-    assert "failed post-check" in plan["approval_reason"]
-
-    # History tracking
-    assert len(result["remediation_history"]) == 1
-    history = result["remediation_history"][0]
-    assert history["is_adaptive_escalation"] is True
-    assert history["attempt"] == 1
-    assert "k8s_restart_deployment" in history["prior_tools"]
-
-
-def test_adaptive_recovery_ladder_escalation_on_aws_lambda():
-    """
-    Tests that on AWS, if memory increase failed and function is still timing out,
-    the adaptive ladder escalates to timeout increase.
-    """
-    state = {
-        "incident_id": "inc-adaptive-02",
-        "platform": "aws",
-        "target": {"name": "payment-processor", "namespace": "us-east-1"},
-        "diagnosis": {
-            "failure_class": "resource_exhaustion",
-            "root_cause": "Lambda duration spike",
-            "confidence": 0.85,
-        },
-        "telemetry": {"live_config": {"Timeout": 30, "MemorySize": 512}},
-        "retry_count": 1,
-        "verification": {
-            "healthy": False,
-            "failure_reason": "Task timed out after 30.00 seconds",
-        },
-        "execution_records": [
-            {
-                "step_index": 0,
-                "tool_name": "aws_update_lambda_memory",
-                "success": True,
-            }
-        ],
-    }
-
-    result = plan_remediation_node(state)
-    plan = result["plan"]
-
-    assert len(plan["steps"]) == 1
-    step = plan["steps"][0]
-    assert step["tool_name"] == "aws_update_lambda_timeout"
-    assert step["parameters"]["timeout_seconds"] == 60
-
-
-# ── 3. Pre-Flight Live-State Self-Healing Short-Circuit Tests ──────────────────
-
-
-# ── 4. End-to-End Workflow with Adaptive Ladder & Human Approval ──────────────
-
-
-class MockHarnessK8sModel(BaseChatModel):
-    @property
-    def _llm_type(self) -> str:
-        return "mock-harness-k8s"
-
-    def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
-        msg = AIMessage(
-            content="",
-            tool_calls=[
-                {
-                    "name": "RCAReport",
-                    "args": {
-                        "root_cause_summary": "Application crash loop detected",
-                        "affected_resource_urn": "k8s://production/apps/v1/Deployment/checkout-web",
-                        "provider": "kubernetes",
-                        "confidence": 0.95,
-                        "hypotheses_evaluated": ["crash", "bad_deploy"],
-                        "evidence_chain": [
-                            {
-                                "tool_name": "k8s_get_logs",
-                                "tool_arguments": {},
-                                "key_finding": "crashloopbackoff",
-                            }
-                        ],
-                        "pre_incident_resource_state": {"replicas": 1},
-                        "requires_remediation": True,
-                        "suggested_action": "k8s_restart_deployment",
-                    },
-                    "id": "rca_wf_harness_1",
-                }
-            ],
         )
-        return ChatResult(generations=[ChatGeneration(message=msg)])
+        == "plan"
+    )
+    assert (
+        route_after_diagnose(
+            {
+                "failure_class": "readiness_probe_container_exit_zero",
+                "confidence": 0.40,
+                "min_confidence_threshold": 0.65,
+                "rca_result": {"can_auto_remediate": True, "confidence": 0.40},
+            }
+        )
+        == "escalate"
+    )
+    assert (
+        route_after_diagnose(
+            {
+                "failure_class": "manual_data_migration_required",
+                "confidence": 0.95,
+                "rca_result": {"can_auto_remediate": False, "confidence": 0.95},
+            }
+        )
+        == "escalate"
+    )
 
-    def bind_tools(self, *args: Any, **kwargs: Any) -> Any:
-        return self
+
+def test_route_after_verify_closed_loop_and_max_attempts():
+    assert route_after_verify({"verification_passed": True}) == "learn"
+    assert (
+        route_after_verify(
+            {
+                "verification_passed": False,
+                "remediation_attempts": 1,
+                "max_remediation_attempts": 2,
+            }
+        )
+        == "diagnose"
+    )
+    assert (
+        route_after_verify(
+            {
+                "verification_passed": False,
+                "remediation_attempts": 2,
+                "max_remediation_attempts": 2,
+                "rollback_available": True,
+            }
+        )
+        == "rollback"
+    )
+    assert (
+        route_after_verify(
+            {
+                "verification_passed": False,
+                "remediation_attempts": 2,
+                "max_remediation_attempts": 2,
+                "rollback_available": False,
+            }
+        )
+        == "escalate"
+    )
 
 
 @pytest.mark.asyncio
-async def test_e2e_workflow_adaptive_ladder_pause_and_resume():
-    """
-    Tests an end-to-end incident run where Attempt 0 fails, Attempt 1 escalates to L3
-    rollback, pauses for human approval, and upon operator approval executes and resolves.
-    """
-    workflow = IncidentWorkflow()
-    adapter = get_platform_registry().get("kubernetes")
+async def test_diagnose_node_react_discovers_namespace_and_owner_from_none():
+    """diagnose_node runs ReAct tool calls and populates discovered topology + open failure_class."""
+    locate_tool = MagicMock()
+    locate_tool.name = "locate_pod_and_owner"
+    locate_tool.ainvoke = AsyncMock(
+        return_value={
+            "pod_name": "shop-demo-59bd7ddcf9-t2skj",
+            "namespace": "shop-ns",
+            "owner_kind": "Deployment",
+            "owner_name": "shop-demo",
+            "container_statuses": [
+                {"last_terminated_state": {"terminated": {"exit_code": 0}}}
+            ],
+        }
+    )
+    mock_registry = MagicMock()
+    mock_registry.get_tools.return_value = [locate_tool]
 
-    events = [
-        {
-            "agent": "k8s",
-            "resource_name": "checkout-web",
-            "namespace": "production",
-            "severity": "critical",
-            "signal_type": "pod_crashloop",
-        },
-    ]
-
-    # Attempt 0 (restart plan) fails health checks for the entire poll window;
-    # Attempt 1 (rollback plan) passes immediately.
-    async def mock_health_check(target, plan):
-        steps = (plan or {}).get("steps") or []
-        tool = steps[0].get("tool_name", "") if steps else ""
-        if tool == "k8s_restart_deployment":
-            return HealthCheckResult(
-                healthy=False,
-                slo_restored=False,
-                failure_reason="CrashLoopBackOff exit code 137",
-            )
-        return HealthCheckResult(
-            healthy=True, slo_restored=True, details="Deployment healthy and ready"
+    bound_llm = MagicMock()
+    bound_llm.ainvoke = AsyncMock(
+        side_effect=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "d_1",
+                        "name": "locate_pod_and_owner",
+                        "args": {"pod_name": "shop-demo-59bd7ddcf9-t2skj"},
+                    }
+                ],
+            ),
+            AIMessage(content="Diagnosis ready.", tool_calls=[]),
+        ]
+    )
+    structured_llm = MagicMock()
+    structured_llm.ainvoke = AsyncMock(
+        return_value=RCAResult(
+            target=DiscoveredTarget(
+                platform="k8s",
+                namespace_or_region="shop-ns",
+                resource_kind="Deployment",
+                resource_name="shop-demo",
+            ),
+            failure_type="readiness_probe_container_exit_zero",
+            root_cause_summary="Container exited with code 0 before serving port 8001.",
+            confidence=0.94,
+            evidence=["exit_code=0", "owner=Deployment/shop-demo"],
+            can_auto_remediate=True,
+            recommended_strategy="Remove erroneous container command override on shop-demo.",
         )
-
-    rolled_back = False
-
-    def mock_rollback(*args: Any, **kwargs: Any) -> str:
-        nonlocal rolled_back
-        rolled_back = True
-        return "rolled_back"
-
-    def mock_describe(*args: Any, **kwargs: Any) -> str:
-        if rolled_back:
-            return "Replicas: 1\nState: Running\nReady: 1/1"
-        return "Replicas: 1\nState: CrashLoopBackOff"
+    )
+    mock_llm = MagicMock()
+    mock_llm.bind_tools.return_value = bound_llm
+    mock_llm.with_structured_output.return_value = structured_llm
 
     with (
-        patch("nexus.graph.nodes.diagnose.get_llm", return_value=MockHarnessK8sModel()),
         patch(
-            "nexus.tools.k8s.observe_tools.describe_resource", side_effect=mock_describe
+            "nexus.graph.nodes.diagnose.get_tool_registry", return_value=mock_registry
         ),
+        patch("nexus.graph.nodes.diagnose.get_chat_model", return_value=mock_llm),
         patch(
-            "nexus.tools.k8s.mutate_tools.restart_deployment", return_value="restarted"
-        ),
-        patch(
-            "nexus.tools.k8s.mutate_tools.rollback_deployment",
-            side_effect=mock_rollback,
-        ),
-        patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05),
-        patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01),
-        patch.object(adapter, "verify_health", side_effect=mock_health_check),
+            "nexus.graph.nodes.diagnose.sync_discovered_target_identity", AsyncMock()
+        ) as mock_sync,
     ):
-        # Initial run: Attempt 0 plans restart -> pauses at approval (all actions require approval)
-        initial_run = await workflow.run_incident(
+        result = await diagnose_node(
             {
-                "incident_id": "inc-adaptive-e2e",
-                "platform": "kubernetes",
-                "events": events,
-                "max_retries": 2,
-            },
-            thread_id="thread-adaptive-e2e",
-        )
-
-        assert initial_run["fsm_state"] == "approval_pending"
-        assert initial_run["resolved"] is False
-        assert initial_run["plan"]["steps"][0]["tool_name"] == "k8s_restart_deployment"
-
-        # 1st resume with operator approval: Attempt 0 executes restart -> fails verify -> Attempt 1 escalates to rollback -> pauses for approval
-        escalated_run = await workflow.resume_incident(
-            thread_id="thread-adaptive-e2e",
-            approval_decision="approved",
-        )
-
-        assert escalated_run["fsm_state"] == "approval_pending"
-        assert escalated_run["resolved"] is False
-        assert (
-            escalated_run["plan"]["steps"][0]["tool_name"] == "k8s_rollback_deployment"
-        )
-
-        # 2nd resume with operator approval: Attempt 1 executes rollback -> passes verify -> resolved
-        resumed_run = await workflow.resume_incident(
-            thread_id="thread-adaptive-e2e",
-            approval_decision="approved",
-        )
-
-        assert resumed_run["fsm_state"] == "resolved"
-        assert resumed_run["resolved"] is True
-        assert resumed_run["escalated"] is False
-        # Both tools were executed across the two ladder attempts
-        executed_tools = [rec["tool_name"] for rec in resumed_run["execution_records"]]
-        assert "k8s_restart_deployment" in executed_tools
-        assert "k8s_rollback_deployment" in executed_tools
-
-
-# ── 4. Dynamic Context-Driven Scenario Unit Tests ─────────────────────────────
-
-
-def test_dynamic_k8s_scaling_plan_from_traffic_spike():
-    """Verify that a traffic surge dynamically computes scale replicas from current replicas."""
-    state = {
-        "incident_id": "inc-dynamic-scale-01",
-        "platform": "kubernetes",
-        "target": {"name": "payments-svc", "namespace": "prod"},
-        "diagnosis": {
-            "failure_class": "cascading_failure",
-            "root_cause": "Traffic spike in payments-svc exceeding workload capacity",
-            "confidence": 0.85,
-        },
-        "telemetry": {
-            "live_config": {"replicas": 2},
-            "metrics": {"current_replicas": 2, "traffic_ratio": 2.5},
-        },
-        "events": [
-            {
-                "signal_type": "traffic_spike",
-                "resource_name": "payments-svc",
-                "severity": "warning",
+                "incident_id": "inc-diag-01",
+                "platform": "k8s",
+                "namespace": None,
+                "service_name": None,
+                "raw_events": [{"involved_object_name": "shop-demo-59bd7ddcf9-t2skj"}],
             }
-        ],
+        )
+
+    locate_tool.ainvoke.assert_awaited_once_with(
+        {"pod_name": "shop-demo-59bd7ddcf9-t2skj"}
+    )
+    synth_msgs = structured_llm.ainvoke.await_args.args[0]
+    assert len(synth_msgs) == 2
+    assert synth_msgs[0].type == "system"
+    assert synth_msgs[1].type == "human"
+    assert "shop-demo" in synth_msgs[1].content
+    assert result["namespace"] == "shop-ns"
+    assert result["resource_kind"] == "Deployment"
+    assert result["service_name"] == "shop-demo"
+    assert result["target_resource"] == "shop-ns/Deployment/shop-demo"
+    assert result["failure_class"] == "readiness_probe_container_exit_zero"
+    assert result["confidence"] == 0.94
+    assert result["status"] == "DIAGNOSED"
+    mock_sync.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_e2e_closed_loop_verify_failure_retries_diagnose_and_re_interrupts_approval():
+    """
+    End-to-end closed-loop test:
+      Attempt 1: diagnose -> plan (restart) -> govern -> approval pause -> approve -> execute -> verify FAILS
+      Loop back: diagnose -> plan (rollback) -> govern (resets approved=None!) -> approval pause AGAIN
+      Attempt 2: approve -> execute -> verify PASSES -> learn -> RESOLVED + Post-Incident Report published.
+    """
+    rca = RCAResult(
+        target=DiscoveredTarget(
+            platform="k8s",
+            namespace_or_region="production",
+            resource_kind="Deployment",
+            resource_name="checkout-web",
+        ),
+        failure_type="crash_loop_bad_release",
+        root_cause_summary="CrashLoopBackOff after bad deployment.",
+        confidence=0.92,
+        evidence=["BackOff restarting failed container"],
+        can_auto_remediate=True,
+        recommended_strategy="Restart or rollback Deployment/checkout-web.",
+    )
+
+    plan_attempts = [
+        AIMessage(
+            content="Attempt 1: restart deployment",
+            tool_calls=[
+                {
+                    "id": "call_attempt_1",
+                    "name": "k8s_restart_deployment",
+                    "args": {
+                        "namespace": "production",
+                        "deployment_name": "checkout-web",
+                    },
+                }
+            ],
+        ),
+        AIMessage(
+            content="Attempt 2: rollback deployment",
+            tool_calls=[
+                {
+                    "id": "call_attempt_2",
+                    "name": "k8s_rollback_deployment",
+                    "args": {
+                        "namespace": "production",
+                        "deployment_name": "checkout-web",
+                    },
+                }
+            ],
+        ),
+    ]
+    verify_results = [
+        VerificationResult(
+            verification_passed=False,
+            observed_state_summary="Pods still CrashLoopBackOff",
+            failure_feedback="Restart did not fix crash loop; rollback needed.",
+        ),
+        VerificationResult(
+            verification_passed=True,
+            observed_state_summary="2/2 pods Running and Ready after rollback.",
+        ),
+    ]
+    plan_idx = 0
+    verify_idx = 0
+
+    class _LoopLLM:
+        async def ainvoke(self, messages: Any) -> AIMessage:
+            return AIMessage(content="Observations complete.", tool_calls=[])
+
+        def bind_tools(self, tools: list[Any]) -> Any:
+            tool_names = {t.name for t in tools}
+
+            class _Bound:
+                async def ainvoke(self, messages: Any) -> AIMessage:
+                    nonlocal plan_idx
+                    if "k8s_restart_deployment" in tool_names:
+                        msg = plan_attempts[min(plan_idx, len(plan_attempts) - 1)]
+                        plan_idx += 1
+                        return msg
+                    return AIMessage(content="Observations complete.", tool_calls=[])
+
+            return _Bound()
+
+        def with_structured_output(self, schema: Any) -> Any:
+            class _Struct:
+                async def ainvoke(self, messages: Any) -> Any:
+                    nonlocal verify_idx
+                    if schema is RCAResult:
+                        return rca
+                    if schema is VerificationResult:
+                        res = verify_results[min(verify_idx, len(verify_results) - 1)]
+                        verify_idx += 1
+                        return res
+                    raise ValueError(schema)
+
+            return _Struct()
+
+    restart_tool = MagicMock()
+    restart_tool.name = "k8s_restart_deployment"
+    restart_tool.ainvoke = AsyncMock(return_value="Restarted checkout-web")
+
+    rollback_tool = MagicMock()
+    rollback_tool.name = "k8s_rollback_deployment"
+    rollback_tool.ainvoke = AsyncMock(return_value="Rolled back checkout-web")
+
+    tool_lookup = {
+        "k8s_restart_deployment": restart_tool,
+        "k8s_rollback_deployment": rollback_tool,
     }
+    mock_registry = MagicMock()
+    mock_registry.get_tools.side_effect = lambda mode, platform=None: (
+        [restart_tool, rollback_tool] if mode == "mutate" else []
+    )
+    mock_registry.get_tool.side_effect = lambda name: tool_lookup.get(name)
+    mock_registry.get_metadata.return_value = SimpleNamespace(
+        blast_radius="service_wide", reversible=True
+    )
 
-    result = plan_remediation_node(state)
-    plan = result["plan"]
-    assert len(plan["steps"]) == 1
-    step = plan["steps"][0]
-    assert step["tool_name"] == "k8s_scale_resource"
-    assert step["parameters"]["replicas"] == 5  # 2 * 2.5 = 5
-    assert step["rollback_tool"] == "k8s_scale_resource"
-    assert step["rollback_parameters"]["replicas"] == 2
+    compiled = build_incident_graph(checkpointer=MemorySaver())
+    llm = _LoopLLM()
+    mock_publish = AsyncMock()
+    mock_notify = AsyncMock()
 
+    with (
+        patch("nexus.graph.nodes.diagnose.get_chat_model", return_value=llm),
+        patch("nexus.graph.nodes.plan.get_chat_model", return_value=llm),
+        patch("nexus.graph.nodes.verify.get_chat_model", return_value=llm),
+        patch(
+            "nexus.graph.nodes.diagnose.get_tool_registry", return_value=mock_registry
+        ),
+        patch("nexus.graph.nodes.plan.get_tool_registry", return_value=mock_registry),
+        patch(
+            "nexus.graph.nodes.execute.get_tool_registry", return_value=mock_registry
+        ),
+        patch("nexus.graph.nodes.verify.get_tool_registry", return_value=mock_registry),
+        patch(
+            "nexus.graph.nodes.govern.evaluate_opa_policy",
+            AsyncMock(
+                return_value={
+                    "allowed": True,
+                    "requires_approval": True,
+                    "reason": "OPA",
+                }
+            ),
+        ),
+        patch("nexus.graph.workflow.send_approval_request_notification", mock_notify),
+        patch(
+            "nexus.integration.notifier.send_approval_request_notification", mock_notify
+        ),
+        patch(
+            "nexus.integration.incident_report.publish_post_incident_report",
+            mock_publish,
+        ),
+    ):
+        # 1. Initial run pauses at Attempt 1 approval
+        paused_1 = await run_incident_workflow(
+            compiled,
+            {
+                "incident_id": "inc-loop-01",
+                "platform": "k8s",
+                "max_remediation_attempts": 2,
+                "raw_events": [{"message": "CrashLoopBackOff"}],
+            },
+        )
+        assert paused_1["status"] == "AWAITING_APPROVAL"
+        assert (
+            paused_1["remediation_plan"]["steps"][0]["tool_name"]
+            == "k8s_restart_deployment"
+        )
+        mock_publish.assert_not_called()
 
-def test_dynamic_k8s_patch_limits_from_oom_and_spec():
-    """Verify that an OOMKilled incident dynamically scales container memory limit."""
-    state = {
-        "incident_id": "inc-dynamic-oom-01",
-        "platform": "kubernetes",
-        "target": {"name": "data-indexer", "namespace": "prod"},
-        "diagnosis": {
-            "failure_class": "resource_exhaustion",
-            "root_cause": "Resource memory limit exceeded for data-indexer (exit code 137).",
-            "confidence": 0.90,
-        },
-        "telemetry": {
-            "health_status": "oomkilled",
-            "live_config": {"memory_limit": "256Mi", "exit_code": 137},
-            "recent_logs": ["Terminated with exit code 137", "oomkilled"],
-        },
-    }
+        # 2. Approve Attempt 1 -> execute restart -> verify fails -> loops to diagnose -> pauses at Attempt 2 approval!
+        paused_2 = await handle_incident_approval(
+            compiled, "inc-loop-01", approved=True
+        )
+        assert paused_2["status"] == "AWAITING_APPROVAL"
+        assert paused_2["approved"] is None
+        assert (
+            paused_2["remediation_plan"]["steps"][0]["tool_name"]
+            == "k8s_rollback_deployment"
+        )
+        mock_publish.assert_not_called()
 
-    result = plan_remediation_node(state)
-    plan = result["plan"]
-    assert len(plan["steps"]) == 1
-    step = plan["steps"][0]
-    assert step["tool_name"] == "k8s_patch_resource_limits"
-    assert step["parameters"]["memory_limit"] == "512Mi"
-    assert step["rollback_tool"] == "k8s_patch_resource_limits"
-    assert step["rollback_parameters"]["memory_limit"] == "256Mi"
-
-
-def test_dynamic_k8s_remove_command_override_on_command_failure():
-    """Verify that a broken entrypoint/command override dynamically plans command removal."""
-    state = {
-        "incident_id": "inc-dynamic-cmd-01",
-        "platform": "kubernetes",
-        "target": {"name": "auth-service", "namespace": "default"},
-        "diagnosis": {
-            "failure_class": "bad_deploy",
-            "root_cause": "Broken startup script or invalid command override in auth-service.",
-            "confidence": 0.88,
-        },
-        "telemetry": {
-            "live_config": {"has_command_override": True, "exit_code": 127},
-            "recent_logs": ["/bin/sh: invalid_entrypoint: command not found"],
-        },
-    }
-
-    result = plan_remediation_node(state)
-    plan = result["plan"]
-    assert len(plan["steps"]) == 1
-    step = plan["steps"][0]
-    assert step["tool_name"] == "k8s_remove_container_command"
-    assert step["rollback_tool"] == "k8s_restart_deployment"
+        # 3. Approve Attempt 2 -> execute rollback -> verify passes -> learn -> RESOLVED + report published
+        final_state = await handle_incident_approval(
+            compiled, "inc-loop-01", approved=True
+        )
+        assert final_state["status"] == "RESOLVED"
+        assert final_state["verification_passed"] is True
+        executed = [r["tool_name"] for r in final_state["execution_results"]]
+        assert executed == ["k8s_restart_deployment", "k8s_rollback_deployment"]
+        mock_publish.assert_awaited_once()

@@ -194,3 +194,86 @@ class PolicyEngine:
             deny_reasons=res.get("deny_reasons", []),
             source=res.get("source", "opa"),
         )
+
+
+async def evaluate_opa_policy(opa_input: dict[str, Any]) -> dict[str, Any]:
+    """
+    Attribute-based OPA policy evaluator for multi-step remediation plans.
+    Evaluates each planned step using tool metadata (blast_radius, reversible,
+    platform, namespace, resource_kind, confidence) without hardcoded tool allowlists.
+    """
+    import os
+
+    engine: PolicyEngine | None = None
+    try:
+        from nexus.observability.status_api import context
+
+        if hasattr(context, "policy_engine") and context.policy_engine is not None:
+            engine = context.policy_engine
+    except Exception:
+        pass
+
+    if engine is None:
+        opa_url = os.getenv("NEXUS_OPA_URL", "http://localhost:8181")
+        engine = PolicyEngine(opa_url=opa_url, fallback_to_local=True)
+
+    steps = opa_input.get("steps") or []
+    confidence = float(opa_input.get("confidence", 0.0))
+    namespace = opa_input.get("namespace")
+    resource_kind = opa_input.get("resource_kind")
+
+    allowed = True
+    requires_approval = False
+    reasons: list[str] = []
+    step_decisions: list[dict[str, Any]] = []
+
+    for step in steps:
+        reversible = bool(step.get("reversible", True))
+        blast_radius = str(step.get("blast_radius", "medium"))
+        tool_args = dict(step.get("tool_args") or {})
+        if namespace and "namespace" not in tool_args:
+            tool_args["namespace"] = namespace
+        if resource_kind and "kind" not in tool_args:
+            tool_args["kind"] = resource_kind
+
+        action_doc = {
+            "tool_name": step.get("tool_name", ""),
+            "tool_arguments": tool_args,
+            "blast_radius": blast_radius,
+            "reversible": reversible,
+            "is_destructive": not reversible,
+            "has_rollback": reversible,
+            "allows_unbacked_rollback": reversible,
+            "confidence": confidence,
+        }
+        inp = build_opa_input_for_action(
+            action_doc,
+            {"confidence": confidence},
+            cooldown_active=bool(opa_input.get("cooldown_active", False)),
+            circuit_breaker_tripped=bool(
+                opa_input.get("circuit_breaker_tripped", False)
+            ),
+        )
+        res = await engine.evaluate_action(inp)
+        dec = res.get("decision", "REQUIRE_APPROVAL")
+        step_decisions.append({"tool_name": step.get("tool_name", ""), **res})
+        if dec == "DENY":
+            allowed = False
+            reasons.extend(res.get("deny_reasons") or ["OPA policy denied action"])
+        elif dec == "REQUIRE_APPROVAL":
+            requires_approval = True
+
+    return {
+        "allowed": allowed,
+        "requires_approval": requires_approval if allowed else False,
+        "reason": (
+            "; ".join(reasons)
+            if reasons
+            else (
+                "Approval required by OPA policy"
+                if requires_approval
+                else "Auto-approved"
+            )
+        ),
+        "decisions": step_decisions,
+    }

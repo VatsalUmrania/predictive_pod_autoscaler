@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from nexus.bus.nats_client import NATSClient
+    from nexus.bus.nats.client import NATSClient
     from nexus.learning.feedback_loop import FeedbackLoop
     from nexus.learning.knowledge_base import KnowledgeBase
     from nexus.learning.outcome_store import OutcomeStore

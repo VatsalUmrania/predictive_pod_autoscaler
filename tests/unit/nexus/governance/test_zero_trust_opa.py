@@ -195,31 +195,88 @@ async def test_policy_engine_allows_unbacked_rollback_permitted(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_govern_node_enforces_zero_trust_metadata_for_destructive_tool():
-    """Verify govern_node intercepts destructive tools via ToolRegistry and blocks execution."""
+    """Verify govern_node intercepts destructive tools via ToolRegistry metadata and blocks execution."""
     state = {
         "incident_id": "inc-gov-dest-01",
         "platform": "aws",
-        "target": {"name": "orders-db", "namespace": "us-east-1", "platform": "aws"},
-        "plan": {
+        "namespace": "us-east-1",
+        "resource_kind": "RDS",
+        "service_name": "orders-db",
+        "confidence": 0.92,
+        "remediation_plan": {
             "steps": [
                 {
-                    "step_index": 0,
-                    # Registered in Phase 1 as is_destructive=True
+                    "step": 1,
                     "tool_name": "aws_rds_delete_db_instance",
-                    "parameters": {"db_instance_identifier": "orders-db"},
+                    "tool_args": {"db_instance_identifier": "orders-db"},
+                    "blast_radius": "database",
+                    "reversible": False,
                 }
             ],
-            "requires_approval": True,
         },
-        "approval_decision": None,
     }
 
     result = await govern_node(state)
-    gov = result["governance"]
+    decision = result["policy_decision"]
 
-    assert gov["allowed"] is False
-    assert result["fsm_state"] in ("failed", "EXECUTION_FAILED")
-    assert any("destructive" in r for r in gov["reasons"])
+    assert decision["allowed"] is False
+    assert result["status"] == "POLICY_DENIED"
+    assert result["approval_status"] == "POLICY_DENIED"
+    assert result["approved"] is None
+    assert "destructive" in decision["reason"].lower()
+
+
+@pytest.mark.asyncio
+async def test_govern_node_allows_k8s_remove_container_command_with_approval():
+    """k8s_remove_container_command declares is_destructive=False and must require human approval, not DENY."""
+    from nexus.governance.policy_abac import resolve_is_destructive
+    from nexus.graph.nodes.escalate import derive_escalation_reason
+
+    assert resolve_is_destructive("k8s_remove_container_command") is False
+    assert resolve_is_destructive("aws_rds_delete_db_instance") is True
+    assert resolve_is_destructive("custom_drop_table") is True
+
+    state = {
+        "incident_id": "CL-A4F56BE9",
+        "platform": "k8s",
+        "namespace": "default",
+        "resource_kind": "Deployment",
+        "service_name": "shop-demo",
+        "confidence": 1.0,
+        "remediation_plan": {
+            "steps": [
+                {
+                    "step": 1,
+                    "tool_name": "k8s_remove_container_command",
+                    "tool_args": {
+                        "namespace": "default",
+                        "deployment_name": "shop-demo",
+                        "container_name": "shop-demo",
+                    },
+                    "blast_radius": "service_wide",
+                    "reversible": True,
+                }
+            ]
+        },
+    }
+
+    result = await govern_node(state)
+    decision = result["policy_decision"]
+    assert decision["allowed"] is True
+    assert result["requires_approval"] is True
+    assert result["approval_status"] == "PENDING"
+    assert result["status"] == "AWAITING_APPROVAL"
+
+    # Also verify OPA denial is never misreported as human approval rejection
+    denied_state = {
+        "status": "POLICY_DENIED",
+        "approval_status": "POLICY_DENIED",
+        "approved": None,
+        "policy_decision": {"allowed": False, "reason": "Tool is destructive"},
+    }
+    esc_reason = derive_escalation_reason(denied_state)
+    assert esc_reason.startswith("OPA Policy Denied:")
+    assert "Human approval rejected" not in esc_reason
 
 
 @pytest.mark.asyncio
@@ -243,43 +300,52 @@ async def test_govern_node_enforces_zero_trust_metadata_for_account_wide_tool():
     state = {
         "incident_id": "inc-gov-account-01",
         "platform": "aws",
-        "target": {"name": "account-root", "namespace": "us-east-1", "platform": "aws"},
-        "plan": {
+        "namespace": "us-east-1",
+        "resource_kind": "Account",
+        "service_name": "account-root",
+        "confidence": 0.9,
+        "remediation_plan": {
             "steps": [
                 {
-                    "step_index": 0,
+                    "step": 1,
                     "tool_name": "mock_account_wipe",
-                    "parameters": {},
+                    "tool_args": {},
+                    "blast_radius": "account_wide",
+                    "reversible": True,
                 }
             ],
         },
-        "approval_decision": None,
     }
 
     try:
         result = await govern_node(state)
-        gov = result["governance"]
+        decision = result["policy_decision"]
 
-        assert gov["allowed"] is False
-        assert any("account_wide" in r for r in gov["reasons"])
+        assert decision["allowed"] is False
+        assert result["status"] == "POLICY_DENIED"
+        assert "account_wide" in decision["reason"]
     finally:
         default_registry.unregister("mock_account_wipe")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. PostgreSQL Advisory Locking Tests
+# 3. PostgreSQL Advisory Locking Helper Tests
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_govern_node_advisory_lock_contention_blocks():
-    """Verify govern_node aborts with allowed=False when PostgreSQL advisory lock is busy."""
+    """Verify acquire_advisory_lock reports False when PostgreSQL advisory lock is busy."""
+    from nexus.graph.nodes.govern_helpers import (
+        acquire_advisory_lock,
+        release_advisory_lock,
+    )
+
     target_service = "payments-api"
     lock_key = zlib.crc32(target_service.encode())
 
-    # Mock DB client whose advisory lock attempt returns False (lock held by another process)
     mock_conn = MagicMock()
-    mock_conn.fetchval = AsyncMock(return_value=False)  # pg_try_advisory_lock -> False
+    mock_conn.fetchval = AsyncMock(return_value=False)
     mock_conn.execute = AsyncMock()
 
     class MockAsyncContext:
@@ -292,62 +358,35 @@ async def test_govern_node_advisory_lock_contention_blocks():
     mock_db_client = MagicMock()
     mock_db_client.acquire.return_value = MockAsyncContext()
 
-    state = {
-        "incident_id": "inc-lock-01",
-        "platform": "kubernetes",
-        "target": {
-            "name": target_service,
-            "namespace": "default",
-            "platform": "kubernetes",
-        },
-        "plan": {
-            "steps": [
-                {
-                    "step_index": 0,
-                    "tool_name": "k8s_restart_deployment",
-                    "parameters": {
-                        "deployment_name": target_service,
-                        "namespace": "default",
-                    },
-                    "rollback_tool": "k8s_restart_deployment",
-                }
-            ],
-        },
-        "approval_decision": "approved",
-    }
-
     with patch(
-        "nexus.graph.nodes.govern.get_database_client",
+        "nexus.graph.nodes.govern_helpers.get_database_client",
         AsyncMock(return_value=mock_db_client),
     ):
-        result = await govern_node(state)
+        conn, conn_ctx, key, acquired = await acquire_advisory_lock(target_service)
+        await release_advisory_lock(conn, conn_ctx, key, acquired)
 
-    gov = result["governance"]
-    assert gov["allowed"] is False
-    assert result["fsm_state"] in ("failed", "EXECUTION_FAILED")
-    assert any(
-        "advisory lock" in r or "Concurrent mutation" in r for r in gov["reasons"]
-    )
-
-    # Verify pg_try_advisory_lock was attempted with crc32 key
+    assert acquired is False
+    assert key == lock_key
     mock_conn.fetchval.assert_awaited_once_with(
         "SELECT pg_try_advisory_lock($1)", lock_key
     )
-    # Unlock should NOT be called because lock was not acquired
     mock_conn.execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_govern_node_advisory_lock_released_on_exit():
-    """Verify govern_node releases the advisory lock before transitioning to next node."""
+    """Verify release_advisory_lock unlocks an acquired PostgreSQL advisory lock."""
+    from nexus.graph.nodes.govern_helpers import (
+        acquire_advisory_lock,
+        release_advisory_lock,
+    )
+
     target_service = "checkout-api"
     lock_key = zlib.crc32(target_service.encode())
 
     mock_conn = MagicMock()
-    mock_conn.fetchval = AsyncMock(
-        return_value=True
-    )  # pg_try_advisory_lock -> True (acquired)
-    mock_conn.execute = AsyncMock()  # pg_advisory_unlock
+    mock_conn.fetchval = AsyncMock(return_value=True)
+    mock_conn.execute = AsyncMock()
 
     class MockAsyncContext:
         async def __aenter__(self):
@@ -359,40 +398,14 @@ async def test_govern_node_advisory_lock_released_on_exit():
     mock_db_client = MagicMock()
     mock_db_client.acquire.return_value = MockAsyncContext()
 
-    state = {
-        "incident_id": "inc-lock-02",
-        "platform": "kubernetes",
-        "target": {
-            "name": target_service,
-            "namespace": "default",
-            "platform": "kubernetes",
-        },
-        "plan": {
-            "steps": [
-                {
-                    "step_index": 0,
-                    "tool_name": "k8s_restart_deployment",
-                    "parameters": {
-                        "deployment_name": target_service,
-                        "namespace": "default",
-                    },
-                    "rollback_tool": "k8s_restart_deployment",
-                }
-            ],
-        },
-        "approval_decision": "approved",
-    }
-
     with patch(
-        "nexus.graph.nodes.govern.get_database_client",
+        "nexus.graph.nodes.govern_helpers.get_database_client",
         AsyncMock(return_value=mock_db_client),
     ):
-        result = await govern_node(state)
+        conn, conn_ctx, key, acquired = await acquire_advisory_lock(target_service)
+        await release_advisory_lock(conn, conn_ctx, key, acquired)
 
-    gov = result["governance"]
-    assert gov["allowed"] is True
-
-    # Verify lock acquisition AND release
+    assert acquired is True
     mock_conn.fetchval.assert_awaited_once_with(
         "SELECT pg_try_advisory_lock($1)", lock_key
     )

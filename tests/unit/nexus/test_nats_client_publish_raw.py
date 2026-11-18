@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from nexus.bus.nats_client import NEXUS_STREAM, NATSClient
+from nexus.bus.nats.client import NATSClient
+from nexus.bus.nats.constants import NEXUS_STREAM
 
 
 @pytest.mark.asyncio

@@ -14,7 +14,7 @@ import asyncio
 import logging
 import time
 
-from nexus.db.postgres import PostgresClient, get_database_client
+from nexus.db.client import PostgresClient, get_database_client
 
 logger = logging.getLogger(__name__)
 

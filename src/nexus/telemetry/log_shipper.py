@@ -8,14 +8,14 @@ from collections import defaultdict
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from nexus.bus.incident_event import (
+from nexus.bus.events import (
     AgentType,
     IncidentEvent,
     NginxHighErrorContext,
     Severity,
     SignalType,
 )
-from nexus.bus.nats_client import NATSClient
+from nexus.bus.nats.client import NATSClient
 from nexus.telemetry.log_parser import (
     _COMBINED_RE,
     _NGINX_TIME_FMT,

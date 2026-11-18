@@ -344,6 +344,46 @@ class IncidentRepository:
                 _ensure_uuid(incident_id),
             )
 
+    async def update_discovered_target(
+        self,
+        incident_id: str,
+        *,
+        target_resource: str,
+        namespace: str | None = None,
+        resource_kind: str | None = None,
+        service_name: str | None = None,
+        failure_class: str | None = None,
+        root_cause_summary: str | None = None,
+        confidence: float | None = None,
+    ) -> None:
+        """Persist dynamically discovered target identity and diagnosis metadata to PostgreSQL."""
+        inc_uuid = _ensure_uuid(incident_id)
+        metadata_patch = {
+            "discovered_namespace": namespace,
+            "discovered_resource_kind": resource_kind,
+            "discovered_service_name": service_name,
+            "discovered_target_resource": target_resource,
+            "failure_class": failure_class,
+        }
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE incidents
+                SET target_resource = COALESCE($1, target_resource),
+                    workload_urn = COALESCE($1, workload_urn),
+                    root_cause_summary = COALESCE($2, root_cause_summary),
+                    confidence_score = COALESCE($3, confidence_score),
+                    trigger_payload = COALESCE(trigger_payload, '{}'::jsonb) || $4::jsonb,
+                    updated_at = NOW()
+                WHERE incident_id = $5
+                """,
+                target_resource,
+                root_cause_summary,
+                confidence,
+                json.dumps(metadata_patch),
+                inc_uuid,
+            )
+
 
 __all__ = [
     "IncidentRepository",

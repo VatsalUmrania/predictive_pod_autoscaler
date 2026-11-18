@@ -24,10 +24,64 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from nexus.bus.incident_event import IncidentEvent
+from nexus.bus.events import IncidentEvent
 
 # Severity ordering map
-_SEV_ORDER: dict[str, int] = {"info": 0, "warning": 1, "critical": 2, "emergency": 3}
+_SEV_ORDER: dict[str, int] = {
+    "info": 0,
+    "low": 0,
+    "medium": 1,
+    "warning": 1,
+    "error": 2,
+    "high": 2,
+    "critical": 3,
+    "emergency": 4,
+}
+
+
+def extract_event_identity_key(event: IncidentEvent) -> str | None:
+    """
+    Extract a stable resource/service identity key for correlation when
+    service_name/resource_name is None, falling back to involved_object_name
+    from context or raw_payload.
+    """
+    if event.resource_name:
+        return event.resource_name
+
+    ctx = event.context if isinstance(event.context, dict) else {}
+    for key in ("service_name", "involved_object_name"):
+        val = ctx.get(key)
+        if val:
+            return str(val)
+
+    raw_candidates = []
+    if isinstance(event.raw, dict):
+        raw_candidates.append(event.raw)
+    if isinstance(ctx.get("raw"), dict):
+        raw_candidates.append(ctx["raw"])
+
+    for raw in raw_candidates:
+        for key in ("service_name", "involved_object_name"):
+            if raw.get(key):
+                return str(raw[key])
+        raw_attrs = raw.get("raw_attributes")
+        if isinstance(raw_attrs, dict):
+            for key in (
+                "k8s.deployment.name",
+                "service.name",
+                "k8s.involved.name",
+                "k8s.pod.name",
+            ):
+                if raw_attrs.get(key):
+                    return str(raw_attrs[key])
+        body = raw.get("raw_body") if "raw_body" in raw else raw.get("body")
+        if isinstance(body, dict):
+            obj = body.get("object") if isinstance(body.get("object"), dict) else body
+            if isinstance(obj, dict):
+                involved = obj.get("involvedObject")
+                if isinstance(involved, dict) and involved.get("name"):
+                    return str(involved["name"])
+    return None
 
 
 @dataclass
@@ -61,11 +115,12 @@ class IncidentCluster:
 
     @property
     def primary_resource(self) -> str | None:
-        """Most frequently referenced resource name."""
+        """Most frequently referenced resource name (falling back to involved_object_name)."""
         counts: dict[str, int] = {}
         for e in self.events:
-            if e.resource_name:
-                counts[e.resource_name] = counts.get(e.resource_name, 0) + 1
+            ident = extract_event_identity_key(e)
+            if ident:
+                counts[ident] = counts.get(ident, 0) + 1
         return max(counts, key=counts.__getitem__) if counts else None
 
     @property
@@ -101,7 +156,7 @@ class IncidentCluster:
     @property
     def fingerprint(self) -> str:
         """Deterministic fingerprint representing the incident cluster target."""
-        ns = self.namespace or "default"
+        ns = self.namespace or "unscoped"
         res = self.primary_resource or self.cluster_id
         return f"{ns}:{res}"
 

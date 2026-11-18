@@ -74,11 +74,17 @@ async def handle_incident_resolved_message(notifier: Any, data: dict[str, Any]) 
         rca = data.get("rca") or data.get("diagnosis") or {}
         verif, plan = data.get("verification") or {}, data.get("plan") or {}
         failure_class = (
-            rca.get("failure_class") or plan.get("failure_mode") or "Unknown"
+            data.get("failure_class")
+            or rca.get("failure_type")
+            or rca.get("failure_class")
+            or plan.get("failure_mode")
+            or "Unknown"
         )
         root_cause = (
-            rca.get("root_cause")
+            rca.get("root_cause_summary")
+            or rca.get("root_cause")
             or rca.get("reasoning")
+            or data.get("suspected_cause")
             or "Target restored to healthy baseline."
         )
         steps = plan.get("steps") or []
@@ -90,7 +96,9 @@ async def handle_incident_resolved_message(notifier: Any, data: dict[str, Any]) 
             or "Remediation plan executed"
         )
         verif_details = (
-            verif.get("details") or "Target verified healthy and SLO restored"
+            verif.get("feedback")
+            or verif.get("details")
+            or "Target verified healthy and SLO restored"
         )
         conf = float(rca.get("confidence") or data.get("confidence") or 1.0)
 
@@ -124,19 +132,48 @@ async def handle_incident_escalated_message(
             data.get("target") or f"{app_name}/{data.get('target_name', 'resource')}"
         )
         rca = data.get("rca") or data.get("diagnosis") or {}
+        plan = data.get("plan") or data.get("remediation_plan") or {}
+        failure_class = (
+            data.get("failure_class")
+            or rca.get("failure_type")
+            or rca.get("failure_class")
+            or "Unknown"
+        )
+        root_cause = (
+            rca.get("root_cause_summary")
+            or rca.get("root_cause")
+            or rca.get("reasoning")
+            or data.get("suspected_cause")
+            or "Unknown"
+        )
         reason = (
             data.get("reason")
             or data.get("error_message")
             or "Remediation failed or maximum retries exhausted"
         )
+        recommended_fix = (
+            data.get("recommended_strategy")
+            or rca.get("recommended_strategy")
+            or plan.get("rationale")
+        )
+        evidence = data.get("evidence") or rca.get("evidence") or None
+        proposed_steps = plan.get("steps") or None
+        raw_conf = rca.get("confidence") if rca.get("confidence") is not None else data.get("confidence")
+        confidence = float(raw_conf) if raw_conf is not None and float(raw_conf) > 0.0 else None
+
         await notifier.notify_incident_escalated(
             app_name=app_name,
             incident_id=data.get("incident_id", "unknown"),
             target=str(target),
             reason=reason,
-            failure_class=rca.get("failure_class") or "Unknown",
-            root_cause=rca.get("root_cause") or rca.get("reasoning") or "Unknown",
+            failure_class=failure_class,
+            root_cause=root_cause,
             context=data,
+            confidence=confidence,
+            recommended_fix=recommended_fix,
+            evidence=evidence,
+            proposed_steps=proposed_steps,
+            rollback_applied=bool(data.get("rollback_applied")),
         )
     except Exception as exc:
         logger.debug(f"[Notifier] incident escalated message error: {exc}")

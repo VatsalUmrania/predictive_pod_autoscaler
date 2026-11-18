@@ -39,6 +39,7 @@ _approval_buttons_block = approval_buttons_block
 
 __all__ = [
     "Notifier",
+    "send_approval_request_notification",
     "resolve_slack_webhook",
     "verify_slack_request",
     "SLACK_INTERACTIVE_URL",
@@ -162,6 +163,12 @@ class Notifier:
         failure_class: str = "Unknown",
         root_cause: str = "Unknown",
         context: dict | None = None,
+        *,
+        confidence: float | None = None,
+        recommended_fix: str | None = None,
+        evidence: list[str] | None = None,
+        proposed_steps: list[dict[str, Any]] | None = None,
+        rollback_applied: bool = False,
     ) -> None:
         await send_incident_escalated(
             self,
@@ -172,6 +179,11 @@ class Notifier:
             failure_class=failure_class,
             root_cause=root_cause,
             context=context,
+            confidence=confidence,
+            recommended_fix=recommended_fix,
+            evidence=evidence,
+            proposed_steps=proposed_steps,
+            rollback_applied=rollback_applied,
         )
 
     async def notify_report_ready(
@@ -251,3 +263,49 @@ class Notifier:
 
     async def _on_report_ready_message(self, data: dict) -> None:
         await handle_report_ready_message(self, data)
+
+
+async def send_approval_request_notification(
+    incident_id: str, state: dict[str, Any]
+) -> None:
+    """
+    Dispatch a Slack approval notification using the discovered workload identity
+    and schema-bound remediation plan when the graph pauses at approval_node.
+    """
+    target_ns = state.get("namespace") or "unscoped"
+    target_resource = state.get("target_resource") or (
+        f"{target_ns}/{state.get('resource_kind') or 'Resource'}/{state.get('service_name')}"
+        if state.get("service_name")
+        else incident_id
+    )
+    failure_class = str(state.get("failure_class") or "remediation")
+    confidence = float(state.get("confidence") or 0.0)
+    plan = state.get("remediation_plan") or {}
+
+    notifier = Notifier()
+    try:
+        await notifier.notify_approval_required(
+            app_name=str(target_ns),
+            approval_id=incident_id,
+            runbook_id=failure_class,
+            target=str(target_resource),
+            healing_level=3,
+            confidence=confidence,
+            context={
+                "incident_id": incident_id,
+                "namespace": state.get("namespace"),
+                "resource_kind": state.get("resource_kind"),
+                "service_name": state.get("service_name"),
+                "target_resource": target_resource,
+                "failure_class": failure_class,
+                "suspected_cause": state.get("suspected_cause"),
+                "rca": state.get("rca_result") or {},
+                "plan": plan,
+            },
+        )
+    except Exception as exc:
+        logger.debug(
+            "[Notifier] Approval notification dispatch skipped for %s: %s",
+            incident_id,
+            exc,
+        )

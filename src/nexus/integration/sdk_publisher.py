@@ -80,7 +80,7 @@ async def publish_sdk_to_nats(
         return
 
     try:
-        from nexus.bus.incident_event import (
+        from nexus.bus.events import (
             AgentType,
             IncidentEvent,
             Severity,

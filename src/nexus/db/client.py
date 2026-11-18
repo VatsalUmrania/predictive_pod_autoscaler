@@ -62,6 +62,29 @@ class PostgresClient:
     ) -> None:
         await self._incidents.update_root_cause(incident_id, summary, confidence)
 
+    async def update_discovered_target(
+        self,
+        incident_id: str,
+        *,
+        target_resource: str,
+        namespace: str | None = None,
+        resource_kind: str | None = None,
+        service_name: str | None = None,
+        failure_class: str | None = None,
+        root_cause_summary: str | None = None,
+        confidence: float | None = None,
+    ) -> None:
+        await self._incidents.update_discovered_target(
+            incident_id,
+            target_resource=target_resource,
+            namespace=namespace,
+            resource_kind=resource_kind,
+            service_name=service_name,
+            failure_class=failure_class,
+            root_cause_summary=root_cause_summary,
+            confidence=confidence,
+        )
+
     # Agent runs delegation
     async def start_agent_run(
         self, incident_id: str, agent_type: str, model_name: str
@@ -112,14 +135,6 @@ _global_db_client: PostgresClient | None = None
 async def get_database_client(dsn: str | None = None) -> PostgresClient:
     """Factory returning the global PostgresClient singleton."""
     global _global_db_client
-    import nexus.db.postgres as pg_mod
-
-    # Keep pg_mod._global_db_client in sync if monkeypatched
-    if (
-        hasattr(pg_mod, "_global_db_client")
-        and pg_mod._global_db_client is not _global_db_client
-    ):
-        _global_db_client = pg_mod._global_db_client
 
     if _global_db_client is not None:
         return _global_db_client
@@ -135,6 +150,4 @@ async def get_database_client(dsn: str | None = None) -> PostgresClient:
     client = PostgresClient(dsn=configured_dsn)
     await client.initialize()
     _global_db_client = client
-    if hasattr(pg_mod, "_global_db_client"):
-        pg_mod._global_db_client = client
     return client

@@ -18,10 +18,7 @@ def _client(service_name: str, region: str | None = None):
     mut_mod = sys.modules.get("nexus.tools.aws.mutate_tools")
     if mut_mod and hasattr(mut_mod, "_client"):
         return mut_mod._client(service_name, region)
-    import nexus.tools.aws_adapter as adapter
-
-    fn = getattr(adapter, "_get_boto3_client", None) or get_boto3_client
-    return fn(service_name, region)
+    return get_boto3_client(service_name, region)
 
 
 class DynamoDBUpdateTableTool(NexusTool):

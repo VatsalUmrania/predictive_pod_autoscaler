@@ -78,11 +78,20 @@ class ConfidenceScorer:
                               LLM's RCA fails consistency or evidence checks.
                               Applied after all other factors, before clamping.
         """
-        if rca_result.source == "rule_based":
+        source = getattr(rca_result, "source", "langgraph_agent")
+        runbook_id = getattr(rca_result, "runbook_id", None) or ""
+        failure_class = (
+            getattr(rca_result, "failure_type", None)
+            or getattr(rca_result, "failure_class", None)
+            or ""
+        )
+        healing_level = int(getattr(rca_result, "healing_level", 1))
+
+        if source == "rule_based":
             # Rule-based scores are pre-calibrated — apply only conservative bias
             raw = rca_result.confidence - self._bias
             # Add historical boost for rule-based too (delta is small, ±0.05)
-            boost = self._historical_boosts.get(rca_result.runbook_id or "", 0.0)
+            boost = self._historical_boosts.get(runbook_id, 0.0)
             return max(0.0, min(1.0, raw + boost))
 
         # Gemini — blend multiple signals
@@ -90,7 +99,7 @@ class ConfidenceScorer:
         agreement = cluster.signal_agreement_score()
 
         # Class adjustment: normalize to [0, 1] (shift from [-0.20, +0.05] to [0, 1])
-        class_adj_raw = _CLASS_ADJUSTMENTS.get(rca_result.failure_class, 0.0)
+        class_adj_raw = _CLASS_ADJUSTMENTS.get(failure_class, 0.0)
         # Map [-0.20, 0.05] → [0.0, 1.0]
         class_adj_normalized = (class_adj_raw + 0.20) / 0.25
 
@@ -101,11 +110,11 @@ class ConfidenceScorer:
         )
 
         # Deploy-proximity bonus: deploy correlated with bad_deploy = clearer signal
-        if cluster.has_deploy_event and rca_result.failure_class == "bad_deploy":
+        if cluster.has_deploy_event and failure_class == "bad_deploy":
             blended += 0.05
 
         # Phase 6: historical boost from Learning Plane (±0.05, capped)
-        hist_boost = self._historical_boosts.get(rca_result.runbook_id or "", 0.0)
+        hist_boost = self._historical_boosts.get(runbook_id, 0.0)
         blended += hist_boost
 
         # PPA feature boost: +0.05 if cluster was seeded by a high-confidence
@@ -121,7 +130,7 @@ class ConfidenceScorer:
 
         # Cap based on healing level and quorum
         n_agents = len(cluster.agent_types)
-        if rca_result.healing_level == 3 and n_agents < 2:
+        if healing_level == 3 and n_agents < 2:
             # L3 requires at least 2 independent agents
             blended = min(blended, 0.82)
 
@@ -132,7 +141,7 @@ class ConfidenceScorer:
             f"llm={llm_conf:.2f} agreement={agreement:.2f} "
             f"class_adj={class_adj_raw:+.2f} "
             f"hist_boost={hist_boost:+.3f} "
-            f"deploy_bonus={'+0.05' if cluster.has_deploy_event and rca_result.failure_class == 'bad_deploy' else '0'} "
+            f"deploy_bonus={'+0.05' if cluster.has_deploy_event and failure_class == 'bad_deploy' else '0'} "
             f"validation_penalty={-abs(external_penalty):+.2f} "
             f"→ final={final:.2f}"
         )

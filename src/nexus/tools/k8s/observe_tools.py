@@ -11,8 +11,12 @@ import asyncio
 import logging
 from typing import Any
 
+from kubernetes import client as k8s_client  # noqa: F401
+from kubernetes.client.rest import ApiException
+from langchain_core.tools import tool
+
 from nexus.tools.base import NexusTool, NexusToolResult, ToolDomain, ToolRiskLevel
-from nexus.tools.k8s.client import get_k8s_client
+from nexus.tools.k8s.client import get_k8s_apps_api, get_k8s_client, get_k8s_core_api
 from nexus.tools.k8s.schemas import (
     DescribeResourceSchema,
     GetMetricsSchema,
@@ -237,6 +241,230 @@ class K8sGetMetricsTool(NexusTool):
         return NexusToolResult(success=True, data={"metrics": res})
 
 
+@tool
+def locate_pod_and_owner(pod_name: str, namespace: str | None = None) -> dict[str, Any]:
+    """
+    Locates a Pod across a specific namespace or all namespaces, returns its exact namespace,
+    traces its ownerReferences (Pod -> ReplicaSet -> Deployment/StatefulSet), and returns
+    live containerStatuses (including exit codes, restart counts, waiting/terminated reasons,
+    and readiness/liveness probe configurations).
+    """
+    core_v1 = get_k8s_core_api()
+    apps_v1 = get_k8s_apps_api()
+
+    pod = None
+    if namespace:
+        try:
+            pod = core_v1.read_namespaced_pod(name=pod_name, namespace=namespace)
+        except ApiException:
+            pod = None
+
+    if pod is None:
+        pods = core_v1.list_pod_for_all_namespaces(
+            field_selector=f"metadata.name={pod_name}"
+        )
+        if not pods.items:
+            return {"error": f"Pod '{pod_name}' not found in any namespace."}
+        pod = pods.items[0]
+
+    resolved_ns = pod.metadata.namespace
+    owner_kind = "Pod"
+    owner_name = pod.metadata.name
+
+    # Trace ownerReferences: Pod -> ReplicaSet -> Deployment (or direct StatefulSet/DaemonSet)
+    for ref in pod.metadata.owner_references or []:
+        if ref.kind == "ReplicaSet":
+            try:
+                rs = apps_v1.read_namespaced_replica_set(
+                    name=ref.name, namespace=resolved_ns
+                )
+                for rs_ref in rs.metadata.owner_references or []:
+                    owner_kind = rs_ref.kind
+                    owner_name = rs_ref.name
+                    break
+                else:
+                    owner_kind = "ReplicaSet"
+                    owner_name = ref.name
+            except ApiException:
+                owner_kind = "ReplicaSet"
+                owner_name = ref.name
+        else:
+            owner_kind = ref.kind
+            owner_name = ref.name
+
+    # Extract container statuses (current state + last terminated state + exit codes)
+    container_statuses: list[dict[str, Any]] = []
+    for cs in pod.status.container_statuses or []:
+        state_info: dict[str, Any] = {}
+        if cs.state and cs.state.running:
+            state_info["running"] = {"started_at": str(cs.state.running.started_at)}
+        if cs.state and cs.state.waiting:
+            state_info["waiting"] = {
+                "reason": cs.state.waiting.reason,
+                "message": cs.state.waiting.message,
+            }
+        if cs.state and cs.state.terminated:
+            state_info["terminated"] = {
+                "exit_code": cs.state.terminated.exit_code,
+                "reason": cs.state.terminated.reason,
+                "message": cs.state.terminated.message,
+            }
+
+        last_state_info: dict[str, Any] = {}
+        if cs.last_state and cs.last_state.terminated:
+            last_state_info["terminated"] = {
+                "exit_code": cs.last_state.terminated.exit_code,
+                "reason": cs.last_state.terminated.reason,
+                "message": cs.last_state.terminated.message,
+                "finished_at": str(cs.last_state.terminated.finished_at),
+            }
+
+        container_statuses.append(
+            {
+                "container_name": cs.name,
+                "ready": cs.ready,
+                "restart_count": cs.restart_count,
+                "current_state": state_info,
+                "last_terminated_state": last_state_info,
+            }
+        )
+
+    # Extract container command, args, limits, and probes from Pod spec
+    container_specs: list[dict[str, Any]] = []
+    for c in pod.spec.containers or []:
+        container_specs.append(
+            {
+                "container_name": c.name,
+                "image": c.image,
+                "command": c.command,
+                "args": c.args,
+                "ports": [p.container_port for p in (c.ports or [])],
+                "resources": c.resources.to_dict() if c.resources else {},
+                "readiness_probe": (
+                    c.readiness_probe.to_dict() if c.readiness_probe else None
+                ),
+                "liveness_probe": (
+                    c.liveness_probe.to_dict() if c.liveness_probe else None
+                ),
+            }
+        )
+
+    return {
+        "pod_name": pod.metadata.name,
+        "namespace": resolved_ns,
+        "owner_kind": owner_kind,
+        "owner_name": owner_name,
+        "labels": pod.metadata.labels or {},
+        "phase": pod.status.phase,
+        "container_statuses": container_statuses,
+        "container_specs": container_specs,
+    }
+
+
+@tool
+def fetch_pod_container_logs(
+    pod_name: str,
+    namespace: str,
+    container_name: str | None = None,
+    tail_lines: int = 80,
+    include_previous_crashed: bool = True,
+) -> dict[str, Any]:
+    """
+    Fetches live stdout/stderr container logs for a Pod, and optionally fetches the logs
+    of the previously terminated container instance (--previous) if the container crashed or exited.
+    """
+    core_v1 = get_k8s_core_api()
+    result: dict[str, Any] = {"pod_name": pod_name, "namespace": namespace}
+
+    try:
+        current_logs = core_v1.read_namespaced_pod_log(
+            name=pod_name,
+            namespace=namespace,
+            container=container_name,
+            tail_lines=tail_lines,
+            previous=False,
+        )
+        result["current_container_logs"] = current_logs
+    except ApiException as exc:
+        result["current_container_logs_error"] = f"HTTP {exc.status}: {exc.reason}"
+
+    if include_previous_crashed:
+        try:
+            prev_logs = core_v1.read_namespaced_pod_log(
+                name=pod_name,
+                namespace=namespace,
+                container=container_name,
+                tail_lines=tail_lines,
+                previous=True,
+            )
+            result["previous_terminated_container_logs"] = prev_logs
+        except ApiException:
+            # No previous terminated container exists yet
+            result["previous_terminated_container_logs"] = None
+
+    return result
+
+
+@tool
+def inspect_deployment_status(deployment_name: str, namespace: str) -> dict[str, Any]:
+    """
+    Fetches the live rollout status, replica counts, conditions, and pod template spec
+    for a registered Kubernetes Deployment, plus all active Pods belonging to it.
+    """
+    apps_v1 = get_k8s_apps_api()
+    core_v1 = get_k8s_core_api()
+
+    try:
+        dep = apps_v1.read_namespaced_deployment(
+            name=deployment_name, namespace=namespace
+        )
+    except ApiException as exc:
+        return {
+            "error": f"Deployment '{namespace}/{deployment_name}' not found: {exc.reason}"
+        }
+
+    match_labels = dep.spec.selector.match_labels or {}
+    label_selector = ",".join(f"{k}={v}" for k, v in match_labels.items())
+    pods = core_v1.list_namespaced_pod(
+        namespace=namespace, label_selector=label_selector
+    )
+
+    pod_summaries = []
+    for p in pods.items:
+        pod_summaries.append(
+            {
+                "pod_name": p.metadata.name,
+                "phase": p.status.phase,
+                "ready": (
+                    all(cs.ready for cs in (p.status.container_statuses or []))
+                    if p.status.container_statuses
+                    else False
+                ),
+                "restarts": sum(
+                    cs.restart_count for cs in (p.status.container_statuses or [])
+                ),
+            }
+        )
+
+    conditions = [
+        {"type": c.type, "status": c.status, "reason": c.reason, "message": c.message}
+        for c in (dep.status.conditions or [])
+    ]
+
+    return {
+        "deployment_name": dep.metadata.name,
+        "namespace": dep.metadata.namespace,
+        "nexus_registered": (dep.metadata.labels or {}).get("nexus.sre/enabled")
+        == "true",
+        "desired_replicas": dep.spec.replicas,
+        "ready_replicas": dep.status.ready_replicas or 0,
+        "available_replicas": dep.status.available_replicas or 0,
+        "unavailable_replicas": dep.status.unavailable_replicas or 0,
+        "conditions": conditions,
+        "pods": pod_summaries,
+    }
+
+
 __all__ = [
     "_get_api",
     "_get_apps_api",
@@ -248,4 +476,7 @@ __all__ = [
     "K8sGetPodLogsTool",
     "K8sDescribeResourceTool",
     "K8sGetMetricsTool",
+    "locate_pod_and_owner",
+    "fetch_pod_container_logs",
+    "inspect_deployment_status",
 ]

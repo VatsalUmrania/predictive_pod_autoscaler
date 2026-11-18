@@ -2,7 +2,8 @@
 NEXUS LLM Concurrency and Rate Limiting
 =======================================
 Protects against API quota exhaustion (429 RESOURCE_EXHAUSTED) and prevents
-event loop saturation from synchronous or unconstrained retries.
+event loop saturation from concurrent LLM requests. Transient 5xx/timeout
+retries are delegated to LangGraph's native RetryPolicy in builder.py.
 """
 
 from __future__ import annotations
@@ -100,12 +101,11 @@ class RateLimitedChatModel:
             call = getattr(self._delegate, "ainvoke", None)
             if callable(call):
                 return await call(*args, **kwargs)
-            # fallback to sync invoke via to_thread
             return await asyncio.to_thread(self._delegate.invoke, *args, **kwargs)
         except Exception as exc:
             if is_rate_limit_error(exc):
                 logger.warning(
-                    "[LLM RateLimiter] Quota exhausted (429): %s; triggering fast fallback",
+                    "[LLM RateLimiter] Quota exhausted (429): %s; failing fast",
                     exc,
                 )
                 raise LLMQuotaExhaustedError(f"LLM quota exceeded: {exc}") from exc
@@ -114,7 +114,6 @@ class RateLimitedChatModel:
             self._limiter.release()
 
     def invoke(self, *args: Any, **kwargs: Any) -> Any:
-        # Sync invoke fallback
         try:
             return self._delegate.invoke(*args, **kwargs)
         except Exception as exc:

@@ -1,9 +1,9 @@
 """
-Tier-1 incident-flow wiring tests:
-  1. Verification polls until healthy instead of a single 0.5s check
-  2. Govern blocks on circuit breaker / cooldown (wired from ActionLadder)
-  3. Rollback uses real captured snapshots (execution record → plan step)
-  4. Workflow completion records learning outcomes (audit trail + KnowledgeBase)
+Tier-1 incident-flow wiring tests for the zero-hardcoding agentic pipeline:
+  1. ReAct verify_node multi-turn live observation & structured VerificationResult
+  2. Attribute-based OPA governance (deny, require approval, auto-approve)
+  3. Schema-validated execution & LIFO rollback via ToolRegistry
+  4. Workflow completion records outcomes to KnowledgeBase and enforces report guard
 """
 
 from __future__ import annotations
@@ -11,12 +11,13 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from nexus.graph.nodes.execute import execute_node
 from nexus.graph.nodes.govern import govern_node
 from nexus.graph.nodes.rollback import rollback_node
 from nexus.graph.nodes.verify import verify_node
-from nexus.graph.platform import HealthCheckResult, RollbackSnapshot
+from nexus.graph.rca.result import VerificationResult
 from nexus.graph.workflow import IncidentWorkflow
 
 
@@ -37,388 +38,355 @@ def status_context():
     ) = saved
 
 
-def _fake_registry(adapter: MagicMock) -> MagicMock:
-    registry = MagicMock()
-    registry.get.return_value = adapter
-    registry.resolve_adapter.return_value = adapter
-    return registry
-
-
-def _target():
-    from nexus.graph.platform import TargetResource
-
-    return TargetResource(name="svc-a", namespace="default", platform="kubernetes")
-
-
 def _state(**overrides):
     base = {
         "incident_id": "inc-wire-01",
-        "fsm_state": "verifying",
-        "platform": "kubernetes",
-        "target": {"name": "svc-a", "namespace": "default", "platform": "kubernetes"},
-        "events": [{"signal_type": "pod_oomkilled", "resource_name": "svc-a"}],
-        "plan": {
+        "platform": "k8s",
+        "namespace": "shop-ns",
+        "resource_kind": "Deployment",
+        "service_name": "svc-a",
+        "target_resource": "shop-ns/Deployment/svc-a",
+        "confidence": 0.9,
+        "remediation_plan": {
             "steps": [
                 {
-                    "step_index": 0,
+                    "step": 1,
                     "tool_name": "k8s_restart_deployment",
-                    "parameters": {"namespace": "default", "deployment_name": "svc-a"},
+                    "tool_args": {"namespace": "shop-ns", "deployment_name": "svc-a"},
+                    "blast_radius": "pod",
+                    "reversible": True,
                 }
             ]
         },
-        "execution_records": [
-            {"step_index": 0, "tool_name": "k8s_restart_deployment", "success": True}
+        "execution_results": [
+            {
+                "step": 1,
+                "tool_name": "k8s_restart_deployment",
+                "tool_args": {"namespace": "shop-ns", "deployment_name": "svc-a"},
+                "status": "SUCCESS",
+            }
         ],
-        "retry_count": 0,
-        "max_retries": 2,
+        "remediation_attempts": 1,
+        "max_remediation_attempts": 2,
     }
     base.update(overrides)
     return base
 
 
-# ── 1. Verification polling ──────────────────────────────────────────────────
+# ── 1. ReAct Verification Node ───────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_verify_polls_until_healthy():
-    """Unhealthy-then-healthy target resolves within the poll window (no retry/rollback)."""
-    adapter = MagicMock()
-    adapter.verify_health = AsyncMock(
+async def test_verify_react_observes_until_healthy():
+    """verify_node iterates ReAct tool calls and marks RESOLVED when healthy."""
+    observe_tool = MagicMock()
+    observe_tool.name = "inspect_deployment_status"
+    observe_tool.ainvoke = AsyncMock(
         side_effect=[
-            HealthCheckResult(
-                healthy=False, slo_restored=False, failure_reason="restarting"
-            ),
-            HealthCheckResult(
-                healthy=False, slo_restored=False, failure_reason="restarting"
-            ),
-            HealthCheckResult(healthy=True, slo_restored=True, details="Ready 1/1"),
+            {"desired_replicas": 2, "ready_replicas": 1},
+            {"desired_replicas": 2, "ready_replicas": 2},
         ]
     )
+    mock_registry = MagicMock()
+    mock_registry.get_tools.return_value = [observe_tool]
+
+    bound_llm = MagicMock()
+    bound_llm.ainvoke = AsyncMock(
+        side_effect=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "v1",
+                        "name": "inspect_deployment_status",
+                        "args": {"deployment_name": "svc-a", "namespace": "shop-ns"},
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "v2",
+                        "name": "inspect_deployment_status",
+                        "args": {"deployment_name": "svc-a", "namespace": "shop-ns"},
+                    }
+                ],
+            ),
+            AIMessage(content="Healthy", tool_calls=[]),
+        ]
+    )
+    struct_llm = MagicMock()
+    struct_llm.ainvoke = AsyncMock(
+        return_value=VerificationResult(
+            verification_passed=True, observed_state_summary="Ready 2/2"
+        )
+    )
+    mock_llm = MagicMock()
+    mock_llm.bind_tools.return_value = bound_llm
+    mock_llm.with_structured_output.return_value = struct_llm
 
     with (
-        patch(
-            "nexus.graph.nodes.verify.get_platform_registry",
-            return_value=_fake_registry(adapter),
-        ),
-        patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 2.0),
-        patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01),
+        patch("nexus.graph.nodes.verify.get_tool_registry", return_value=mock_registry),
+        patch("nexus.graph.nodes.verify.get_chat_model", return_value=mock_llm),
     ):
         result = await verify_node(_state())
 
-    assert result["resolved"] is True
-    assert result["verification"]["healthy"] is True
-    assert adapter.verify_health.await_count == 3
+    assert result["verification_passed"] is True
+    assert result["status"] == "RESOLVED"
+    assert observe_tool.ainvoke.await_count == 2
 
 
 @pytest.mark.asyncio
-async def test_verify_failure_after_timeout_records_circuit_breaker():
-    """Perpetually unhealthy target exhausts the poll window, records a CB failure, rolls back."""
-    adapter = MagicMock()
-    adapter.verify_health = AsyncMock(
-        return_value=HealthCheckResult(
-            healthy=False, slo_restored=False, failure_reason="OOM persists"
+async def test_verify_failure_returns_verification_feedback():
+    """Unhealthy observation sets verification_passed=False and preserves failure feedback."""
+    mock_registry = MagicMock()
+    mock_registry.get_tools.return_value = []
+
+    struct_llm = MagicMock()
+    struct_llm.ainvoke = AsyncMock(
+        return_value=VerificationResult(
+            verification_passed=False,
+            observed_state_summary="0/2 replicas ready",
+            failure_feedback="OOM persists after restart",
         )
     )
-    ladder = MagicMock()
-    ladder.record_post_check_failure = MagicMock()
-    ladder.set_cooldown = AsyncMock()
+    mock_llm = MagicMock()
+    mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content="Done", tool_calls=[]))
+    mock_llm.with_structured_output.return_value = struct_llm
 
-    from nexus.observability.status_api import context
-
-    context.action_ladder = ladder
-    try:
-        with (
-            patch(
-                "nexus.graph.nodes.verify.get_platform_registry",
-                return_value=_fake_registry(adapter),
-            ),
-            patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05),
-            patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.02),
-        ):
-            result = await verify_node(_state(max_retries=0))
-    finally:
-        context.action_ladder = None
-
-    assert result.get("resolved") is not True
-    assert result["fsm_state"] == "rolling_back"
-    ladder.record_post_check_failure.assert_called_once()
-    ladder.set_cooldown.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_verify_success_records_cb_and_sets_cooldown():
-    """Healthy verification resets the circuit breaker and sets a cooldown for the action+target."""
-    adapter = MagicMock()
-    adapter.verify_health = AsyncMock(
-        return_value=HealthCheckResult(healthy=True, slo_restored=True, details="Ready")
-    )
-    ladder = MagicMock()
-    ladder.record_post_check_success = MagicMock()
-    ladder.set_cooldown = AsyncMock()
-
-    from nexus.observability.status_api import context
-
-    context.action_ladder = ladder
-    try:
-        with patch(
-            "nexus.graph.nodes.verify.get_platform_registry",
-            return_value=_fake_registry(adapter),
-        ):
-            result = await verify_node(_state())
-    finally:
-        context.action_ladder = None
-
-    assert result["resolved"] is True
-    ladder.record_post_check_success.assert_called_once()
-    ladder.set_cooldown.assert_awaited_once_with(
-        "k8s_restart_deployment", "default/svc-a"
-    )
-
-
-# ── 2. Governance circuit breaker + cooldown ─────────────────────────────────
-
-
-def _ladder(cb_open: bool, in_cooldown: bool) -> MagicMock:
-    ladder = MagicMock()
-    ladder.governance_cb.is_open = cb_open
-    ladder.governance_cb.consecutive_failures = 3 if cb_open else 0
-    ladder.cooldown_store.is_in_cooldown = AsyncMock(return_value=in_cooldown)
-    ladder.cooldown_store.remaining_seconds = AsyncMock(return_value=250.0)
-    return ladder
-
-
-@pytest.mark.asyncio
-async def test_govern_blocks_when_circuit_breaker_open(status_context):
-    status_context.action_ladder = _ladder(cb_open=True, in_cooldown=False)
-
-    result = await govern_node(_state(platform="aws", fsm_state="planning"))
-
-    assert result["governance"]["allowed"] is False
-    assert result["governance"]["circuit_breaker_open"] is True
-    assert any("circuit breaker" in r for r in result["governance"]["reasons"])
-
-
-@pytest.mark.asyncio
-async def test_govern_blocks_when_target_in_cooldown(status_context):
-    status_context.action_ladder = _ladder(cb_open=False, in_cooldown=True)
-
-    result = await govern_node(_state(platform="aws", fsm_state="planning"))
-
-    assert result["governance"]["allowed"] is False
-    assert result["governance"]["cooldown_active"] is True
-    assert any("cooldown" in r for r in result["governance"]["reasons"])
-
-
-@pytest.mark.asyncio
-async def test_govern_passes_when_safety_clear(status_context):
-    status_context.action_ladder = _ladder(cb_open=False, in_cooldown=False)
-
-    result = await govern_node(
-        _state(platform="aws", fsm_state="planning", approval_decision="approved")
-    )
-
-    assert result["governance"]["allowed"] is True
-    assert result["governance"]["circuit_breaker_open"] is False
-    assert result["governance"]["cooldown_active"] is False
-
-
-# ── 3. Snapshot-based rollback ───────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_execute_stores_snapshot_rollback_fields():
-    """execute_node persists the captured snapshot's real inverse into the execution record."""
-    adapter = MagicMock()
-    adapter.capture_snapshot = AsyncMock(
-        return_value=RollbackSnapshot(
-            snapshot_id="snap-1",
-            target=_target(),
-            action_name="k8s_scale_deployment",
-            rollback_tool="k8s_scale_deployment",
-            rollback_parameters={
-                "namespace": "default",
-                "deployment_name": "svc-a",
-                "replicas": 3,
-            },
-        )
-    )
-    adapter.execute_action = AsyncMock(
-        return_value=MagicMock(success=True, data={}, error=None)
-    )
-
-    with patch(
-        "nexus.graph.nodes.execute.get_platform_registry",
-        return_value=_fake_registry(adapter),
+    with (
+        patch("nexus.graph.nodes.verify.get_tool_registry", return_value=mock_registry),
+        patch("nexus.graph.nodes.verify.get_chat_model", return_value=mock_llm),
     ):
-        result = await execute_node(_state())
+        result = await verify_node(_state())
 
-    rec = result["execution_records"][0]
-    assert rec["rollback_tool"] == "k8s_scale_deployment"
-    assert rec["rollback_parameters"]["replicas"] == 3
+    assert result["verification_passed"] is False
+    assert result["status"] == "VERIFICATION_FAILED"
+    assert "OOM persists" in result["verification_feedback"]
+
+
+# ── 2. Attribute-Based OPA Governance ────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_rollback_prefers_captured_snapshot_over_hardcoded_inverse():
-    """rollback_node uses the execution record's captured inverse, not 'restart deployment'."""
-    adapter = MagicMock()
-    adapter.execute_rollback = AsyncMock(
-        return_value=MagicMock(success=True, data={}, error=None)
-    )
-
-    state = _state(
-        execution_records=[
-            {
-                "step_index": 0,
-                "tool_name": "k8s_scale_deployment",
-                "success": True,
-                "snapshot_id": "snap-1",
-                "rollback_tool": "k8s_scale_deployment",
-                "rollback_parameters": {
-                    "namespace": "default",
-                    "deployment_name": "svc-a",
-                    "replicas": 3,
-                },
+async def test_govern_blocks_when_opa_denies():
+    with patch(
+        "nexus.graph.nodes.govern.evaluate_opa_policy",
+        AsyncMock(
+            return_value={
+                "allowed": False,
+                "requires_approval": False,
+                "reason": "Circuit breaker tripped",
             }
-        ]
-    )
-
-    with patch(
-        "nexus.graph.nodes.rollback.get_platform_registry",
-        return_value=_fake_registry(adapter),
+        ),
     ):
-        await rollback_node(state)
+        result = await govern_node(_state())
 
-    snap = adapter.execute_rollback.await_args.args[0]
-    assert snap.rollback_tool == "k8s_scale_deployment"
-    assert snap.rollback_parameters["replicas"] == 3
+    assert result["policy_decision"]["allowed"] is False
+    assert result["approval_status"] == "POLICY_DENIED"
+    assert result["approved"] is None
+    assert result["status"] == "POLICY_DENIED"
 
 
 @pytest.mark.asyncio
-async def test_rollback_falls_back_to_plan_step_fields():
-    """Without a captured snapshot, the plan step's deterministic rollback fields are used."""
-    adapter = MagicMock()
-    adapter.execute_rollback = AsyncMock(
-        return_value=MagicMock(success=True, data={}, error=None)
-    )
+async def test_govern_requires_approval_and_resets_flags():
+    with patch(
+        "nexus.graph.nodes.govern.evaluate_opa_policy",
+        AsyncMock(
+            return_value={
+                "allowed": True,
+                "requires_approval": True,
+                "reason": "Human authorization required",
+            }
+        ),
+    ):
+        result = await govern_node(_state(approved=True, approved_by="old"))
+
+    assert result["requires_approval"] is True
+    assert result["approved"] is None
+    assert result["approved_by"] is None
+    assert result["approval_status"] == "PENDING"
+    assert result["status"] == "AWAITING_APPROVAL"
+
+
+@pytest.mark.asyncio
+async def test_govern_auto_approves_when_opa_allows_without_approval():
+    with patch(
+        "nexus.graph.nodes.govern.evaluate_opa_policy",
+        AsyncMock(
+            return_value={
+                "allowed": True,
+                "requires_approval": False,
+                "reason": "Auto-approved",
+            }
+        ),
+    ):
+        result = await govern_node(_state())
+
+    assert result["policy_decision"]["allowed"] is True
+    assert result["requires_approval"] is False
+    assert result["approved"] is True
+    assert result["approval_status"] == "AUTO_APPROVED"
+    assert result["status"] == "APPROVED"
+
+
+# ── 3. Direct Execution & LIFO Rollback ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_execute_invokes_tool_and_sets_rollback_available():
+    mock_tool = MagicMock()
+    mock_tool.ainvoke = AsyncMock(return_value="Scaled svc-a to 4")
+    mock_registry = MagicMock()
+    mock_registry.get_tool.return_value = mock_tool
 
     state = _state(
-        plan={
+        execution_results=[],
+        remediation_attempts=0,
+        remediation_plan={
             "steps": [
                 {
-                    "step_index": 0,
-                    "tool_name": "k8s_scale_deployment",
-                    "rollback_tool": "k8s_scale_deployment",
-                    "rollback_parameters": {
-                        "namespace": "default",
-                        "deployment_name": "svc-a",
+                    "step": 1,
+                    "tool_name": "k8s_scale_resource",
+                    "tool_args": {
+                        "namespace": "shop-ns",
+                        "resource_name": "svc-a",
+                        "replicas": 4,
+                    },
+                    "reversible": True,
+                }
+            ]
+        },
+    )
+
+    with patch(
+        "nexus.graph.nodes.execute.get_tool_registry", return_value=mock_registry
+    ):
+        result = await execute_node(state)
+
+    assert result["execution_status"] == "SUCCESS"
+    assert result["rollback_available"] is True
+    assert result["remediation_attempts"] == 1
+    assert result["execution_results"][0]["tool_name"] == "k8s_scale_resource"
+
+
+@pytest.mark.asyncio
+async def test_rollback_executes_declared_plan_step_inverse():
+    rb_tool = MagicMock()
+    rb_tool.ainvoke = AsyncMock(return_value="Reverted to 2 replicas")
+    mock_registry = MagicMock()
+    mock_registry.get_tool.return_value = rb_tool
+
+    state = _state(
+        remediation_plan={
+            "steps": [
+                {
+                    "step": 1,
+                    "tool_name": "k8s_scale_resource",
+                    "tool_args": {
+                        "namespace": "shop-ns",
+                        "resource_name": "svc-a",
+                        "replicas": 4,
+                    },
+                    "rollback_tool": "k8s_scale_resource",
+                    "rollback_args": {
+                        "namespace": "shop-ns",
+                        "resource_name": "svc-a",
                         "replicas": 2,
                     },
                 }
             ]
         },
-        execution_records=[
-            {"step_index": 0, "tool_name": "k8s_scale_deployment", "success": True}
+        execution_results=[
+            {
+                "step": 1,
+                "tool_name": "k8s_scale_resource",
+                "tool_args": {
+                    "namespace": "shop-ns",
+                    "resource_name": "svc-a",
+                    "replicas": 4,
+                },
+                "status": "SUCCESS",
+            }
         ],
     )
 
     with patch(
-        "nexus.graph.nodes.rollback.get_platform_registry",
-        return_value=_fake_registry(adapter),
+        "nexus.graph.nodes.rollback.get_tool_registry", return_value=mock_registry
     ):
-        await rollback_node(state)
+        res = await rollback_node(state)
 
-    snap = adapter.execute_rollback.await_args.args[0]
-    assert snap.rollback_tool == "k8s_scale_deployment"
-    assert snap.rollback_parameters["replicas"] == 2
+    assert res["status"] == "ROLLED_BACK"
+    assert len(res["rollback_results"]) == 1
+    assert res["rollback_results"][0]["status"] == "SUCCESS"
+    rb_tool.ainvoke.assert_awaited_once_with(
+        {"namespace": "shop-ns", "resource_name": "svc-a", "replicas": 2}
+    )
 
 
 # ── 4. Learning-plane recording at workflow completion ────────────────────────
 
 
-def _completion_result(resolved: bool, rolled_back: bool = False) -> dict:
-    return {
-        "incident_id": "inc-learn-01",
-        "fsm_state": "resolved" if resolved else "escalated",
-        "resolved": resolved,
-        "escalated": not resolved,
-        "rollback_executed": rolled_back,
-        "target": {"name": "svc-a", "namespace": "default", "platform": "kubernetes"},
-        "events": [
-            {
-                "signal_type": "pod_oomkilled",
-                "resource_name": "svc-a",
-                "namespace": "default",
-            }
-        ],
-        "diagnosis": {"failure_class": "resource_exhaustion", "confidence": 0.9},
-        "plan": {
-            "failure_mode": "resource_exhaustion",
-            "steps": [
-                {"tool_name": "k8s_restart_deployment", "description": "restart"}
-            ],
-        },
-        "verification": {
-            "healthy": resolved,
-            "slo_restored": resolved,
-            "details": "ok",
-        },
-        "execution_records": [
-            {"step_index": 0, "tool_name": "k8s_restart_deployment", "success": True}
-        ],
-        "error_message": None if resolved else "unhealthy after retries",
-    }
-
-
 @pytest.mark.asyncio
 async def test_completion_records_success_outcome_to_learning_plane(status_context):
     workflow = IncidentWorkflow()
-    status_context.audit_trail = MagicMock()
-    status_context.audit_trail.write = AsyncMock(return_value="audit-1")
     status_context.knowledge_base = MagicMock()
     status_context.knowledge_base.record_incident_outcome = AsyncMock()
-    status_context.knowledge_base.record_pattern = AsyncMock()
 
-    await workflow._handle_workflow_completion(
-        _completion_result(resolved=True), inc_id="inc-learn-01", thread_id="t1"
+    state = _state(
+        status="RESOLVED",
+        failure_class="oom_killed_memory_limit",
+        verification_passed=True,
+        verification_feedback="Ready 2/2",
     )
 
-    status_context.audit_trail.write.assert_awaited_once()
-    kwargs = status_context.audit_trail.write.await_args.kwargs
-    assert kwargs["execution_outcome"] == "success"
-    assert kwargs["runbook_id"] == "resource_exhaustion"
-    assert kwargs["incident_id"] == "inc-learn-01"
+    with (
+        patch("nexus.integration.dashboard.record_incident_resolution", AsyncMock()),
+        patch(
+            "nexus.integration.incident_report.publish_post_incident_report",
+            AsyncMock(),
+        ) as mock_report,
+    ):
+        await workflow._handle_workflow_completion(
+            state, inc_id="inc-learn-01", thread_id="t1"
+        )
 
     status_context.knowledge_base.record_incident_outcome.assert_awaited_once()
     io_kwargs = status_context.knowledge_base.record_incident_outcome.await_args.kwargs
     assert io_kwargs["resolved"] is True
+    assert io_kwargs["runbook_id"] == "oom_killed_memory_limit"
     assert io_kwargs["action_type"] == "k8s_restart_deployment"
-
-    status_context.knowledge_base.record_pattern.assert_awaited_once()
-    p_kwargs = status_context.knowledge_base.record_pattern.await_args.kwargs
-    assert p_kwargs["signal_types"] == {"pod_oomkilled"}
-    assert p_kwargs["success"] is True
+    mock_report.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_completion_records_rolled_back_outcome(status_context):
+async def test_completion_records_failed_outcome_and_guards_empty_execution(
+    status_context,
+):
     workflow = IncidentWorkflow()
-    status_context.audit_trail = MagicMock()
-    status_context.audit_trail.write = AsyncMock(return_value="audit-2")
     status_context.knowledge_base = MagicMock()
     status_context.knowledge_base.record_incident_outcome = AsyncMock()
-    status_context.knowledge_base.record_pattern = AsyncMock()
 
-    await workflow._handle_workflow_completion(
-        _completion_result(resolved=False, rolled_back=True),
-        inc_id="inc-learn-02",
-        thread_id="t2",
+    state = _state(
+        status="ESCALATED",
+        failure_class="manual_intervention_needed",
+        execution_results=[],
     )
 
-    kwargs = status_context.audit_trail.write.await_args.kwargs
-    assert kwargs["execution_outcome"] == "rolled_back"
-    assert kwargs["rollback_triggered"] is True
-    status_context.knowledge_base.record_pattern.assert_awaited_once()
-    assert (
-        status_context.knowledge_base.record_pattern.await_args.kwargs["success"]
-        is False
-    )
+    with (
+        patch("nexus.integration.dashboard.record_incident_resolution", AsyncMock()),
+        patch(
+            "nexus.integration.incident_report.publish_post_incident_report",
+            AsyncMock(),
+        ) as mock_report,
+    ):
+        await workflow._handle_workflow_completion(
+            state, inc_id="inc-learn-02", thread_id="t2"
+        )
+
+    status_context.knowledge_base.record_incident_outcome.assert_awaited_once()
+    io_kwargs = status_context.knowledge_base.record_incident_outcome.await_args.kwargs
+    assert io_kwargs["resolved"] is False
+    # Zero executed steps -> Post-Incident Report strictly skipped
+    mock_report.assert_not_called()

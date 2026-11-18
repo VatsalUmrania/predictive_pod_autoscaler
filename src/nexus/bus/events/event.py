@@ -23,13 +23,18 @@ class SymptomSignal(BaseModel):
     signal_id: str = Field(default_factory=lambda: f"sig-{uuid4().hex[:12]}")
     source: SignalSource
     kind: SignalKind
-    provider: str = Field(
-        description="Cloud/platform provider, e.g., 'aws', 'kubernetes'"
+    provider: str | None = Field(
+        default=None,
+        description="Cloud/platform provider, e.g., 'aws', 'k8s', 'kubernetes'",
     )
-    resource_urn: str = Field(
-        description="Universal resource identifier, e.g., ARN 'arn:aws:rds:us-east-1:123456789012:db:prod-pg' or 'k8s://prod/apps/v1/StatefulSet/redis'"
+    resource_urn: str | None = Field(
+        default=None,
+        description="Universal resource identifier, e.g., ARN or K8s URI (None if unknown until diagnosed)",
     )
-    region_or_namespace: str = Field(default="default")
+    region_or_namespace: str | None = Field(default=None)
+    service_name: str | None = Field(default=None)
+    involved_object_name: str | None = Field(default=None)
+    involved_object_kind: str | None = Field(default=None)
     symptom_summary: str = Field(
         description="Natural-language alert or anomaly summary"
     )
@@ -52,22 +57,27 @@ class SymptomSignal(BaseModel):
         return cast(datetime, v)
 
     def nats_subject(self) -> str:
-        return f"nexus.symptom.{self.provider}.{self.kind}"
+        prov = self.provider or "unknown"
+        return f"nexus.symptom.{prov}.{self.kind}"
 
     @property
-    def workload_urn(self) -> str:
+    def workload_urn(self) -> str | None:
         return self.resource_urn
 
     @property
-    def service_name(self) -> str:
-        if "/" in self.resource_urn:
-            return self.resource_urn.split("/")[-1]
-        if ":" in self.resource_urn:
-            return self.resource_urn.split(":")[-1]
-        return self.resource_urn
+    def resolved_service_name(self) -> str | None:
+        if self.service_name:
+            return self.service_name
+        if self.resource_urn:
+            if "/" in self.resource_urn:
+                return self.resource_urn.split("/")[-1]
+            if ":" in self.resource_urn:
+                return self.resource_urn.split(":")[-1]
+            return self.resource_urn
+        return self.involved_object_name
 
     @property
-    def namespace(self) -> str:
+    def namespace(self) -> str | None:
         return self.region_or_namespace
 
     @property
@@ -89,10 +99,14 @@ class SymptomSignal(BaseModel):
 
     def to_incident_event(self) -> IncidentEvent:
         """Convert SymptomSignal to normalized IncidentEvent for workflow consumption."""
-        parts = self.resource_urn.split("/") if "/" in self.resource_urn else []
-        res_name = parts[-1] if parts else self.service_name
-        res_kind = parts[-2] if len(parts) >= 2 else "Pod"
-        provider = str(getattr(self.provider, "value", self.provider)).lower()
+        parts = (
+            self.resource_urn.split("/")
+            if (self.resource_urn and "/" in self.resource_urn)
+            else []
+        )
+        res_name = self.service_name or (parts[-1] if parts else None)
+        res_kind = self.involved_object_kind or (parts[-2] if len(parts) >= 2 else None)
+        provider = str(getattr(self.provider, "value", self.provider) or "k8s").lower()
         agent = "k8s" if provider in ("kubernetes", "k8s") else provider
         sev = str(getattr(self.severity, "value", self.severity)).lower()
         if "." in sev:
@@ -110,6 +124,9 @@ class SymptomSignal(BaseModel):
             context={
                 "summary": self.symptom_summary,
                 "urn": self.resource_urn,
+                "service_name": self.service_name,
+                "involved_object_name": self.involved_object_name,
+                "involved_object_kind": self.involved_object_kind,
                 "raw": self.raw_payload,
             },
             raw=self.raw_payload,
@@ -183,18 +200,16 @@ class IncidentEvent(BaseModel):
                 or "symptom_summary" in data
                 or "signal_id" in data
             ):
-                res_urn = str(data.get("resource_urn", ""))
-                parts = res_urn.split("/") if "/" in res_urn else []
-                res_name = (
-                    parts[-1] if parts else str(data.get("target_service", "unknown"))
+                res_urn = data.get("resource_urn") or None
+                parts = res_urn.split("/") if (res_urn and "/" in res_urn) else []
+                res_name = data.get("service_name") or (
+                    parts[-1] if parts else data.get("target_service")
                 )
-                res_kind = parts[-2] if len(parts) >= 2 else "Pod"
-                ns = (
-                    data.get("region_or_namespace")
-                    or data.get("namespace")
-                    or "default"
+                res_kind = data.get("involved_object_kind") or (
+                    parts[-2] if len(parts) >= 2 else None
                 )
-                provider = str(data.get("provider", "kubernetes")).lower()
+                ns = data.get("region_or_namespace") or data.get("namespace") or None
+                provider = str(data.get("provider") or "k8s").lower()
                 agent = "k8s" if provider in ("kubernetes", "k8s") else provider
                 sev = str(data.get("severity", "warning")).lower()
                 if "." in sev:
@@ -205,12 +220,15 @@ class IncidentEvent(BaseModel):
                     agent=agent,
                     signal_type=str(data.get("kind", "error_log_burst")),
                     severity=sev,
-                    namespace=str(ns),
+                    namespace=str(ns) if ns is not None else None,
                     resource_name=res_name,
                     resource_kind=res_kind,
                     context={
                         "summary": str(data.get("symptom_summary", "")),
                         "urn": res_urn,
+                        "service_name": data.get("service_name"),
+                        "involved_object_name": data.get("involved_object_name"),
+                        "involved_object_kind": data.get("involved_object_kind"),
                         "raw": data.get("raw_payload", {}),
                     },
                     raw=data.get("raw_payload") or data,

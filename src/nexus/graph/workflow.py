@@ -1,7 +1,9 @@
 """
-NEXUS Unified LangGraph Incident Workflow
-=========================================
-Builds, compiles, and orchestrates the governed incident response StateGraph.
+NEXUS Interrupt-Aware LangGraph Incident Workflow
+=================================================
+Provides the standalone `run_incident_workflow` entrypoint and the high-level
+`IncidentWorkflow` orchestration class bridged cleanly to `run_incident_workflow`,
+`handle_incident_approval`, and `finalize_workflow_run`.
 """
 
 from __future__ import annotations
@@ -9,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Mapping
 from typing import Any, cast
 
 from nexus.graph.builder import build_incident_graph
@@ -18,15 +21,21 @@ from nexus.graph.routes import (
     route_after_diagnose,
     route_after_execute,
     route_after_govern,
+    route_after_plan,
+    route_after_triage,
     route_after_verify,
 )
 from nexus.graph.workflow_approval import (
     create_pending_approval_entry,
+    handle_incident_approval,
     notify_incident_rejected_helper,
     publish_pending_approval,
     resume_incident_execution,
 )
-from nexus.graph.workflow_completion import handle_workflow_completion
+from nexus.graph.workflow_completion import (
+    finalize_workflow_run,
+    handle_workflow_completion,
+)
 from nexus.graph.workflow_events import (
     build_cluster_event_dicts,
     build_initial_state,
@@ -34,18 +43,56 @@ from nexus.graph.workflow_events import (
     run_flush_loop,
     setup_event_subscriptions,
 )
+from nexus.graph.workflow_state import sync_discovered_target_identity
+from nexus.integration.notifier import send_approval_request_notification
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "run_incident_workflow",
+    "handle_incident_approval",
+    "finalize_workflow_run",
     "IncidentWorkflow",
     "build_incident_graph",
-    "route_after_approval",
+    "route_after_triage",
     "route_after_diagnose",
-    "route_after_execute",
+    "route_after_plan",
     "route_after_govern",
+    "route_after_approval",
+    "route_after_execute",
     "route_after_verify",
 ]
+
+
+async def run_incident_workflow(
+    compiled_graph: Any,
+    initial_state: Mapping[str, Any],
+    *,
+    notify_on_pause: bool = True,
+) -> dict[str, Any]:
+    incident_id = initial_state["incident_id"]
+    config = {"configurable": {"thread_id": incident_id}}
+
+    final_state = await compiled_graph.ainvoke(initial_state, config=config)
+    snapshot = await compiled_graph.aget_state(config)
+
+    # If snapshot.next is non-empty, the graph paused at `approval_node` via interrupt()
+    if snapshot and snapshot.next:
+        logger.info(
+            "Incident %s paused at interrupt node(s) %s; notify_on_pause=%s.",
+            incident_id,
+            snapshot.next,
+            notify_on_pause,
+        )
+        await sync_discovered_target_identity(incident_id, snapshot.values)
+        if notify_on_pause:
+            await send_approval_request_notification(incident_id, snapshot.values)
+        return cast(dict[str, Any], snapshot.values)
+
+    # Graph reached a terminal state (END)
+    await sync_discovered_target_identity(incident_id, final_state)
+    await finalize_workflow_run(incident_id, final_state)
+    return cast(dict[str, Any], final_state)
 
 
 class IncidentWorkflow:
@@ -89,7 +136,7 @@ class IncidentWorkflow:
             inc_id = getattr(cluster, "cluster_id", str(uuid.uuid4()))
             sev = getattr(cluster, "highest_severity", "warning")
             await self.run_incident(
-                {"incident_id": inc_id, "events": events, "severity": sev},
+                {"incident_id": inc_id, "raw_events": events, "severity": sev},
                 thread_id=inc_id,
             )
         except Exception as exc:
@@ -161,34 +208,49 @@ class IncidentWorkflow:
     ) -> dict[str, Any]:
         inc_id = incident_data.get("incident_id") or str(uuid.uuid4())
         tid = thread_id or inc_id
-        config = {"configurable": {"thread_id": tid}}
+        initial_state = build_initial_state(incident_data, inc_id)
+        initial_state["incident_id"] = tid
+
         logger.info(
             "[IncidentWorkflow] Starting workflow for incident %s (thread=%s)",
             inc_id,
             tid,
         )
 
-        result = await self._compiled_graph.ainvoke(
-            build_initial_state(incident_data, inc_id), config=config
+        # When NATS is configured, _record_pending_approval -> publish_pending_approval
+        # dispatches the single canonical Slack approval card via Notifier.
+        has_nats_publisher = bool(self.nats and hasattr(self.nats, "publish_raw"))
+        result = await run_incident_workflow(
+            self._compiled_graph,
+            initial_state,
+            notify_on_pause=not has_nats_publisher,
         )
-        if result.get("diagnosis"):
-            self._rca_results.append(result["diagnosis"])
+        if result.get("rca_result"):
+            self._rca_results.append(result["rca_result"])
             self._rca_results = self._rca_results[-100:]
 
-        state_snapshot = self._compiled_graph.get_state(config)
-        if (state_snapshot.next and "approval" in state_snapshot.next) or result.get(
-            "__interrupt__"
-        ):
+        config = {"configurable": {"thread_id": tid}}
+        snapshot = await self._compiled_graph.aget_state(config)
+        if snapshot and snapshot.next:
             await self._record_pending_approval(result, inc_id=inc_id, thread_id=tid)
         else:
-            await self._handle_workflow_completion(result, inc_id=inc_id, thread_id=tid)
+            await self._handle_workflow_completion(
+                result, inc_id=inc_id, thread_id=tid, publish_report=False
+            )
 
         return cast(dict[str, Any], result)
 
     async def _handle_workflow_completion(
-        self, result: dict[str, Any], inc_id: str, thread_id: str
+        self,
+        result: dict[str, Any],
+        inc_id: str,
+        thread_id: str,
+        *,
+        publish_report: bool = True,
     ) -> None:
-        await handle_workflow_completion(result, inc_id, thread_id, self.nats)
+        await handle_workflow_completion(
+            result, inc_id, thread_id, self.nats, publish_report=publish_report
+        )
 
     async def _record_pending_approval(
         self, state_or_result: dict[str, Any], inc_id: str, thread_id: str
@@ -197,14 +259,17 @@ class IncidentWorkflow:
         for k in (entry["approval_id"], inc_id, thread_id):
             self._pending_approvals[k] = entry
         logger.info(
-            "[IncidentWorkflow] Staged pending approval %s for incident %s",
+            "[IncidentWorkflow] Staged pending approval %s for incident %s (target=%s)",
             entry["approval_id"],
             inc_id,
+            entry["target"],
         )
         await publish_pending_approval(self.nats, entry)
         return entry
 
     async def resume_incident(
-        self, thread_id: str, approval_decision: str = "approved"
+        self,
+        thread_id: str,
+        approval_decision: str | dict[str, Any] = "approved",
     ) -> dict[str, Any]:
         return await resume_incident_execution(self, thread_id, approval_decision)

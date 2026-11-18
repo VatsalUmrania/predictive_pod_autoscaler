@@ -145,11 +145,55 @@ async def send_incident_escalated(
     failure_class: str = "Unknown",
     root_cause: str = "Unknown",
     context: dict | None = None,
+    *,
+    confidence: float | None = None,
+    recommended_fix: str | None = None,
+    evidence: list[str] | None = None,
+    proposed_steps: list[dict[str, Any]] | None = None,
+    rollback_applied: bool = False,
 ) -> None:
     webhook = notifier._get_webhook(app_name)
     if webhook:
+        ctx = context or {}
+        rca = ctx.get("rca") or ctx.get("rca_result") or {}
+        plan = ctx.get("plan") or ctx.get("remediation_plan") or {}
+        resolved_conf = (
+            confidence
+            if confidence is not None
+            else (
+                float(rca.get("confidence") or ctx.get("confidence") or 0.0) or None
+            )
+        )
+        resolved_fix = (
+            recommended_fix
+            or ctx.get("recommended_strategy")
+            or rca.get("recommended_strategy")
+            or plan.get("rationale")
+        )
+        resolved_evidence = (
+            evidence
+            if evidence is not None
+            else (ctx.get("evidence") or rca.get("evidence") or None)
+        )
+        resolved_steps = (
+            proposed_steps
+            if proposed_steps is not None
+            else (plan.get("steps") or None)
+        )
+        resolved_rollback = bool(
+            rollback_applied or ctx.get("rollback_applied") or ctx.get("rollback_results")
+        )
         payload = build_incident_escalated_payload(
-            target, incident_id, failure_class, reason, root_cause
+            target,
+            incident_id,
+            failure_class,
+            reason,
+            root_cause,
+            confidence=resolved_conf,
+            recommended_fix=resolved_fix,
+            evidence=resolved_evidence,
+            proposed_steps=resolved_steps,
+            rollback_applied=resolved_rollback,
         )
         await notifier._send(webhook, payload, app_name)
         logger.warning(

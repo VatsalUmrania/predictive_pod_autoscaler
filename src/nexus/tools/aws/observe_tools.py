@@ -17,10 +17,7 @@ from nexus.tools.base import NexusTool, NexusToolResult, ToolDomain, ToolRiskLev
 
 
 def _client(service_name: str, region: str | None = None):
-    import nexus.tools.aws_adapter as adapter
-
-    fn = getattr(adapter, "_get_boto3_client", None) or get_boto3_client
-    return fn(service_name, region)
+    return get_boto3_client(service_name, region)
 
 
 class AWSGetMetricDataTool(NexusTool):

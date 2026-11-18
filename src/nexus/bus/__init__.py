@@ -14,14 +14,14 @@ Example:
     nexus.incidents.git.env_contract_violation
 """
 
-from nexus.bus.incident_event import (
+from nexus.bus.events import (
     AgentType,
     HealingLevel,
     IncidentEvent,
     Severity,
     SignalType,
 )
-from nexus.bus.nats_client import NATSClient
+from nexus.bus.nats.client import NATSClient
 
 __all__ = [
     "IncidentEvent",

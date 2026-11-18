@@ -11,14 +11,16 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-DESTRUCTIVE_VERBS = (
-    "delete",
-    "terminate",
-    "drop",
-    "purge",
-    "remove",
-    "destroy",
-    "deregister",
+DESTRUCTIVE_VERBS = frozenset(
+    {
+        "delete",
+        "terminate",
+        "drop",
+        "purge",
+        "destroy",
+        "wipe",
+        "deregister",
+    }
 )
 RESTRICTED_AWS_SERVICES = frozenset(
     {"iam", "kms", "organizations", "sts", "secretsmanager", "ssm", "billing"}
@@ -36,6 +38,61 @@ STATEFUL_KINDS_OR_SERVICES = frozenset(
 )
 
 
+def resolve_is_destructive(
+    tool_name: str,
+    step: dict[str, Any] | None = None,
+    *,
+    operation: str | None = None,
+) -> bool:
+    """
+    Determine whether an action is destructive without false-positive substring overrides.
+
+    1. Trust explicit boolean `is_destructive` from a registered tool in ToolRegistry
+       (e.g., `k8s_remove_container_command` declares `is_destructive=False`).
+    2. Honor explicit `is_destructive=True` in the step payload.
+    3. For unregistered/generic operations, match whole snake_case tokens against
+       `DESTRUCTIVE_VERBS` (excluding `delete_pod` and container-spec patch helpers).
+    """
+    from nexus.tools.registry import get_tool_registry
+
+    registry = get_tool_registry()
+    explicit_step_dest = (
+        step.get("is_destructive")
+        if step and isinstance(step.get("is_destructive"), bool)
+        else None
+    )
+
+    if tool_name:
+        registered_tool = registry.get(tool_name)
+        if registered_tool is not None and isinstance(
+            getattr(registered_tool, "is_destructive", None), bool
+        ):
+            return bool(registered_tool.is_destructive) or (
+                explicit_step_dest is True
+            )
+
+        if tool_name in getattr(registry, "_langchain_tools", {}):
+            meta = registry.get_metadata(tool_name)
+            if isinstance(getattr(meta, "is_destructive", None), bool):
+                return bool(meta.is_destructive) or (explicit_step_dest is True)
+
+    if explicit_step_dest is True:
+        return True
+
+    op_str = (operation or tool_name or "").lower()
+    if "delete_pod" in op_str or "remove_container_command" in op_str:
+        return False
+
+    tokens = set(op_str.replace("-", "_").split("_"))
+    if tokens & DESTRUCTIVE_VERBS:
+        return True
+
+    if explicit_step_dest is False:
+        return False
+
+    return False
+
+
 def build_opa_input_for_action(
     action: dict[str, Any],
     rca_report: dict[str, Any] | None = None,
@@ -44,11 +101,13 @@ def build_opa_input_for_action(
     cost_delta_pct: float = 0.0,
 ) -> dict[str, Any]:
     """Construct attribute-based OPA input with deterministic risk overrides."""
+    tool_name = str(action.get("tool_name", "") or "")
     tool_meta = None
     try:
-        from nexus.tools.registry import default_registry
+        from nexus.tools.registry import get_tool_registry
 
-        tool_meta = default_registry.get(action.get("tool_name", ""))
+        registry = get_tool_registry()
+        tool_meta = registry.get(tool_name)
     except Exception:
         pass
     args = action.get("tool_arguments") or action.get("parameters") or {}
@@ -56,7 +115,7 @@ def build_opa_input_for_action(
         args.get("operation")
         or args.get("mutation_type")
         or action.get("action_type")
-        or action.get("tool_name", "")
+        or tool_name
     ).lower()
     service_or_kind = str(args.get("service") or args.get("kind") or "")
     if not service_or_kind:
@@ -64,14 +123,7 @@ def build_opa_input_for_action(
             if s in op:
                 service_or_kind = s
                 break
-    is_dest_meta = (
-        bool(getattr(tool_meta, "is_destructive", False)) if tool_meta else False
-    )
-    is_destructive_verb = (
-        (any(v in op for v in DESTRUCTIVE_VERBS) and "delete_pod" not in op)
-        or bool(action.get("is_destructive"))
-        or is_dest_meta
-    )
+    is_destructive_verb = resolve_is_destructive(tool_name, action, operation=op)
     is_restricted_service = service_or_kind.lower() in RESTRICTED_AWS_SERVICES
     is_stateful = (
         service_or_kind in STATEFUL_KINDS_OR_SERVICES

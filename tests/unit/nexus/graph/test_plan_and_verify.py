@@ -1,513 +1,377 @@
 """
-Unit Tests for Phase 4: Planning & Verification Contracts
-=========================================================
-Tests safe verification condition evaluation, operator security, metric extraction,
-autonomous LLM planning with deterministic fallback, and verify_node integration.
+Unit Tests for Schema-Bound Planning (`plan_node`), Direct Tool Execution (`execute_node`),
+ReAct Post-Remediation Verification (`verify_node`), and K8s Observation Tools.
 """
 
 from __future__ import annotations
 
-import json
-from typing import Any
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
 
-from nexus.graph.nodes.plan import plan_remediation_node
-from nexus.graph.nodes.verify import (
-    evaluate_verification_condition,
-    extract_metric_value,
-    verify_node,
+from nexus.graph.nodes.execute import execute_node
+from nexus.graph.nodes.plan import plan_node
+from nexus.graph.nodes.verify import verify_node
+from nexus.graph.rca.result import VerificationResult
+from nexus.tools.k8s.observe_tools import (
+    fetch_pod_container_logs,
+    inspect_deployment_status,
+    locate_pod_and_owner,
 )
-from nexus.graph.platform import HealthCheckResult
-from nexus.graph.state import VerificationCondition
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 1. Verification Condition Evaluation Tests
-# ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_evaluate_verification_condition_operators():
-    """Verify all supported comparison operators evaluate correctly without eval()."""
-    # Less than (<)
-    cond_lt = VerificationCondition(
-        metric_name="error_rate", operator="<", threshold=0.05
-    )
-    passed, msg = evaluate_verification_condition(cond_lt, 0.02)
-    assert passed is True
-    assert "PASS" in msg
+@pytest.mark.asyncio
+async def test_plan_node_binds_mutate_tools_and_attaches_registry_metadata():
+    """plan_node uses llm.bind_tools(mutate_tools) and attaches blast_radius/reversible metadata."""
+    fake_mutate_tool = MagicMock()
+    fake_mutate_tool.name = "k8s_rollback_deployment"
 
-    passed, msg = evaluate_verification_condition(cond_lt, 0.08)
-    assert passed is False
-    assert "FAIL" in msg
-
-    # Less than or equal (<=)
-    cond_le = VerificationCondition(
-        metric_name="memory_usage_pct", operator="<=", threshold=85.0
-    )
-    passed, _ = evaluate_verification_condition(cond_le, 85.0)
-    assert passed is True
-    passed, _ = evaluate_verification_condition(cond_le, 85.1)
-    assert passed is False
-
-    # Greater than (>)
-    cond_gt = VerificationCondition(
-        metric_name="throughput", operator=">", threshold=100.0
-    )
-    passed, _ = evaluate_verification_condition(cond_gt, 150.0)
-    assert passed is True
-    passed, _ = evaluate_verification_condition(cond_gt, 50.0)
-    assert passed is False
-
-    # Greater than or equal (>=)
-    cond_ge = VerificationCondition(
-        metric_name="ready_replicas", operator=">=", threshold=1.0
-    )
-    passed, _ = evaluate_verification_condition(cond_ge, 1.0)
-    assert passed is True
-    passed, _ = evaluate_verification_condition(cond_ge, 0.0)
-    assert passed is False
-
-    # Equal (==)
-    cond_eq = VerificationCondition(metric_name="Errors", operator="==", threshold=0.0)
-    passed, _ = evaluate_verification_condition(cond_eq, 0.0)
-    assert passed is True
-    passed, _ = evaluate_verification_condition(cond_eq, 1.0)
-    assert passed is False
-
-    # Not equal (!=)
-    cond_ne = VerificationCondition(
-        metric_name="exit_code", operator="!=", threshold=137.0
-    )
-    passed, _ = evaluate_verification_condition(cond_ne, 0.0)
-    assert passed is True
-    passed, _ = evaluate_verification_condition(cond_ne, 137.0)
-    assert passed is False
-
-
-def test_evaluate_verification_condition_malicious_operator_rejection():
-    """Verify malicious or arbitrary strings cannot execute or evaluate."""
-    for bad_op in (
-        "eval",
-        "__import__('os').system('ls')",
-        "exec",
-        "system",
-        "or 1==1",
-        ";",
-    ):
-        cond = {"metric_name": "cpu", "operator": bad_op, "threshold": 50.0}
-        passed, msg = evaluate_verification_condition(cond, 10.0)
-        assert passed is False
-        assert "Unsupported or dangerous comparison operator" in msg
-
-
-def test_evaluate_verification_condition_invalid_numeric():
-    """Verify non-numeric values fail safely without unhandled exceptions."""
-    cond = VerificationCondition(metric_name="cpu", operator="<", threshold=50.0)
-    passed, msg = evaluate_verification_condition(cond, "not-a-number")
-    assert passed is False
-    assert "invalid observed value" in msg
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 2. Metric Extraction Tests
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def test_extract_metric_value_sources():
-    """Verify numeric metric values can be extracted from multiple telemetry sources."""
-    # From tool_data direct
-    val = extract_metric_value("ready_replicas", tool_data={"ready_replicas": 3})
-    assert val == 3.0
-
-    # From tool_data nested metrics
-    val = extract_metric_value(
-        "memory_usage_pct", tool_data={"metrics": {"memory_usage_pct": 74.5}}
-    )
-    assert val == 74.5
-
-    # From CloudWatch datapoints
-    tool_data_cw = {"datapoints": [{"Average": 12.4}, {"Average": 0.0}]}
-    val = extract_metric_value("Errors", tool_data=tool_data_cw)
-    assert val == 0.0
-
-    # From k8s describe status regex
-    val = extract_metric_value(
-        "ready_replicas", tool_data={"status": "Deployment status: 2 ready, 2 total"}
-    )
-    assert val == 2.0
-
-    # From health_result metrics
-    mock_health = HealthCheckResult(
-        healthy=True, slo_restored=True, metrics={"Errors": 0.0}
-    )
-    val = extract_metric_value("Errors", health_result=mock_health)
-    assert val == 0.0
-
-    # From telemetry metrics
-    telemetry = {"metrics": {"cpu_utilization": 42.0}}
-    val = extract_metric_value("cpu_utilization", telemetry=telemetry)
-    assert val == 42.0
-
-    # None when missing
-    assert extract_metric_value("nonexistent", tool_data={}) is None
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 3. Planning Node Tests (LLM & Fallback)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class MockPlanChatModel(BaseChatModel):
-    """Mock LangChain chat model returning predetermined structured plan."""
-
-    response_text: str
-
-    def __init__(self, response_text: str, **kwargs: Any):
-        super().__init__(response_text=response_text, **kwargs)
-
-    @property
-    def _llm_type(self) -> str:
-        return "mock-plan-chat-model"
-
-    def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
-        return ChatResult(
-            generations=[ChatGeneration(message=AIMessage(content=self.response_text))]
-        )
-
-
-def test_plan_node_deterministic_when_fallback_active():
-    """Verify that plan_remediation_node uses deterministic planner when fallback_active is True."""
-    state = {
-        "incident_id": "inc-fallback-plan-01",
-        "platform": "kubernetes",
-        "fallback_active": True,
-        "target": {"name": "order-service", "namespace": "prod"},
-        "diagnosis": {
-            "failure_class": "bad_deploy",
-            "root_cause": "Rollout regression with crashlooping containers",
-            "confidence": 0.9,
-        },
-        "telemetry": {},
-        "retry_count": 0,
-    }
-
-    result = plan_remediation_node(state)
-    plan = result["plan"]
-
-    assert len(plan["steps"]) == 1
-    step = plan["steps"][0]
-    assert step["tool_name"] == "k8s_rollback_deployment"
-    assert step["verification_tool"] == "k8s_describe_resource"
-    assert step["verification_condition"] is not None
-    assert step["verification_condition"]["metric_name"] == "ready_replicas"
-    assert step["verification_condition"]["operator"] == ">="
-    assert step["verification_condition"]["threshold"] == 1.0
-
-
-def test_plan_node_autonomous_llm_success():
-    """Verify that plan_remediation_node successfully parses an autonomous LLM plan."""
-    llm_plan_json = json.dumps(
-        {
-            "steps": [
-                {
-                    "step_index": 0,
-                    "tool_name": "k8s_scale_resource",
-                    "parameters": {
-                        "namespace": "prod",
-                        "resource_name": "checkout-svc",
-                        "resource_kind": "deployment",
-                        "replicas": 4,
-                    },
-                    "description": "Scale checkout-svc to 4 replicas to handle burst traffic",
-                    "rollback_tool": "k8s_scale_resource",
-                    "rollback_parameters": {
-                        "namespace": "prod",
-                        "resource_name": "checkout-svc",
-                        "resource_kind": "deployment",
-                        "replicas": 2,
-                    },
-                    "verification_tool": "k8s_describe_resource",
-                    "verification_parameters": {
-                        "namespace": "prod",
-                        "resource_kind": "deployment",
-                        "resource_name": "checkout-svc",
-                    },
-                    "verification_condition": {
-                        "metric_name": "ready_replicas",
-                        "operator": ">=",
-                        "threshold": 4.0,
-                        "window_seconds": 60,
-                    },
-                }
-            ],
-            "requires_approval": True,
-            "approval_reason": "Scaling production deployment checkout-svc to 4 replicas",
-            "expected_slo_target": "p99_latency < 200ms",
-        }
+    mock_registry = MagicMock()
+    mock_registry.get_tools.return_value = [fake_mutate_tool]
+    mock_registry.get_metadata.return_value = SimpleNamespace(
+        blast_radius="service_wide", reversible=True
     )
 
-    mock_llm = MockPlanChatModel(response_text=f"```json\n{llm_plan_json}\n```")
-
-    state = {
-        "incident_id": "inc-llm-plan-01",
-        "platform": "kubernetes",
-        "fallback_active": False,
-        "target": {"name": "checkout-svc", "namespace": "prod"},
-        "diagnosis": {
-            "failure_class": "cascading_failure",
-            "root_cause": "Spike in incoming checkout requests causing queue backlog",
-            "confidence": 0.95,
-        },
-        "telemetry": {},
-        "retry_count": 0,
-    }
-
-    with patch("nexus.graph.nodes.plan.get_llm", return_value=mock_llm):
-        result = plan_remediation_node(state)
-
-    plan = result["plan"]
-    assert len(plan["steps"]) == 1
-    step = plan["steps"][0]
-    assert step["tool_name"] == "k8s_scale_resource"
-    assert step["parameters"]["replicas"] == 4
-    assert step["rollback_tool"] == "k8s_scale_resource"
-    assert step["verification_tool"] == "k8s_describe_resource"
-    assert step["verification_condition"]["metric_name"] == "ready_replicas"
-    assert step["verification_condition"]["threshold"] == 4.0
-    assert plan["expected_slo_target"] == "p99_latency < 200ms"
-
-
-def test_plan_node_autonomous_llm_failure_falls_back():
-    """Verify that plan_remediation_node falls back to deterministic planning on LLM exception."""
+    ai_response = AIMessage(
+        content="Rolling back shop-demo to previous healthy revision.",
+        tool_calls=[
+            {
+                "id": "call_rb_1",
+                "name": "k8s_rollback_deployment",
+                "args": {"namespace": "shop-ns", "deployment_name": "shop-demo"},
+            }
+        ],
+    )
+    bound_llm = MagicMock()
+    bound_llm.ainvoke = AsyncMock(return_value=ai_response)
     mock_llm = MagicMock()
-    mock_llm.invoke.side_effect = RuntimeError("Connection timed out to LLM provider")
+    mock_llm.bind_tools.return_value = bound_llm
 
     state = {
-        "incident_id": "inc-llm-fail-01",
-        "platform": "kubernetes",
-        "fallback_active": False,
-        "target": {"name": "auth-service", "namespace": "default"},
-        "diagnosis": {
-            "failure_class": "bad_deploy",
-            "root_cause": "Broken deployment revision",
-            "confidence": 0.85,
-        },
-        "telemetry": {},
-        "retry_count": 0,
+        "incident_id": "inc-plan-01",
+        "platform": "k8s",
+        "namespace": "shop-ns",
+        "resource_kind": "Deployment",
+        "service_name": "shop-demo",
+        "target_resource": "shop-ns/Deployment/shop-demo",
+        "rca_result": {"failure_type": "readiness_probe_container_exit_zero"},
     }
 
-    with patch("nexus.graph.nodes.plan.get_llm", return_value=mock_llm):
-        result = plan_remediation_node(state)
+    with (
+        patch("nexus.graph.nodes.plan.get_tool_registry", return_value=mock_registry),
+        patch("nexus.graph.nodes.plan.get_chat_model", return_value=mock_llm),
+    ):
+        res = await plan_node(state)
 
-    plan = result["plan"]
-    assert len(plan["steps"]) == 1
-    assert plan["steps"][0]["tool_name"] == "k8s_rollback_deployment"
-    assert plan["steps"][0]["verification_condition"] is not None
+    mock_registry.get_tools.assert_called_once_with(mode="mutate", platform="k8s")
+    mock_llm.bind_tools.assert_called_once_with([fake_mutate_tool])
+    assert res["status"] == "PLANNED"
+    steps = res["remediation_plan"]["steps"]
+    assert len(steps) == 1
+    assert steps[0]["tool_name"] == "k8s_rollback_deployment"
+    assert steps[0]["tool_args"] == {
+        "namespace": "shop-ns",
+        "deployment_name": "shop-demo",
+    }
+    assert steps[0]["blast_radius"] == "service_wide"
+    assert steps[0]["reversible"] is True
 
 
-def test_plan_node_autonomous_llm_unregistered_tool_falls_back():
-    """Verify that an LLM hallucinating unregistered tools is rejected and falls back."""
-    llm_bad_plan = json.dumps(
-        {
+@pytest.mark.asyncio
+async def test_plan_node_returns_unplannable_when_llm_emits_zero_tool_calls():
+    fake_mutate_tool = MagicMock()
+    fake_mutate_tool.name = "k8s_restart_deployment"
+    mock_registry = MagicMock()
+    mock_registry.get_tools.return_value = [fake_mutate_tool]
+
+    bound_llm = MagicMock()
+    bound_llm.ainvoke = AsyncMock(
+        return_value=AIMessage(content="Cannot safely remediate", tool_calls=[])
+    )
+    mock_llm = MagicMock()
+    mock_llm.bind_tools.return_value = bound_llm
+
+    with (
+        patch("nexus.graph.nodes.plan.get_tool_registry", return_value=mock_registry),
+        patch("nexus.graph.nodes.plan.get_chat_model", return_value=mock_llm),
+    ):
+        res = await plan_node({"incident_id": "inc-unplan", "platform": "k8s"})
+
+    assert res["status"] == "UNPLANNABLE"
+    assert res["remediation_plan"]["steps"] == []
+
+
+@pytest.mark.asyncio
+async def test_execute_node_invokes_schema_validated_tool_args_directly():
+    """execute_node calls await tool_fn.ainvoke(tool_args) without parameter guessing."""
+    mock_tool = MagicMock()
+    mock_tool.ainvoke = AsyncMock(return_value="deployment.apps/shop-demo rolled back")
+    mock_registry = MagicMock()
+    mock_registry.get_tool.return_value = mock_tool
+
+    state = {
+        "incident_id": "inc-exec-01",
+        "remediation_attempts": 0,
+        "remediation_plan": {
             "steps": [
                 {
-                    "step_index": 0,
-                    "tool_name": "malicious_unregistered_tool_drop_db",
-                    "parameters": {},
+                    "step": 1,
+                    "tool_name": "k8s_rollback_deployment",
+                    "tool_args": {
+                        "namespace": "shop-ns",
+                        "deployment_name": "shop-demo",
+                    },
+                    "reversible": True,
                 }
             ]
+        },
+    }
+
+    with patch(
+        "nexus.graph.nodes.execute.get_tool_registry", return_value=mock_registry
+    ):
+        res = await execute_node(state)
+
+    assert res["execution_status"] == "SUCCESS"
+    assert res["status"] == "EXECUTED"
+    assert res["remediation_attempts"] == 1
+    assert res["rollback_available"] is True
+    assert len(res["execution_results"]) == 1
+    assert res["execution_results"][0]["status"] == "SUCCESS"
+    mock_tool.ainvoke.assert_awaited_once_with(
+        {"namespace": "shop-ns", "deployment_name": "shop-demo"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_node_fails_when_zero_steps_or_tool_missing():
+    res_empty = await execute_node(
+        {"incident_id": "inc-empty", "remediation_plan": {"steps": []}}
+    )
+    assert res_empty["execution_status"] == "FAILED"
+    assert res_empty["status"] == "EXECUTION_FAILED"
+
+    mock_registry = MagicMock()
+    mock_registry.get_tool.return_value = None
+    with patch(
+        "nexus.graph.nodes.execute.get_tool_registry", return_value=mock_registry
+    ):
+        res_missing = await execute_node(
+            {
+                "incident_id": "inc-missing",
+                "remediation_plan": {
+                    "steps": [
+                        {"step": 1, "tool_name": "nonexistent_tool", "tool_args": {}}
+                    ]
+                },
+            }
+        )
+    assert res_missing["execution_status"] == "FAILED"
+    assert res_missing["remediation_attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_verify_node_react_observation_loop_and_structured_result():
+    """verify_node invokes observe tools in a ReAct loop and synthesizes VerificationResult."""
+    observe_tool = MagicMock()
+    observe_tool.name = "inspect_deployment_status"
+    observe_tool.ainvoke = AsyncMock(
+        return_value={
+            "deployment_name": "shop-demo",
+            "namespace": "shop-ns",
+            "desired_replicas": 2,
+            "ready_replicas": 2,
+            "pods": [
+                {"pod_name": "shop-demo-new-1", "phase": "Running", "ready": True}
+            ],
         }
     )
-    mock_llm = MockPlanChatModel(response_text=llm_bad_plan)
+    mock_registry = MagicMock()
+    mock_registry.get_tools.return_value = [observe_tool]
 
-    state = {
-        "incident_id": "inc-bad-tool-01",
-        "platform": "kubernetes",
-        "fallback_active": False,
-        "target": {"name": "auth-service", "namespace": "default"},
-        "diagnosis": {
-            "failure_class": "bad_deploy",
-            "root_cause": "Broken deployment revision",
-            "confidence": 0.85,
-        },
-        "telemetry": {},
-        "retry_count": 0,
-    }
-
-    with patch("nexus.graph.nodes.plan.get_llm", return_value=mock_llm):
-        result = plan_remediation_node(state)
-
-    # Hallucinated tool rejected -> deterministic fallback used
-    plan = result["plan"]
-    assert len(plan["steps"]) == 1
-    assert plan["steps"][0]["tool_name"] == "k8s_rollback_deployment"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 4. Verify Node Integration Tests
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _fake_registry(adapter: MagicMock) -> MagicMock:
-    registry = MagicMock()
-    registry.get.return_value = adapter
-    registry.resolve_adapter.return_value = adapter
-    return registry
-
-
-@pytest.mark.asyncio
-async def test_verify_node_condition_passed():
-    """Verify that verify_node marks resolved when condition evaluates to PASS."""
-    adapter = MagicMock()
-    adapter.verify_health = AsyncMock(
-        return_value=HealthCheckResult(
-            healthy=True,
-            slo_restored=True,
-            details="Deployment healthy",
-            metrics={"ready_replicas": 2.0},
+    bound_llm = MagicMock()
+    bound_llm.ainvoke = AsyncMock(
+        side_effect=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "v_call_1",
+                        "name": "inspect_deployment_status",
+                        "args": {
+                            "deployment_name": "shop-demo",
+                            "namespace": "shop-ns",
+                        },
+                    }
+                ],
+            ),
+            AIMessage(content="All replicas ready.", tool_calls=[]),
+        ]
+    )
+    structured_llm = MagicMock()
+    structured_llm.ainvoke = AsyncMock(
+        return_value=VerificationResult(
+            verification_passed=True,
+            observed_state_summary="2/2 replicas ready and passing readiness probes.",
         )
     )
-
-    state = {
-        "incident_id": "inc-verif-pass-01",
-        "platform": "kubernetes",
-        "target": {"name": "app-svc", "namespace": "prod"},
-        "plan": {
-            "steps": [
-                {
-                    "step_index": 0,
-                    "tool_name": "k8s_restart_deployment",
-                    "verification_condition": {
-                        "metric_name": "ready_replicas",
-                        "operator": ">=",
-                        "threshold": 1.0,
-                        "window_seconds": 60,
-                    },
-                }
-            ]
-        },
-        "retry_count": 0,
-        "max_retries": 2,
-    }
+    mock_llm = MagicMock()
+    mock_llm.bind_tools.return_value = bound_llm
+    mock_llm.with_structured_output.return_value = structured_llm
 
     with (
-        patch(
-            "nexus.graph.nodes.verify.get_platform_registry",
-            return_value=_fake_registry(adapter),
-        ),
-        patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 1.0),
-        patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01),
+        patch("nexus.graph.nodes.verify.get_tool_registry", return_value=mock_registry),
+        patch("nexus.graph.nodes.verify.get_chat_model", return_value=mock_llm),
     ):
-        result = await verify_node(state)
+        res = await verify_node(
+            {
+                "incident_id": "inc-ver-01",
+                "platform": "k8s",
+                "namespace": "shop-ns",
+                "resource_kind": "Deployment",
+                "service_name": "shop-demo",
+                "execution_results": [
+                    {
+                        "step": 1,
+                        "tool_name": "k8s_rollback_deployment",
+                        "status": "SUCCESS",
+                    }
+                ],
+            }
+        )
 
-    assert result["resolved"] is True
-    assert result["verification"]["healthy"] is True
-    assert result["fsm_state"] == "resolved"
-    assert "PASS" in result["verification"]["details"]
+    observe_tool.ainvoke.assert_awaited_once_with(
+        {"deployment_name": "shop-demo", "namespace": "shop-ns"}
+    )
+    assert res["verification_passed"] is True
+    assert res["status"] == "RESOLVED"
 
 
-@pytest.mark.asyncio
-async def test_verify_node_condition_failed_triggers_retry():
-    """Verify that verify_node triggers retry when VerificationCondition fails despite adapter health."""
-    adapter = MagicMock()
-    adapter.verify_health = AsyncMock(
-        return_value=HealthCheckResult(
-            healthy=True,
-            slo_restored=True,
-            details="Deployment running",
-            metrics={"ready_replicas": 1.0},
+def test_k8s_observe_tools_locate_logs_and_deployment_status():
+    """Verify locate_pod_and_owner, fetch_pod_container_logs, and inspect_deployment_status."""
+    pod = SimpleNamespace(
+        metadata=SimpleNamespace(
+            name="shop-demo-59bd7ddcf9-t2skj",
+            namespace="shop-ns",
+            labels={"app.kubernetes.io/name": "shop-demo", "nexus.sre/enabled": "true"},
+            owner_references=[
+                SimpleNamespace(kind="ReplicaSet", name="shop-demo-59bd7ddcf9")
+            ],
+        ),
+        status=SimpleNamespace(
+            phase="Running",
+            container_statuses=[
+                SimpleNamespace(
+                    name="shop-backend",
+                    ready=False,
+                    restart_count=4,
+                    state=SimpleNamespace(
+                        running=None,
+                        waiting=SimpleNamespace(
+                            reason="CrashLoopBackOff", message="back-off"
+                        ),
+                        terminated=None,
+                    ),
+                    last_state=SimpleNamespace(
+                        terminated=SimpleNamespace(
+                            exit_code=0,
+                            reason="Completed",
+                            message="",
+                            finished_at="2026-11-18T12:00:00Z",
+                        )
+                    ),
+                )
+            ],
+        ),
+        spec=SimpleNamespace(
+            containers=[
+                SimpleNamespace(
+                    name="shop-backend",
+                    image="shop-demo:latest",
+                    command=["sh", "-c", "exit 0"],
+                    args=None,
+                    ports=[SimpleNamespace(container_port=8001)],
+                    resources=SimpleNamespace(
+                        to_dict=lambda: {"limits": {"memory": "256Mi"}}
+                    ),
+                    readiness_probe=SimpleNamespace(
+                        to_dict=lambda: {"httpGet": {"port": 8001, "path": "/health"}}
+                    ),
+                    liveness_probe=None,
+                )
+            ]
+        ),
+    )
+    rs = SimpleNamespace(
+        metadata=SimpleNamespace(
+            owner_references=[SimpleNamespace(kind="Deployment", name="shop-demo")]
         )
     )
-
-    state = {
-        "incident_id": "inc-verif-fail-01",
-        "platform": "kubernetes",
-        "target": {"name": "app-svc", "namespace": "prod"},
-        "plan": {
-            "steps": [
-                {
-                    "step_index": 0,
-                    "tool_name": "k8s_scale_resource",
-                    # Condition requires 3 replicas, but observed is only 1.0
-                    "verification_condition": {
-                        "metric_name": "ready_replicas",
-                        "operator": ">=",
-                        "threshold": 3.0,
-                        "window_seconds": 60,
-                    },
-                }
-            ]
-        },
-        "retry_count": 0,
-        "max_retries": 2,
-    }
-
-    with (
-        patch(
-            "nexus.graph.nodes.verify.get_platform_registry",
-            return_value=_fake_registry(adapter),
+    dep = SimpleNamespace(
+        metadata=SimpleNamespace(
+            name="shop-demo",
+            namespace="shop-ns",
+            labels={"nexus.sre/enabled": "true"},
         ),
-        patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05),
-        patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.02),
-    ):
-        result = await verify_node(state)
-
-    assert result.get("resolved") is not True
-    assert result["verification"]["healthy"] is False
-    assert result["fsm_state"] == "retrying"
-    assert result["retry_count"] == 1
-    assert "FAIL" in result["verification"]["failure_reason"]
-
-
-@pytest.mark.asyncio
-async def test_verify_node_condition_failed_triggers_rollback_on_max_retries():
-    """Verify that verify_node transitions to ROLLING_BACK when max retries are exceeded."""
-    adapter = MagicMock()
-    adapter.verify_health = AsyncMock(
-        return_value=HealthCheckResult(
-            healthy=True,
-            slo_restored=True,
-            details="Deployment running",
-            metrics={"ready_replicas": 1.0},
-        )
+        spec=SimpleNamespace(
+            replicas=2,
+            selector=SimpleNamespace(
+                match_labels={"app.kubernetes.io/name": "shop-demo"}
+            ),
+        ),
+        status=SimpleNamespace(
+            ready_replicas=2,
+            available_replicas=2,
+            unavailable_replicas=0,
+            conditions=[
+                SimpleNamespace(
+                    type="Available",
+                    status="True",
+                    reason="MinimumReplicasAvailable",
+                    message="ok",
+                )
+            ],
+        ),
     )
 
-    state = {
-        "incident_id": "inc-verif-rollback-01",
-        "platform": "kubernetes",
-        "target": {"name": "app-svc", "namespace": "prod"},
-        "plan": {
-            "steps": [
-                {
-                    "step_index": 0,
-                    "tool_name": "k8s_scale_resource",
-                    "verification_condition": {
-                        "metric_name": "ready_replicas",
-                        "operator": ">=",
-                        "threshold": 3.0,
-                        "window_seconds": 60,
-                    },
-                }
-            ]
-        },
-        "retry_count": 2,
-        "max_retries": 2,  # Already at max retries
-    }
+    core_v1 = MagicMock()
+    core_v1.list_pod_for_all_namespaces.return_value = SimpleNamespace(items=[pod])
+    core_v1.read_namespaced_pod_log.side_effect = [
+        "current log line",
+        "previous crash line",
+    ]
+    core_v1.list_namespaced_pod.return_value = SimpleNamespace(items=[pod])
+
+    apps_v1 = MagicMock()
+    apps_v1.read_namespaced_replica_set.return_value = rs
+    apps_v1.read_namespaced_deployment.return_value = dep
 
     with (
-        patch(
-            "nexus.graph.nodes.verify.get_platform_registry",
-            return_value=_fake_registry(adapter),
-        ),
-        patch("nexus.graph.nodes.verify.VERIFY_TIMEOUT_S", 0.05),
-        patch("nexus.graph.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.02),
+        patch("nexus.tools.k8s.observe_tools.get_k8s_core_api", return_value=core_v1),
+        patch("nexus.tools.k8s.observe_tools.get_k8s_apps_api", return_value=apps_v1),
     ):
-        result = await verify_node(state)
+        loc = locate_pod_and_owner.invoke({"pod_name": "shop-demo-59bd7ddcf9-t2skj"})
+        assert loc["namespace"] == "shop-ns"
+        assert loc["owner_kind"] == "Deployment"
+        assert loc["owner_name"] == "shop-demo"
+        assert (
+            loc["container_statuses"][0]["last_terminated_state"]["terminated"][
+                "exit_code"
+            ]
+            == 0
+        )
 
-    assert result.get("resolved") is not True
-    assert result["verification"]["healthy"] is False
-    assert result["fsm_state"] == "rolling_back"
+        logs = fetch_pod_container_logs.invoke(
+            {"pod_name": "shop-demo-59bd7ddcf9-t2skj", "namespace": "shop-ns"}
+        )
+        assert logs["current_container_logs"] == "current log line"
+        assert logs["previous_terminated_container_logs"] == "previous crash line"
+
+        dep_status = inspect_deployment_status.invoke(
+            {"deployment_name": "shop-demo", "namespace": "shop-ns"}
+        )
+        assert dep_status["nexus_registered"] is True
+        assert dep_status["desired_replicas"] == 2
+        assert dep_status["ready_replicas"] == 2

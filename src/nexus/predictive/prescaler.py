@@ -10,8 +10,8 @@ import time
 import uuid
 from typing import Any
 
-from nexus.bus.incident_event import AgentType, IncidentEvent, Severity, SignalType
-from nexus.bus.nats_client import NATSClient
+from nexus.bus.events import AgentType, IncidentEvent, Severity, SignalType
+from nexus.bus.nats.client import NATSClient
 from nexus.predictive.calculator import (
     compute_recommended_replicas,
     endpoint_to_deployment,

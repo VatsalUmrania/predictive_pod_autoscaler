@@ -1,17 +1,18 @@
 """
-Helpers for NEXUS Governance Node.
+Attribute-Based Governance Helpers for NEXUS.
+Relies exclusively on ToolRegistry metadata and OPA policy evaluation
+(zero hardcoded Python sets of allowed tool names).
 """
 
 from __future__ import annotations
 
-import inspect
 import logging
 import os
 import zlib
 from typing import Any, cast
 
 from nexus.db import get_database_client
-from nexus.governance.policy_engine import PolicyEngine, build_opa_input_for_action
+from nexus.governance.policy_engine import PolicyEngine, evaluate_opa_policy
 
 logger = logging.getLogger(__name__)
 
@@ -59,35 +60,9 @@ async def release_advisory_lock(
             pass
 
 
-async def evaluate_steps_opa(
-    steps: list, confidence: float, cb_open: bool, cooldown_active: bool
-) -> tuple[bool, bool, list[str]]:
-    engine = get_policy_engine()
-    allowed: bool = True
-    requires_approval: bool = False
-    reasons: list[str] = []
-    for raw_step in steps:
-        step = (
-            raw_step
-            if isinstance(raw_step, dict)
-            else (
-                raw_step.model_dump()
-                if hasattr(raw_step, "model_dump")
-                else vars(raw_step)
-            )
-        )
-        inp = build_opa_input_for_action(
-            step,
-            {"confidence": confidence},
-            cooldown_active=cooldown_active,
-            circuit_breaker_tripped=cb_open,
-        )
-        call = engine.evaluate_action(inp)
-        res = await call if inspect.isawaitable(call) else call
-        dec = res.get("decision", "DENY")
-        if dec == "DENY":
-            allowed = False
-            reasons.extend(res.get("deny_reasons") or ["OPA policy denied action"])
-        elif dec == "REQUIRE_APPROVAL":
-            requires_approval = True
-    return allowed, requires_approval, reasons
+__all__ = [
+    "get_policy_engine",
+    "acquire_advisory_lock",
+    "release_advisory_lock",
+    "evaluate_opa_policy",
+]

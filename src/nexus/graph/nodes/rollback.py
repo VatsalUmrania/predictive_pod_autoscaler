@@ -1,125 +1,111 @@
 """
 NEXUS Deterministic Rollback Node
 =================================
-Executes deterministic state restoration using pre-mutation snapshots captured
-in RollbackRegistry. Does NOT use LLM improvisation — all rollback actions
-are pre-computed inverses applied in reverse order.
+Reverts executed reversible mutations in LIFO order when execution or
+verification exhausts its retry budget.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
-from nexus.db.models import IncidentState
-from nexus.graph.platform import RollbackSnapshot, TargetResource, get_platform_registry
-from nexus.graph.state import IncidentGraphState
+from nexus.graph.state import IncidentState
+from nexus.tools.registry import get_tool_registry
 
 logger = logging.getLogger(__name__)
 
 
-async def rollback_node(state: IncidentGraphState) -> dict[str, Any]:
-    """Deterministically execute inverse actions for executed steps in reverse order."""
-    incident_id = state["incident_id"]
-    execution_records = state.get("execution_records", [])
-    target_dict = state.get("target") or {}
-    target = (
-        TargetResource(**target_dict) if isinstance(target_dict, dict) else target_dict
-    )
-    platform_id = state.get("platform", "kubernetes")
-    plan = state.get("plan") or {}
-    plan_steps = plan.get("steps", []) if isinstance(plan, dict) else []
-    steps_by_index = {s.get("step_index", i): s for i, s in enumerate(plan_steps)}
+async def rollback_node(state: IncidentState) -> dict[str, Any]:
+    """Execute inverse rollback actions for previously executed steps in reverse order."""
+    incident_id = state.get("incident_id", "unknown")
+    execution_results: list[dict[str, Any]] = list(state.get("execution_results") or [])
+    plan_steps = (state.get("remediation_plan") or {}).get("steps") or []
+    steps_by_num = {s.get("step", idx): s for idx, s in enumerate(plan_steps, start=1)}
 
-    registry = get_platform_registry()
-    adapter = registry.get(platform_id) or registry.resolve_adapter(
-        state.get("events", [])
-    )
+    registry = get_tool_registry()
+    rollback_results: list[dict[str, Any]] = list(state.get("rollback_results") or [])
 
     logger.warning(
-        "[Rollback] Incident %s: initiating rollback across %d executed step(s)",
+        "Incident %s initiating rollback across %d executed step(s).",
         incident_id,
-        len(execution_records),
+        len(execution_results),
     )
 
-    rollback_records: list[dict[str, Any]] = []
-    # Reverse executed steps for proper LIFO rollback
-    for rec in reversed(execution_records):
-        snap_id = rec.get("snapshot_id")
+    for rec in reversed(execution_results):
+        if rec.get("status") != "SUCCESS":
+            continue
+        step_num = rec.get("step", 0)
         tool_name = rec.get("tool_name", "")
-        step_idx = rec.get("step_index", 0)
+        tool_args = dict(rec.get("tool_args") or {})
+        step_meta = steps_by_num.get(step_num, {})
 
-        logger.info("[Rollback] Rolling back step %s (snap_id=%s)", tool_name, snap_id)
+        rb_tool_name = step_meta.get("rollback_tool")
+        rb_args = dict(step_meta.get("rollback_args") or {})
 
-        # Inverse preference: captured pre-mutation snapshot → plan step fields → synthesized default
-        step = steps_by_index.get(step_idx, {})
-        rb_tool = rec.get("rollback_tool") or step.get("rollback_tool")
-        rb_params = rec.get("rollback_parameters") or step.get("rollback_parameters")
+        # Check NexusTool.get_rollback_action if registered
+        if not rb_tool_name:
+            nexus_tool = registry.get(tool_name)
+            if nexus_tool and hasattr(nexus_tool, "get_rollback_action"):
+                rb_spec = nexus_tool.get_rollback_action(**tool_args)
+                if isinstance(rb_spec, dict) and rb_spec.get("tool_name"):
+                    rb_tool_name = rb_spec["tool_name"]
+                    rb_args = dict(rb_spec.get("parameters") or {})
 
-        if rb_tool:
-            snap = RollbackSnapshot(
-                snapshot_id=snap_id or f"rollback-{tool_name}",
-                target=target,
-                action_name=tool_name,
-                rollback_tool=rb_tool,
-                rollback_parameters=dict(rb_params or {}),
-                description="Restoring captured pre-mutation state",
+        if not rb_tool_name:
+            rollback_results.append(
+                {
+                    "step": step_num,
+                    "original_tool": tool_name,
+                    "status": "SKIPPED",
+                    "output": f"No inverse rollback tool declared for '{tool_name}'.",
+                }
             )
-        else:
-            snap = RollbackSnapshot(
-                snapshot_id=snap_id or f"rollback-{tool_name}",
-                target=target,
-                action_name=tool_name,
-                rollback_tool=(
-                    "k8s_restart_deployment"
-                    if platform_id == "kubernetes"
-                    else "aws_update_lambda_memory"
-                ),
-                rollback_parameters=(
-                    {"namespace": target.namespace, "deployment_name": target.name}
-                    if platform_id == "kubernetes"
-                    else {"function_name": target.name, "memory_mb": 256}
-                ),
-                description="Reverting action to prior stable state (synthesized fallback)",
+            continue
+
+        rb_tool = registry.get_tool(rb_tool_name)
+        if rb_tool is None:
+            rollback_results.append(
+                {
+                    "step": step_num,
+                    "original_tool": tool_name,
+                    "rollback_tool": rb_tool_name,
+                    "status": "FAILED",
+                    "output": f"Rollback tool '{rb_tool_name}' not found in registry.",
+                }
             )
+            continue
 
         try:
-            rb_res = await adapter.execute_rollback(snap)
-            rollback_records.append(
+            output = await rb_tool.ainvoke(rb_args)
+            rollback_results.append(
                 {
-                    "snapshot_id": snap.snapshot_id,
-                    "tool": snap.rollback_tool,
-                    "success": rb_res.success,
-                    "error": rb_res.error,
+                    "step": step_num,
+                    "original_tool": tool_name,
+                    "rollback_tool": rb_tool_name,
+                    "rollback_args": rb_args,
+                    "status": "SUCCESS",
+                    "output": str(output),
                 }
             )
         except Exception as exc:
             logger.error(
-                "[Rollback] Failed executing rollback snapshot %s: %s",
-                snap.snapshot_id,
+                "Incident %s rollback tool %s failed: %s",
+                incident_id,
+                rb_tool_name,
                 exc,
             )
-            rollback_records.append(
+            rollback_results.append(
                 {
-                    "snapshot_id": snap.snapshot_id,
-                    "tool": snap.rollback_tool,
-                    "success": False,
-                    "error": str(exc),
+                    "step": step_num,
+                    "original_tool": tool_name,
+                    "rollback_tool": rb_tool_name,
+                    "status": "FAILED",
+                    "output": str(exc),
                 }
             )
 
-    now_iso = datetime.now(timezone.utc).isoformat()
-    audit_entry = {
-        "timestamp": now_iso,
-        "stage": "rollback",
-        "action": "rolled_back",
-        "details": f"Reverted {len(rollback_records)} action(s)",
-    }
-
     return {
-        "rollback_executed": True,
-        "rollback_records": rollback_records,
-        "fsm_state": IncidentState.ROLLED_BACK.value,
-        "audit_log": [audit_entry],
+        "rollback_results": rollback_results,
+        "status": "ROLLED_BACK",
     }

@@ -1,392 +1,491 @@
 """
-Unit tests for NEXUS LangGraph Approval Node, Interrupt, and HITL Edit Routing.
+Unit Tests for NEXUS LangGraph Approval Interrupt, Clean Command(resume=...),
+Approval Reset on Retries, and Post-Incident Report Guard.
 """
 
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
+from langgraph.checkpoint.memory import MemorySaver
 
-from nexus.db.models import IncidentState
+from nexus.graph.builder import build_incident_graph
 from nexus.graph.nodes.approval import approval_node
-from nexus.graph.platform import HealthCheckResult, get_platform_registry
+from nexus.graph.nodes.govern import govern_node
+from nexus.graph.rca.result import DiscoveredTarget, RCAResult, VerificationResult
 from nexus.graph.routes import route_after_approval
-from nexus.graph.workflow import IncidentWorkflow
-from nexus.integration.slack_templates import build_agentic_approval_payload
-from nexus.tools.base import NexusToolResult
+from nexus.graph.workflow import run_incident_workflow
+from nexus.graph.workflow_approval import handle_incident_approval
+from nexus.graph.workflow_completion import finalize_workflow_run
 
 
-class MockRCAChatModel(BaseChatModel):
-    """Mock LLM that immediately emits structured RCAReport tool call."""
+def _make_fake_llm(
+    rca: RCAResult, plan_tool_calls: list[dict[str, Any]], verify: VerificationResult
+):
+    class _FakeStructured:
+        def __init__(self, schema: Any):
+            self._schema = schema
 
-    @property
-    def _llm_type(self) -> str:
-        return "mock-rca-chat-model"
+        async def ainvoke(self, messages: Any) -> Any:
+            if self._schema is RCAResult:
+                return rca
+            if self._schema is VerificationResult:
+                return verify
+            raise ValueError(f"Unexpected schema {self._schema}")
 
-    def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
-        msg = AIMessage(
-            content="",
-            tool_calls=[
-                {
-                    "name": "RCAReport",
-                    "args": {
-                        "root_cause_summary": "OOMKilled pod due to memory limit exhaustion",
-                        "affected_resource_urn": "k8s://production/apps/v1/Deployment/checkout-api",
-                        "provider": "kubernetes",
-                        "confidence": 0.95,
-                        "hypotheses_evaluated": ["oom", "bad_deploy"],
-                        "evidence_chain": [
-                            {
-                                "tool_name": "execute_k8s_get_logs",
-                                "tool_arguments": {
-                                    "pod_name": "checkout-api-123",
-                                    "namespace": "production",
-                                },
-                                "key_finding": "Pod status terminated with exitCode 137",
-                            }
-                        ],
-                        "pre_incident_resource_state": {"replicas": 2},
-                        "requires_remediation": True,
-                    },
-                    "id": "rca_call_1",
-                }
-            ],
-        )
-        return ChatResult(generations=[ChatGeneration(message=msg)])
+    class _FakeBound:
+        def __init__(self, tools: list[Any]):
+            self._tool_names = {t.name for t in tools}
 
-    def bind_tools(self, *args: Any, **kwargs: Any) -> Any:
-        return self
+        async def ainvoke(self, messages: Any) -> AIMessage:
+            # If mutation tools are bound, return planned mutation tool call(s)
+            if any(tc["name"] in self._tool_names for tc in plan_tool_calls):
+                return AIMessage(
+                    content="Remediating target", tool_calls=plan_tool_calls
+                )
+            return AIMessage(content="Observation complete", tool_calls=[])
+
+    class _FakeLLM:
+        async def ainvoke(self, messages: Any) -> AIMessage:
+            return AIMessage(content="Observation complete", tool_calls=[])
+
+        def bind_tools(self, tools: list[Any]) -> Any:
+            return _FakeBound(tools)
+
+        def with_structured_output(self, schema: Any) -> Any:
+            return _FakeStructured(schema)
+
+    return _FakeLLM()
 
 
 def test_route_after_approval_logic():
-    """Verify routing decisions based on operator verdicts."""
-    assert route_after_approval({"approval_decision": "approved"}) == "execute"
-    assert route_after_approval({"approval_decision": "yes"}) == "execute"
-    assert route_after_approval({"approval_decision": "proceed"}) == "execute"
+    assert (
+        route_after_approval({"approved": True, "approval_status": "APPROVED"})
+        == "execute"
+    )
+    assert route_after_approval({"approval_status": "AUTO_APPROVED"}) == "execute"
+    assert (
+        route_after_approval({"approved": False, "approval_status": "REJECTED"})
+        == "escalate"
+    )
+    assert route_after_approval({"approval_status": "PENDING"}) == "escalate"
 
-    assert route_after_approval({"approval_decision": "edit"}) == "govern"
-    assert route_after_approval({"approval_decision": "modify"}) == "govern"
 
-    assert route_after_approval({"approval_decision": "rejected"}) == "escalate"
-    assert route_after_approval({"approval_decision": "no"}) == "escalate"
-    assert route_after_approval({"approval_decision": "unknown"}) == "escalate"
-
-
-def test_approval_node_processes_verdicts_and_edits():
-    """Verify approval_node correctly parses approved, edit, and rejected payloads."""
-    # 1. Approved string
-    state_approved = {
-        "incident_id": "inc-app-01",
-        "approval_decision": "approved",
-    }
-    res1 = approval_node(state_approved)
-    assert res1["approval_decision"] == "approved"
-    assert res1["fsm_state"] == IncidentState.EXECUTING.value
-
-    # 2. Rejected string
-    state_rejected = {
-        "incident_id": "inc-app-02",
-        "approval_decision": "rejected",
-    }
-    res2 = approval_node(state_rejected)
-    assert res2["approval_decision"] == "rejected"
-    assert res2["fsm_state"] == IncidentState.REJECTED.value
-
-    # 3. Edit dict with updated parameters
-    state_edit = {
-        "incident_id": "inc-app-03",
-        "approval_decision": {
-            "action": "edit",
-            "parameters": {"replicas": 5, "namespace": "production"},
-        },
-        "plan": {
+@pytest.mark.asyncio
+async def test_govern_node_resets_prior_approval_on_requires_approval():
+    """Verify govern_node clears prior approved/approved_by/approval_reason when approval is required."""
+    state = {
+        "incident_id": "inc-reset-01",
+        "platform": "k8s",
+        "namespace": "shop-ns",
+        "resource_kind": "Deployment",
+        "service_name": "shop-demo",
+        "confidence": 0.9,
+        "approved": True,
+        "approved_by": "previous-operator",
+        "approval_reason": "attempt 1",
+        "remediation_plan": {
             "steps": [
                 {
-                    "step_index": 0,
-                    "tool_name": "k8s_scale_resource",
-                    "parameters": {"replicas": 2},
+                    "step": 1,
+                    "tool_name": "k8s_rollback_deployment",
+                    "tool_args": {
+                        "namespace": "shop-ns",
+                        "deployment_name": "shop-demo",
+                    },
+                    "blast_radius": "service_wide",
+                    "reversible": True,
                 }
             ]
         },
     }
-    res3 = approval_node(state_edit)
-    assert res3["approval_decision"] == "edit"
-    assert res3["fsm_state"] == IncidentState.POLICY_CHECK.value
-    assert res3["plan"]["steps"][0]["parameters"]["replicas"] == 5
+    with patch(
+        "nexus.graph.nodes.govern.evaluate_opa_policy",
+        AsyncMock(
+            return_value={
+                "allowed": True,
+                "requires_approval": True,
+                "reason": "Requires approval",
+            }
+        ),
+    ):
+        res = await govern_node(state)
+
+    assert res["requires_approval"] is True
+    assert res["approval_status"] == "PENDING"
+    assert res["approved"] is None
+    assert res["approved_by"] is None
+    assert res["approval_reason"] is None
+    assert res["status"] == "AWAITING_APPROVAL"
 
 
-def test_slack_block_kit_agentic_approval_card():
-    """Verify build_agentic_approval_payload constructs rich Block Kit approval cards."""
-    proposed_steps = [
-        {
-            "step_index": 0,
-            "tool_name": "k8s_scale_resource",
-            "blast_radius": "service",
-            "is_destructive": False,
-            "parameters": {"deployment_name": "checkout-web", "replicas": 5},
-            "rollback_tool": "k8s_scale_resource",
-            "rollback_parameters": {"replicas": 2},
-        },
-        {
-            "step_index": 1,
-            "tool_name": "aws_rds_delete_db_instance",
-            "blast_radius": "database",
-            "is_destructive": True,
-            "parameters": {"db_instance_identifier": "legacy-db"},
-        },
-    ]
-
-    card = build_agentic_approval_payload(
-        incident_id="inc-test-card",
-        target_service="checkout-web",
-        causal_rationale="Traffic surge caused pod crash; scaling recommended.",
-        proposed_steps=proposed_steps,
-        confidence=0.92,
-        platform="kubernetes",
+@pytest.mark.asyncio
+async def test_approval_node_requires_both_status_and_flag():
+    """approval_node short-circuits only when approval_status=='APPROVED' and approved is True."""
+    res_auto = await approval_node(
+        {"incident_id": "inc-1", "approval_status": "AUTO_APPROVED"}
     )
+    assert res_auto["approved"] is True
+    assert res_auto["status"] == "APPROVED"
 
-    attachments = card.get("attachments", [])
-    assert len(attachments) == 1
-    blocks = attachments[0].get("blocks", [])
-    assert len(blocks) >= 5
+    res_approved = await approval_node(
+        {"incident_id": "inc-2", "approval_status": "APPROVED", "approved": True}
+    )
+    assert res_approved["approved"] is True
+    assert res_approved["status"] == "APPROVED"
 
-    # Check header
-    header_block = blocks[0]
-    assert "checkout-web" in header_block["text"]["text"]
-
-    # Check action buttons
-    action_block = blocks[-1]
-    assert action_block["type"] == "actions"
-    actions = [btn["action_id"] for btn in action_block["elements"]]
-    assert "nexus_approve" in actions
-    assert "nexus_edit" in actions
-    assert "nexus_reject" in actions
+    res_rejected = await approval_node(
+        {"incident_id": "inc-3", "approval_status": "REJECTED", "approved": False}
+    )
+    assert res_rejected["approved"] is False
+    assert res_rejected["status"] == "ESCALATED"
 
 
 @pytest.mark.asyncio
-async def test_e2e_approval_interrupt_and_resume_approved():
-    """Test full workflow pausing on approval and resuming cleanly upon approval."""
-    workflow = IncidentWorkflow()
-    thread_id = "thread-hitl-approve"
-    adapter = get_platform_registry().get("kubernetes")
-
-    events = [
-        {
-            "agent": "k8s",
-            "resource_name": "checkout-api",
-            "namespace": "production",
-            "severity": "critical",
-            "signal_type": "pod_oomkilled",
-        }
-    ]
-
-    with (
-        patch(
-            "nexus.graph.nodes.diagnose.get_llm",
-            return_value=MockRCAChatModel(),
-        ),
-        patch.object(
-            adapter,
-            "execute_action",
-            AsyncMock(return_value=NexusToolResult(success=True)),
-        ),
-        patch.object(
-            adapter,
-            "verify_health",
-            AsyncMock(
-                return_value=HealthCheckResult(
-                    healthy=True, slo_restored=True, details="Pods Ready"
-                )
-            ),
-        ),
-    ):
-        interrupted = await workflow.run_incident(
-            {
-                "incident_id": "inc-hitl-01",
-                "platform": "kubernetes",
-                "events": events,
-            },
-            thread_id=thread_id,
-        )
-
-        assert interrupted["fsm_state"] == "approval_pending"
-        assert len(interrupted["execution_records"]) == 0
-
-        # Resume with approved
-        resumed = await workflow.resume_incident(
-            thread_id=thread_id,
-            approval_decision="approved",
-        )
-
-        assert resumed["resolved"] is True
-        assert resumed["fsm_state"] == "resolved"
-        assert len(resumed["execution_records"]) == 1
-        assert resumed["execution_records"][0]["success"] is True
-
-
-@pytest.mark.asyncio
-async def test_e2e_approval_interrupt_and_resume_rejected():
-    """Test full workflow pausing on approval and escalating when operator rejects."""
-    workflow = IncidentWorkflow()
-    thread_id = "thread-hitl-reject"
-
-    events = [
-        {
-            "agent": "k8s",
-            "resource_name": "checkout-api",
-            "namespace": "production",
-            "severity": "critical",
-            "signal_type": "pod_oomkilled",
-        }
-    ]
-
+async def test_finalize_workflow_run_strict_report_guards():
+    """Post-Incident Report MUST NOT fire while awaiting approval or with 0 executed steps."""
     with patch(
-        "nexus.graph.nodes.diagnose.get_llm",
-        return_value=MockRCAChatModel(),
-    ):
-        interrupted = await workflow.run_incident(
+        "nexus.integration.incident_report.publish_post_incident_report",
+        AsyncMock(),
+    ) as mock_publish:
+        await finalize_workflow_run(
+            "inc-paused",
             {
-                "incident_id": "inc-hitl-02",
-                "platform": "kubernetes",
-                "events": events,
+                "status": "AWAITING_APPROVAL",
+                "approval_status": "PENDING",
+                "execution_results": [],
             },
-            thread_id=thread_id,
         )
-
-        assert interrupted["fsm_state"] == "approval_pending"
-
-        # Resume with rejected
-        resumed = await workflow.resume_incident(
-            thread_id=thread_id,
-            approval_decision="rejected",
-        )
-
-        assert resumed["resolved"] is False
-        assert resumed["escalated"] is True
-        assert resumed["fsm_state"] == "escalated"
-
-
-@pytest.mark.asyncio
-async def test_e2e_approval_interrupt_resume_edit_re_governs_and_executes():
-    """Test operator editing proposed arguments: loops back to govern and executes edited plan."""
-    workflow = IncidentWorkflow()
-    thread_id = "thread-hitl-edit"
-    adapter = get_platform_registry().get("kubernetes")
-
-    events = [
-        {
-            "agent": "k8s",
-            "resource_name": "checkout-api",
-            "namespace": "production",
-            "severity": "warning",
-            "signal_type": "high_cpu_throttle",
-        }
-    ]
-
-    with (
-        patch(
-            "nexus.graph.nodes.diagnose.get_llm",
-            return_value=MockRCAChatModel(),
-        ),
-        patch.object(
-            adapter,
-            "execute_action",
-            AsyncMock(return_value=NexusToolResult(success=True)),
-        ),
-        patch.object(
-            adapter,
-            "verify_health",
-            AsyncMock(
-                return_value=HealthCheckResult(
-                    healthy=True, slo_restored=True, details="Healthy after edit"
-                )
-            ),
-        ),
-    ):
-        interrupted = await workflow.run_incident(
+        await finalize_workflow_run(
+            "inc-zero-steps",
             {
-                "incident_id": "inc-hitl-03",
-                "platform": "kubernetes",
-                "events": events,
-            },
-            thread_id=thread_id,
-        )
-
-        assert interrupted["fsm_state"] == "approval_pending"
-
-        # Operator edits plan: changes parameters
-        resumed = await workflow.resume_incident(
-            thread_id=thread_id,
-            approval_decision={
-                "action": "edit",
-                "parameters": {
-                    "namespace": "production",
-                    "deployment_name": "checkout-api",
-                    "custom_annotation": "operator-modified",
-                },
+                "status": "ESCALATED",
+                "approval_status": "REJECTED",
+                "execution_results": [],
             },
         )
+        mock_publish.assert_not_called()
 
-        assert resumed["resolved"] is True
-        assert resumed["fsm_state"] == "resolved"
-        assert len(resumed["execution_records"]) == 1
-        executed_params = resumed["plan"]["steps"][0]["parameters"]
-        assert executed_params.get("custom_annotation") == "operator-modified"
-
-
-@pytest.mark.asyncio
-async def test_e2e_approval_interrupt_resume_edit_violating_policy_escalates():
-    """Test operator editing plan to a destructive tool: govern blocks it and escalates."""
-    workflow = IncidentWorkflow()
-    thread_id = "thread-hitl-edit-unsafe"
-
-    events = [
-        {
-            "agent": "k8s",
-            "resource_name": "checkout-api",
-            "namespace": "production",
-            "severity": "warning",
-            "signal_type": "high_cpu_throttle",
-        }
-    ]
-
-    with patch(
-        "nexus.graph.nodes.diagnose.get_llm",
-        return_value=MockRCAChatModel(),
-    ):
-        interrupted = await workflow.run_incident(
+        await finalize_workflow_run(
+            "inc-done",
             {
-                "incident_id": "inc-hitl-04",
-                "platform": "kubernetes",
-                "events": events,
-            },
-            thread_id=thread_id,
-        )
-
-        assert interrupted["fsm_state"] == "approval_pending"
-
-        # Operator edits plan to insert a destructive tool
-        resumed = await workflow.resume_incident(
-            thread_id=thread_id,
-            approval_decision={
-                "action": "edit",
-                "steps": [
+                "status": "RESOLVED",
+                "approval_status": "APPROVED",
+                "execution_results": [
                     {
-                        "step_index": 0,
-                        "tool_name": "aws_rds_delete_db_instance",
-                        "parameters": {"db_instance_identifier": "production-db"},
+                        "step": 1,
+                        "tool_name": "k8s_rollback_deployment",
+                        "status": "SUCCESS",
                     }
                 ],
             },
         )
+        mock_publish.assert_awaited_once()
 
-        # Zero-trust govern node intercepts the destructive tool and routes to escalate
-        assert resumed["resolved"] is False
-        assert resumed["escalated"] is True
-        assert resumed["fsm_state"] == "escalated"
-        assert len(resumed["execution_records"]) == 0
+
+@pytest.mark.asyncio
+async def test_e2e_interrupt_pause_no_report_then_clean_command_resume_approved():
+    """
+    Full pause/resume flow:
+      1. run_incident_workflow pauses at approval_node (snapshot.next == ('approval',))
+      2. Sends approval notification & syncs discovered target to DB; does NOT publish Post-Incident Report
+      3. handle_incident_approval resumes directly via Command(resume=...) WITHOUT calling aupdate_state
+      4. Executes tool -> verifies -> publishes Post-Incident Report once with 1 executed step.
+    """
+    rca = RCAResult(
+        target=DiscoveredTarget(
+            platform="k8s",
+            namespace_or_region="production",
+            resource_kind="Deployment",
+            resource_name="checkout-api",
+        ),
+        failure_type="oom_killed_memory_limit",
+        root_cause_summary="Container exceeded 256Mi memory limit (exit code 137).",
+        confidence=0.95,
+        evidence=["lastState.terminated.exitCode=137"],
+        can_auto_remediate=True,
+        recommended_strategy="Patch memory limit on Deployment/checkout-api to 512Mi.",
+    )
+    plan_calls = [
+        {
+            "id": "call_1",
+            "name": "k8s_patch_resource_limits",
+            "args": {
+                "namespace": "production",
+                "deployment_name": "checkout-api",
+                "cpu_limit": "500m",
+                "memory_limit": "512Mi",
+            },
+        }
+    ]
+    verif = VerificationResult(
+        verification_passed=True,
+        observed_state_summary="Deployment checkout-api readyReplicas=2/2.",
+    )
+    fake_llm = _make_fake_llm(rca, plan_calls, verif)
+    compiled = build_incident_graph(checkpointer=MemorySaver())
+
+    mock_tool = MagicMock()
+    mock_tool.ainvoke = AsyncMock(return_value="Patched limits for checkout-api")
+    mock_registry = MagicMock()
+    mock_registry.get_tools.side_effect = lambda mode, platform=None: (
+        [MagicMock(name="k8s_patch_resource_limits")] if mode == "mutate" else []
+    )
+    mock_registry.get_tools.side_effect = None
+
+    real_patch_tool = MagicMock()
+    real_patch_tool.name = "k8s_patch_resource_limits"
+    mock_registry.get_tools.side_effect = lambda mode, platform=None: (
+        [real_patch_tool] if mode == "mutate" else []
+    )
+    mock_registry.get_tool.return_value = mock_tool
+    mock_registry.get_metadata.return_value = MagicMock(
+        blast_radius="service_wide", reversible=True
+    )
+
+    mock_notify = AsyncMock()
+    mock_publish = AsyncMock()
+    mock_sync = AsyncMock()
+
+    with (
+        patch("nexus.graph.nodes.diagnose.get_chat_model", return_value=fake_llm),
+        patch("nexus.graph.nodes.plan.get_chat_model", return_value=fake_llm),
+        patch("nexus.graph.nodes.verify.get_chat_model", return_value=fake_llm),
+        patch(
+            "nexus.graph.nodes.diagnose.get_tool_registry", return_value=mock_registry
+        ),
+        patch("nexus.graph.nodes.plan.get_tool_registry", return_value=mock_registry),
+        patch(
+            "nexus.graph.nodes.execute.get_tool_registry", return_value=mock_registry
+        ),
+        patch("nexus.graph.nodes.verify.get_tool_registry", return_value=mock_registry),
+        patch(
+            "nexus.graph.nodes.govern.evaluate_opa_policy",
+            AsyncMock(
+                return_value={
+                    "allowed": True,
+                    "requires_approval": True,
+                    "reason": "OPA approval required",
+                }
+            ),
+        ),
+        patch("nexus.graph.workflow.send_approval_request_notification", mock_notify),
+        patch("nexus.graph.workflow.sync_discovered_target_identity", mock_sync),
+        patch("nexus.graph.nodes.diagnose.sync_discovered_target_identity", mock_sync),
+        patch("nexus.graph.nodes.approval.sync_discovered_target_identity", mock_sync),
+        patch(
+            "nexus.integration.incident_report.publish_post_incident_report",
+            mock_publish,
+        ),
+    ):
+        paused_state = await run_incident_workflow(
+            compiled,
+            {
+                "incident_id": "inc-hitl-01",
+                "platform": "k8s",
+                "namespace": None,
+                "service_name": None,
+                "raw_events": [{"message": "OOMKilled"}],
+            },
+        )
+
+        # 1. Paused cleanly at approval without premature Post-Incident Report
+        assert paused_state["status"] == "AWAITING_APPROVAL"
+        assert paused_state["target_resource"] == "production/Deployment/checkout-api"
+        assert paused_state.get("execution_results", []) == []
+        mock_notify.assert_awaited_once()
+        mock_publish.assert_not_called()
+        assert mock_sync.await_count >= 1
+
+        # 2. Resume directly via Command(resume=...) — verify aupdate_state is NOT called
+        with patch.object(
+            compiled, "aupdate_state", wraps=compiled.aupdate_state
+        ) as spy_update:
+            final_state = await handle_incident_approval(
+                compiled,
+                incident_id="inc-hitl-01",
+                approved=True,
+                approver="alice",
+                reason="Looks safe",
+            )
+            spy_update.assert_not_called()
+
+        assert final_state["status"] == "RESOLVED"
+        assert final_state["approved"] is True
+        assert final_state["approved_by"] == "alice"
+        assert final_state["execution_status"] == "SUCCESS"
+        assert len(final_state["execution_results"]) == 1
+        mock_tool.ainvoke.assert_awaited_once_with(plan_calls[0]["args"])
+        mock_publish.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_e2e_interrupt_resume_rejected_skips_post_incident_report():
+    """Rejecting an approval routes to escalate with 0 executed steps and emits NO Post-Incident Report."""
+    rca = RCAResult(
+        target=DiscoveredTarget(
+            platform="k8s",
+            namespace_or_region="production",
+            resource_kind="Deployment",
+            resource_name="checkout-api",
+        ),
+        failure_type="readiness_probe_timeout",
+        root_cause_summary="Probe timed out.",
+        confidence=0.9,
+        evidence=["probe timeout"],
+        can_auto_remediate=True,
+        recommended_strategy="Restart deployment.",
+    )
+    plan_calls = [
+        {
+            "id": "call_1",
+            "name": "k8s_restart_deployment",
+            "args": {"namespace": "production", "deployment_name": "checkout-api"},
+        }
+    ]
+    verif = VerificationResult(verification_passed=True, observed_state_summary="OK")
+    fake_llm = _make_fake_llm(rca, plan_calls, verif)
+    compiled = build_incident_graph(checkpointer=MemorySaver())
+
+    real_tool = MagicMock()
+    real_tool.name = "k8s_restart_deployment"
+    mock_registry = MagicMock()
+    mock_registry.get_tools.side_effect = lambda mode, platform=None: (
+        [real_tool] if mode == "mutate" else []
+    )
+    mock_registry.get_metadata.return_value = MagicMock(
+        blast_radius="pod", reversible=True
+    )
+    mock_publish = AsyncMock()
+
+    with (
+        patch("nexus.graph.nodes.diagnose.get_chat_model", return_value=fake_llm),
+        patch("nexus.graph.nodes.plan.get_chat_model", return_value=fake_llm),
+        patch(
+            "nexus.graph.nodes.diagnose.get_tool_registry", return_value=mock_registry
+        ),
+        patch("nexus.graph.nodes.plan.get_tool_registry", return_value=mock_registry),
+        patch(
+            "nexus.graph.nodes.govern.evaluate_opa_policy",
+            AsyncMock(
+                return_value={
+                    "allowed": True,
+                    "requires_approval": True,
+                    "reason": "OPA",
+                }
+            ),
+        ),
+        patch("nexus.graph.workflow.send_approval_request_notification", AsyncMock()),
+        patch(
+            "nexus.integration.incident_report.publish_post_incident_report",
+            mock_publish,
+        ),
+    ):
+        await run_incident_workflow(
+            compiled,
+            {
+                "incident_id": "inc-hitl-reject",
+                "platform": "k8s",
+                "raw_events": [{"message": "Readiness probe failed"}],
+            },
+        )
+        final_state = await handle_incident_approval(
+            compiled,
+            incident_id="inc-hitl-reject",
+            approved=False,
+            approver="bob",
+            reason="Maintenance window active",
+        )
+
+    assert final_state["status"] == "ESCALATED"
+    assert final_state["approved"] is False
+    assert final_state.get("execution_results", []) == []
+    mock_publish.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_incident_workflow_with_nats_dispatches_single_approval_notification():
+    """With NATS connected, IncidentWorkflow dispatches approval once over NATS and skips direct Slack post."""
+    from nexus.graph.checkpointer import GraphCheckpointStore
+    from nexus.graph.workflow import IncidentWorkflow
+
+    rca = RCAResult(
+        target=DiscoveredTarget(
+            platform="k8s",
+            namespace_or_region="default",
+            resource_kind="Deployment",
+            resource_name="shop-demo",
+        ),
+        failure_type="container_command_misconfiguration",
+        root_cause_summary="Container command override exits immediately with code 1.",
+        confidence=1.0,
+        evidence=["command=['/bin/sh', '-c', 'exit 1']"],
+        can_auto_remediate=True,
+        recommended_strategy="Remove erroneous command override from shop-demo.",
+    )
+    plan_calls = [
+        {
+            "id": "call_1",
+            "name": "k8s_remove_container_command",
+            "args": {"namespace": "default", "deployment_name": "shop-demo"},
+        }
+    ]
+    verif = VerificationResult(verification_passed=True, observed_state_summary="OK")
+    fake_llm = _make_fake_llm(rca, plan_calls, verif)
+
+    real_tool = MagicMock()
+    real_tool.name = "k8s_remove_container_command"
+    mock_registry = MagicMock()
+    mock_registry.get_tools.side_effect = lambda mode, platform=None: (
+        [real_tool] if mode == "mutate" else []
+    )
+    mock_registry.get_metadata.return_value = MagicMock(
+        blast_radius="service_wide", reversible=True
+    )
+
+    mock_nats = MagicMock()
+    mock_nats.publish_raw = AsyncMock()
+    mock_direct_notify = AsyncMock()
+
+    wf = IncidentWorkflow(
+        checkpointer_store=GraphCheckpointStore(MemorySaver()),
+        nats_client=mock_nats,
+    )
+
+    with (
+        patch("nexus.graph.nodes.diagnose.get_chat_model", return_value=fake_llm),
+        patch("nexus.graph.nodes.plan.get_chat_model", return_value=fake_llm),
+        patch("nexus.graph.nodes.diagnose.get_tool_registry", return_value=mock_registry),
+        patch("nexus.graph.nodes.plan.get_tool_registry", return_value=mock_registry),
+        patch(
+            "nexus.graph.nodes.govern.evaluate_opa_policy",
+            AsyncMock(
+                return_value={
+                    "allowed": True,
+                    "requires_approval": True,
+                    "reason": "Approval required by OPA policy",
+                }
+            ),
+        ),
+        patch("nexus.graph.workflow.send_approval_request_notification", mock_direct_notify),
+        patch("nexus.graph.workflow.sync_discovered_target_identity", AsyncMock()),
+        patch("nexus.graph.nodes.diagnose.sync_discovered_target_identity", AsyncMock()),
+        patch("nexus.graph.nodes.approval.sync_discovered_target_identity", AsyncMock()),
+    ):
+        paused = await wf.run_incident(
+            {
+                "incident_id": "CL-SINGLE-APPR",
+                "platform": "k8s",
+                "raw_events": [{"message": "CrashLoopBackOff"}],
+            },
+            thread_id="CL-SINGLE-APPR",
+        )
+
+    assert paused["status"] == "AWAITING_APPROVAL"
+    # Direct Slack dispatch is skipped when NATS publishes nexus.approvals.required
+    mock_direct_notify.assert_not_awaited()
+    mock_nats.publish_raw.assert_awaited_once()
+    assert mock_nats.publish_raw.await_args.args[0] == "nexus.approvals.required"

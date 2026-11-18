@@ -181,6 +181,7 @@ async def _slack_dispatch_approved(
 
 @router.post("/slack/interactive")
 @router.post("/api/v1/slack/interactive")
+@router.post("/api/v1/slack/interactions")
 async def slack_interactive(
     request: Request, background_tasks: BackgroundTasks
 ) -> dict[str, Any]:

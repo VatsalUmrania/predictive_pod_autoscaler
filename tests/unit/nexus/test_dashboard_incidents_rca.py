@@ -7,33 +7,26 @@ from nexus.observability.status_api import app
 
 @pytest.mark.asyncio
 async def test_serve_dashboard_html():
-    """Verify that the developer dashboard HTML is served at root with aspects, accept, approve, and RCA."""
+    """Verify that the developer dashboard HTML is served at root with SRE console UI, HITL approval, and RCA."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         res = await client.get("/")
         assert res.status_code == 200
         assert "text/html" in res.headers["content-type"]
         html = res.text
-        # Verify restored white theme palette and dark theme support
-        assert "--bg: #f8fafc" in html
-        assert "--text: #1e293b" in html
-        assert "--bg: #07070f" in html
-        assert "themeToggle" in html
-        assert "toggleTheme" in html
-        # Verify core aspects, navigation, and toolbar
-        assert "Incident Feed" in html
-        assert "aspect-toolbar" in html
+        # Verify theme palette and control plane branding
+        assert "--background: oklch(0.0400 0.0050 270)" in html
+        assert "NEXUS Autonomous SRE Control Plane" in html
+        # Verify incident feed, filters, and HITL approval actions
+        assert "LangGraph Incident Threads" in html
         assert "Awaiting Approval" in html
-        # Verify accept, approve, reject actions
-        assert "btn-accept" in html
         assert "btn-approve" in html
         assert "btn-reject" in html
-        assert "function accept(" in html
-        assert "function approve(" in html
-        assert "function reject(" in html
-        # Verify RCA block
-        assert "rca-box" in html
-        assert "Root Cause Analysis (RCA)" in html
+        assert "async function submitApprovalDecision(" in html
+        # Verify ReAct investigator / RCA and OPA panels
+        assert "ReAct Investigator (diagnose_node)" in html
+        assert "Synthesized Root Cause" in html
+        assert "Schema-Bound Plan &amp; OPA Policy" in html
 
 
 @pytest.mark.asyncio

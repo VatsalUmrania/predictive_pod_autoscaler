@@ -8,12 +8,102 @@ import asyncio
 import logging
 from typing import Any, cast
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
+from pydantic import BaseModel
 
+from nexus.graph.workflow_approval import handle_incident_approval
 from nexus.observability.status_context import _require, context
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["governance"])
+
+
+class ApprovalDecisionRequest(BaseModel):
+    """Optional JSON payload for inline dashboard / API approval decisions."""
+
+    incident_id: str | None = None
+    approved: bool | None = None
+    approver: str = "dashboard-operator"
+    reason: str = ""
+
+
+_OPTIONAL_APPROVAL_BODY = Body(default=None)
+
+
+async def _has_checkpoint(workflow: Any, thread_id: str) -> bool:
+    compiled_graph = getattr(workflow, "_compiled_graph", None)
+    if compiled_graph is None or not hasattr(compiled_graph, "aget_state"):
+        return False
+    try:
+        snapshot = await compiled_graph.aget_state(
+            {"configurable": {"thread_id": thread_id}}
+        )
+        return bool(snapshot and getattr(snapshot, "values", None))
+    except Exception:
+        return False
+
+
+async def _dispatch_workflow_decision(
+    action_id: str,
+    *,
+    approved: bool,
+    approver: str,
+    reason: str,
+) -> tuple[bool, Any]:
+    """Resume a paused LangGraph thread via resume_incident or handle_incident_approval."""
+    workflow = context.workflow
+    if workflow is None:
+        return False, None
+
+    has_pending = bool(
+        hasattr(workflow, "has_pending") and workflow.has_pending(action_id)
+    )
+    has_cp = await _has_checkpoint(workflow, action_id)
+    is_wf_target = has_pending or has_cp or not context.orchestrator
+
+    if not is_wf_target:
+        return False, None
+
+    decision_payload = {
+        "approved": approved,
+        "approved_by": approver,
+        "approval_reason": reason,
+    }
+
+    if hasattr(workflow, "resume_incident"):
+        outcome = await workflow.resume_incident(
+            action_id, approval_decision=decision_payload
+        )
+        return True, outcome
+
+    compiled_graph = getattr(workflow, "_compiled_graph", None)
+    if compiled_graph is not None:
+        outcome = await handle_incident_approval(
+            compiled_graph=compiled_graph,
+            incident_id=action_id,
+            approved=approved,
+            approver=approver,
+            reason=reason,
+        )
+        return True, outcome
+
+    return False, None
+
+
+async def _record_audit_decision(
+    action_id: str, *, approved: bool, approver: str
+) -> None:
+    if not context.audit_trail:
+        return
+    try:
+        if approved:
+            await context.audit_trail.record_approval(action_id, approver)
+        else:
+            await context.audit_trail.record_rejection(action_id, approver)
+    except Exception as exc:
+        logger.warning(
+            "[StatusAPI] Failed recording audit decision for %s: %s", action_id, exc
+        )
 
 
 @router.get("/audit/tail")
@@ -33,29 +123,34 @@ async def audit_by_incident(incident_id: str) -> list[dict[str, Any]]:
 
 
 @router.post("/approve/{action_id}")
-async def approve_action(action_id: str) -> dict[str, Any]:
+async def approve_action(
+    action_id: str,
+    payload: ApprovalDecisionRequest | None = _OPTIONAL_APPROVAL_BODY,
+) -> dict[str, Any]:
     """Approve a pending human-review action in LangGraph workflow."""
-    if context.workflow and hasattr(context.workflow, "resume_incident"):
-        is_wf_target = (
-            hasattr(context.workflow, "has_pending")
-            and context.workflow.has_pending(action_id)
-        ) or not context.orchestrator
+    approver = (payload.approver if payload and payload.approver else "api_user")
+    reason = payload.reason if payload else ""
 
-        if is_wf_target:
-            try:
-                outcome = await context.workflow.resume_incident(
-                    action_id, approval_decision="approved"
+    if context.workflow:
+        try:
+            handled, outcome = await _dispatch_workflow_decision(
+                action_id, approved=True, approver=approver, reason=reason
+            )
+            if handled:
+                await _record_audit_decision(
+                    action_id, approved=True, approver=approver
                 )
-                if context.audit_trail:
-                    await context.audit_trail.record_approval(action_id, "api_user")
                 return {
                     "status": "approved",
                     "action_id": action_id,
+                    "incident_id": action_id,
+                    "approved_by": approver,
+                    "reason": reason,
                     "outcome": outcome,
                 }
-            except Exception as exc:
-                logger.warning(f"Workflow approve failed for {action_id}: {exc}")
-                return {"status": "approved", "action_id": action_id, "error": str(exc)}
+        except Exception as exc:
+            logger.warning(f"Workflow approve failed for {action_id}: {exc}")
+            return {"status": "approved", "action_id": action_id, "error": str(exc)}
 
     orc = context.orchestrator
     if orc and hasattr(orc, "executor"):
@@ -66,8 +161,9 @@ async def approve_action(action_id: str) -> dict[str, Any]:
                 return {"status": "already_approved", "action_id": action_id}
             pending_item = queue.get(action_id)
             if queue.approve(action_id):
-                if context.audit_trail:
-                    await context.audit_trail.record_approval(action_id, "api_user")
+                await _record_audit_decision(
+                    action_id, approved=True, approver=approver
+                )
                 if pending_item:
                     asyncio.create_task(ladder.dispatch_approved(pending_item))
                 return {"status": "approved", "action_id": action_id}
@@ -78,26 +174,35 @@ async def approve_action(action_id: str) -> dict[str, Any]:
 
 
 @router.post("/reject/{action_id}")
-async def reject_action(action_id: str) -> dict[str, str]:
+async def reject_action(
+    action_id: str,
+    payload: ApprovalDecisionRequest | None = _OPTIONAL_APPROVAL_BODY,
+) -> dict[str, Any]:
     """Reject a pending human-review action."""
-    if context.workflow and hasattr(context.workflow, "resume_incident"):
-        is_wf_target = (
-            hasattr(context.workflow, "has_pending")
-            and context.workflow.has_pending(action_id)
-        ) or not context.orchestrator
+    approver = (payload.approver if payload and payload.approver else "api_user")
+    reason = payload.reason if payload else ""
 
-        if is_wf_target:
-            try:
-                await context.workflow.resume_incident(
-                    action_id, approval_decision="rejected"
+    if context.workflow:
+        try:
+            handled, outcome = await _dispatch_workflow_decision(
+                action_id, approved=False, approver=approver, reason=reason
+            )
+            if handled:
+                await _record_audit_decision(
+                    action_id, approved=False, approver=approver
                 )
-                if context.audit_trail:
-                    await context.audit_trail.record_rejection(action_id, "api_user")
-                return {"status": "rejected", "action_id": action_id}
-            except Exception as wf_exc:
-                logger.info(
-                    f"[StatusAPI] Workflow reject attempted for {action_id}: {wf_exc}"
-                )
+                return {
+                    "status": "rejected",
+                    "action_id": action_id,
+                    "incident_id": action_id,
+                    "approved_by": approver,
+                    "reason": reason,
+                    "outcome": outcome,
+                }
+        except Exception as wf_exc:
+            logger.info(
+                f"[StatusAPI] Workflow reject attempted for {action_id}: {wf_exc}"
+            )
 
     orc = context.orchestrator
     if not orc:
@@ -109,13 +214,14 @@ async def reject_action(action_id: str) -> dict[str, str]:
             return {"status": "already_rejected", "action_id": action_id}
         pending_item = queue.get(action_id)
         if queue.reject(action_id):
-            if context.audit_trail:
-                await context.audit_trail.record_rejection(action_id, "api_user")
+            await _record_audit_decision(
+                action_id, approved=False, approver=approver
+            )
             if pending_item and hasattr(orc, "notify_incident_rejected"):
                 res = orc.notify_incident_rejected(
                     pending_item.target,
                     pending_item.incident_id,
-                    reason="Rejected via HTTP API",
+                    reason=reason or "Rejected via HTTP API",
                 )
                 if asyncio.iscoroutine(res):
                     await res
@@ -127,6 +233,85 @@ async def reject_action(action_id: str) -> dict[str, str]:
         raise HTTPException(
             status_code=503, detail="HumanApprovalQueue not accessible"
         ) from None
+
+
+async def _dashboard_incident_decision(
+    incident_id: str,
+    *,
+    approved: bool,
+    payload: ApprovalDecisionRequest | None,
+) -> dict[str, Any]:
+    """Resume a paused LangGraph incident thread from the Developer Dashboard."""
+    approver = (
+        payload.approver if payload and payload.approver else "dashboard-operator"
+    )
+    reason = (
+        payload.reason
+        if payload and payload.reason
+        else (
+            "Approved via NEXUS Developer Console"
+            if approved
+            else "Rejected via NEXUS Developer Console"
+        )
+    )
+
+    if context.workflow is None:
+        raise HTTPException(status_code=503, detail="LangGraph workflow not configured")
+
+    try:
+        handled, outcome = await _dispatch_workflow_decision(
+            incident_id, approved=approved, approver=approver, reason=reason
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except Exception as exc:
+        logger.exception(
+            "[StatusAPI] Dashboard %s failed for %s: %s",
+            "approve" if approved else "reject",
+            incident_id,
+            exc,
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+
+    if not handled:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No paused LangGraph checkpoint found for incident {incident_id!r}",
+        )
+
+    await _record_audit_decision(incident_id, approved=approved, approver=approver)
+    return {
+        "status": "approved" if approved else "rejected",
+        "incident_id": incident_id,
+        "approved": approved,
+        "approved_by": approver,
+        "reason": reason,
+        "outcome": outcome,
+    }
+
+
+@router.post("/developer/incidents/{incident_id}/approve", tags=["developer"])
+@router.post("/api/v1/governance/approvals/{incident_id}/approve")
+async def approve_incident_from_dashboard(
+    incident_id: str,
+    payload: ApprovalDecisionRequest | None = _OPTIONAL_APPROVAL_BODY,
+) -> dict[str, Any]:
+    """Inline dashboard endpoint to approve and resume a LangGraph interrupt() thread."""
+    return await _dashboard_incident_decision(
+        incident_id, approved=True, payload=payload
+    )
+
+
+@router.post("/developer/incidents/{incident_id}/reject", tags=["developer"])
+@router.post("/api/v1/governance/approvals/{incident_id}/reject")
+async def reject_incident_from_dashboard(
+    incident_id: str,
+    payload: ApprovalDecisionRequest | None = _OPTIONAL_APPROVAL_BODY,
+) -> dict[str, Any]:
+    """Inline dashboard endpoint to reject and escalate a LangGraph interrupt() thread."""
+    return await _dashboard_incident_decision(
+        incident_id, approved=False, payload=payload
+    )
 
 
 @router.get("/approvals/pending")

@@ -53,7 +53,7 @@ def test_lifespan_skips_all_self_init_when_context_orchestrator_pre_populated():
         with patch.dict(
             "sys.modules",
             {
-                "nexus.bus.nats_client": MagicMock(NATSClient=fake_nats_client),
+                "nexus.bus.nats.client": MagicMock(NATSClient=fake_nats_client),
                 "nexus.learning.ppa_outcome_tracker": MagicMock(
                     PpaOutcomeTracker=fake_tracker
                 ),

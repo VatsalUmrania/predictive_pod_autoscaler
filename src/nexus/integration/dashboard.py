@@ -14,13 +14,15 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from nexus.db.postgres import get_database_client
+from nexus.db.client import get_database_client
 from nexus.integration.dashboard_incidents import (
     _in_memory_incidents,
+    determine_active_graph_node,
     make_plain_english,
     read_incidents,
     record_in_memory_incident,
     record_incident_resolution,
+    serialize_incident_for_dashboard,
     write_incident,
 )
 from nexus.integration.dashboard_policy import (
@@ -58,6 +60,8 @@ __all__ = [
     "cache_policy",
     "refresh_policy_cache",
     "record_incident_resolution",
+    "determine_active_graph_node",
+    "serialize_incident_for_dashboard",
     "get_database_client",
     "PolicyOverride",
     "_policy_cache",

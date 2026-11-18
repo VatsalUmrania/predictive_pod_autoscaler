@@ -1,5 +1,5 @@
 """
-Pending approval management and notification helpers for IncidentWorkflow.
+Human-in-the-loop approval resume and notification helpers for NEXUS workflows.
 """
 
 from __future__ import annotations
@@ -10,50 +10,109 @@ from typing import Any, cast
 
 from langgraph.types import Command
 
-from nexus.db.models import IncidentState
 from nexus.graph.manifest_formatter import (
     extract_diagnostic_logs,
     plan_to_yaml_manifest,
 )
+from nexus.graph.workflow_completion import finalize_workflow_run
+from nexus.graph.workflow_state import sync_discovered_target_identity
 
 logger = logging.getLogger(__name__)
 
 
-def _dump(obj: Any) -> dict[str, Any]:
-    fn = getattr(obj, "model_dump", getattr(obj, "to_dict", None))
-    res = fn() if callable(fn) else obj
-    return dict(res) if isinstance(res, dict) else {}
+async def handle_incident_approval(
+    compiled_graph: Any,
+    incident_id: str,
+    approved: bool,
+    approver: str = "slack-operator",
+    reason: str = "",
+    *,
+    notify_on_pause: bool = True,
+) -> dict[str, Any]:
+    """
+    Resumes a paused LangGraph incident thread when an operator clicks Approve or Reject.
+    Uses Command(resume=resume_payload) directly when snapshot.tasks has a pending
+    LangGraph interrupt; falls back to aupdate_state + ainvoke(None) otherwise.
+    """
+    config = {"configurable": {"thread_id": incident_id}}
+    snapshot = await compiled_graph.aget_state(config)
+
+    if not snapshot or not snapshot.values:
+        raise ValueError(f"No persisted checkpoint found for incident_id={incident_id}")
+
+    resume_payload = {
+        "approved": approved,
+        "approval_status": "APPROVED" if approved else "REJECTED",
+        "approved_by": approver,
+        "approval_reason": reason,
+    }
+
+    has_pending_interrupt = any(
+        getattr(task, "interrupts", None)
+        for task in (getattr(snapshot, "tasks", None) or ())
+    )
+
+    logger.info(
+        "Resuming incident %s from checkpoint (paused at %s, has_interrupt=%s) with approved=%s by %s",
+        incident_id,
+        snapshot.next,
+        has_pending_interrupt,
+        approved,
+        approver,
+    )
+
+    if has_pending_interrupt:
+        final_state = await compiled_graph.ainvoke(
+            Command(resume=resume_payload), config=config
+        )
+    else:
+        await compiled_graph.aupdate_state(config, resume_payload)
+        final_state = await compiled_graph.ainvoke(None, config=config)
+
+    # Check if the graph completed or paused again (e.g., closed-loop retry awaiting approval)
+    post_snapshot = await compiled_graph.aget_state(config)
+    if post_snapshot and post_snapshot.next:
+        await sync_discovered_target_identity(incident_id, post_snapshot.values)
+        if notify_on_pause:
+            from nexus.integration.notifier import send_approval_request_notification
+
+            await send_approval_request_notification(incident_id, post_snapshot.values)
+        return cast(dict[str, Any], post_snapshot.values)
+
+    await finalize_workflow_run(incident_id, final_state)
+    return cast(dict[str, Any], final_state)
 
 
 def create_pending_approval_entry(
     state_or_result: dict[str, Any], inc_id: str, thread_id: str
 ) -> dict[str, Any]:
-    """Format pending approval entry from state or result with YAML manifest and logs."""
-    plan_dict = _dump(
-        state_or_result.get("plan") or state_or_result.get("remediation_plan")
-    )
-    steps = plan_dict.get("steps") or plan_dict.get("actions") or []
-    action_type = (
-        steps[0].get("tool_name", "k8s_remediation") if steps else "k8s_remediation"
-    )
-    runbook_id = plan_dict.get("failure_mode") or action_type or "dynamic_remediation"
+    """Format pending approval entry from discovered IncidentState with YAML manifest."""
+    plan_dict = dict(state_or_result.get("remediation_plan") or {})
+    steps = plan_dict.get("steps") or []
+    action_type = steps[0].get("tool_name", "remediation") if steps else "remediation"
+    failure_class = state_or_result.get("failure_class") or action_type
 
-    diag_dict = _dump(
-        state_or_result.get("diagnosis") or state_or_result.get("rca_report")
+    rca_dict = dict(state_or_result.get("rca_result") or {})
+    raw_conf = state_or_result.get("confidence", rca_dict.get("confidence", 0.0))
+    confidence = float(raw_conf if raw_conf is not None else 0.0)
+
+    target_ns = state_or_result.get("namespace")
+    target_kind = state_or_result.get("resource_kind")
+    target_name = state_or_result.get("service_name")
+    target_str = state_or_result.get("target_resource") or (
+        f"{target_ns}/{target_kind or 'Resource'}/{target_name}"
+        if target_ns and target_name
+        else (target_name or inc_id)
     )
-    confidence = float(diag_dict.get("confidence", 0.8))
 
-    target_dict = _dump(state_or_result.get("target"))
-    target_ns = target_dict.get("namespace", "default")
-    target_name = target_dict.get("name", "unknown")
-    target_str = f"{target_ns}/{target_name}"
-
-    gov_dict = _dump(state_or_result.get("governance"))
-    reasons = gov_dict.get(
-        "reasons", ["L2/L3 mutating action requires operator authorization"]
+    policy_dec = dict(state_or_result.get("policy_decision") or {})
+    reasons = (
+        [policy_dec["reason"]]
+        if policy_dec.get("reason")
+        else ["Mutating remediation requires operator authorization"]
     )
     suggested_fix = (
-        diag_dict.get("suggested_fix")
+        rca_dict.get("recommended_strategy")
         or (steps[0].get("description") if steps else None)
         or f"Execute {action_type} on {target_str}"
     )
@@ -63,10 +122,14 @@ def create_pending_approval_entry(
 
     context = {
         "namespace": target_ns,
-        "platform": state_or_result.get("platform", "kubernetes"),
+        "resource_kind": target_kind,
+        "service_name": target_name,
+        "target_resource": target_str,
+        "platform": state_or_result.get("platform"),
         "thread_id": thread_id,
-        "target": target_dict,
-        "rca": diag_dict,
+        "failure_class": failure_class,
+        "suspected_cause": state_or_result.get("suspected_cause"),
+        "rca": rca_dict,
         "plan": plan_dict,
         "suggested_fix": suggested_fix,
         "remediation_yaml": rem_yaml,
@@ -77,7 +140,7 @@ def create_pending_approval_entry(
         "approval_id": thread_id,
         "thread_id": thread_id,
         "incident_id": inc_id,
-        "runbook_id": runbook_id,
+        "runbook_id": failure_class,
         "action_type": action_type,
         "target": target_str,
         "healing_level": 3,
@@ -86,7 +149,7 @@ def create_pending_approval_entry(
         "reasons": reasons,
         "prompt": suggested_fix,
         "suggested_fix": suggested_fix,
-        "rca": diag_dict,
+        "rca": rca_dict,
         "plan": plan_dict,
         "remediation_yaml": rem_yaml,
         "diagnostic_logs": diag_logs,
@@ -109,15 +172,11 @@ async def publish_pending_approval(nats: Any, entry: dict[str, Any]) -> None:
                 "incident_id": entry["incident_id"],
                 "healing_level": 3,
                 "confidence": entry["confidence"],
-                "app": entry["context"].get("namespace", "default"),
+                "app": entry["context"].get("namespace") or "unscoped",
                 "remediation_yaml": entry.get("remediation_yaml"),
                 "diagnostic_logs": entry.get("diagnostic_logs"),
                 "context": entry["context"],
             },
-        )
-        logger.info(
-            "[IncidentWorkflow] Published nexus.approvals.required for %s",
-            entry["approval_id"],
         )
     except Exception as e_pub:
         logger.warning(
@@ -132,13 +191,7 @@ async def notify_incident_rejected_helper(
     incident_id: str,
     reason: str = "",
 ) -> None:
-    inc_data = active_incidents.pop(target_key, None)
-    if inc_data and "fsm" in inc_data:
-        fsm = inc_data["fsm"]
-        if hasattr(fsm, "transition_to"):
-            await fsm.transition_to(IncidentState.REJECTED, reason=reason)
-        elif hasattr(fsm, "_current_state"):
-            fsm._current_state = IncidentState.REJECTED
+    active_incidents.pop(target_key, None)
     if nats and hasattr(nats, "publish_raw"):
         await nats.publish_raw(
             "nexus.lifecycle.rejected",
@@ -150,18 +203,22 @@ async def handle_slack_button_click(
     compiled_graph: Any,
     incident_id: str,
     approved: bool,
-    approver_name: str = "slack_operator",
+    approver_name: str = "slack-operator",
 ) -> dict[str, Any]:
-    config = {"configurable": {"thread_id": incident_id}}
-    result = await compiled_graph.ainvoke(
-        Command(resume={"approved": approved, "approver": approver_name}), config=config
+    return await handle_incident_approval(
+        compiled_graph=compiled_graph,
+        incident_id=incident_id,
+        approved=approved,
+        approver=approver_name,
     )
-    return cast(dict[str, Any], result)
 
 
 async def resume_incident_execution(
-    workflow: Any, thread_id: str, approval_decision: str | dict[str, Any] = "approved"
+    workflow: Any,
+    thread_id: str,
+    approval_decision: str | dict[str, Any] = "approved",
 ) -> dict[str, Any]:
+    """IncidentWorkflow bridge delegating to handle_incident_approval."""
     entry = workflow._pending_approvals.get(thread_id)
     if not entry:
         for val in list(workflow._pending_approvals.values()):
@@ -173,58 +230,80 @@ async def resume_incident_execution(
                 break
     actual_tid = entry.get("thread_id", thread_id) if entry else thread_id
     if entry:
-        for k in [
+        for k in (
             entry.get("approval_id"),
             entry.get("thread_id"),
             entry.get("incident_id"),
-        ]:
+        ):
             if k:
                 workflow._pending_approvals.pop(k, None)
     else:
         workflow._pending_approvals.pop(thread_id, None)
 
-    config = {"configurable": {"thread_id": actual_tid}}
-    logger.info(
-        "[IncidentWorkflow] Resuming incident %s with '%s'",
-        actual_tid,
-        approval_decision,
+    if isinstance(approval_decision, dict):
+        if "approved" in approval_decision:
+            approved = bool(approval_decision["approved"])
+        else:
+            raw = str(
+                approval_decision.get("action")
+                or approval_decision.get("decision")
+                or ""
+            ).lower()
+            approved = raw in ("approved", "yes", "true", "proceed")
+        approver = str(approval_decision.get("approved_by") or "slack-operator")
+        reason = str(approval_decision.get("approval_reason") or "")
+    else:
+        approved = str(approval_decision).lower() in (
+            "approved",
+            "yes",
+            "true",
+            "proceed",
+        )
+        approver = "slack-operator"
+        reason = ""
+
+    has_nats_publisher = bool(
+        getattr(workflow, "nats", None) and hasattr(workflow.nats, "publish_raw")
     )
-    result = await workflow._compiled_graph.ainvoke(
-        Command(resume=approval_decision), config=config
+    result = await handle_incident_approval(
+        compiled_graph=workflow._compiled_graph,
+        incident_id=actual_tid,
+        approved=approved,
+        approver=approver,
+        reason=reason,
+        notify_on_pause=not has_nats_publisher,
     )
 
-    state_snapshot = workflow._compiled_graph.get_state(config)
-    if (state_snapshot.next and "approval" in state_snapshot.next) or result.get(
-        "__interrupt__"
-    ):
+    config = {"configurable": {"thread_id": actual_tid}}
+    post_snapshot = await workflow._compiled_graph.aget_state(config)
+    if post_snapshot and post_snapshot.next:
         await workflow._record_pending_approval(
-            result, inc_id=result.get("incident_id", actual_tid), thread_id=actual_tid
+            post_snapshot.values,
+            inc_id=post_snapshot.values.get("incident_id", actual_tid),
+            thread_id=actual_tid,
         )
     else:
-        dec_str = str(
-            approval_decision.get("action") or approval_decision.get("decision") or ""
-            if isinstance(approval_decision, dict)
-            else approval_decision
-        )
-        if dec_str.lower() in ("rejected", "no", "false"):
-            target_obj = result.get("target") or (
-                entry.get("context", {}).get("target") if entry else {}
-            )
-            t_str = (
-                target_obj.get("name", "unknown")
-                if isinstance(target_obj, dict)
-                else str(target_obj)
+        if not approved:
+            target_str = str(
+                result.get("target_resource")
+                or result.get("service_name")
+                or actual_tid
             )
             await workflow.notify_incident_rejected(
-                t_str,
+                target_str,
                 result.get("incident_id", actual_tid),
-                reason=f"Rejected: {approval_decision}",
+                reason=reason or f"Rejected by {approver}",
             )
-        await workflow._handle_workflow_completion(
-            result, inc_id=result.get("incident_id", actual_tid), thread_id=actual_tid
-        )
+        if hasattr(workflow, "_handle_workflow_completion"):
+            await workflow._handle_workflow_completion(
+                result,
+                inc_id=result.get("incident_id", actual_tid),
+                thread_id=actual_tid,
+                publish_report=False,
+            )
 
-    if result.get("diagnosis"):
-        workflow._rca_results.append(result["diagnosis"])
+    if result.get("rca_result"):
+        workflow._rca_results.append(result["rca_result"])
         workflow._rca_results = workflow._rca_results[-100:]
-    return cast(dict[str, Any], result)
+
+    return result

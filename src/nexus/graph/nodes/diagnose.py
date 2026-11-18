@@ -1,234 +1,172 @@
-"""
-NEXUS ReAct Investigator Loop & Diagnostic Node
-===============================================
-Conducts iterative hypothesis-driven investigation using read-only tools
-to prove root cause and emit evidence-backed RCAReports with resilient fallbacks.
-"""
-
-from __future__ import annotations
-
 import json
 import logging
 from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
-from nexus.db.models import IncidentState
-from nexus.graph.llm import get_llm
-from nexus.graph.nodes.diagnose_builders import (
-    build_rca_success,
-    parse_rca_json,
-    parsed_to_rca_dict,
-    truncate_observation,
-)
-from nexus.graph.rca import RCALeadSynthesizer
-from nexus.graph.rca.result import RCAReport
-from nexus.tools.registry import ToolRegistry, default_registry
+from nexus.graph.llm import get_chat_model
+from nexus.graph.nodes.diagnose_builders import truncate_observation
+from nexus.graph.rca.result import RCAResult
+from nexus.graph.state import IncidentState
+from nexus.graph.workflow_state import sync_discovered_target_identity
+from nexus.tools.registry import get_tool_registry
 
 logger = logging.getLogger(__name__)
-RCAEngine = RCALeadSynthesizer
-MAX_RCA_STEPS = 5
 
-RCA_SYSTEM_PROMPT = """You are the NEXUS Autonomous SRE Investigator.
-Follow this strict scientific ReAct investigation protocol:
-1. OBSERVE: Call read-only inspection tools (e.g. k8s_inspect_resource, k8s_get_logs, aws_inspect_resource).
-   - In Kubernetes, use k8s_inspect_resource to inspect Pods and parent Deployments/ReplicaSets. Check metadata.ownerReferences and status.containerStatuses (including lastState for OOMKilled or exit code 137).
-   - If a pod crashed, use k8s_get_logs with previous=true to read crashed container logs.
-2. HYPOTHESIZE: Formulate specific technical hypotheses based on observed cluster state.
-3. TEST & FALSIFY: Gather evidence proving one hypothesis and falsifying others.
-4. CONCLUDE: Call the RCAReport structured output tool once proven with failure_class, root_cause, confidence, and suggested_action. Never invent tool outputs."""
+DIAGNOSE_SYSTEM_PROMPT = """You are the NEXUS Autonomous SRE Investigator.
+You receive raw telemetry and symptom events where the namespace or owning service may be missing (None) or only a Pod/instance name is mentioned.
 
-diagnose_node = None  # Defined after rca_reasoner_node below
-
-__all__ = [
-    "RCAEngine",
-    "MAX_RCA_STEPS",
-    "truncate_observation",
-    "rca_reasoner_node",
-    "rca_tool_executor_node",
-    "diagnose_node",
-    "create_react_agent",
-]
+Follow this exact investigation protocol using your read-only observation tools:
+1. LOCATE THE RESOURCE: If `known_namespace` is None, use your cluster/cloud listing or search tools across namespaces to find the involved Pod or resource.
+2. TRACE OWNERSHIP: Inspect the resource's metadata and `ownerReferences` (e.g., Pod -> ReplicaSet -> Deployment or StatefulSet) to identify the true owning controller (`resource_kind` and `resource_name`) and its exact `namespace_or_region`. Never guess or report 'unknown-service' if a tool can inspect the cluster.
+3. DIAGNOSE ROOT CAUSE: Inspect container statuses, exit codes, readiness/liveness probe configurations, container commands/args, resource limits, recent events, and logs.
+4. ASSESS AUTO-REMEDIATION & FIX STRATEGY:
+   - Check `available_mutation_tools` to see what remediation tools the planner has available.
+   - Set `can_auto_remediate = True` whenever an available mutation tool can fix or mitigate the root cause (for example: patching misconfigured readiness/liveness probes or too-short `initialDelaySeconds`/timeouts, adjusting resource limits, fixing env/config fields, scaling replicas, or restarting/rolling back a broken rollout).
+   - Set `can_auto_remediate = False` only if no available mutation tool can fix the root cause (e.g., application source-code bug or external third-party outage).
+   - ALWAYS populate `recommended_strategy` with a concrete, actionable fix (exact resource, spec fields, or operator commands), even when `can_auto_remediate` is `False`.
+5. SYNTHESIZE: Once you have verified evidence from your tool calls, stop calling tools and summarize your findings concisely."""
 
 
-async def rca_reasoner_node(
-    state: dict[str, Any], llm: Any = None, registry: ToolRegistry | None = None
-) -> dict[str, Any]:
-    reg = registry or default_registry
-    model = llm or get_llm()
-    read_tools = reg.get_read_only_tools_as_langchain()
-    sig = (
-        state.get("symptom_signal")
-        or state.get("anomaly_signal")
-        or (state.get("events") or [{}])[0]
-    )
-    messages = list(
-        state.get("rca_messages")
-        or [
-            SystemMessage(content=RCA_SYSTEM_PROMPT),
-            HumanMessage(
-                content=f"Investigate this SymptomSignal:\n{json.dumps(sig, default=str, indent=2)}"
-            ),
-        ]
-    )
-    try:
-        llm_with_tools = model.bind_tools([*read_tools, RCAReport])
-        response: AIMessage = await llm_with_tools.ainvoke(messages)
-    except (NotImplementedError, AttributeError, Exception):
-        try:
-            response = await model.ainvoke(messages)
-        except Exception:
-            response = AIMessage(content="")
-
-    telem: dict[str, Any] = dict(state.get("telemetry") or {})
-    tgt_raw = state.get("target")
-    plat = state.get("platform") or (
-        tgt_raw.get("platform") if isinstance(tgt_raw, dict) else None
-    )
-    if (not telem or plat == "gcp") and tgt_raw:
-        try:
-            from nexus.graph.platform import TargetResource, get_platform_registry
-
-            plat_reg = get_platform_registry()
-            tgt_res = (
-                TargetResource(**tgt_raw) if isinstance(tgt_raw, dict) else tgt_raw
-            )
-            adapter = plat_reg.get(tgt_res.platform)
-            if adapter and hasattr(adapter, "collect_telemetry"):
-                p_telem = await adapter.collect_telemetry(tgt_res)
-                if p_telem:
-                    telem = (
-                        p_telem.model_dump()
-                        if hasattr(p_telem, "model_dump")
-                        else dict(p_telem)
-                    )
-        except Exception:
-            pass
-
-    steps = int(state.get("rca_steps", 0)) + 1
-    tool_calls = getattr(response, "tool_calls", [])
-    if tool_calls:
-        tc = next((t for t in tool_calls if t.get("name") == "RCAReport"), None)
-        if tc:
-            args = tc.get("args") or {}
-            return build_rca_success(
-                messages,
-                response,
-                args,
-                steps,
-                state,
-                model,
-                telemetry=telem,
-            )
-
-    parsed = parse_rca_json(str(getattr(response, "content", "")))
-    if parsed and ("root_cause" in parsed or "root_cause_summary" in parsed):
-        rep_dict = parsed_to_rca_dict(parsed, state, sig)
-        return build_rca_success(
-            messages, response, rep_dict, steps, state, model, telemetry=telem
-        )
-
-    # Continue multi-turn ReAct if model invoked read-only tools
-    if steps < MAX_RCA_STEPS and tool_calls:
-        return {
-            "rca_messages": [*messages, response],
-            "rca_steps": steps,
-            "rca_complete": False,
-            "fsm_state": IncidentState.DIAGNOSING.value,
+async def diagnose_node(state: IncidentState) -> dict[str, Any]:
+    incident_id = state.get("incident_id", "unknown")
+    registry = get_tool_registry()
+    observe_tools = registry.get_tools(mode="observe", platform=state.get("platform"))
+    mutate_tools = registry.get_tools(mode="mutate", platform=state.get("platform"))
+    tool_map = {t.name: t for t in observe_tools}
+    available_mutation_tools = [
+        {
+            "name": t.name,
+            "description": (getattr(t, "description", "") or "").splitlines()[0][:160],
         }
+        for t in mutate_tools
+    ]
 
-    # Max steps reached or no further tool calls: try final structured synthesis
-    trace = list(state.get("investigation_trace", []))
-    if trace and hasattr(model, "with_structured_output"):
-        try:
-            synth = model.with_structured_output(RCAReport)
-            synth_call = synth.ainvoke(
-                [
-                    *messages,
-                    response,
-                    HumanMessage(
-                        content="Synthesize the investigation findings and produce the final RCAReport."
-                    ),
-                ]
-            )
-            final_report = (
-                await synth_call if hasattr(synth_call, "__await__") else synth_call
-            )
-            if isinstance(final_report, RCAReport):
-                return build_rca_success(
-                    messages,
-                    response,
-                    final_report.model_dump(),
-                    steps,
-                    state,
-                    model,
-                    telemetry=telem,
-                )
-            if isinstance(final_report, dict) and (
-                "root_cause" in final_report or "root_cause_summary" in final_report
-            ):
-                return build_rca_success(
-                    messages,
-                    response,
-                    final_report,
-                    steps,
-                    state,
-                    model,
-                    telemetry=telem,
-                )
-        except Exception as synth_exc:
-            logger.debug(
-                "[Diagnose] Final structured synthesis exception: %s", synth_exc
-            )
+    llm = get_chat_model(temperature=0.0)
+    llm_with_tools = llm.bind_tools(observe_tools) if observe_tools else llm
 
-    tname = (
-        state.get("target", {}).get("name") or sig.get("resource_name") or "workload"
-    )
-    prov = str(state.get("platform") or sig.get("provider") or "kubernetes")
-    urn = str(sig.get("resource_urn") or f"{prov}://default/{tname}")
-
-    inconclusive_dict = {
-        "root_cause_summary": f"Investigation completed for {tname}; no root cause conclusively proven",
-        "affected_resource_urn": urn,
-        "provider": prov,
-        "confidence": 0.0,
-        "hypotheses_evaluated": [],
-        "evidence_chain": trace,
-        "pre_incident_resource_state": {},
-        "requires_remediation": False,
-        "failure_class": "unknown",
-        "suggested_action": None,
-        "action_params": {},
+    context_payload = {
+        "incident_id": incident_id,
+        "known_platform": state.get("platform"),
+        "known_namespace": state.get("namespace"),
+        "known_service": state.get("service_name"),
+        "raw_events": truncate_observation(
+            state.get("raw_events", []), max_lines=40, max_bytes=3072
+        ),
+        "previous_execution_results": state.get("execution_results", []),
+        "previous_verification_feedback": state.get("verification_feedback"),
     }
-    return build_rca_success(
-        messages, response, inconclusive_dict, steps, state, model, telemetry=telem
-    )
 
+    messages: list[Any] = [
+        SystemMessage(content=DIAGNOSE_SYSTEM_PROMPT),
+        HumanMessage(content=json.dumps(context_payload, default=str)),
+    ]
+    collected_observations: list[dict[str, Any]] = []
+    investigator_notes = ""
 
-diagnose_node = rca_reasoner_node
+    max_steps = state.get("max_diagnose_steps", 6)
+    for step_idx in range(1, max_steps + 1):
+        ai_msg = await llm_with_tools.ainvoke(messages)
+        messages.append(ai_msg)
 
+        if getattr(ai_msg, "content", None):
+            investigator_notes = str(ai_msg.content)
 
-async def rca_tool_executor_node(
-    state: dict[str, Any], registry: ToolRegistry | None = None
-) -> dict[str, Any]:
-    reg, messages, trace = (
-        registry or default_registry,
-        list(state.get("rca_messages", [])),
-        list(state.get("investigation_trace", [])),
-    )
-    last_msg = messages[-1] if messages else None
-    if last_msg:
-        for tc in getattr(last_msg, "tool_calls", []):
-            name, args = tc["name"], tc["args"]
-            if name == "RCAReport":
-                continue
-            try:
-                obs = await reg.execute_read_only(name, args)
-            except Exception as e:
-                obs = {"error": str(e), "tool_name": name}
-            trace.append({"tool_name": name, "tool_args": args, "output": obs})
-            messages.append(
-                ToolMessage(content=str(obs), tool_call_id=tc["id"], name=name)
+        if not getattr(ai_msg, "tool_calls", None):
+            break
+
+        for tc in ai_msg.tool_calls:
+            tool_name = tc["name"]
+            tool_args = tc.get("args") or {}
+            tool_fn = tool_map.get(tool_name)
+
+            if tool_fn is None:
+                observation: Any = (
+                    f"Error: Observation tool '{tool_name}' is not registered."
+                )
+            else:
+                try:
+                    logger.info(
+                        "Incident %s [diagnose step %d] calling %s(%s)",
+                        incident_id,
+                        step_idx,
+                        tool_name,
+                        tool_args,
+                    )
+                    observation = await tool_fn.ainvoke(tool_args)
+                except Exception as exc:
+                    logger.warning(
+                        "Incident %s observation tool %s error: %s",
+                        incident_id,
+                        tool_name,
+                        exc,
+                    )
+                    observation = f"Tool error: {exc}"
+
+            compact_obs = truncate_observation(
+                observation, max_lines=80, max_bytes=4096
             )
-    return {"rca_messages": messages, "investigation_trace": trace}
+            collected_observations.append(
+                {
+                    "step": step_idx,
+                    "tool": tool_name,
+                    "args": tool_args,
+                    "output": compact_obs,
+                }
+            )
+            messages.append(
+                ToolMessage(
+                    content=str(compact_obs),
+                    tool_call_id=tc["id"],
+                    name=tool_name,
+                )
+            )
+
+    # Synthesize RCAResult using a clean, bounded [SystemMessage, HumanMessage] prompt
+    # so providers like Gemini never receive dangling model turns or mismatched tool history.
+    synthesis_payload = {
+        "incident_context": context_payload,
+        "available_mutation_tools": available_mutation_tools,
+        "tool_observations": collected_observations,
+        "investigator_notes": truncate_observation(
+            investigator_notes, max_lines=40, max_bytes=2048
+        ),
+    }
+    synthesis_messages = [
+        SystemMessage(content=DIAGNOSE_SYSTEM_PROMPT),
+        HumanMessage(
+            content=(
+                "Synthesize the final structured RCAResult using only the verified "
+                "incident context and tool observations below:\n"
+                + json.dumps(synthesis_payload, default=str)
+            )
+        ),
+    ]
+
+    structured_llm = llm.with_structured_output(RCAResult)
+    rca: RCAResult = await structured_llm.ainvoke(synthesis_messages)
+
+    target_uri = f"{rca.target.namespace_or_region}/{rca.target.resource_kind}/{rca.target.resource_name}"
+    logger.info(
+        "Incident %s diagnosed target=%s failure_type=%s confidence=%.2f",
+        incident_id,
+        target_uri,
+        rca.failure_type,
+        rca.confidence,
+    )
+
+    update: dict[str, Any] = {
+        "platform": rca.target.platform,
+        "namespace": rca.target.namespace_or_region,
+        "resource_kind": rca.target.resource_kind,
+        "service_name": rca.target.resource_name,
+        "target_resource": target_uri,
+        "failure_class": rca.failure_type,
+        "suspected_cause": rca.root_cause_summary,
+        "confidence": rca.confidence,
+        "rca_result": rca.model_dump(),
+        "status": "DIAGNOSED",
+    }
+
+    await sync_discovered_target_identity(incident_id, update)
+    return update

@@ -41,13 +41,15 @@ data:
             cors:
               allowed_origins: ["*"]
 
-      # Plane 1: Native Kubernetes Event Watcher (Warning events)
+      # Plane 1: Native Kubernetes Event Watcher
       k8sobjects:
         auth_type: serviceAccount
         objects:
           - name: events
             mode: watch
-            field_selector: type=Warning
+            group: ""
+            exclude_watch_type:
+              - DELETED
 
       # Scrape existing PPA operator + test-app + NATS self-metrics
       prometheus:
@@ -92,11 +94,11 @@ data:
 
       # Batch signals before writing to reduce I/O pressure
       batch:
-        timeout: 5s
-        send_batch_size: 1024
+        timeout: 2s
+        send_batch_size: 256
         send_batch_max_size: 2048
 
-      # Inject consistent resource attributes on all signals
+      # Inject consistent resource attributes on metrics/loki/traces signals
       resource:
         attributes:
           - action: upsert
@@ -105,6 +107,73 @@ data:
           - action: upsert
             key: deployment.environment
             value: development
+
+      # Hoist involvedObject identity from K8s Events before k8sattributes enrichment
+      transform/k8s_events:
+        error_mode: ignore
+        log_statements:
+          - context: log
+            statements:
+              - set(resource.attributes["k8s.namespace.name"], body["object"]["involvedObject"]["namespace"]) where IsMap(body) and body["object"] != nil and body["object"]["involvedObject"]["namespace"] != nil
+              - set(resource.attributes["k8s.involved.kind"], body["object"]["involvedObject"]["kind"]) where IsMap(body) and body["object"] != nil and body["object"]["involvedObject"]["kind"] != nil
+              - set(resource.attributes["k8s.involved.name"], body["object"]["involvedObject"]["name"]) where IsMap(body) and body["object"] != nil and body["object"]["involvedObject"]["name"] != nil
+              - set(resource.attributes["k8s.pod.name"], body["object"]["involvedObject"]["name"]) where IsMap(body) and body["object"] != nil and body["object"]["involvedObject"]["kind"] == "Pod"
+              - set(resource.attributes["k8s.namespace.name"], body["involvedObject"]["namespace"]) where IsMap(body) and body["involvedObject"] != nil and body["involvedObject"]["namespace"] != nil
+              - set(resource.attributes["k8s.involved.kind"], body["involvedObject"]["kind"]) where IsMap(body) and body["involvedObject"] != nil and body["involvedObject"]["kind"] != nil
+              - set(resource.attributes["k8s.involved.name"], body["involvedObject"]["name"]) where IsMap(body) and body["involvedObject"] != nil and body["involvedObject"]["name"] != nil
+              - set(resource.attributes["k8s.pod.name"], body["involvedObject"]["name"]) where IsMap(body) and body["involvedObject"] != nil and body["involvedObject"]["kind"] == "Pod"
+
+      # Enrich logs & events with K8s Deployment, Namespace, and NEXUS registration labels
+      k8sattributes:
+        auth_type: "serviceAccount"
+        passthrough: false
+        extract:
+          metadata:
+            - k8s.namespace.name
+            - k8s.deployment.name
+            - k8s.replicaset.name
+            - k8s.statefulset.name
+            - k8s.daemonset.name
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.node.name
+          labels:
+            - tag_name: service.name
+              key: app.kubernetes.io/name
+              from: pod
+            - tag_name: service.name
+              key: app
+              from: pod
+            - tag_name: nexus.enabled
+              key: nexus.sre/enabled
+              from: pod
+          annotations:
+            - tag_name: nexus.tier
+              key: nexus.sre/tier
+              from: pod
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.name
+              - from: resource_attribute
+                name: k8s.namespace.name
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.uid
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.ip
+          - sources:
+              - from: connection
+
+      # Only forward signals to NEXUS for Warning/Error K8s events or WARN/ERROR logs
+      filter/nexus_registered:
+        error_mode: ignore
+        logs:
+          log_record:
+            - 'IsMap(body) and body["object"] != nil and body["object"]["type"] == "Normal"'
+            - 'IsMap(body) and body["type"] == "Normal"'
+            - 'not IsMap(body) and severity_number > 0 and severity_number < 13'
 
     exporters:
       # Metrics → Prometheus (via remote write receiver)
@@ -126,7 +195,7 @@ data:
 
       # Plane 1 -> Plane 2 Ingestion Webhook
       otlphttp/nexus:
-        endpoint: "http://nexus-api:8080/api/v1/ingest/otlp/events"
+        endpoint: "http://nexus-api:8080/api/v1/ingest/otlp"
         encoding: json
         compression: none
         tls:
@@ -168,8 +237,8 @@ data:
 
         # ── Kubernetes Events pipeline (Plane 1 -> Plane 2) ──────────────────────
         logs/events:
-          receivers:  [k8sobjects]
-          processors: [batch]
+          receivers:  [otlp, k8sobjects]
+          processors: [transform/k8s_events, k8sattributes, filter/nexus_registered, batch]
           exporters:  [otlphttp/nexus]
 
         # ── Traces pipeline ──────────────────────────────────────────────────────
@@ -197,6 +266,9 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["events", "pods", "namespaces", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
     verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

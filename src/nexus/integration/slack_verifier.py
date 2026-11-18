@@ -13,7 +13,10 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-SLACK_INTERACTIVE_URL = os.environ.get("SLACK_INTERACTIVE_URL", "")
+DEFAULT_SLACK_INTERACTIVE_PATH = "/api/v1/slack/interactions"
+SLACK_INTERACTIVE_URL = os.environ.get(
+    "SLACK_INTERACTIVE_URL", DEFAULT_SLACK_INTERACTIVE_PATH
+)
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
 SLACK_REQUEST_TOLERANCE_S = 60 * 5
 
@@ -73,13 +76,23 @@ def resolve_slack_webhook(app_name: str | None) -> str | None:
 
 
 def approval_buttons_block(approval_id: str) -> dict[str, Any]:
-    """Slack Block Kit action block with Approve/Reject buttons."""
+    """Slack Block Kit action block with Approve/Reject buttons.
+
+    Renders interactive Approve/Reject buttons by default (using
+    `/api/v1/slack/interactions` as the default path) whenever Slack is active,
+    unless `SLACK_INTERACTIVE_URL` is explicitly disabled (`false`/`disabled`/`none`).
+    """
     import nexus.integration.notifier as notifier_mod
 
-    interactive_url = getattr(
-        notifier_mod, "SLACK_INTERACTIVE_URL", SLACK_INTERACTIVE_URL
+    raw_url = getattr(notifier_mod, "SLACK_INTERACTIVE_URL", SLACK_INTERACTIVE_URL)
+    explicitly_disabled = str(raw_url).strip().lower() in ("false", "disabled", "none")
+    slack_active = bool(
+        raw_url
+        or os.environ.get("SLACK_BOT_TOKEN")
+        or os.environ.get("SLACK_WEBHOOK")
+        or os.environ.get("SLACK_WEBHOOK_URL")
     )
-    if not interactive_url:
+    if explicitly_disabled or not slack_active:
         return {
             "type": "context",
             "elements": [

@@ -25,7 +25,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from nexus.bus.incident_event import IncidentEvent
+from nexus.bus.events import IncidentEvent
 from nexus.learning.feedback_loop import FeedbackLoop
 from nexus.learning.ppa_outcome_tracker import PendingPrediction, PpaOutcomeTracker
 from nexus.predictive.prescaler import PrescaleMode, Prescaler

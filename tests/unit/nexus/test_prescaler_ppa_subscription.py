@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from nexus.bus.incident_event import SignalType
+from nexus.bus.events import SignalType
 from nexus.predictive.prescaler import Prescaler
 
 

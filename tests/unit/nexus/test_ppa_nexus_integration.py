@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from nexus.bus.incident_event import IncidentEvent
+from nexus.bus.events import IncidentEvent
 from nexus.learning.feedback_loop import FeedbackLoop
 
 # Internal import

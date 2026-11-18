@@ -162,7 +162,7 @@ def test_build_escalation_payload_block_kit():
 
 
 def test_build_approval_required_payload_block_kit():
-    """Verify human-in-the-loop approval Block Kit payload and validation."""
+    """Verify human-in-the-loop approval Block Kit payload reads new RCAResult keys and renders buttons."""
     ctx = {
         "event": {
             "signal_type": "high_error_rate",
@@ -170,8 +170,9 @@ def test_build_approval_required_payload_block_kit():
             "namespace": "production",
         },
         "rca": {
-            "failure_class": "ConnectionExhaustion",
-            "root_cause": "Database connection pool saturated",
+            "failure_type": "container_command_misconfiguration",
+            "root_cause_summary": "Container command override exits immediately with code 1.",
+            "recommended_strategy": "Remove erroneous command override from Deployment/billing-api.",
         },
         "remediation_yaml": "apiVersion: apps/v1\nkind: Deployment\nspec:\n  replicas: 5",
         "diagnostic_logs": "FATAL: remaining connection slots are reserved for non-replication superuser connections",
@@ -180,7 +181,7 @@ def test_build_approval_required_payload_block_kit():
         app_name="billing-api",
         approval_id="APPR-9999",
         runbook_id="scale_pool_v1",
-        target="production/billing-api",
+        target="production/Deployment/billing-api",
         healing_level=3,
         confidence=0.91,
         context=ctx,
@@ -188,6 +189,14 @@ def test_build_approval_required_payload_block_kit():
     assert payload.get("text")
     blocks = payload["attachments"][0]["blocks"]
     validate_blocks_schema(blocks)
+    blocks_str = str(blocks)
+    assert "container_command_misconfiguration" in blocks_str
+    assert "Container command override exits immediately with code 1." in blocks_str
+    assert "Remove erroneous command override" in blocks_str
+    action_blocks = [b for b in blocks if b.get("type") == "actions"]
+    assert len(action_blocks) == 1
+    action_ids = {el["action_id"] for el in action_blocks[0]["elements"]}
+    assert {"nexus_approve", "nexus_reject"} <= action_ids
 
     res = call_slack_blocks_validate(blocks)
     assert res.get("ok") is True, f"Slack validation failed: {res}"
@@ -274,17 +283,36 @@ def test_build_incident_resolved_payload_block_kit():
 
 
 def test_build_incident_escalated_payload_block_kit():
-    """Verify escalated incident Block Kit payload and validation."""
+    """Verify escalated incident Block Kit payload includes RCA, evidence, and proposed fix."""
     payload = build_incident_escalated_payload(
-        target="prod/shipping-service",
+        target="prod/Deployment/shipping-service",
         incident_id="INC-222",
-        failure_class="DiskPressure",
-        reason="Disk utilization remains at 99% after cache purge attempt",
-        root_cause="Persistent volume logging overflow",
+        failure_class="readiness_probe_startup_race",
+        reason="Auto-remediation disabled by investigator (can_auto_remediate=False, confidence=88%)",
+        root_cause="Application takes 12s to bind port 8001 while readinessProbe initialDelaySeconds is 2s.",
+        confidence=0.88,
+        recommended_fix="Increase readinessProbe.initialDelaySeconds to 15s on prod/Deployment/shipping-service.",
+        evidence=[
+            "Readiness probe failed: dial tcp 10.244.0.12:8001: connect: connection refused",
+            "Deployment spec shows readinessProbe.initialDelaySeconds=2",
+        ],
+        proposed_steps=[
+            {
+                "tool_name": "k8s_mutate_resource",
+                "description": "Patch readinessProbe.initialDelaySeconds=15",
+            }
+        ],
+        rollback_applied=False,
     )
     assert payload.get("text")
     blocks = payload["attachments"][0]["blocks"]
     validate_blocks_schema(blocks)
+    blocks_str = str(blocks)
+    assert "Root Cause Analysis (RCA)" in blocks_str
+    assert "Proposed Fix / Recommended Strategy" in blocks_str
+    assert "Increase readinessProbe.initialDelaySeconds to 15s" in blocks_str
+    assert "Observed Evidence" in blocks_str
+    assert "88%" in blocks_str
 
     res = call_slack_blocks_validate(blocks)
     assert res.get("ok") is True, f"Slack validation failed: {res}"
