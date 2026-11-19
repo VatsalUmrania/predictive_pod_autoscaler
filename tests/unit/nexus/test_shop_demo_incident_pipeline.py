@@ -26,10 +26,10 @@ from nexus.engine.reasoning.rca.result import (
     RCAResult,
     VerificationResult,
 )
-from nexus.engine.workflow.builder import build_incident_graph
-from nexus.engine.workflow.workflow import run_incident_workflow
-from nexus.engine.workflow.workflow_approval import handle_incident_approval
-from nexus.services.api.ingest import extract_telemetry_context
+from nexus.engine.workflow.graph.builder import build_incident_graph
+from nexus.engine.workflow.graph.workflow import run_incident_workflow
+from nexus.engine.workflow.lifecycle.workflow_approval import handle_incident_approval
+from nexus.services.api.ingest.ingest import extract_telemetry_context
 
 
 @pytest.mark.asyncio
@@ -254,21 +254,27 @@ async def test_shop_demo_readiness_probe_exit_zero_end_to_end():
     mock_db.update_discovered_target = AsyncMock()
 
     with (
-        patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=llm),
-        patch("nexus.engine.nodes.plan.get_chat_model", return_value=llm),
-        patch("nexus.engine.nodes.verify.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.analysis.diagnose.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.planning.plan.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.execution.verify.get_chat_model", return_value=llm),
         patch(
-            "nexus.engine.nodes.diagnose.get_tool_registry", return_value=mock_registry
-        ),
-        patch("nexus.engine.nodes.plan.get_tool_registry", return_value=mock_registry),
-        patch(
-            "nexus.engine.nodes.execute.get_tool_registry", return_value=mock_registry
+            "nexus.engine.nodes.analysis.diagnose.get_tool_registry",
+            return_value=mock_registry,
         ),
         patch(
-            "nexus.engine.nodes.verify.get_tool_registry", return_value=mock_registry
+            "nexus.engine.nodes.planning.plan.get_tool_registry",
+            return_value=mock_registry,
         ),
         patch(
-            "nexus.engine.nodes.govern.evaluate_opa_policy",
+            "nexus.engine.nodes.execution.execute.get_tool_registry",
+            return_value=mock_registry,
+        ),
+        patch(
+            "nexus.engine.nodes.execution.verify.get_tool_registry",
+            return_value=mock_registry,
+        ),
+        patch(
+            "nexus.engine.nodes.supervision.govern.evaluate_opa_policy",
             AsyncMock(
                 return_value={
                     "allowed": True,
@@ -278,14 +284,14 @@ async def test_shop_demo_readiness_probe_exit_zero_end_to_end():
             ),
         ),
         patch(
-            "nexus.engine.workflow.workflow.send_approval_request_notification",
+            "nexus.engine.workflow.graph.workflow.send_approval_request_notification",
             mock_notify,
         ),
         patch(
             "nexus.services.reporting.incident_report.publish_post_incident_report",
             mock_publish,
         ),
-        patch("nexus.services.api.status_api.context.db_client", mock_db),
+        patch("nexus.services.api.status.status_api.context.db_client", mock_db),
     ):
         # Phase A: Ingest -> Triage -> ReAct Diagnose -> Schema-Bound Plan -> Govern -> Approval Interrupt
         paused = await run_incident_workflow(

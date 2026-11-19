@@ -14,18 +14,18 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from nexus.services.api.status_slack import _slack_replace
-from nexus.services.notifications.slack_action_templates import (
+from nexus.services.api.routes.status_slack import _slack_replace
+from nexus.services.notifications.slack.templates.slack_action_templates import (
     build_approval_required_payload,
     build_escalation_payload,
     build_heal_payload,
     build_prescale_payload,
 )
-from nexus.services.notifications.slack_agentic_templates import (
+from nexus.services.notifications.slack.templates.slack_agentic_templates import (
     build_agentic_approval_payload,
     build_slack_approval_blocks,
 )
-from nexus.services.notifications.slack_incident_templates import (
+from nexus.services.notifications.slack.templates.slack_incident_templates import (
     build_incident_escalated_payload,
     build_incident_resolved_payload,
     build_report_ready_payload,

@@ -12,16 +12,16 @@ import pytest
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import MemorySaver
 
-from nexus.engine.nodes.diagnose import diagnose_node
+from nexus.engine.nodes.analysis.diagnose import diagnose_node
 from nexus.engine.reasoning.rca.result import (
     DiscoveredTarget,
     RCAResult,
     VerificationResult,
 )
-from nexus.engine.workflow.builder import build_incident_graph
-from nexus.engine.workflow.routes import route_after_diagnose, route_after_verify
-from nexus.engine.workflow.workflow import run_incident_workflow
-from nexus.engine.workflow.workflow_approval import handle_incident_approval
+from nexus.engine.workflow.graph.builder import build_incident_graph
+from nexus.engine.workflow.graph.routes import route_after_diagnose, route_after_verify
+from nexus.engine.workflow.graph.workflow import run_incident_workflow
+from nexus.engine.workflow.lifecycle.workflow_approval import handle_incident_approval
 
 
 def test_route_after_diagnose_uses_confidence_and_can_auto_remediate_not_enums():
@@ -154,11 +154,15 @@ async def test_diagnose_node_react_discovers_namespace_and_owner_from_none():
 
     with (
         patch(
-            "nexus.engine.nodes.diagnose.get_tool_registry", return_value=mock_registry
+            "nexus.engine.nodes.analysis.diagnose.get_tool_registry",
+            return_value=mock_registry,
         ),
-        patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=mock_llm),
         patch(
-            "nexus.engine.nodes.diagnose.sync_discovered_target_identity", AsyncMock()
+            "nexus.engine.nodes.analysis.diagnose.get_chat_model", return_value=mock_llm
+        ),
+        patch(
+            "nexus.engine.nodes.analysis.diagnose.sync_discovered_target_identity",
+            AsyncMock(),
         ) as mock_sync,
     ):
         result = await diagnose_node(
@@ -313,21 +317,27 @@ async def test_e2e_closed_loop_verify_failure_retries_diagnose_and_re_interrupts
     mock_notify = AsyncMock()
 
     with (
-        patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=llm),
-        patch("nexus.engine.nodes.plan.get_chat_model", return_value=llm),
-        patch("nexus.engine.nodes.verify.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.analysis.diagnose.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.planning.plan.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.execution.verify.get_chat_model", return_value=llm),
         patch(
-            "nexus.engine.nodes.diagnose.get_tool_registry", return_value=mock_registry
-        ),
-        patch("nexus.engine.nodes.plan.get_tool_registry", return_value=mock_registry),
-        patch(
-            "nexus.engine.nodes.execute.get_tool_registry", return_value=mock_registry
+            "nexus.engine.nodes.analysis.diagnose.get_tool_registry",
+            return_value=mock_registry,
         ),
         patch(
-            "nexus.engine.nodes.verify.get_tool_registry", return_value=mock_registry
+            "nexus.engine.nodes.planning.plan.get_tool_registry",
+            return_value=mock_registry,
         ),
         patch(
-            "nexus.engine.nodes.govern.evaluate_opa_policy",
+            "nexus.engine.nodes.execution.execute.get_tool_registry",
+            return_value=mock_registry,
+        ),
+        patch(
+            "nexus.engine.nodes.execution.verify.get_tool_registry",
+            return_value=mock_registry,
+        ),
+        patch(
+            "nexus.engine.nodes.supervision.govern.evaluate_opa_policy",
             AsyncMock(
                 return_value={
                     "allowed": True,
@@ -337,11 +347,11 @@ async def test_e2e_closed_loop_verify_failure_retries_diagnose_and_re_interrupts
             ),
         ),
         patch(
-            "nexus.engine.workflow.workflow.send_approval_request_notification",
+            "nexus.engine.workflow.graph.workflow.send_approval_request_notification",
             mock_notify,
         ),
         patch(
-            "nexus.services.notifications.notifier.send_approval_request_notification",
+            "nexus.services.notifications.dispatcher.notifier.send_approval_request_notification",
             mock_notify,
         ),
         patch(

@@ -11,8 +11,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from nexus.core.database.client import PostgresClient, get_database_client
-from nexus.core.database.utils import _ensure_uuid
+from nexus.core.database.connection.client import PostgresClient, get_database_client
+from nexus.core.database.connection.utils import _ensure_uuid
 from nexus.governance.audit.audit_format import format_audit_row
 
 logger = logging.getLogger(__name__)

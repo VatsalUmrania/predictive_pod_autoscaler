@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from nexus.services.observability.dashboard_incidents import (
+from nexus.services.observability.dashboard.dashboard_incidents import (
     record_incident_resolution,
 )
 

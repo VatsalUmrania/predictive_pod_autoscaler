@@ -20,7 +20,7 @@ from nexus.engine.reasoning.rca.result import (
     VerificationResult,
 )
 from nexus.engine.tools.registry import ToolMetadata, get_tool_registry
-from nexus.engine.workflow.workflow import IncidentWorkflow
+from nexus.engine.workflow.graph.workflow import IncidentWorkflow
 
 
 @pytest.mark.asyncio
@@ -110,11 +110,15 @@ async def test_future_platform_registration_and_workflow_execution():
     llm = _GCPFakeLLM()
     try:
         with (
-            patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=llm),
-            patch("nexus.engine.nodes.plan.get_chat_model", return_value=llm),
-            patch("nexus.engine.nodes.verify.get_chat_model", return_value=llm),
             patch(
-                "nexus.engine.nodes.govern.evaluate_opa_policy",
+                "nexus.engine.nodes.analysis.diagnose.get_chat_model", return_value=llm
+            ),
+            patch("nexus.engine.nodes.planning.plan.get_chat_model", return_value=llm),
+            patch(
+                "nexus.engine.nodes.execution.verify.get_chat_model", return_value=llm
+            ),
+            patch(
+                "nexus.engine.nodes.supervision.govern.evaluate_opa_policy",
                 AsyncMock(
                     return_value={
                         "allowed": True,
@@ -124,7 +128,7 @@ async def test_future_platform_registration_and_workflow_execution():
                 ),
             ),
             patch(
-                "nexus.services.observability.dashboard.record_incident_resolution",
+                "nexus.services.observability.dashboard.dashboard.record_incident_resolution",
                 AsyncMock(),
             ),
             patch(

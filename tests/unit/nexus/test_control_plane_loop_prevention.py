@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from nexus.engine.workflow.workflow_events import (
+from nexus.engine.workflow.lifecycle.workflow_events import (
     handle_incoming_event,
     is_control_plane_resource,
 )

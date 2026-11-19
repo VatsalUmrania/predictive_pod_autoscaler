@@ -139,7 +139,7 @@ async def test_langchain_tool_invocation(monkeypatch):
                 }
             }
 
-    import nexus.engine.tools.aws.observe_tools as obs_module
+    import nexus.engine.tools.aws.observe.observe_tools as obs_module
 
     monkeypatch.setattr(obs_module, "_client", lambda s, r=None: FakeDynamoDB())
 

@@ -1,12 +1,12 @@
 """NEXUS Predictive Pod Autoscaler package."""
 
-from nexus.intelligence.predictive.models import (
+from nexus.intelligence.predictive.scaling.prescaler import Prescaler
+from nexus.intelligence.predictive.tracking.models import (
     PrecisionStats,
     PrescaleDecision,
     PrescaleMode,
 )
-from nexus.intelligence.predictive.prescaler import Prescaler
-from nexus.intelligence.predictive.tracker import PrecisionTracker
+from nexus.intelligence.predictive.tracking.tracker import PrecisionTracker
 
 __all__ = [
     "PrecisionStats",

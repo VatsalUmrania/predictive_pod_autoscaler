@@ -2,8 +2,8 @@
 AWS Tools Package
 """
 
-from nexus.engine.tools.aws.client import get_boto3_client
-from nexus.engine.tools.aws.schemas import (
+from nexus.engine.tools.aws.client.client import get_boto3_client
+from nexus.engine.tools.aws.client.schemas import (
     AWSGetLogEventsSchema,
     AWSGetMetricDataSchema,
     AWSReplaySQSDLQSchema,
@@ -17,7 +17,7 @@ from nexus.engine.tools.aws.schemas import (
     RDSDeleteInstanceInput,
     RDSDeleteInstanceSchema,
 )
-from nexus.engine.tools.aws.tools import (
+from nexus.engine.tools.aws.mutate.tools import (
     AWSGetLogEventsTool,
     AWSGetMetricDataTool,
     AWSReplaySQSDLQTool,

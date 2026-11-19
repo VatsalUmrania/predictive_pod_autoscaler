@@ -239,7 +239,7 @@ async def test_report_endpoint_content_negotiation():
     """Browsers get the readable HTML page; API clients get raw JSON."""
     from httpx import ASGITransport, AsyncClient
 
-    from nexus.services.api.status_api import app
+    from nexus.services.api.status.status_api import app
 
     stored = {
         "incident_id": "inc-nego",

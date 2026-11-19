@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pytest
 
-from nexus.services.notifications.notifier import resolve_slack_webhook
+from nexus.services.notifications.dispatcher.notifier import resolve_slack_webhook
 
 
 @pytest.fixture
@@ -34,7 +34,9 @@ def env_webhook(monkeypatch):
 def empty_policy_cache(monkeypatch):
     """No app policies loaded → forces the env-fallback branch."""
     cache: dict[str, dict] = {}
-    monkeypatch.setattr("nexus.services.observability.dashboard._policy_cache", cache)
+    monkeypatch.setattr(
+        "nexus.services.observability.dashboard.dashboard._policy_cache", cache
+    )
     return cache
 
 
@@ -89,7 +91,7 @@ def test_dashboard_import_failure_falls_back_to_env(env_webhook, monkeypatch):
     real_import = builtins.__import__
 
     def _fail(name, *args, **kwargs):
-        if name == "nexus.services.observability.dashboard":
+        if name == "nexus.services.observability.dashboard.dashboard":
             raise ImportError("simulated")
         return real_import(name, *args, **kwargs)
 

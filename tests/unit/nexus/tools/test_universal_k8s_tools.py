@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock
 
-from nexus.engine.tools.k8s.universal import (
+from nexus.engine.tools.k8s.mutate.universal import (
     K8sGetLogsInput,
     K8sInspectResourceInput,
     K8sMutateResourceInput,

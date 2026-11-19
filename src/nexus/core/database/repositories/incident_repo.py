@@ -6,15 +6,15 @@ import json
 import uuid
 from typing import Any
 
-from nexus.core.database.models import (
+from nexus.core.database.connection.pool import PostgresPool
+from nexus.core.database.connection.utils import _ensure_uuid
+from nexus.core.database.models.models import (
     VALID_INCIDENT_TRANSITIONS,
     VALID_TRANSITIONS,
     IncidentFSM,
     IncidentState,
     IncidentStatus,
 )
-from nexus.core.database.pool import PostgresPool
-from nexus.core.database.utils import _ensure_uuid
 
 
 class IncidentRepository:

@@ -8,7 +8,7 @@ import logging
 import time
 from typing import Any
 
-from nexus.engine.tools.aws.universal import (
+from nexus.engine.tools.aws.mutate.universal import (
     AWSInspectInput,
     AWSMutateInput,
     AWSQueryTelemetryInput,
@@ -17,7 +17,7 @@ from nexus.engine.tools.aws.universal import (
     execute_aws_query_telemetry,
 )
 from nexus.engine.tools.base import NexusToolResult, ToolRiskLevel
-from nexus.engine.tools.k8s.universal import (
+from nexus.engine.tools.k8s.mutate.universal import (
     K8sGetLogsInput,
     K8sInspectResourceInput,
     K8sMutateResourceInput,
@@ -109,7 +109,7 @@ def build_tool_schemas(
 
 def register_legacy_tools(registry: Any) -> None:
     try:
-        from nexus.engine.tools.k8s.observe_tools import (
+        from nexus.engine.tools.k8s.observe.observe_tools import (
             fetch_pod_container_logs,
             inspect_deployment_status,
             locate_pod_and_owner,

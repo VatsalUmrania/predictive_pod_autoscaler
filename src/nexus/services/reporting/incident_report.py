@@ -15,8 +15,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from nexus.core.database.client import get_database_client
-from nexus.engine.workflow.llm import get_llm
+from nexus.core.database.connection.client import get_database_client
+from nexus.engine.workflow.llm.llm import get_llm
 from nexus.services.reporting.incident_report_builder import (
     build_report_facts,
     template_report,

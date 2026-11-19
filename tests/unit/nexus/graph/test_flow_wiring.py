@@ -13,17 +13,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.messages import AIMessage
 
-from nexus.engine.nodes.execute import execute_node
-from nexus.engine.nodes.govern import govern_node
-from nexus.engine.nodes.rollback import rollback_node
-from nexus.engine.nodes.verify import verify_node
+from nexus.engine.nodes.execution.execute import execute_node
+from nexus.engine.nodes.execution.rollback import rollback_node
+from nexus.engine.nodes.execution.verify import verify_node
+from nexus.engine.nodes.supervision.govern import govern_node
 from nexus.engine.reasoning.rca.result import VerificationResult
-from nexus.engine.workflow.workflow import IncidentWorkflow
+from nexus.engine.workflow.graph.workflow import IncidentWorkflow
 
 
 @pytest.fixture
 def status_context():
-    from nexus.services.api.status_api import context
+    from nexus.services.api.status.status_api import context
 
     saved = (
         context.action_ladder,
@@ -128,9 +128,12 @@ async def test_verify_react_observes_until_healthy():
 
     with (
         patch(
-            "nexus.engine.nodes.verify.get_tool_registry", return_value=mock_registry
+            "nexus.engine.nodes.execution.verify.get_tool_registry",
+            return_value=mock_registry,
         ),
-        patch("nexus.engine.nodes.verify.get_chat_model", return_value=mock_llm),
+        patch(
+            "nexus.engine.nodes.execution.verify.get_chat_model", return_value=mock_llm
+        ),
     ):
         result = await verify_node(_state())
 
@@ -159,9 +162,12 @@ async def test_verify_failure_returns_verification_feedback():
 
     with (
         patch(
-            "nexus.engine.nodes.verify.get_tool_registry", return_value=mock_registry
+            "nexus.engine.nodes.execution.verify.get_tool_registry",
+            return_value=mock_registry,
         ),
-        patch("nexus.engine.nodes.verify.get_chat_model", return_value=mock_llm),
+        patch(
+            "nexus.engine.nodes.execution.verify.get_chat_model", return_value=mock_llm
+        ),
     ):
         result = await verify_node(_state())
 
@@ -176,7 +182,7 @@ async def test_verify_failure_returns_verification_feedback():
 @pytest.mark.asyncio
 async def test_govern_blocks_when_opa_denies():
     with patch(
-        "nexus.engine.nodes.govern.evaluate_opa_policy",
+        "nexus.engine.nodes.supervision.govern.evaluate_opa_policy",
         AsyncMock(
             return_value={
                 "allowed": False,
@@ -196,7 +202,7 @@ async def test_govern_blocks_when_opa_denies():
 @pytest.mark.asyncio
 async def test_govern_requires_approval_and_resets_flags():
     with patch(
-        "nexus.engine.nodes.govern.evaluate_opa_policy",
+        "nexus.engine.nodes.supervision.govern.evaluate_opa_policy",
         AsyncMock(
             return_value={
                 "allowed": True,
@@ -217,7 +223,7 @@ async def test_govern_requires_approval_and_resets_flags():
 @pytest.mark.asyncio
 async def test_govern_auto_approves_when_opa_allows_without_approval():
     with patch(
-        "nexus.engine.nodes.govern.evaluate_opa_policy",
+        "nexus.engine.nodes.supervision.govern.evaluate_opa_policy",
         AsyncMock(
             return_value={
                 "allowed": True,
@@ -265,7 +271,8 @@ async def test_execute_invokes_tool_and_sets_rollback_available():
     )
 
     with patch(
-        "nexus.engine.nodes.execute.get_tool_registry", return_value=mock_registry
+        "nexus.engine.nodes.execution.execute.get_tool_registry",
+        return_value=mock_registry,
     ):
         result = await execute_node(state)
 
@@ -317,7 +324,8 @@ async def test_rollback_executes_declared_plan_step_inverse():
     )
 
     with patch(
-        "nexus.engine.nodes.rollback.get_tool_registry", return_value=mock_registry
+        "nexus.engine.nodes.execution.rollback.get_tool_registry",
+        return_value=mock_registry,
     ):
         res = await rollback_node(state)
 
@@ -347,7 +355,7 @@ async def test_completion_records_success_outcome_to_learning_plane(status_conte
 
     with (
         patch(
-            "nexus.services.observability.dashboard.record_incident_resolution",
+            "nexus.services.observability.dashboard.dashboard.record_incident_resolution",
             AsyncMock(),
         ),
         patch(
@@ -383,7 +391,7 @@ async def test_completion_records_failed_outcome_and_guards_empty_execution(
 
     with (
         patch(
-            "nexus.services.observability.dashboard.record_incident_resolution",
+            "nexus.services.observability.dashboard.dashboard.record_incident_resolution",
             AsyncMock(),
         ),
         patch(

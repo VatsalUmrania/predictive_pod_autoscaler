@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from nexus.engine.workflow.llm_limiter import (
+from nexus.engine.workflow.llm.llm_limiter import (
     AsyncLLMRateLimiter,
     LLMQuotaExhaustedError,
     RateLimitedChatModel,
@@ -73,7 +73,7 @@ async def test_langgraph_retry_policy_recovers_from_transient_504_and_escalates_
     from langgraph.checkpoint.memory import MemorySaver
     from langgraph.types import RetryPolicy
 
-    from nexus.engine.workflow.builder import (
+    from nexus.engine.workflow.graph.builder import (
         build_incident_graph,
         is_retryable_node_error,
     )

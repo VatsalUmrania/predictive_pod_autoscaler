@@ -54,11 +54,11 @@ async def test_k8s_adapter_telemetry_collection_deterministic():
     )
 
     with patch(
-        "nexus.engine.tools.k8s.observe_tools.describe_resource",
+        "nexus.engine.tools.k8s.observe.observe_tools.describe_resource",
         return_value="State: CrashLoopBackOff\nReplicas: 3",
     ):
         with patch(
-            "nexus.engine.tools.k8s.observe_tools.get_pod_logs",
+            "nexus.engine.tools.k8s.observe.observe_tools.get_pod_logs",
             return_value="panic: fatal memory error\nstack trace line 1",
         ):
             telemetry: PlatformTelemetry = await adapter.collect_telemetry(target)
@@ -82,7 +82,7 @@ async def test_k8s_adapter_snapshot_and_rollback():
 
     # Capture scale snapshot
     with patch(
-        "nexus.engine.tools.k8s.observe_tools.describe_resource",
+        "nexus.engine.tools.k8s.observe.observe_tools.describe_resource",
         return_value="Replicas: 4\nAvailable: 4",
     ):
         snapshot = await adapter.capture_snapshot(
@@ -117,7 +117,7 @@ async def test_k8s_adapter_health_verification():
     )
 
     with patch(
-        "nexus.engine.tools.k8s.observe_tools.describe_resource",
+        "nexus.engine.tools.k8s.observe.observe_tools.describe_resource",
         return_value="All pods Running and Ready",
     ):
         verif: HealthCheckResult = await adapter.verify_health(target, {})
@@ -125,7 +125,7 @@ async def test_k8s_adapter_health_verification():
         assert verif.slo_restored is True
 
     with patch(
-        "nexus.engine.tools.k8s.observe_tools.describe_resource",
+        "nexus.engine.tools.k8s.observe.observe_tools.describe_resource",
         return_value="Pod in CrashLoopBackOff state",
     ):
         verif2: HealthCheckResult = await adapter.verify_health(target, {})

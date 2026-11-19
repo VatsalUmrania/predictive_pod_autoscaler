@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from nexus.services.notifications.notifier import Notifier
-from nexus.services.observability.dashboard import record_incident_resolution
+from nexus.services.notifications.dispatcher.notifier import Notifier
+from nexus.services.observability.dashboard.dashboard import record_incident_resolution
 
 
 def _policy(app_name: str, webhook: str | None) -> dict:
@@ -27,7 +27,9 @@ async def test_notify_incident_resolved_sends_slack_payload():
     notifier._send = AsyncMock()
 
     policy = _policy("checkout-service", "https://hooks.slack.test/RESOLVED")
-    with patch("nexus.services.observability.dashboard._policy_cache", policy):
+    with patch(
+        "nexus.services.observability.dashboard.dashboard._policy_cache", policy
+    ):
         await notifier.notify_incident_resolved(
             app_name="checkout-service",
             incident_id="inc-12345",
@@ -71,7 +73,7 @@ async def test_notify_incident_resolved_skips_when_no_webhook():
 
     policy = _policy("silent-app", None)
     with (
-        patch("nexus.services.observability.dashboard._policy_cache", policy),
+        patch("nexus.services.observability.dashboard.dashboard._policy_cache", policy),
         patch.dict("os.environ", {}, clear=True),
     ):
         await notifier.notify_incident_resolved(
@@ -90,7 +92,9 @@ async def test_notify_incident_escalated_sends_slack_payload():
     notifier._send = AsyncMock()
 
     policy = _policy("order-service", "https://hooks.slack.test/ESCALATE")
-    with patch("nexus.services.observability.dashboard._policy_cache", policy):
+    with patch(
+        "nexus.services.observability.dashboard.dashboard._policy_cache", policy
+    ):
         await notifier.notify_incident_escalated(
             app_name="order-service",
             incident_id="inc-888",
@@ -186,7 +190,8 @@ async def test_on_incident_escalated_message_maps_nats_payload():
 async def test_record_incident_resolution_persists_to_db():
     """record_incident_resolution formats row and invokes _write_incident."""
     with patch(
-        "nexus.services.observability.dashboard._write_incident", new_callable=AsyncMock
+        "nexus.services.observability.dashboard.dashboard._write_incident",
+        new_callable=AsyncMock,
     ) as mock_write:
         data = {
             "incident_id": "inc-db-1",
@@ -222,7 +227,7 @@ async def test_record_incident_resolution_persists_to_db():
 async def test_workflow_handle_completion_publishes_nats_and_records():
     """IncidentWorkflow._handle_workflow_completion broadcasts on NATS, persists to DB, and publishes report."""
     from nexus.core.bus.nats.client import NATSClient
-    from nexus.engine.workflow.workflow import IncidentWorkflow
+    from nexus.engine.workflow.graph.workflow import IncidentWorkflow
 
     workflow = IncidentWorkflow.__new__(IncidentWorkflow)
     workflow.nats = MagicMock()
@@ -267,7 +272,7 @@ async def test_workflow_handle_completion_publishes_nats_and_records():
 
     with (
         patch(
-            "nexus.services.observability.dashboard.record_incident_resolution",
+            "nexus.services.observability.dashboard.dashboard.record_incident_resolution",
             new_callable=AsyncMock,
         ) as mock_rec,
         patch.object(NATSClient, "_instance", workflow.nats),
@@ -310,8 +315,13 @@ async def test_workflow_handle_completion_publishes_nats_and_records():
 async def test_escalation_flow_maps_new_rca_schema_and_avoids_duplicate_slack():
     """Escalated workflow publishes RCA + proposed fix without Unknown/ESCALATED placeholders or duplicate Slack sends."""
     from nexus.core.bus.nats.client import NATSClient
-    from nexus.engine.nodes.escalate import derive_escalation_reason, escalate_node
-    from nexus.engine.workflow.workflow_completion import handle_workflow_completion
+    from nexus.engine.nodes.supervision.escalate import (
+        derive_escalation_reason,
+        escalate_node,
+    )
+    from nexus.engine.workflow.lifecycle.workflow_completion import (
+        handle_workflow_completion,
+    )
 
     state = {
         "incident_id": "CL-46C15FD3",
@@ -350,7 +360,7 @@ async def test_escalation_flow_maps_new_rca_schema_and_avoids_duplicate_slack():
     with (
         patch.object(NATSClient, "_instance", mock_nats),
         patch(
-            "nexus.engine.nodes.escalate.sync_discovered_target_identity",
+            "nexus.engine.nodes.supervision.escalate.sync_discovered_target_identity",
             new_callable=AsyncMock,
         ),
         patch.object(
@@ -365,7 +375,7 @@ async def test_escalation_flow_maps_new_rca_schema_and_avoids_duplicate_slack():
 
     final_state = {**state, **esc_update}
     with patch(
-        "nexus.services.observability.dashboard.record_incident_resolution",
+        "nexus.services.observability.dashboard.dashboard.record_incident_resolution",
         new_callable=AsyncMock,
     ):
         await handle_workflow_completion(
@@ -387,7 +397,7 @@ async def test_escalation_flow_maps_new_rca_schema_and_avoids_duplicate_slack():
     notifier = Notifier()
     notifier._send = AsyncMock()
     with patch(
-        "nexus.services.observability.dashboard._policy_cache",
+        "nexus.services.observability.dashboard.dashboard._policy_cache",
         _policy("default", "https://hooks.slack.test/ESC"),
     ):
         await notifier._on_incident_escalated_message(published)

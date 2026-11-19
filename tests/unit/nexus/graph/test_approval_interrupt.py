@@ -12,18 +12,18 @@ import pytest
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import MemorySaver
 
-from nexus.engine.nodes.approval import approval_node
-from nexus.engine.nodes.govern import govern_node
+from nexus.engine.nodes.supervision.approval import approval_node
+from nexus.engine.nodes.supervision.govern import govern_node
 from nexus.engine.reasoning.rca.result import (
     DiscoveredTarget,
     RCAResult,
     VerificationResult,
 )
-from nexus.engine.workflow.builder import build_incident_graph
-from nexus.engine.workflow.routes import route_after_approval
-from nexus.engine.workflow.workflow import run_incident_workflow
-from nexus.engine.workflow.workflow_approval import handle_incident_approval
-from nexus.engine.workflow.workflow_completion import finalize_workflow_run
+from nexus.engine.workflow.graph.builder import build_incident_graph
+from nexus.engine.workflow.graph.routes import route_after_approval
+from nexus.engine.workflow.graph.workflow import run_incident_workflow
+from nexus.engine.workflow.lifecycle.workflow_approval import handle_incident_approval
+from nexus.engine.workflow.lifecycle.workflow_completion import finalize_workflow_run
 
 
 def _make_fake_llm(
@@ -107,7 +107,7 @@ async def test_govern_node_resets_prior_approval_on_requires_approval():
         },
     }
     with patch(
-        "nexus.engine.nodes.govern.evaluate_opa_policy",
+        "nexus.engine.nodes.supervision.govern.evaluate_opa_policy",
         AsyncMock(
             return_value={
                 "allowed": True,
@@ -255,21 +255,31 @@ async def test_e2e_interrupt_pause_no_report_then_clean_command_resume_approved(
     mock_sync = AsyncMock()
 
     with (
-        patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=fake_llm),
-        patch("nexus.engine.nodes.plan.get_chat_model", return_value=fake_llm),
-        patch("nexus.engine.nodes.verify.get_chat_model", return_value=fake_llm),
         patch(
-            "nexus.engine.nodes.diagnose.get_tool_registry", return_value=mock_registry
+            "nexus.engine.nodes.analysis.diagnose.get_chat_model", return_value=fake_llm
         ),
-        patch("nexus.engine.nodes.plan.get_tool_registry", return_value=mock_registry),
+        patch("nexus.engine.nodes.planning.plan.get_chat_model", return_value=fake_llm),
         patch(
-            "nexus.engine.nodes.execute.get_tool_registry", return_value=mock_registry
+            "nexus.engine.nodes.execution.verify.get_chat_model", return_value=fake_llm
         ),
         patch(
-            "nexus.engine.nodes.verify.get_tool_registry", return_value=mock_registry
+            "nexus.engine.nodes.analysis.diagnose.get_tool_registry",
+            return_value=mock_registry,
         ),
         patch(
-            "nexus.engine.nodes.govern.evaluate_opa_policy",
+            "nexus.engine.nodes.planning.plan.get_tool_registry",
+            return_value=mock_registry,
+        ),
+        patch(
+            "nexus.engine.nodes.execution.execute.get_tool_registry",
+            return_value=mock_registry,
+        ),
+        patch(
+            "nexus.engine.nodes.execution.verify.get_tool_registry",
+            return_value=mock_registry,
+        ),
+        patch(
+            "nexus.engine.nodes.supervision.govern.evaluate_opa_policy",
             AsyncMock(
                 return_value={
                     "allowed": True,
@@ -279,14 +289,21 @@ async def test_e2e_interrupt_pause_no_report_then_clean_command_resume_approved(
             ),
         ),
         patch(
-            "nexus.engine.workflow.workflow.send_approval_request_notification",
+            "nexus.engine.workflow.graph.workflow.send_approval_request_notification",
             mock_notify,
         ),
         patch(
-            "nexus.engine.workflow.workflow.sync_discovered_target_identity", mock_sync
+            "nexus.engine.workflow.graph.workflow.sync_discovered_target_identity",
+            mock_sync,
         ),
-        patch("nexus.engine.nodes.diagnose.sync_discovered_target_identity", mock_sync),
-        patch("nexus.engine.nodes.approval.sync_discovered_target_identity", mock_sync),
+        patch(
+            "nexus.engine.nodes.analysis.diagnose.sync_discovered_target_identity",
+            mock_sync,
+        ),
+        patch(
+            "nexus.engine.nodes.supervision.approval.sync_discovered_target_identity",
+            mock_sync,
+        ),
         patch(
             "nexus.services.reporting.incident_report.publish_post_incident_report",
             mock_publish,
@@ -373,14 +390,20 @@ async def test_e2e_interrupt_resume_rejected_skips_post_incident_report():
     mock_publish = AsyncMock()
 
     with (
-        patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=fake_llm),
-        patch("nexus.engine.nodes.plan.get_chat_model", return_value=fake_llm),
         patch(
-            "nexus.engine.nodes.diagnose.get_tool_registry", return_value=mock_registry
+            "nexus.engine.nodes.analysis.diagnose.get_chat_model", return_value=fake_llm
         ),
-        patch("nexus.engine.nodes.plan.get_tool_registry", return_value=mock_registry),
+        patch("nexus.engine.nodes.planning.plan.get_chat_model", return_value=fake_llm),
         patch(
-            "nexus.engine.nodes.govern.evaluate_opa_policy",
+            "nexus.engine.nodes.analysis.diagnose.get_tool_registry",
+            return_value=mock_registry,
+        ),
+        patch(
+            "nexus.engine.nodes.planning.plan.get_tool_registry",
+            return_value=mock_registry,
+        ),
+        patch(
+            "nexus.engine.nodes.supervision.govern.evaluate_opa_policy",
             AsyncMock(
                 return_value={
                     "allowed": True,
@@ -390,7 +413,7 @@ async def test_e2e_interrupt_resume_rejected_skips_post_incident_report():
             ),
         ),
         patch(
-            "nexus.engine.workflow.workflow.send_approval_request_notification",
+            "nexus.engine.workflow.graph.workflow.send_approval_request_notification",
             AsyncMock(),
         ),
         patch(
@@ -423,8 +446,8 @@ async def test_e2e_interrupt_resume_rejected_skips_post_incident_report():
 @pytest.mark.asyncio
 async def test_incident_workflow_with_nats_dispatches_single_approval_notification():
     """With NATS connected, IncidentWorkflow dispatches approval once over NATS and skips direct Slack post."""
-    from nexus.engine.workflow.checkpointer import GraphCheckpointStore
-    from nexus.engine.workflow.workflow import IncidentWorkflow
+    from nexus.engine.workflow.graph.checkpointer import GraphCheckpointStore
+    from nexus.engine.workflow.graph.workflow import IncidentWorkflow
 
     rca = RCAResult(
         target=DiscoveredTarget(
@@ -470,14 +493,20 @@ async def test_incident_workflow_with_nats_dispatches_single_approval_notificati
     )
 
     with (
-        patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=fake_llm),
-        patch("nexus.engine.nodes.plan.get_chat_model", return_value=fake_llm),
         patch(
-            "nexus.engine.nodes.diagnose.get_tool_registry", return_value=mock_registry
+            "nexus.engine.nodes.analysis.diagnose.get_chat_model", return_value=fake_llm
         ),
-        patch("nexus.engine.nodes.plan.get_tool_registry", return_value=mock_registry),
+        patch("nexus.engine.nodes.planning.plan.get_chat_model", return_value=fake_llm),
         patch(
-            "nexus.engine.nodes.govern.evaluate_opa_policy",
+            "nexus.engine.nodes.analysis.diagnose.get_tool_registry",
+            return_value=mock_registry,
+        ),
+        patch(
+            "nexus.engine.nodes.planning.plan.get_tool_registry",
+            return_value=mock_registry,
+        ),
+        patch(
+            "nexus.engine.nodes.supervision.govern.evaluate_opa_policy",
             AsyncMock(
                 return_value={
                     "allowed": True,
@@ -487,18 +516,20 @@ async def test_incident_workflow_with_nats_dispatches_single_approval_notificati
             ),
         ),
         patch(
-            "nexus.engine.workflow.workflow.send_approval_request_notification",
+            "nexus.engine.workflow.graph.workflow.send_approval_request_notification",
             mock_direct_notify,
         ),
         patch(
-            "nexus.engine.workflow.workflow.sync_discovered_target_identity",
+            "nexus.engine.workflow.graph.workflow.sync_discovered_target_identity",
             AsyncMock(),
         ),
         patch(
-            "nexus.engine.nodes.diagnose.sync_discovered_target_identity", AsyncMock()
+            "nexus.engine.nodes.analysis.diagnose.sync_discovered_target_identity",
+            AsyncMock(),
         ),
         patch(
-            "nexus.engine.nodes.approval.sync_discovered_target_identity", AsyncMock()
+            "nexus.engine.nodes.supervision.approval.sync_discovered_target_identity",
+            AsyncMock(),
         ),
     ):
         paused = await wf.run_incident(

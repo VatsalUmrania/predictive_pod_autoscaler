@@ -50,7 +50,7 @@ class K8sPlatformAdapter(BasePlatformAdapter):
     def _resolve_owner(self, namespace: str, pod_name: str) -> tuple[str, str] | None:
         """Resolve top-level workload controller for an ephemeral pod via ownerReferences."""
         try:
-            from nexus.engine.tools.k8s.client import get_k8s_client
+            from nexus.engine.tools.k8s.client.client import get_k8s_client
 
             core = get_k8s_client("CoreV1Api")
             if not core:
@@ -101,7 +101,10 @@ class K8sPlatformAdapter(BasePlatformAdapter):
         )
 
     async def collect_telemetry(self, target: TargetResource) -> PlatformTelemetry:
-        from nexus.engine.tools.k8s.observe_tools import describe_resource, get_pod_logs
+        from nexus.engine.tools.k8s.observe.observe_tools import (
+            describe_resource,
+            get_pod_logs,
+        )
 
         desc = describe_resource(
             namespace=target.namespace,
@@ -146,7 +149,7 @@ class K8sPlatformAdapter(BasePlatformAdapter):
     ) -> RollbackSnapshot | None:
         prev_replicas = int(parameters.get("replicas", 1))
         try:
-            from nexus.engine.tools.k8s.observe_tools import describe_resource
+            from nexus.engine.tools.k8s.observe.observe_tools import describe_resource
 
             desc = describe_resource(
                 namespace=target.namespace,
@@ -178,7 +181,7 @@ class K8sPlatformAdapter(BasePlatformAdapter):
     async def verify_health(
         self, target: TargetResource, plan_step: dict[str, Any]
     ) -> HealthCheckResult:
-        from nexus.engine.tools.k8s.observe_tools import describe_resource
+        from nexus.engine.tools.k8s.observe.observe_tools import describe_resource
 
         dep_name = (
             target.name if target.kind.lower() in ("deployment", "deploy") else None

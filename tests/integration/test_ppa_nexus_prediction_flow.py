@@ -26,12 +26,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 from nexus.core.bus.events import IncidentEvent
-from nexus.intelligence.learning.feedback_loop import FeedbackLoop
-from nexus.intelligence.learning.ppa_outcome_tracker import (
+from nexus.intelligence.learning.feedback.feedback_loop import FeedbackLoop
+from nexus.intelligence.learning.ppa.ppa_outcome_tracker import (
     PendingPrediction,
     PpaOutcomeTracker,
 )
-from nexus.intelligence.predictive.prescaler import PrescaleMode, Prescaler
+from nexus.intelligence.predictive.scaling.prescaler import PrescaleMode, Prescaler
 
 # ── Test fixtures ──────────────────────────────────────────────────────────────
 
@@ -265,7 +265,9 @@ class TestFeedbackLoopBatchFlush:
                 return {}
 
             async def get_system_kpis(self, days=30):
-                from nexus.intelligence.knowledge.outcome_store import SystemKPIs
+                from nexus.intelligence.knowledge.outcomes.outcome_store import (
+                    SystemKPIs,
+                )
 
                 return SystemKPIs(window_days=days)
 
@@ -314,7 +316,9 @@ class TestFeedbackLoopBatchFlush:
                 return {}
 
             async def get_system_kpis(self, days=30):
-                from nexus.intelligence.knowledge.outcome_store import SystemKPIs
+                from nexus.intelligence.knowledge.outcomes.outcome_store import (
+                    SystemKPIs,
+                )
 
                 return SystemKPIs(window_days=days)
 

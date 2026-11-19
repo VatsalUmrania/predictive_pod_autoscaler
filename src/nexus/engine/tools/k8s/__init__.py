@@ -5,8 +5,8 @@ Exports client factory, schemas, and tools for Kubernetes operations.
 Mirrors nexus.engine.tools.aws.
 """
 
-from nexus.engine.tools.k8s.client import get_k8s_client
-from nexus.engine.tools.k8s.schemas import (
+from nexus.engine.tools.k8s.client.client import get_k8s_client
+from nexus.engine.tools.k8s.client.schemas import (
     DescribeResourceSchema,
     GetMetricsSchema,
     GetPodLogsSchema,
@@ -16,7 +16,7 @@ from nexus.engine.tools.k8s.schemas import (
     RollbackDeploymentSchema,
     ScaleResourceSchema,
 )
-from nexus.engine.tools.k8s.tools import (
+from nexus.engine.tools.k8s.mutate.tools import (
     K8sDescribeResourceTool,
     K8sGetMetricsTool,
     K8sGetPodLogsTool,

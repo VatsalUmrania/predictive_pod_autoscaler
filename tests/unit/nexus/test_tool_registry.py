@@ -55,7 +55,7 @@ async def test_tool_execution_with_db_logging():
 
     # Mock the internal k8s mutate tool for restart_deployment
     with patch(
-        "nexus.engine.tools.k8s.mutate_tools.restart_deployment",
+        "nexus.engine.tools.k8s.mutate.mutate_tools.restart_deployment",
         return_value="Restarted successfully",
     ):
         res = await reg.execute_tool(

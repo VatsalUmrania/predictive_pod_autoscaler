@@ -14,12 +14,12 @@ from fastapi.testclient import TestClient
 
 from nexus.core.bus.nats.client import NATSClient
 from nexus.engine.reasoning.event_correlator import EventCorrelator
-from nexus.services.api.ingest import (
+from nexus.services.api.ingest.ingest import (
     _attrs_list_to_dict,
     extract_symptom_signals_from_otlp,
     extract_telemetry_context,
 )
-from nexus.services.api.status_api import app
+from nexus.services.api.status.status_api import app
 
 client = TestClient(app)
 

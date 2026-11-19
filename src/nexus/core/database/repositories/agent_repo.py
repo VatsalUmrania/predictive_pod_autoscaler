@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import uuid
 
-from nexus.core.database.pool import PostgresPool
-from nexus.core.database.utils import _ensure_uuid
+from nexus.core.database.connection.pool import PostgresPool
+from nexus.core.database.connection.utils import _ensure_uuid
 
 
 class AgentRepository:

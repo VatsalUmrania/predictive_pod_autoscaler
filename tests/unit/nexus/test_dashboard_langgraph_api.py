@@ -21,10 +21,10 @@ from nexus.engine.reasoning.rca.result import (
     RCAResult,
     VerificationResult,
 )
-from nexus.engine.workflow.checkpointer import GraphCheckpointStore
-from nexus.engine.workflow.workflow import IncidentWorkflow
-from nexus.services.api.status_api import app, context
-from nexus.services.observability.dashboard_incidents import (
+from nexus.engine.workflow.graph.checkpointer import GraphCheckpointStore
+from nexus.engine.workflow.graph.workflow import IncidentWorkflow
+from nexus.services.api.status.status_api import app, context
+from nexus.services.observability.dashboard.dashboard_incidents import (
     _in_memory_incidents,
     determine_active_graph_node,
     serialize_incident_for_dashboard,
@@ -250,7 +250,8 @@ async def test_dashboard_merges_live_checkpoint_and_inline_approve_resumes_graph
         raise RuntimeError("offline test")
 
     monkeypatch.setattr(
-        "nexus.services.observability.dashboard.get_database_client", _failing_db
+        "nexus.services.observability.dashboard.dashboard.get_database_client",
+        _failing_db,
     )
 
     prev_wf = context.workflow
@@ -264,26 +265,35 @@ async def test_dashboard_merges_live_checkpoint_and_inline_approve_resumes_graph
 
     try:
         with (
-            patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=fake_llm),
-            patch("nexus.engine.nodes.plan.get_chat_model", return_value=fake_llm),
-            patch("nexus.engine.nodes.verify.get_chat_model", return_value=fake_llm),
             patch(
-                "nexus.engine.nodes.diagnose.get_tool_registry",
+                "nexus.engine.nodes.analysis.diagnose.get_chat_model",
+                return_value=fake_llm,
+            ),
+            patch(
+                "nexus.engine.nodes.planning.plan.get_chat_model", return_value=fake_llm
+            ),
+            patch(
+                "nexus.engine.nodes.execution.verify.get_chat_model",
+                return_value=fake_llm,
+            ),
+            patch(
+                "nexus.engine.nodes.analysis.diagnose.get_tool_registry",
                 return_value=mock_registry,
             ),
             patch(
-                "nexus.engine.nodes.plan.get_tool_registry", return_value=mock_registry
-            ),
-            patch(
-                "nexus.engine.nodes.execute.get_tool_registry",
+                "nexus.engine.nodes.planning.plan.get_tool_registry",
                 return_value=mock_registry,
             ),
             patch(
-                "nexus.engine.nodes.verify.get_tool_registry",
+                "nexus.engine.nodes.execution.execute.get_tool_registry",
                 return_value=mock_registry,
             ),
             patch(
-                "nexus.engine.nodes.govern.evaluate_opa_policy",
+                "nexus.engine.nodes.execution.verify.get_tool_registry",
+                return_value=mock_registry,
+            ),
+            patch(
+                "nexus.engine.nodes.supervision.govern.evaluate_opa_policy",
                 AsyncMock(
                     return_value={
                         "allowed": True,
@@ -293,19 +303,19 @@ async def test_dashboard_merges_live_checkpoint_and_inline_approve_resumes_graph
                 ),
             ),
             patch(
-                "nexus.engine.workflow.workflow.send_approval_request_notification",
+                "nexus.engine.workflow.graph.workflow.send_approval_request_notification",
                 AsyncMock(),
             ),
             patch(
-                "nexus.engine.workflow.workflow.sync_discovered_target_identity",
+                "nexus.engine.workflow.graph.workflow.sync_discovered_target_identity",
                 AsyncMock(),
             ),
             patch(
-                "nexus.engine.nodes.diagnose.sync_discovered_target_identity",
+                "nexus.engine.nodes.analysis.diagnose.sync_discovered_target_identity",
                 AsyncMock(),
             ),
             patch(
-                "nexus.engine.nodes.approval.sync_discovered_target_identity",
+                "nexus.engine.nodes.supervision.approval.sync_discovered_target_identity",
                 AsyncMock(),
             ),
             patch(
@@ -450,7 +460,8 @@ async def test_dashboard_inline_reject_escalates_and_keeps_report_guarded(monkey
         raise RuntimeError("offline test")
 
     monkeypatch.setattr(
-        "nexus.services.observability.dashboard.get_database_client", _failing_db
+        "nexus.services.observability.dashboard.dashboard.get_database_client",
+        _failing_db,
     )
 
     prev_wf = context.workflow
@@ -464,17 +475,23 @@ async def test_dashboard_inline_reject_escalates_and_keeps_report_guarded(monkey
 
     try:
         with (
-            patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=fake_llm),
-            patch("nexus.engine.nodes.plan.get_chat_model", return_value=fake_llm),
             patch(
-                "nexus.engine.nodes.diagnose.get_tool_registry",
+                "nexus.engine.nodes.analysis.diagnose.get_chat_model",
+                return_value=fake_llm,
+            ),
+            patch(
+                "nexus.engine.nodes.planning.plan.get_chat_model", return_value=fake_llm
+            ),
+            patch(
+                "nexus.engine.nodes.analysis.diagnose.get_tool_registry",
                 return_value=mock_registry,
             ),
             patch(
-                "nexus.engine.nodes.plan.get_tool_registry", return_value=mock_registry
+                "nexus.engine.nodes.planning.plan.get_tool_registry",
+                return_value=mock_registry,
             ),
             patch(
-                "nexus.engine.nodes.govern.evaluate_opa_policy",
+                "nexus.engine.nodes.supervision.govern.evaluate_opa_policy",
                 AsyncMock(
                     return_value={
                         "allowed": True,
@@ -484,19 +501,19 @@ async def test_dashboard_inline_reject_escalates_and_keeps_report_guarded(monkey
                 ),
             ),
             patch(
-                "nexus.engine.workflow.workflow.send_approval_request_notification",
+                "nexus.engine.workflow.graph.workflow.send_approval_request_notification",
                 AsyncMock(),
             ),
             patch(
-                "nexus.engine.workflow.workflow.sync_discovered_target_identity",
+                "nexus.engine.workflow.graph.workflow.sync_discovered_target_identity",
                 AsyncMock(),
             ),
             patch(
-                "nexus.engine.nodes.diagnose.sync_discovered_target_identity",
+                "nexus.engine.nodes.analysis.diagnose.sync_discovered_target_identity",
                 AsyncMock(),
             ),
             patch(
-                "nexus.engine.nodes.approval.sync_discovered_target_identity",
+                "nexus.engine.nodes.supervision.approval.sync_discovered_target_identity",
                 AsyncMock(),
             ),
             patch(

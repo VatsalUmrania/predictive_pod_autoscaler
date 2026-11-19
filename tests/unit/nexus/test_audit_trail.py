@@ -173,7 +173,7 @@ async def test_status_api_audit_tail_endpoint():
     """GET /audit/tail?n=20 returns 200 OK with list of recent records."""
     from httpx import ASGITransport, AsyncClient
 
-    from nexus.services.api.status_api import app, context
+    from nexus.services.api.status.status_api import app, context
 
     mock_client = MockPostgresClient()
     audit = AuditTrail(db_client=mock_client)

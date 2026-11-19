@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from nexus.core.bus.events import SignalType
-from nexus.intelligence.predictive.prescaler import Prescaler
+from nexus.intelligence.predictive.scaling.prescaler import Prescaler
 
 
 def make_ppa_payload(

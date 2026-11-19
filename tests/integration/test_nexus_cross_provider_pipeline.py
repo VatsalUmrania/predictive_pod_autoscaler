@@ -18,14 +18,14 @@ from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 from nexus.core.bus.events.event import AnomalySignal
-from nexus.core.database.models import IncidentState
-from nexus.engine.nodes.execute import execute_node
+from nexus.core.database.models.models import IncidentState
+from nexus.engine.nodes.execution.execute import execute_node
 from nexus.engine.platforms import (
     HealthCheckResult,
     get_platform_registry,
 )
 from nexus.engine.tools.base import NexusToolResult
-from nexus.engine.workflow.workflow import IncidentWorkflow
+from nexus.engine.workflow.graph.workflow import IncidentWorkflow
 
 
 class MockPipelineRCAModel(BaseChatModel):
@@ -104,7 +104,7 @@ async def test_k8s_autonomous_cross_provider_pipeline_e2e():
 
     with (
         patch(
-            "nexus.engine.nodes.diagnose.get_llm",
+            "nexus.engine.nodes.analysis.diagnose.get_llm",
             return_value=rca_mock,
         ),
         patch.object(
@@ -196,7 +196,7 @@ async def test_aws_autonomous_cross_provider_pipeline_e2e():
 
     with (
         patch(
-            "nexus.engine.nodes.diagnose.get_llm",
+            "nexus.engine.nodes.analysis.diagnose.get_llm",
             return_value=rca_mock,
         ),
         patch.object(
@@ -298,7 +298,7 @@ async def test_cross_provider_advisory_locking_concurrency():
     }
 
     with patch(
-        "nexus.engine.nodes.execute.get_database_client",
+        "nexus.engine.nodes.execution.execute.get_database_client",
         AsyncMock(return_value=mock_db_client),
     ):
         result = await execute_node(state)
@@ -339,7 +339,7 @@ async def test_cross_provider_verification_failure_triggers_rollback():
 
     with (
         patch(
-            "nexus.engine.nodes.diagnose.get_llm",
+            "nexus.engine.nodes.analysis.diagnose.get_llm",
             return_value=rca_mock,
         ),
         patch.object(
@@ -347,8 +347,8 @@ async def test_cross_provider_verification_failure_triggers_rollback():
             "execute_action",
             AsyncMock(return_value=NexusToolResult(success=True)),
         ),
-        patch("nexus.engine.nodes.verify.VERIFY_TIMEOUT_S", 0.05),
-        patch("nexus.engine.nodes.verify.VERIFY_POLL_INTERVAL_S", 0.01),
+        patch("nexus.engine.nodes.execution.verify.VERIFY_TIMEOUT_S", 0.05),
+        patch("nexus.engine.nodes.execution.verify.VERIFY_POLL_INTERVAL_S", 0.01),
         patch.object(
             adapter,
             "verify_health",

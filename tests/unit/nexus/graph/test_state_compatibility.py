@@ -9,16 +9,16 @@ import pytest
 from langgraph.graph import StateGraph
 
 from nexus.core.bus.events.event import AnomalySignal
-from nexus.engine.nodes.triage import triage_node
-from nexus.engine.workflow.builder import build_incident_graph
-from nexus.engine.workflow.state import (
+from nexus.engine.nodes.analysis.triage import triage_node
+from nexus.engine.workflow.graph.builder import build_incident_graph
+from nexus.engine.workflow.lifecycle.workflow_events import build_initial_state
+from nexus.engine.workflow.state.state import (
     IncidentGraphState,
     IncidentState,
     PlannedToolStep,
     PlanStep,
     VerificationCondition,
 )
-from nexus.engine.workflow.workflow_events import build_initial_state
 
 
 def test_incident_graph_state_compilation():

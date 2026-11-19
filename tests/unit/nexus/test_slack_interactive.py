@@ -35,8 +35,8 @@ from nexus.governance.safeguards.approval_queue import (
     HumanApprovalQueue,
     PendingApproval,
 )
-from nexus.services.api import status_api as status_api_module
-from nexus.services.notifications import notifier as notifier_module
+from nexus.services.api.status import status_api as status_api_module
+from nexus.services.notifications.dispatcher import notifier as notifier_module
 
 _SECRET = "test-signing-secret"
 

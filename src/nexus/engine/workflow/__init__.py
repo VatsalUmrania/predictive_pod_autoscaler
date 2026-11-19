@@ -21,8 +21,8 @@ from nexus.engine.platforms import (
     TargetResource,
     get_platform_registry,
 )
-from nexus.engine.workflow.checkpointer import GraphCheckpointStore
-from nexus.engine.workflow.state import (
+from nexus.engine.workflow.graph.checkpointer import GraphCheckpointStore
+from nexus.engine.workflow.state.state import (
     ExecutionRecord,
     GovernanceVerdict,
     IncidentGraphState,
@@ -54,7 +54,7 @@ __all__ = [
 
 def __getattr__(name: str) -> Any:
     if name in ("IncidentWorkflow", "build_incident_graph"):
-        from nexus.engine.workflow.workflow import (
+        from nexus.engine.workflow.graph.workflow import (
             IncidentWorkflow,
             build_incident_graph,
         )

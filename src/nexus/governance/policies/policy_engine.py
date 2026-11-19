@@ -206,7 +206,7 @@ async def evaluate_opa_policy(opa_input: dict[str, Any]) -> dict[str, Any]:
 
     engine: PolicyEngine | None = None
     try:
-        from nexus.services.api.status_api import context
+        from nexus.services.api.status.status_api import context
 
         if hasattr(context, "policy_engine") and context.policy_engine is not None:
             engine = context.policy_engine

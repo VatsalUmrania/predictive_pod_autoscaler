@@ -2,8 +2,8 @@ from unittest.mock import patch
 
 import pytest
 
-from nexus.core.database.client import PostgresClient, get_database_client
-from nexus.core.database.utils import _ensure_uuid
+from nexus.core.database.connection.client import PostgresClient, get_database_client
+from nexus.core.database.connection.utils import _ensure_uuid
 from tests.unit.nexus.test_db_helpers import MockPostgresClient
 
 
@@ -173,7 +173,7 @@ async def test_get_database_client_requires_dsn(monkeypatch):
     monkeypatch.delenv("NEXUS_POSTGRES_DSN", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
 
-    import nexus.core.database.client as pg_mod
+    import nexus.core.database.connection.client as pg_mod
 
     monkeypatch.setattr(pg_mod, "_global_db_client", None)
 

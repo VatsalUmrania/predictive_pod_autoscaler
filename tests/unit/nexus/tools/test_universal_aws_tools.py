@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from botocore.exceptions import ParamValidationError
 
-from nexus.engine.tools.aws.universal import (
+from nexus.engine.tools.aws.mutate.universal import (
     AWSInspectInput,
     AWSMutateInput,
     AWSQueryTelemetryInput,

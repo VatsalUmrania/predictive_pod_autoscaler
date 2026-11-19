@@ -25,7 +25,7 @@ import pytest
 # 1. PolicyEngine & Rego Rule Tests
 # ─────────────────────────────────────────────────────────────────────────────
 import nexus.governance.policies.policy_engine as pe_module
-from nexus.engine.nodes.govern import govern_node
+from nexus.engine.nodes.supervision.govern import govern_node
 from nexus.engine.tools.base import (
     NexusTool,
     NexusToolResult,
@@ -234,7 +234,7 @@ async def test_govern_node_enforces_zero_trust_metadata_for_destructive_tool():
 @pytest.mark.asyncio
 async def test_govern_node_allows_k8s_remove_container_command_with_approval():
     """k8s_remove_container_command declares is_destructive=False and must require human approval, not DENY."""
-    from nexus.engine.nodes.escalate import derive_escalation_reason
+    from nexus.engine.nodes.supervision.escalate import derive_escalation_reason
     from nexus.governance.policies.policy_abac import resolve_is_destructive
 
     assert resolve_is_destructive("k8s_remove_container_command") is False
@@ -341,7 +341,7 @@ async def test_govern_node_enforces_zero_trust_metadata_for_account_wide_tool():
 @pytest.mark.asyncio
 async def test_govern_node_advisory_lock_contention_blocks():
     """Verify acquire_advisory_lock reports False when PostgreSQL advisory lock is busy."""
-    from nexus.engine.nodes.govern_helpers import (
+    from nexus.engine.nodes.supervision.govern_helpers import (
         acquire_advisory_lock,
         release_advisory_lock,
     )
@@ -364,7 +364,7 @@ async def test_govern_node_advisory_lock_contention_blocks():
     mock_db_client.acquire.return_value = MockAsyncContext()
 
     with patch(
-        "nexus.engine.nodes.govern_helpers.get_database_client",
+        "nexus.engine.nodes.supervision.govern_helpers.get_database_client",
         AsyncMock(return_value=mock_db_client),
     ):
         conn, conn_ctx, key, acquired = await acquire_advisory_lock(target_service)
@@ -381,7 +381,7 @@ async def test_govern_node_advisory_lock_contention_blocks():
 @pytest.mark.asyncio
 async def test_govern_node_advisory_lock_released_on_exit():
     """Verify release_advisory_lock unlocks an acquired PostgreSQL advisory lock."""
-    from nexus.engine.nodes.govern_helpers import (
+    from nexus.engine.nodes.supervision.govern_helpers import (
         acquire_advisory_lock,
         release_advisory_lock,
     )
@@ -404,7 +404,7 @@ async def test_govern_node_advisory_lock_released_on_exit():
     mock_db_client.acquire.return_value = MockAsyncContext()
 
     with patch(
-        "nexus.engine.nodes.govern_helpers.get_database_client",
+        "nexus.engine.nodes.supervision.govern_helpers.get_database_client",
         AsyncMock(return_value=mock_db_client),
     ):
         conn, conn_ctx, key, acquired = await acquire_advisory_lock(target_service)
