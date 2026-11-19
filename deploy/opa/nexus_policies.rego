@@ -1,181 +1,99 @@
-# NEXUS — OPA Policy Definitions
-# ================================
-# Rego policy that governs all autonomous healing actions in NEXUS.
-#
-# Deploy:
-#   docker run -d --name nexus-opa -p 8181:8181 \
-#     -v $(pwd)/deploy/opa:/policies openpolicyagent/opa:latest \
-#     run --server /policies
-#
-# Test:
-#   echo '{"input": {"action": {"type":"restart_pod","level":1,"blast_radius":"single_pod","in_cooldown":false,"governance_cb_open":false,"confidence":0.9,"human_approved":false}}}' \
-#   | curl -s -X POST localhost:8181/v1/data/nexus/allow_action -H "Content-Type: application/json" -d @-
-#
-# Input schema (all fields required):
-#   input.action.type               — action type key (string)
-#   input.action.level              — healing level 0-3 (int)
-#   input.action.blast_radius       — blast radius label (string)
-#   input.action.in_cooldown        — true if in cooldown window (bool)
-#   input.action.governance_cb_open — true if governance CB is tripped (bool)
-#   input.action.confidence         — orchestrator confidence 0.0-1.0 (float)
-#   input.action.human_approved     — true if a human has approved this L3 action (bool)
-#   input.action.override_blast_radius — true to bypass cluster_wide blast radius block (bool)
+package nexus.governance
 
-package nexus
+import rego.v1
 
-import future.keywords.in
+default decision := "REQUIRE_APPROVAL"
+default allow := false
+default require_human_approval := false
+default valid_input := false
 
-# ── Default deny ──────────────────────────────────────────────────────────────
+valid_input if {
+    is_object(input)
 
-default allow_action = false
-default requires_human_approval = false
+    is_boolean(input.restricted_security_service)
+    is_boolean(input.is_destructive)
+    is_boolean(input.reversible)
+    is_boolean(input.cooldown_active)
+    is_boolean(input.circuit_breaker_tripped)
+    is_boolean(input.has_rollback_plan)
 
-# ── Action type allowlists per healing level ──────────────────────────────────
+    is_string(input.action_category)
+    is_string(input.blast_radius)
 
-# Two execution vocabularies share one ladder:
-#   - runbook executor actions (restart_pod, scale_deployment, kubectl_rollout_undo …)
-#   - LLM-proposed tools       (restart_deployment, scale_resource, cordon_node …)
-# Every LLM tool is mapped onto the level it requires so a routed-through-governance
-# LLM proposal isn't denied at the allowlist gate. (The level mapping itself
-# lives in policy_engine.py LLM_TOOL_LEVEL — input shaping, not policy.)
-l0_actions = {
-    "emit_alert",
-    "patch_annotation"
+    is_number(input.rca_confidence)
+    is_number(input.estimated_cost_delta_pct)
 }
 
-l1_actions = l0_actions | {
-    "restart_pod",
-    "flush_coredns_cache",
-    "restart_deployment"
+deny_reasons contains "Missing or invalid governance input" if {
+    not valid_input
 }
 
-l2_actions = l1_actions | {
-    "scale_deployment",
-    "scale_resource"
+deny_reasons contains "Mutations on security/identity services (IAM/KMS/STS/Secrets) are strictly prohibited" if {
+    valid_input
+    input.restricted_security_service == true
 }
 
-l3_actions = l2_actions | {
-    "kubectl_rollout_undo",
-    "http_webhook",
-    "rollback_deployment",
-    "patch_configmap",
-    "cordon_node",
-    "drain_node"
+deny_reasons contains "Destructive or irreversible mutations on stateful data stores are prohibited" if {
+    input.blast_radius == "stateful_data"
+    input.action_category == "destructive"
 }
 
-# ── Helper rules ──────────────────────────────────────────────────────────────
-
-# Action type is in the allowlist for this level
-allowed_action_type {
-    input.action.level == 0
-    input.action.type in l0_actions
+deny_reasons contains "Tool is destructive — blocked by zero-trust governance" if {
+    input.action_category == "destructive"
 }
 
-allowed_action_type {
-    input.action.level == 1
-    input.action.type in l1_actions
+deny_reasons contains "Tool is destructive — blocked by zero-trust governance" if {
+    input.is_destructive == true
 }
 
-allowed_action_type {
-    input.action.level == 2
-    input.action.type in l2_actions
+deny_reasons contains "Tool has account_wide blast radius" if {
+    input.blast_radius == "account_wide"
 }
 
-allowed_action_type {
-    input.action.level == 3
-    input.action.type in l3_actions
+deny_reasons contains "Mutating action is missing an explicit rollback tool call" if {
+    input.has_rollback_plan == false
+    input.allows_unbacked_rollback != true
 }
 
-# Blast radius is within acceptable bounds
-blast_radius_ok {
-    input.action.blast_radius != "cluster_wide"
+deny_reasons contains "Circuit breaker is tripped for target resource" if {
+    input.circuit_breaker_tripped == true
 }
 
-blast_radius_ok {
-    input.action.blast_radius == "cluster_wide"
-    input.action.override_blast_radius == true
+deny_reasons contains "Resource is currently in remediation cooldown window" if {
+    input.cooldown_active == true
 }
 
-# ── L3 human approval ─────────────────────────────────────────────────────────
-
-requires_human_approval {
-    input.action.level == 3
-    input.action.confidence < 0.85
-    not input.action.human_approved
+# AST path inspection rules (Plane 4)
+deny_reasons contains "Scale to zero replicas is prohibited" if {
+    some path in input.mutated_paths
+    startswith(path, "/spec/replicas")
+    input.patch_payload.spec.replicas == 0
 }
 
-# ── Main allow rules ──────────────────────────────────────────────────────────
-
-# L0: always allowed (zero blast radius — alert + annotate only)
-allow_action {
-    input.action.level == 0
-    allowed_action_type
+deny_reasons contains "Mutating system/immutable labels is prohibited" if {
+    some path in input.mutated_paths
+    startswith(path, "/metadata/labels/")
 }
 
-# L1: allowed when not in cooldown and governance CB is closed
-allow_action {
-    input.action.level == 1
-    allowed_action_type
-    not input.action.in_cooldown
-    not input.action.governance_cb_open
+# Auto-approval conditions
+allow_auto_conditions_met if {
+    input.allow_auto == true
+    input.blast_radius == "pod"
+    input.rca_confidence >= 0.95
+    input.is_destructive == false
 }
 
-# L2: L1 conditions + blast-radius check
-allow_action {
-    input.action.level == 2
-    allowed_action_type
-    not input.action.in_cooldown
-    not input.action.governance_cb_open
-    blast_radius_ok
+# Strict Precedence: DENY > ALLOW_AUTO > REQUIRE_APPROVAL
+decision := "DENY" if {
+    count(deny_reasons) > 0
+} else := "ALLOW_AUTO" if {
+    allow_auto_conditions_met
+} else := "REQUIRE_APPROVAL"
+
+allow if {
+    decision in ["REQUIRE_APPROVAL", "ALLOW_AUTO"]
 }
 
-# L3: L2 conditions + confidence >= 0.85 (no human approval needed)
-allow_action {
-    input.action.level == 3
-    allowed_action_type
-    not input.action.in_cooldown
-    not input.action.governance_cb_open
-    blast_radius_ok
-    input.action.confidence >= 0.85
-}
-
-# L3 bypass: explicit human approval overrides the confidence gate
-allow_action {
-    input.action.level == 3
-    allowed_action_type
-    not input.action.in_cooldown
-    not input.action.governance_cb_open
-    blast_radius_ok
-    input.action.human_approved == true
-}
-
-# ── Deny reasons (for audit trail and debugging) ──────────────────────────────
-
-deny_reasons[reason] {
-    not allowed_action_type
-    reason = "action_type_not_in_allowlist_for_this_healing_level"
-}
-
-deny_reasons[reason] {
-    input.action.in_cooldown
-    reason = "action_in_cooldown"
-}
-
-deny_reasons[reason] {
-    input.action.governance_cb_open
-    reason = "governance_circuit_breaker_open_stop_autonomous_healing"
-}
-
-deny_reasons[reason] {
-    input.action.level >= 2
-    input.action.blast_radius == "cluster_wide"
-    not input.action.override_blast_radius
-    reason = "blast_radius_cluster_wide_not_allowed_without_override"
-}
-
-deny_reasons[reason] {
-    input.action.level == 3
-    input.action.confidence < 0.85
-    not input.action.human_approved
-    reason = "l3_action_requires_confidence_0.85_or_human_approval"
+require_human_approval if {
+    decision == "REQUIRE_APPROVAL"
 }

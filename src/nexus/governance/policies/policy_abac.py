@@ -1,0 +1,268 @@
+"""
+NEXUS Policy ABAC Input Builder & Local Evaluator
+=================================================
+Constructs OPA input with deterministic risk overrides and provides local fallback evaluation.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+DESTRUCTIVE_VERBS = frozenset(
+    {
+        "delete",
+        "terminate",
+        "drop",
+        "purge",
+        "destroy",
+        "wipe",
+        "deregister",
+    }
+)
+RESTRICTED_AWS_SERVICES = frozenset(
+    {"iam", "kms", "organizations", "sts", "secretsmanager", "ssm", "billing"}
+)
+STATEFUL_KINDS_OR_SERVICES = frozenset(
+    {
+        "rds",
+        "dynamodb",
+        "s3",
+        "elasticache",
+        "StatefulSet",
+        "PersistentVolumeClaim",
+        "PersistentVolume",
+    }
+)
+
+
+def resolve_is_destructive(
+    tool_name: str,
+    step: dict[str, Any] | None = None,
+    *,
+    operation: str | None = None,
+) -> bool:
+    """
+    Determine whether an action is destructive without false-positive substring overrides.
+
+    1. Trust explicit boolean `is_destructive` from a registered tool in ToolRegistry
+       (e.g., `k8s_remove_container_command` declares `is_destructive=False`).
+    2. Honor explicit `is_destructive=True` in the step payload.
+    3. For unregistered/generic operations, match whole snake_case tokens against
+       `DESTRUCTIVE_VERBS` (excluding `delete_pod` and container-spec patch helpers).
+    """
+    from nexus.engine.tools.registry import get_tool_registry
+
+    registry = get_tool_registry()
+    explicit_step_dest = (
+        step.get("is_destructive")
+        if step and isinstance(step.get("is_destructive"), bool)
+        else None
+    )
+
+    if tool_name:
+        registered_tool = registry.get(tool_name)
+        if registered_tool is not None and isinstance(
+            getattr(registered_tool, "is_destructive", None), bool
+        ):
+            return bool(registered_tool.is_destructive) or (explicit_step_dest is True)
+
+        if tool_name in getattr(registry, "_langchain_tools", {}):
+            meta = registry.get_metadata(tool_name)
+            if isinstance(getattr(meta, "is_destructive", None), bool):
+                return bool(meta.is_destructive) or (explicit_step_dest is True)
+
+    if explicit_step_dest is True:
+        return True
+
+    op_str = (operation or tool_name or "").lower()
+    if "delete_pod" in op_str or "remove_container_command" in op_str:
+        return False
+
+    tokens = set(op_str.replace("-", "_").split("_"))
+    if tokens & DESTRUCTIVE_VERBS:
+        return True
+
+    if explicit_step_dest is False:
+        return False
+
+    return False
+
+
+def build_opa_input_for_action(
+    action: dict[str, Any],
+    rca_report: dict[str, Any] | None = None,
+    cooldown_active: bool = False,
+    circuit_breaker_tripped: bool = False,
+    cost_delta_pct: float = 0.0,
+) -> dict[str, Any]:
+    """Construct attribute-based OPA input with deterministic risk overrides."""
+    tool_name = str(action.get("tool_name", "") or "")
+    tool_meta = None
+    try:
+        from nexus.engine.tools.registry import get_tool_registry
+
+        registry = get_tool_registry()
+        tool_meta = registry.get(tool_name)
+    except Exception:
+        pass
+    args = action.get("tool_arguments") or action.get("parameters") or {}
+    op = str(
+        args.get("operation")
+        or args.get("mutation_type")
+        or action.get("action_type")
+        or tool_name
+    ).lower()
+    service_or_kind = str(args.get("service") or args.get("kind") or "")
+    if not service_or_kind:
+        for s in ("rds", "dynamodb", "s3", "lambda", "ecs", "ec2", "sqs"):
+            if s in op:
+                service_or_kind = s
+                break
+    is_destructive_verb = resolve_is_destructive(tool_name, action, operation=op)
+    is_restricted_service = service_or_kind.lower() in RESTRICTED_AWS_SERVICES
+    is_stateful = (
+        service_or_kind in STATEFUL_KINDS_OR_SERVICES
+        or action.get("blast_radius") == "stateful_data"
+    )
+    raw_br = (
+        action.get("blast_radius")
+        or getattr(tool_meta, "blast_radius", None)
+        or "pod_or_instance"
+    )
+    blast_radius = (
+        "stateful_data"
+        if is_stateful
+        else ("account_wide" if raw_br == "account_wide" else raw_br)
+    )
+
+    has_rollback = bool(
+        (
+            action.get("rollback_tool_name")
+            or action.get("rollback_tool")
+            or action.get("rollback_step")
+        )
+        and (
+            action.get("rollback_arguments")
+            or action.get("rollback_parameters")
+            or True
+        )
+    ) and bool(action.get("has_rollback", True))
+    if action.get("has_rollback") is False:
+        has_rollback = False
+
+    allows_unbacked = bool(
+        action.get("allows_unbacked_rollback")
+        or getattr(tool_meta, "allows_unbacked_rollback", False)
+    )
+    conf_val = (
+        (rca_report.get("confidence") if rca_report else None)
+        or action.get("confidence", 0.85)
+        or 0.85
+    )
+    rca_conf = float(conf_val)
+
+    return {
+        "tool_name": action.get("tool_name", ""),
+        "service_or_kind": service_or_kind,
+        "operation": op,
+        "action_category": (
+            "destructive"
+            if is_destructive_verb
+            else action.get(
+                "action_category",
+                (
+                    "restart"
+                    if "restart" in op
+                    else "scale" if "scale" in op else "config_patch"
+                ),
+            )
+        ),
+        "blast_radius": blast_radius,
+        "is_destructive": is_destructive_verb,
+        "reversible": (
+            False if is_destructive_verb else bool(action.get("reversible", True))
+        ),
+        "has_rollback_plan": has_rollback,
+        "allows_unbacked_rollback": allows_unbacked,
+        "restricted_security_service": is_restricted_service,
+        "rca_confidence": rca_conf,
+        "cooldown_active": cooldown_active,
+        "circuit_breaker_tripped": circuit_breaker_tripped,
+        "estimated_cost_delta_pct": cost_delta_pct,
+        "mutated_paths": list(action.get("mutated_paths") or []),
+        "patch_payload": dict(
+            action.get("patch_payload")
+            or action.get("parameters")
+            or action.get("tool_arguments")
+            or {}
+        ),
+        "allow_auto": bool(action.get("allow_auto", False)),
+    }
+
+
+def evaluate_local_abac(inp: dict[str, Any]) -> tuple[str, list[str]]:
+    """Local Python evaluation of nexus_policies.rego ABAC rules when OPA daemon is offline."""
+    deny_reasons: list[str] = []
+    if inp.get("restricted_security_service"):
+        deny_reasons.append(
+            "Mutations on security/identity services (IAM/KMS/STS/Secrets) are strictly prohibited"
+        )
+    if inp.get("blast_radius") == "stateful_data" and (
+        inp.get("action_category") == "destructive" or inp.get("is_destructive")
+    ):
+        deny_reasons.append(
+            "Destructive or irreversible mutations on stateful data stores are prohibited"
+        )
+    if inp.get("action_category") == "destructive" or inp.get("is_destructive"):
+        deny_reasons.append("Tool is destructive — blocked by zero-trust governance")
+    if inp.get("blast_radius") == "account_wide":
+        deny_reasons.append(
+            "Tool has account_wide blast radius — blocked by zero-trust governance"
+        )
+    if inp.get("circuit_breaker_tripped"):
+        deny_reasons.append("Circuit breaker is tripped for target resource")
+    if inp.get("cooldown_active"):
+        deny_reasons.append("Resource is currently in remediation cooldown window")
+    if not (inp.get("has_rollback_plan") or inp.get("allows_unbacked_rollback")):
+        deny_reasons.append("Mutating action is missing an explicit rollback tool call")
+
+    # AST path validations (Plane 4)
+    mutated_paths = inp.get("mutated_paths") or []
+    patch_payload = inp.get("patch_payload") or {}
+
+    for path in mutated_paths:
+        if path.startswith("/spec/replicas"):
+            replicas = None
+            if isinstance(patch_payload, dict):
+                spec = patch_payload.get("spec")
+                if isinstance(spec, dict):
+                    replicas = spec.get("replicas")
+                elif "replicas" in patch_payload:
+                    replicas = patch_payload.get("replicas")
+            if replicas == 0 or replicas == "0":
+                deny_reasons.append("Scale to zero replicas is prohibited")
+                break
+
+    for path in mutated_paths:
+        if path.startswith("/metadata/labels/"):
+            deny_reasons.append("Mutating system/immutable labels is prohibited")
+            break
+
+    # Strict precedence ordering: DENY > ALLOW_AUTO > REQUIRE_APPROVAL
+    if deny_reasons:
+        return "DENY", deny_reasons
+
+    # Check auto-approval condition
+    allow_auto = (
+        inp.get("allow_auto") is True
+        and inp.get("blast_radius") in ("pod", "pod_or_instance")
+        and float(inp.get("rca_confidence", 0.0)) >= 0.95
+        and not inp.get("is_destructive", False)
+    )
+    if allow_auto:
+        return "ALLOW_AUTO", []
+
+    return "REQUIRE_APPROVAL", []

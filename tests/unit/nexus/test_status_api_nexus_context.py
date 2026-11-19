@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import FastAPI
 
-from nexus.observability import status_api as status_api_module
+from nexus.services.api.status import status_api as status_api_module
 
 
 def test_lifespan_skips_all_self_init_when_context_orchestrator_pre_populated():
@@ -27,7 +27,6 @@ def test_lifespan_skips_all_self_init_when_context_orchestrator_pre_populated():
     status_api_module.context.feedback_loop = MagicMock()
     status_api_module.context.outcome_store = MagicMock()
     status_api_module.context.knowledge_base = MagicMock()
-    status_api_module.context.runbook_library = MagicMock()
 
     nats_instantiated: list = []
     tracker_started: list = []
@@ -54,12 +53,12 @@ def test_lifespan_skips_all_self_init_when_context_orchestrator_pre_populated():
         with patch.dict(
             "sys.modules",
             {
-                "nexus.bus.nats_client": MagicMock(NATSClient=fake_nats_client),
-                "nexus.learning.ppa_outcome_tracker": MagicMock(
+                "nexus.core.bus.nats.client": MagicMock(NATSClient=fake_nats_client),
+                "nexus.intelligence.learning.ppa.ppa_outcome_tracker": MagicMock(
                     PpaOutcomeTracker=fake_tracker
                 ),
-                "nexus.predictive.prescaler": MagicMock(),
-                "nexus.integration.token_store": MagicMock(
+                "nexus.intelligence.predictive.scaling.prescaler": MagicMock(),
+                "nexus.services.gateway.auth.token_store": MagicMock(
                     get_token_store=MagicMock(return_value=fake_token_store)
                 ),
             },
@@ -90,4 +89,3 @@ def test_lifespan_skips_all_self_init_when_context_orchestrator_pre_populated():
         status_api_module.context.feedback_loop = None
         status_api_module.context.outcome_store = None
         status_api_module.context.knowledge_base = None
-        status_api_module.context.runbook_library = None

@@ -14,7 +14,6 @@ This module is responsible for:
 from ppa.domain.scaling import (
     calculate_replicas,
     calculate_replicas_fixed,
-    calculate_replicas_old,
 )
 
 # Private re-exports for backward compatibility with old private function names
@@ -50,6 +49,5 @@ def scale_deployment(
 __all__ = [
     "calculate_replicas",
     "calculate_replicas_fixed",
-    "calculate_replicas_old",
     "scale_deployment",
 ]

@@ -1,11 +1,11 @@
-"""Unit tests for nexus.learning.ppa_outcome_tracker.PpaOutcomeTracker."""
+"""Unit tests for nexus.intelligence.learning.ppa.ppa_outcome_tracker.PpaOutcomeTracker."""
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from nexus.learning.ppa_outcome_tracker import (
+from nexus.intelligence.learning.ppa.ppa_outcome_tracker import (
     PendingPrediction,
     PpaOutcomeTracker,
     _compute_smape,
