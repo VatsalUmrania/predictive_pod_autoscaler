@@ -7,8 +7,8 @@ from __future__ import annotations
 import pytest
 from langchain_core.tools import StructuredTool
 
-from nexus.tools.base import ToolDomain, ToolRiskLevel
-from nexus.tools.registry import ToolRegistry, default_registry
+from nexus.engine.tools.base import ToolDomain, ToolRiskLevel
+from nexus.engine.tools.registry import ToolRegistry, default_registry
 
 
 def test_default_registry_all_tools_have_immutable_metadata():
@@ -139,7 +139,7 @@ async def test_langchain_tool_invocation(monkeypatch):
                 }
             }
 
-    import nexus.tools.aws.observe_tools as obs_module
+    import nexus.engine.tools.aws.observe_tools as obs_module
 
     monkeypatch.setattr(obs_module, "_client", lambda s, r=None: FakeDynamoDB())
 

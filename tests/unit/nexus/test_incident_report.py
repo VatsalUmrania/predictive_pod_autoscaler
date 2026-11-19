@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from nexus.integration.incident_report import (
+from nexus.services.reporting.incident_report import (
     SECTIONS,
     build_report_facts,
     generate_post_incident_report,
@@ -125,7 +125,7 @@ async def test_llm_narrative_used_and_persisted():
     """LLM returns all sections → generated_by=llm, report stored via SQL upsert."""
     db = _mock_db_client()
     with patch(
-        "nexus.integration.incident_report.get_llm",
+        "nexus.services.reporting.incident_report.get_llm",
         return_value=_FakeLLM(json.dumps(_LLM_SECTIONS)),
     ):
         report = await generate_post_incident_report(_terminal_result(), client=db)
@@ -153,7 +153,7 @@ async def test_template_fallback_when_llm_fails():
     def _boom():
         raise RuntimeError("gemini down")
 
-    with patch("nexus.integration.incident_report.get_llm", side_effect=_boom):
+    with patch("nexus.services.reporting.incident_report.get_llm", side_effect=_boom):
         report = await generate_post_incident_report(_terminal_result(), client=db)
 
     assert report["generated_by"] == "template"
@@ -175,7 +175,7 @@ async def test_partial_llm_output_filled_from_template():
     partial = {"summary": "LLM summary only"}
     db = _mock_db_client()
     with patch(
-        "nexus.integration.incident_report.get_llm",
+        "nexus.services.reporting.incident_report.get_llm",
         return_value=_FakeLLM(json.dumps(partial)),
     ):
         report = await generate_post_incident_report(_terminal_result(), client=db)
@@ -191,7 +191,7 @@ async def test_partial_llm_output_filled_from_template():
 
 def test_render_report_html_escapes_content():
     """Report page escapes LLM/incident text (trust boundary) and renders sections."""
-    from nexus.integration.incident_report import render_report_html
+    from nexus.services.reporting.incident_report import render_report_html
 
     report = {
         "incident_id": "inc-xss",
@@ -227,7 +227,7 @@ def test_render_report_html_escapes_content():
 
 
 def test_render_report_missing_page():
-    from nexus.integration.incident_report import render_report_missing_html
+    from nexus.services.reporting.incident_report import render_report_missing_html
 
     page = render_report_missing_html("inc-404")
     assert "No report for this incident yet" in page
@@ -239,7 +239,7 @@ async def test_report_endpoint_content_negotiation():
     """Browsers get the readable HTML page; API clients get raw JSON."""
     from httpx import ASGITransport, AsyncClient
 
-    from nexus.observability.status_api import app
+    from nexus.services.api.status_api import app
 
     stored = {
         "incident_id": "inc-nego",
@@ -259,7 +259,7 @@ async def test_report_endpoint_content_negotiation():
     db.acquire = MagicMock(return_value=acm)
 
     with patch(
-        "nexus.integration.incident_report.get_database_client", return_value=db
+        "nexus.services.reporting.incident_report.get_database_client", return_value=db
     ):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:

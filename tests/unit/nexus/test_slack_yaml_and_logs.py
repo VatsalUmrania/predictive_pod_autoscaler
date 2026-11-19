@@ -1,7 +1,9 @@
 """Tests for Slack Block Kit formatting showing YAML manifests and diagnostic logs."""
 
-from nexus.integration.slack_action_templates import build_approval_required_payload
-from nexus.integration.slack_agentic_templates import (
+from nexus.services.notifications.slack_action_templates import (
+    build_approval_required_payload,
+)
+from nexus.services.notifications.slack_agentic_templates import (
     build_agentic_approval_payload,
 )
 

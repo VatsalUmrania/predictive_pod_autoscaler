@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from nexus.graph.llm_limiter import (
+from nexus.engine.workflow.llm_limiter import (
     AsyncLLMRateLimiter,
     LLMQuotaExhaustedError,
     RateLimitedChatModel,
@@ -73,7 +73,10 @@ async def test_langgraph_retry_policy_recovers_from_transient_504_and_escalates_
     from langgraph.checkpoint.memory import MemorySaver
     from langgraph.types import RetryPolicy
 
-    from nexus.graph.builder import build_incident_graph, is_retryable_node_error
+    from nexus.engine.workflow.builder import (
+        build_incident_graph,
+        is_retryable_node_error,
+    )
 
     # 1. Verify predicate retries transient timeouts/5xx but fast-fails on 429 quota
     assert is_retryable_node_error(TimeoutError("504 DEADLINE_EXCEEDED")) is True

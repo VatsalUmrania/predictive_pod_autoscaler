@@ -16,15 +16,19 @@ from httpx import ASGITransport, AsyncClient
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import MemorySaver
 
-from nexus.graph.checkpointer import GraphCheckpointStore
-from nexus.graph.rca.result import DiscoveredTarget, RCAResult, VerificationResult
-from nexus.graph.workflow import IncidentWorkflow
-from nexus.integration.dashboard_incidents import (
+from nexus.engine.reasoning.rca.result import (
+    DiscoveredTarget,
+    RCAResult,
+    VerificationResult,
+)
+from nexus.engine.workflow.checkpointer import GraphCheckpointStore
+from nexus.engine.workflow.workflow import IncidentWorkflow
+from nexus.services.api.status_api import app, context
+from nexus.services.observability.dashboard_incidents import (
     _in_memory_incidents,
     determine_active_graph_node,
     serialize_incident_for_dashboard,
 )
-from nexus.observability.status_api import app, context
 
 
 def _make_fake_llm(
@@ -69,7 +73,9 @@ def _make_fake_llm(
 
 
 def test_determine_active_graph_node_mappings():
-    assert determine_active_graph_node({"status": "DIAGNOSED"}, ["approval"]) == "APPROVAL"
+    assert (
+        determine_active_graph_node({"status": "DIAGNOSED"}, ["approval"]) == "APPROVAL"
+    )
     assert determine_active_graph_node({"triage_status": "IGNORED"}) == "TRIAGE"
     assert determine_active_graph_node({"status": "AWAITING_APPROVAL"}) == "APPROVAL"
     assert determine_active_graph_node({"approval_status": "PENDING"}) == "APPROVAL"
@@ -131,7 +137,10 @@ def test_serialize_incident_for_dashboard_enriches_agentic_and_preserves_legacy(
                     "step": 1,
                     "tool_call_id": "call_1",
                     "tool_name": "k8s_rollback_deployment",
-                    "tool_args": {"namespace": "default", "deployment_name": "shop-demo"},
+                    "tool_args": {
+                        "namespace": "default",
+                        "deployment_name": "shop-demo",
+                    },
                     "blast_radius": "service_wide",
                     "reversible": True,
                 }
@@ -169,7 +178,10 @@ def test_serialize_incident_for_dashboard_enriches_agentic_and_preserves_legacy(
     assert serialized["confidence"] == 0.92
     assert serialized["can_auto_remediate"] is True
     assert len(serialized["evidence"]) == 2
-    assert serialized["remediation_plan"]["steps"][0]["tool_name"] == "k8s_rollback_deployment"
+    assert (
+        serialized["remediation_plan"]["steps"][0]["tool_name"]
+        == "k8s_rollback_deployment"
+    )
     assert serialized["policy_decision"]["requires_approval"] is True
     assert serialized["approval"]["is_interrupted"] is True
     assert serialized["post_incident_report_ready"] is False
@@ -237,7 +249,9 @@ async def test_dashboard_merges_live_checkpoint_and_inline_approve_resumes_graph
     async def _failing_db():
         raise RuntimeError("offline test")
 
-    monkeypatch.setattr("nexus.integration.dashboard.get_database_client", _failing_db)
+    monkeypatch.setattr(
+        "nexus.services.observability.dashboard.get_database_client", _failing_db
+    )
 
     prev_wf = context.workflow
     prev_orc = context.orchestrator
@@ -250,15 +264,26 @@ async def test_dashboard_merges_live_checkpoint_and_inline_approve_resumes_graph
 
     try:
         with (
-            patch("nexus.graph.nodes.diagnose.get_chat_model", return_value=fake_llm),
-            patch("nexus.graph.nodes.plan.get_chat_model", return_value=fake_llm),
-            patch("nexus.graph.nodes.verify.get_chat_model", return_value=fake_llm),
-            patch("nexus.graph.nodes.diagnose.get_tool_registry", return_value=mock_registry),
-            patch("nexus.graph.nodes.plan.get_tool_registry", return_value=mock_registry),
-            patch("nexus.graph.nodes.execute.get_tool_registry", return_value=mock_registry),
-            patch("nexus.graph.nodes.verify.get_tool_registry", return_value=mock_registry),
+            patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=fake_llm),
+            patch("nexus.engine.nodes.plan.get_chat_model", return_value=fake_llm),
+            patch("nexus.engine.nodes.verify.get_chat_model", return_value=fake_llm),
             patch(
-                "nexus.graph.nodes.govern.evaluate_opa_policy",
+                "nexus.engine.nodes.diagnose.get_tool_registry",
+                return_value=mock_registry,
+            ),
+            patch(
+                "nexus.engine.nodes.plan.get_tool_registry", return_value=mock_registry
+            ),
+            patch(
+                "nexus.engine.nodes.execute.get_tool_registry",
+                return_value=mock_registry,
+            ),
+            patch(
+                "nexus.engine.nodes.verify.get_tool_registry",
+                return_value=mock_registry,
+            ),
+            patch(
+                "nexus.engine.nodes.govern.evaluate_opa_policy",
                 AsyncMock(
                     return_value={
                         "allowed": True,
@@ -267,12 +292,24 @@ async def test_dashboard_merges_live_checkpoint_and_inline_approve_resumes_graph
                     }
                 ),
             ),
-            patch("nexus.graph.workflow.send_approval_request_notification", AsyncMock()),
-            patch("nexus.graph.workflow.sync_discovered_target_identity", AsyncMock()),
-            patch("nexus.graph.nodes.diagnose.sync_discovered_target_identity", AsyncMock()),
-            patch("nexus.graph.nodes.approval.sync_discovered_target_identity", AsyncMock()),
             patch(
-                "nexus.integration.incident_report.publish_post_incident_report",
+                "nexus.engine.workflow.workflow.send_approval_request_notification",
+                AsyncMock(),
+            ),
+            patch(
+                "nexus.engine.workflow.workflow.sync_discovered_target_identity",
+                AsyncMock(),
+            ),
+            patch(
+                "nexus.engine.nodes.diagnose.sync_discovered_target_identity",
+                AsyncMock(),
+            ),
+            patch(
+                "nexus.engine.nodes.approval.sync_discovered_target_identity",
+                AsyncMock(),
+            ),
+            patch(
+                "nexus.services.reporting.incident_report.publish_post_incident_report",
                 AsyncMock(),
             ) as mock_publish,
         ):
@@ -292,14 +329,17 @@ async def test_dashboard_merges_live_checkpoint_and_inline_approve_resumes_graph
             )
 
             transport = ASGITransport(app=app)
-            async with AsyncClient(transport=transport, base_url="http://test") as client:
+            async with AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
                 # 1. Paused thread appears on both /developer/incidents and /api/v1/status/incidents
                 for url in ("/developer/incidents", "/api/v1/status/incidents"):
                     res = await client.get(url)
                     assert res.status_code == 200
                     items = res.json()
                     inc = next(
-                        (i for i in items if i["incident_id"] == "INC-HITL-DASH-01"), None
+                        (i for i in items if i["incident_id"] == "INC-HITL-DASH-01"),
+                        None,
                     )
                     assert inc is not None, f"Missing paused incident on {url}"
                     assert inc["status"] == "AWAITING_APPROVAL"
@@ -308,8 +348,14 @@ async def test_dashboard_merges_live_checkpoint_and_inline_approve_resumes_graph
                     assert inc["involved_object"] == "Pod/shop-demo-abc123"
                     assert inc["target_resource"] == "production/Deployment/shop-demo"
                     assert inc["failure_class"] == "readiness_probe_exit_zero"
-                    assert inc["policy_decision"]["reason"] == "Production rollout requires human sign-off"
-                    assert inc["remediation_plan"]["steps"][0]["tool_name"] == "k8s_rollback_deployment"
+                    assert (
+                        inc["policy_decision"]["reason"]
+                        == "Production rollout requires human sign-off"
+                    )
+                    assert (
+                        inc["remediation_plan"]["steps"][0]["tool_name"]
+                        == "k8s_rollback_deployment"
+                    )
                     assert inc["post_incident_report_ready"] is False
 
                 # 2. Operator approves inline from dashboard
@@ -346,7 +392,10 @@ async def test_dashboard_merges_live_checkpoint_and_inline_approve_resumes_graph
                 assert inc_after["active_node"] == "LEARN"
                 assert inc_after["approval"]["is_interrupted"] is False
                 assert inc_after["approval"]["approved_by"] == "sre-vatsal"
-                assert inc_after["approval"]["approval_reason"] == "Verified rollout window"
+                assert (
+                    inc_after["approval"]["approval_reason"]
+                    == "Verified rollout window"
+                )
                 assert len(inc_after["execution"]["results"]) == 1
                 assert inc_after["verification"]["verification_passed"] is True
                 assert inc_after["post_incident_report_ready"] is True
@@ -400,7 +449,9 @@ async def test_dashboard_inline_reject_escalates_and_keeps_report_guarded(monkey
     async def _failing_db():
         raise RuntimeError("offline test")
 
-    monkeypatch.setattr("nexus.integration.dashboard.get_database_client", _failing_db)
+    monkeypatch.setattr(
+        "nexus.services.observability.dashboard.get_database_client", _failing_db
+    )
 
     prev_wf = context.workflow
     prev_orc = context.orchestrator
@@ -413,12 +464,17 @@ async def test_dashboard_inline_reject_escalates_and_keeps_report_guarded(monkey
 
     try:
         with (
-            patch("nexus.graph.nodes.diagnose.get_chat_model", return_value=fake_llm),
-            patch("nexus.graph.nodes.plan.get_chat_model", return_value=fake_llm),
-            patch("nexus.graph.nodes.diagnose.get_tool_registry", return_value=mock_registry),
-            patch("nexus.graph.nodes.plan.get_tool_registry", return_value=mock_registry),
+            patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=fake_llm),
+            patch("nexus.engine.nodes.plan.get_chat_model", return_value=fake_llm),
             patch(
-                "nexus.graph.nodes.govern.evaluate_opa_policy",
+                "nexus.engine.nodes.diagnose.get_tool_registry",
+                return_value=mock_registry,
+            ),
+            patch(
+                "nexus.engine.nodes.plan.get_tool_registry", return_value=mock_registry
+            ),
+            patch(
+                "nexus.engine.nodes.govern.evaluate_opa_policy",
                 AsyncMock(
                     return_value={
                         "allowed": True,
@@ -427,12 +483,24 @@ async def test_dashboard_inline_reject_escalates_and_keeps_report_guarded(monkey
                     }
                 ),
             ),
-            patch("nexus.graph.workflow.send_approval_request_notification", AsyncMock()),
-            patch("nexus.graph.workflow.sync_discovered_target_identity", AsyncMock()),
-            patch("nexus.graph.nodes.diagnose.sync_discovered_target_identity", AsyncMock()),
-            patch("nexus.graph.nodes.approval.sync_discovered_target_identity", AsyncMock()),
             patch(
-                "nexus.integration.incident_report.publish_post_incident_report",
+                "nexus.engine.workflow.workflow.send_approval_request_notification",
+                AsyncMock(),
+            ),
+            patch(
+                "nexus.engine.workflow.workflow.sync_discovered_target_identity",
+                AsyncMock(),
+            ),
+            patch(
+                "nexus.engine.nodes.diagnose.sync_discovered_target_identity",
+                AsyncMock(),
+            ),
+            patch(
+                "nexus.engine.nodes.approval.sync_discovered_target_identity",
+                AsyncMock(),
+            ),
+            patch(
+                "nexus.services.reporting.incident_report.publish_post_incident_report",
                 AsyncMock(),
             ) as mock_publish,
         ):
@@ -446,7 +514,9 @@ async def test_dashboard_inline_reject_escalates_and_keeps_report_guarded(monkey
             )
 
             transport = ASGITransport(app=app)
-            async with AsyncClient(transport=transport, base_url="http://test") as client:
+            async with AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
                 res_reject = await client.post(
                     "/developer/incidents/INC-HITL-REJ-01/reject",
                     json={
@@ -482,8 +552,13 @@ async def test_dashboard_html_upgraded_security_accessibility_and_routes():
         assert '<meta name="color-scheme" content="dark light" />' in html
         assert "color-scheme: dark;" in html
         assert "ph-shield-check" in html
-        assert "/developer/incidents/${encodeURIComponent(inc.incident_id)}/report" in html
-        assert "/api/v1/incidents/${encodeURIComponent(inc.incident_id)}/report" not in html
+        assert (
+            "/developer/incidents/${encodeURIComponent(inc.incident_id)}/report" in html
+        )
+        assert (
+            "/api/v1/incidents/${encodeURIComponent(inc.incident_id)}/report"
+            not in html
+        )
         assert 'id="kpi-success-rate"' in html
         assert 'id="kpi-ppa-events"' in html
         assert "evidence-details" in html

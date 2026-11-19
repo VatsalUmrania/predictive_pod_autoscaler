@@ -5,7 +5,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from nexus.graph.workflow_events import handle_incoming_event, is_control_plane_resource
+from nexus.engine.workflow.workflow_events import (
+    handle_incoming_event,
+    is_control_plane_resource,
+)
 
 
 def test_is_control_plane_resource():

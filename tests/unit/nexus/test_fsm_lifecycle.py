@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from nexus.db.models import IncidentFSM, IncidentState, IncidentStatus
+from nexus.core.database.models import IncidentFSM, IncidentState, IncidentStatus
 from tests.unit.nexus.test_db_helpers import MockPostgresClient
 
 

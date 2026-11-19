@@ -1,4 +1,4 @@
-"""Unit tests for nexus.governance.cooldown_store — PostgreSQL backend & memory fallback.
+"""Unit tests for nexus.governance.safeguards.cooldown_store — PostgreSQL backend & memory fallback.
 
 Tests that cooldowns persist to the PostgreSQL ``cooldowns`` table:
   - connect() hydrates the in-memory cache from PostgreSQL
@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-from nexus.governance.cooldown_store import CooldownStore
+from nexus.governance.safeguards.cooldown_store import CooldownStore
 from tests.unit.nexus.test_db_helpers import MockPostgresClient
 
 
@@ -104,7 +104,7 @@ async def test_zero_seconds_does_not_set(mock_client: MockPostgresClient):
 async def test_postgres_unavailable_degrades_to_memory():
     """If PostgreSQL init fails, the store works purely in-memory."""
     with patch(
-        "nexus.governance.cooldown_store.get_database_client",
+        "nexus.governance.safeguards.cooldown_store.get_database_client",
         side_effect=RuntimeError("connection refused"),
     ):
         store = CooldownStore()

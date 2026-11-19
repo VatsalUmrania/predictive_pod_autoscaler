@@ -2,8 +2,8 @@ from unittest.mock import patch
 
 import pytest
 
-from nexus.tools.base import ToolDomain, ToolRiskLevel
-from nexus.tools.registry import ToolRegistry
+from nexus.engine.tools.base import ToolDomain, ToolRiskLevel
+from nexus.engine.tools.registry import ToolRegistry
 from tests.unit.nexus.test_db_helpers import MockPostgresClient
 
 
@@ -55,7 +55,7 @@ async def test_tool_execution_with_db_logging():
 
     # Mock the internal k8s mutate tool for restart_deployment
     with patch(
-        "nexus.tools.k8s.mutate_tools.restart_deployment",
+        "nexus.engine.tools.k8s.mutate_tools.restart_deployment",
         return_value="Restarted successfully",
     ):
         res = await reg.execute_tool(

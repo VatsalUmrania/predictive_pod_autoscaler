@@ -11,11 +11,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.messages import AIMessage
 
-from nexus.graph.nodes.execute import execute_node
-from nexus.graph.nodes.plan import plan_node
-from nexus.graph.nodes.verify import verify_node
-from nexus.graph.rca.result import VerificationResult
-from nexus.tools.k8s.observe_tools import (
+from nexus.engine.nodes.execute import execute_node
+from nexus.engine.nodes.plan import plan_node
+from nexus.engine.nodes.verify import verify_node
+from nexus.engine.reasoning.rca.result import VerificationResult
+from nexus.engine.tools.k8s.observe_tools import (
     fetch_pod_container_logs,
     inspect_deployment_status,
     locate_pod_and_owner,
@@ -60,8 +60,8 @@ async def test_plan_node_binds_mutate_tools_and_attaches_registry_metadata():
     }
 
     with (
-        patch("nexus.graph.nodes.plan.get_tool_registry", return_value=mock_registry),
-        patch("nexus.graph.nodes.plan.get_chat_model", return_value=mock_llm),
+        patch("nexus.engine.nodes.plan.get_tool_registry", return_value=mock_registry),
+        patch("nexus.engine.nodes.plan.get_chat_model", return_value=mock_llm),
     ):
         res = await plan_node(state)
 
@@ -94,8 +94,8 @@ async def test_plan_node_returns_unplannable_when_llm_emits_zero_tool_calls():
     mock_llm.bind_tools.return_value = bound_llm
 
     with (
-        patch("nexus.graph.nodes.plan.get_tool_registry", return_value=mock_registry),
-        patch("nexus.graph.nodes.plan.get_chat_model", return_value=mock_llm),
+        patch("nexus.engine.nodes.plan.get_tool_registry", return_value=mock_registry),
+        patch("nexus.engine.nodes.plan.get_chat_model", return_value=mock_llm),
     ):
         res = await plan_node({"incident_id": "inc-unplan", "platform": "k8s"})
 
@@ -130,7 +130,7 @@ async def test_execute_node_invokes_schema_validated_tool_args_directly():
     }
 
     with patch(
-        "nexus.graph.nodes.execute.get_tool_registry", return_value=mock_registry
+        "nexus.engine.nodes.execute.get_tool_registry", return_value=mock_registry
     ):
         res = await execute_node(state)
 
@@ -156,7 +156,7 @@ async def test_execute_node_fails_when_zero_steps_or_tool_missing():
     mock_registry = MagicMock()
     mock_registry.get_tool.return_value = None
     with patch(
-        "nexus.graph.nodes.execute.get_tool_registry", return_value=mock_registry
+        "nexus.engine.nodes.execute.get_tool_registry", return_value=mock_registry
     ):
         res_missing = await execute_node(
             {
@@ -222,8 +222,10 @@ async def test_verify_node_react_observation_loop_and_structured_result():
     mock_llm.with_structured_output.return_value = structured_llm
 
     with (
-        patch("nexus.graph.nodes.verify.get_tool_registry", return_value=mock_registry),
-        patch("nexus.graph.nodes.verify.get_chat_model", return_value=mock_llm),
+        patch(
+            "nexus.engine.nodes.verify.get_tool_registry", return_value=mock_registry
+        ),
+        patch("nexus.engine.nodes.verify.get_chat_model", return_value=mock_llm),
     ):
         res = await verify_node(
             {
@@ -349,8 +351,14 @@ def test_k8s_observe_tools_locate_logs_and_deployment_status():
     apps_v1.read_namespaced_deployment.return_value = dep
 
     with (
-        patch("nexus.tools.k8s.observe_tools.get_k8s_core_api", return_value=core_v1),
-        patch("nexus.tools.k8s.observe_tools.get_k8s_apps_api", return_value=apps_v1),
+        patch(
+            "nexus.engine.tools.k8s.observe_tools.get_k8s_core_api",
+            return_value=core_v1,
+        ),
+        patch(
+            "nexus.engine.tools.k8s.observe_tools.get_k8s_apps_api",
+            return_value=apps_v1,
+        ),
     ):
         loc = locate_pod_and_owner.invoke({"pod_name": "shop-demo-59bd7ddcf9-t2skj"})
         assert loc["namespace"] == "shop-ns"

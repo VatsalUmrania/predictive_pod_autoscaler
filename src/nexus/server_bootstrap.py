@@ -16,24 +16,24 @@ from typing import Any
 
 import uvicorn
 
-from nexus.bus.nats.client import NATSClient
-from nexus.db.client import get_database_client
-from nexus.governance.approval_queue import HumanApprovalQueue
-from nexus.governance.audit_trail import AuditTrail
-from nexus.governance.circuit_breaker import GovernanceCircuitBreaker
-from nexus.governance.cooldown_store import CooldownStore
-from nexus.governance.policy_engine import PolicyEngine
-from nexus.governance.rollback_registry import RollbackRegistry
-from nexus.graph.workflow import IncidentWorkflow
-from nexus.integration.notifier import Notifier
-from nexus.learning.feedback_loop import build_feedback_loop
-from nexus.learning.knowledge_base import KnowledgeBase
-from nexus.learning.outcome_store import OutcomeStore
-from nexus.learning.ppa_outcome_tracker import PpaOutcomeTracker
-from nexus.observability.status_api import app as status_api
-from nexus.observability.status_api import context
-from nexus.predictive.prescaler import Prescaler
-from nexus.reasoning.confidence_scorer import ConfidenceScorer
+from nexus.core.bus.nats.client import NATSClient
+from nexus.core.database.client import get_database_client
+from nexus.engine.reasoning.confidence_scorer import ConfidenceScorer
+from nexus.engine.workflow.workflow import IncidentWorkflow
+from nexus.governance.audit.audit_trail import AuditTrail
+from nexus.governance.policies.policy_engine import PolicyEngine
+from nexus.governance.rollback.rollback_registry import RollbackRegistry
+from nexus.governance.safeguards.approval_queue import HumanApprovalQueue
+from nexus.governance.safeguards.circuit_breaker import GovernanceCircuitBreaker
+from nexus.governance.safeguards.cooldown_store import CooldownStore
+from nexus.intelligence.knowledge.knowledge_base import KnowledgeBase
+from nexus.intelligence.knowledge.outcome_store import OutcomeStore
+from nexus.intelligence.learning.feedback_loop import build_feedback_loop
+from nexus.intelligence.learning.ppa_outcome_tracker import PpaOutcomeTracker
+from nexus.intelligence.predictive.prescaler import Prescaler
+from nexus.services.api.status_api import app as status_api
+from nexus.services.api.status_api import context
+from nexus.services.notifications.notifier import Notifier
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ async def bootstrap_components(
     await nats.connect()
 
     try:
-        from nexus.integration.token_store import get_token_store
+        from nexus.services.gateway.token_store import get_token_store
 
         _ts = get_token_store()
         await _ts.init()
@@ -146,7 +146,7 @@ async def bootstrap_components(
         orchestrator = workflow
 
     try:
-        from nexus.integration.dashboard import refresh_policy_cache
+        from nexus.services.observability.dashboard import refresh_policy_cache
 
         _loaded = refresh_policy_cache()
         logger.info(

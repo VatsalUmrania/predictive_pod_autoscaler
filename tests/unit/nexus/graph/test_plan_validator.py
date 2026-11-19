@@ -16,8 +16,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from nexus.db.models import IncidentStatus
-from nexus.graph.nodes.plan_validator import (
+from nexus.core.database.models import IncidentStatus
+from nexus.engine.nodes.plan_validator import (
     plan_validator_node,
     validate_and_seal_plan,
 )

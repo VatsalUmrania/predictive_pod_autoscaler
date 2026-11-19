@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from nexus.tools.registry import ToolRegistry
+from nexus.engine.tools.registry import ToolRegistry
 
 
 def test_tool_registry_read_only_and_mutating_separation():

@@ -31,9 +31,12 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from nexus.governance.approval_queue import HumanApprovalQueue, PendingApproval
-from nexus.integration import notifier as notifier_module
-from nexus.observability import status_api as status_api_module
+from nexus.governance.safeguards.approval_queue import (
+    HumanApprovalQueue,
+    PendingApproval,
+)
+from nexus.services.api import status_api as status_api_module
+from nexus.services.notifications import notifier as notifier_module
 
 _SECRET = "test-signing-secret"
 

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from nexus.graph.platform import (
+from nexus.engine.platforms import (
     AWSPlatformAdapter,
     HealthCheckResult,
     K8sPlatformAdapter,
@@ -16,7 +16,7 @@ from nexus.graph.platform import (
     PlatformTelemetry,
     TargetResource,
 )
-from nexus.tools.base import NexusToolResult
+from nexus.engine.tools.base import NexusToolResult
 
 # ── Kubernetes Platform Adapter Tests ─────────────────────────────────────────
 
@@ -54,11 +54,11 @@ async def test_k8s_adapter_telemetry_collection_deterministic():
     )
 
     with patch(
-        "nexus.tools.k8s.observe_tools.describe_resource",
+        "nexus.engine.tools.k8s.observe_tools.describe_resource",
         return_value="State: CrashLoopBackOff\nReplicas: 3",
     ):
         with patch(
-            "nexus.tools.k8s.observe_tools.get_pod_logs",
+            "nexus.engine.tools.k8s.observe_tools.get_pod_logs",
             return_value="panic: fatal memory error\nstack trace line 1",
         ):
             telemetry: PlatformTelemetry = await adapter.collect_telemetry(target)
@@ -82,7 +82,7 @@ async def test_k8s_adapter_snapshot_and_rollback():
 
     # Capture scale snapshot
     with patch(
-        "nexus.tools.k8s.observe_tools.describe_resource",
+        "nexus.engine.tools.k8s.observe_tools.describe_resource",
         return_value="Replicas: 4\nAvailable: 4",
     ):
         snapshot = await adapter.capture_snapshot(
@@ -117,7 +117,7 @@ async def test_k8s_adapter_health_verification():
     )
 
     with patch(
-        "nexus.tools.k8s.observe_tools.describe_resource",
+        "nexus.engine.tools.k8s.observe_tools.describe_resource",
         return_value="All pods Running and Ready",
     ):
         verif: HealthCheckResult = await adapter.verify_health(target, {})
@@ -125,7 +125,7 @@ async def test_k8s_adapter_health_verification():
         assert verif.slo_restored is True
 
     with patch(
-        "nexus.tools.k8s.observe_tools.describe_resource",
+        "nexus.engine.tools.k8s.observe_tools.describe_resource",
         return_value="Pod in CrashLoopBackOff state",
     ):
         verif2: HealthCheckResult = await adapter.verify_health(target, {})
@@ -184,7 +184,7 @@ async def test_aws_adapter_telemetry_collection():
     adapter._tools["aws_get_metric_data"] = mock_cw_tool
     adapter._tools["aws_get_log_events"] = mock_log_tool
 
-    with patch("nexus.graph.platform.aws._get_boto3_client") as mock_boto:
+    with patch("nexus.engine.platforms.aws._get_boto3_client") as mock_boto:
         client = MagicMock()
         client.get_function_configuration.return_value = {
             "MemorySize": 128,
@@ -207,7 +207,7 @@ async def test_aws_adapter_snapshot_and_rollback():
         platform="aws", namespace="us-east-1", name="orders-processor", kind="lambda"
     )
 
-    with patch("nexus.graph.platform.aws._get_boto3_client") as mock_boto:
+    with patch("nexus.engine.platforms.aws._get_boto3_client") as mock_boto:
         client = MagicMock()
         client.get_function_configuration.return_value = {"MemorySize": 128}
         mock_boto.return_value = client

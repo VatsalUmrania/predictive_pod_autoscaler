@@ -18,12 +18,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from nexus.bus.events import IncidentEvent
-from nexus.learning.feedback_loop import FeedbackLoop
+from nexus.core.bus.events import IncidentEvent
+from nexus.intelligence.learning.feedback_loop import FeedbackLoop
 
 # Internal import
-from nexus.learning.ppa_outcome_tracker import PendingPrediction, PpaOutcomeTracker
-from nexus.predictive.prescaler import PrescaleMode, Prescaler
+from nexus.intelligence.learning.ppa_outcome_tracker import (
+    PendingPrediction,
+    PpaOutcomeTracker,
+)
+from nexus.intelligence.predictive.prescaler import PrescaleMode, Prescaler
 
 # ── Test fixtures ──────────────────────────────────────────────────────────────
 
@@ -580,7 +583,7 @@ class TestFeedbackLoopWithPpaOutcomeTracker:
                 return {}
 
             async def get_system_kpis(self, days=30):
-                from nexus.learning.outcome_store import SystemKPIs
+                from nexus.intelligence.knowledge.outcome_store import SystemKPIs
 
                 return SystemKPIs(window_days=days)
 

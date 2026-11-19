@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import yaml
 
-from nexus.graph.manifest_formatter import (
+from nexus.engine.workflow.manifest_formatter import (
     extract_diagnostic_logs,
     plan_to_yaml_manifest,
 )

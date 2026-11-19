@@ -7,9 +7,9 @@ Verifies:
 
 from __future__ import annotations
 
-from nexus.bus.events.enums import Severity, SignalKind, SignalSource
-from nexus.bus.events.event import SymptomSignal
-from nexus.telemetry.log_parser import is_error_log, parse_and_group_log_burst
+from nexus.core.bus.events.enums import Severity, SignalKind, SignalSource
+from nexus.core.bus.events.event import SymptomSignal
+from nexus.core.telemetry.log_parser import is_error_log, parse_and_group_log_burst
 
 
 def test_symptom_signal_creation_and_defaults():

@@ -12,12 +12,16 @@ import pytest
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import MemorySaver
 
-from nexus.graph.builder import build_incident_graph
-from nexus.graph.nodes.diagnose import diagnose_node
-from nexus.graph.rca.result import DiscoveredTarget, RCAResult, VerificationResult
-from nexus.graph.routes import route_after_diagnose, route_after_verify
-from nexus.graph.workflow import run_incident_workflow
-from nexus.graph.workflow_approval import handle_incident_approval
+from nexus.engine.nodes.diagnose import diagnose_node
+from nexus.engine.reasoning.rca.result import (
+    DiscoveredTarget,
+    RCAResult,
+    VerificationResult,
+)
+from nexus.engine.workflow.builder import build_incident_graph
+from nexus.engine.workflow.routes import route_after_diagnose, route_after_verify
+from nexus.engine.workflow.workflow import run_incident_workflow
+from nexus.engine.workflow.workflow_approval import handle_incident_approval
 
 
 def test_route_after_diagnose_uses_confidence_and_can_auto_remediate_not_enums():
@@ -150,11 +154,11 @@ async def test_diagnose_node_react_discovers_namespace_and_owner_from_none():
 
     with (
         patch(
-            "nexus.graph.nodes.diagnose.get_tool_registry", return_value=mock_registry
+            "nexus.engine.nodes.diagnose.get_tool_registry", return_value=mock_registry
         ),
-        patch("nexus.graph.nodes.diagnose.get_chat_model", return_value=mock_llm),
+        patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=mock_llm),
         patch(
-            "nexus.graph.nodes.diagnose.sync_discovered_target_identity", AsyncMock()
+            "nexus.engine.nodes.diagnose.sync_discovered_target_identity", AsyncMock()
         ) as mock_sync,
     ):
         result = await diagnose_node(
@@ -309,19 +313,21 @@ async def test_e2e_closed_loop_verify_failure_retries_diagnose_and_re_interrupts
     mock_notify = AsyncMock()
 
     with (
-        patch("nexus.graph.nodes.diagnose.get_chat_model", return_value=llm),
-        patch("nexus.graph.nodes.plan.get_chat_model", return_value=llm),
-        patch("nexus.graph.nodes.verify.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.plan.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.verify.get_chat_model", return_value=llm),
         patch(
-            "nexus.graph.nodes.diagnose.get_tool_registry", return_value=mock_registry
+            "nexus.engine.nodes.diagnose.get_tool_registry", return_value=mock_registry
         ),
-        patch("nexus.graph.nodes.plan.get_tool_registry", return_value=mock_registry),
+        patch("nexus.engine.nodes.plan.get_tool_registry", return_value=mock_registry),
         patch(
-            "nexus.graph.nodes.execute.get_tool_registry", return_value=mock_registry
+            "nexus.engine.nodes.execute.get_tool_registry", return_value=mock_registry
         ),
-        patch("nexus.graph.nodes.verify.get_tool_registry", return_value=mock_registry),
         patch(
-            "nexus.graph.nodes.govern.evaluate_opa_policy",
+            "nexus.engine.nodes.verify.get_tool_registry", return_value=mock_registry
+        ),
+        patch(
+            "nexus.engine.nodes.govern.evaluate_opa_policy",
             AsyncMock(
                 return_value={
                     "allowed": True,
@@ -330,12 +336,16 @@ async def test_e2e_closed_loop_verify_failure_retries_diagnose_and_re_interrupts
                 }
             ),
         ),
-        patch("nexus.graph.workflow.send_approval_request_notification", mock_notify),
         patch(
-            "nexus.integration.notifier.send_approval_request_notification", mock_notify
+            "nexus.engine.workflow.workflow.send_approval_request_notification",
+            mock_notify,
         ),
         patch(
-            "nexus.integration.incident_report.publish_post_incident_report",
+            "nexus.services.notifications.notifier.send_approval_request_notification",
+            mock_notify,
+        ),
+        patch(
+            "nexus.services.reporting.incident_report.publish_post_incident_report",
             mock_publish,
         ),
     ):

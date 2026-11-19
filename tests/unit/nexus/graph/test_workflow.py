@@ -19,8 +19,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.messages import AIMessage
 
-from nexus.graph.rca.result import DiscoveredTarget, RCAResult, VerificationResult
-from nexus.graph.workflow import IncidentWorkflow
+from nexus.engine.reasoning.rca.result import (
+    DiscoveredTarget,
+    RCAResult,
+    VerificationResult,
+)
+from nexus.engine.workflow.workflow import IncidentWorkflow
 
 
 def _build_workflow_llm(
@@ -112,15 +116,15 @@ async def test_k8s_remediation_requires_approval_and_resumes():
     )
 
     with (
-        patch("nexus.graph.nodes.diagnose.get_chat_model", return_value=llm),
-        patch("nexus.graph.nodes.plan.get_chat_model", return_value=llm),
-        patch("nexus.graph.nodes.verify.get_chat_model", return_value=llm),
-        patch("nexus.graph.nodes.diagnose.get_tool_registry", return_value=reg),
-        patch("nexus.graph.nodes.plan.get_tool_registry", return_value=reg),
-        patch("nexus.graph.nodes.execute.get_tool_registry", return_value=reg),
-        patch("nexus.graph.nodes.verify.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.plan.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.verify.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.diagnose.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.plan.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.execute.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.verify.get_tool_registry", return_value=reg),
         patch(
-            "nexus.graph.nodes.govern.evaluate_opa_policy",
+            "nexus.engine.nodes.govern.evaluate_opa_policy",
             AsyncMock(
                 return_value={
                     "allowed": True,
@@ -129,9 +133,12 @@ async def test_k8s_remediation_requires_approval_and_resumes():
                 }
             ),
         ),
-        patch("nexus.graph.workflow.send_approval_request_notification", AsyncMock()),
         patch(
-            "nexus.integration.incident_report.publish_post_incident_report",
+            "nexus.engine.workflow.workflow.send_approval_request_notification",
+            AsyncMock(),
+        ),
+        patch(
+            "nexus.services.reporting.incident_report.publish_post_incident_report",
             AsyncMock(),
         ),
     ):
@@ -187,15 +194,15 @@ async def test_aws_hitl_approval_and_resume():
     reg, tool_fn = _mock_registry_for_tool("aws_update_lambda_memory", "MemorySize=512")
 
     with (
-        patch("nexus.graph.nodes.diagnose.get_chat_model", return_value=llm),
-        patch("nexus.graph.nodes.plan.get_chat_model", return_value=llm),
-        patch("nexus.graph.nodes.verify.get_chat_model", return_value=llm),
-        patch("nexus.graph.nodes.diagnose.get_tool_registry", return_value=reg),
-        patch("nexus.graph.nodes.plan.get_tool_registry", return_value=reg),
-        patch("nexus.graph.nodes.execute.get_tool_registry", return_value=reg),
-        patch("nexus.graph.nodes.verify.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.plan.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.verify.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.diagnose.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.plan.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.execute.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.verify.get_tool_registry", return_value=reg),
         patch(
-            "nexus.graph.nodes.govern.evaluate_opa_policy",
+            "nexus.engine.nodes.govern.evaluate_opa_policy",
             AsyncMock(
                 return_value={
                     "allowed": True,
@@ -204,9 +211,12 @@ async def test_aws_hitl_approval_and_resume():
                 }
             ),
         ),
-        patch("nexus.graph.workflow.send_approval_request_notification", AsyncMock()),
         patch(
-            "nexus.integration.incident_report.publish_post_incident_report",
+            "nexus.engine.workflow.workflow.send_approval_request_notification",
+            AsyncMock(),
+        ),
+        patch(
+            "nexus.services.reporting.incident_report.publish_post_incident_report",
             AsyncMock(),
         ),
     ):
@@ -255,12 +265,12 @@ async def test_operator_rejection_pathway():
     reg, tool_fn = _mock_registry_for_tool("aws_update_lambda_timeout")
 
     with (
-        patch("nexus.graph.nodes.diagnose.get_chat_model", return_value=llm),
-        patch("nexus.graph.nodes.plan.get_chat_model", return_value=llm),
-        patch("nexus.graph.nodes.diagnose.get_tool_registry", return_value=reg),
-        patch("nexus.graph.nodes.plan.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.plan.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.diagnose.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.plan.get_tool_registry", return_value=reg),
         patch(
-            "nexus.graph.nodes.govern.evaluate_opa_policy",
+            "nexus.engine.nodes.govern.evaluate_opa_policy",
             AsyncMock(
                 return_value={
                     "allowed": True,
@@ -269,9 +279,12 @@ async def test_operator_rejection_pathway():
                 }
             ),
         ),
-        patch("nexus.graph.workflow.send_approval_request_notification", AsyncMock()),
         patch(
-            "nexus.integration.incident_report.publish_post_incident_report",
+            "nexus.engine.workflow.workflow.send_approval_request_notification",
+            AsyncMock(),
+        ),
+        patch(
+            "nexus.services.reporting.incident_report.publish_post_incident_report",
             AsyncMock(),
         ) as mock_pub,
     ):
@@ -324,16 +337,16 @@ async def test_verification_failure_and_deterministic_rollback():
     reg, _ = _mock_registry_for_tool("k8s_restart_deployment")
 
     with (
-        patch("nexus.graph.nodes.diagnose.get_chat_model", return_value=llm),
-        patch("nexus.graph.nodes.plan.get_chat_model", return_value=llm),
-        patch("nexus.graph.nodes.verify.get_chat_model", return_value=llm),
-        patch("nexus.graph.nodes.diagnose.get_tool_registry", return_value=reg),
-        patch("nexus.graph.nodes.plan.get_tool_registry", return_value=reg),
-        patch("nexus.graph.nodes.execute.get_tool_registry", return_value=reg),
-        patch("nexus.graph.nodes.verify.get_tool_registry", return_value=reg),
-        patch("nexus.graph.nodes.rollback.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.plan.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.verify.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.diagnose.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.plan.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.execute.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.verify.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.rollback.get_tool_registry", return_value=reg),
         patch(
-            "nexus.graph.nodes.govern.evaluate_opa_policy",
+            "nexus.engine.nodes.govern.evaluate_opa_policy",
             AsyncMock(
                 return_value={
                     "allowed": True,
@@ -342,9 +355,12 @@ async def test_verification_failure_and_deterministic_rollback():
                 }
             ),
         ),
-        patch("nexus.integration.dashboard.record_incident_resolution", AsyncMock()),
         patch(
-            "nexus.integration.incident_report.publish_post_incident_report",
+            "nexus.services.observability.dashboard.record_incident_resolution",
+            AsyncMock(),
+        ),
+        patch(
+            "nexus.services.reporting.incident_report.publish_post_incident_report",
             AsyncMock(),
         ),
     ):
@@ -416,15 +432,15 @@ async def test_dynamic_tool_planning_without_runbooks_and_auto_approval():
     reg, tool_fn = _mock_registry_for_tool("k8s_restart_deployment", blast_radius="pod")
 
     with (
-        patch("nexus.graph.nodes.diagnose.get_chat_model", return_value=llm),
-        patch("nexus.graph.nodes.plan.get_chat_model", return_value=llm),
-        patch("nexus.graph.nodes.verify.get_chat_model", return_value=llm),
-        patch("nexus.graph.nodes.diagnose.get_tool_registry", return_value=reg),
-        patch("nexus.graph.nodes.plan.get_tool_registry", return_value=reg),
-        patch("nexus.graph.nodes.execute.get_tool_registry", return_value=reg),
-        patch("nexus.graph.nodes.verify.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.plan.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.verify.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.diagnose.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.plan.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.execute.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.verify.get_tool_registry", return_value=reg),
         patch(
-            "nexus.graph.nodes.govern.evaluate_opa_policy",
+            "nexus.engine.nodes.govern.evaluate_opa_policy",
             AsyncMock(
                 return_value={
                     "allowed": True,
@@ -433,9 +449,12 @@ async def test_dynamic_tool_planning_without_runbooks_and_auto_approval():
                 }
             ),
         ),
-        patch("nexus.integration.dashboard.record_incident_resolution", AsyncMock()),
         patch(
-            "nexus.integration.incident_report.publish_post_incident_report",
+            "nexus.services.observability.dashboard.record_incident_resolution",
+            AsyncMock(),
+        ),
+        patch(
+            "nexus.services.reporting.incident_report.publish_post_incident_report",
             AsyncMock(),
         ),
     ):
@@ -482,12 +501,12 @@ async def test_workflow_pending_approvals_and_status_api_integration():
     reg, _ = _mock_registry_for_tool("k8s_rollback_deployment")
 
     with (
-        patch("nexus.graph.nodes.diagnose.get_chat_model", return_value=llm),
-        patch("nexus.graph.nodes.plan.get_chat_model", return_value=llm),
-        patch("nexus.graph.nodes.diagnose.get_tool_registry", return_value=reg),
-        patch("nexus.graph.nodes.plan.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.plan.get_chat_model", return_value=llm),
+        patch("nexus.engine.nodes.diagnose.get_tool_registry", return_value=reg),
+        patch("nexus.engine.nodes.plan.get_tool_registry", return_value=reg),
         patch(
-            "nexus.graph.nodes.govern.evaluate_opa_policy",
+            "nexus.engine.nodes.govern.evaluate_opa_policy",
             AsyncMock(
                 return_value={
                     "allowed": True,
@@ -496,7 +515,10 @@ async def test_workflow_pending_approvals_and_status_api_integration():
                 }
             ),
         ),
-        patch("nexus.graph.workflow.send_approval_request_notification", AsyncMock()),
+        patch(
+            "nexus.engine.workflow.workflow.send_approval_request_notification",
+            AsyncMock(),
+        ),
     ):
         await workflow.run_incident(
             {

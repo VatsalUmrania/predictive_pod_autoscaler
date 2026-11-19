@@ -14,9 +14,13 @@ import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 
-from nexus.graph.rca.result import DiscoveredTarget, RCAResult, VerificationResult
-from nexus.graph.workflow import IncidentWorkflow
-from nexus.tools.registry import ToolMetadata, get_tool_registry
+from nexus.engine.reasoning.rca.result import (
+    DiscoveredTarget,
+    RCAResult,
+    VerificationResult,
+)
+from nexus.engine.tools.registry import ToolMetadata, get_tool_registry
+from nexus.engine.workflow.workflow import IncidentWorkflow
 
 
 @pytest.mark.asyncio
@@ -106,11 +110,11 @@ async def test_future_platform_registration_and_workflow_execution():
     llm = _GCPFakeLLM()
     try:
         with (
-            patch("nexus.graph.nodes.diagnose.get_chat_model", return_value=llm),
-            patch("nexus.graph.nodes.plan.get_chat_model", return_value=llm),
-            patch("nexus.graph.nodes.verify.get_chat_model", return_value=llm),
+            patch("nexus.engine.nodes.diagnose.get_chat_model", return_value=llm),
+            patch("nexus.engine.nodes.plan.get_chat_model", return_value=llm),
+            patch("nexus.engine.nodes.verify.get_chat_model", return_value=llm),
             patch(
-                "nexus.graph.nodes.govern.evaluate_opa_policy",
+                "nexus.engine.nodes.govern.evaluate_opa_policy",
                 AsyncMock(
                     return_value={
                         "allowed": True,
@@ -120,10 +124,11 @@ async def test_future_platform_registration_and_workflow_execution():
                 ),
             ),
             patch(
-                "nexus.integration.dashboard.record_incident_resolution", AsyncMock()
+                "nexus.services.observability.dashboard.record_incident_resolution",
+                AsyncMock(),
             ),
             patch(
-                "nexus.integration.incident_report.publish_post_incident_report",
+                "nexus.services.reporting.incident_report.publish_post_incident_report",
                 AsyncMock(),
             ),
         ):

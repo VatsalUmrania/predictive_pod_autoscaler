@@ -1,4 +1,4 @@
-"""Unit tests for nexus.bus.nats_client.NATSClient.publish_raw.
+"""Unit tests for nexus.core.bus.nats_client.NATSClient.publish_raw.
 
 ``publish_raw(subject, payload)`` is the new counterpart to ``subscribe_raw``:
 it lets the governance plane emit non-IncidentEvent dicts (e.g. the
@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from nexus.bus.nats.client import NATSClient
-from nexus.bus.nats.constants import NEXUS_STREAM
+from nexus.core.bus.nats.client import NATSClient
+from nexus.core.bus.nats.constants import NEXUS_STREAM
 
 
 @pytest.mark.asyncio

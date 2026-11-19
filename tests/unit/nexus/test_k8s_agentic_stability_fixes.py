@@ -17,9 +17,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from nexus.graph.platform.base import TargetResource
-from nexus.graph.platform.k8s import K8sPlatformAdapter
-from nexus.tools.k8s.universal import (
+from nexus.engine.platforms.base import TargetResource
+from nexus.engine.platforms.k8s import K8sPlatformAdapter
+from nexus.engine.tools.k8s.universal import (
     K8sInspectResourceInput,
     K8sMutateResourceInput,
     execute_k8s_inspect,
@@ -137,7 +137,7 @@ def test_k8s_mutate_strategic_merge_patch_and_rollback():
 
     # Test rollback mutation
     with patch(
-        "nexus.tools.k8s.mutate_tools.rollback_deployment",
+        "nexus.engine.tools.k8s.mutate_tools.rollback_deployment",
         return_value="Rolled back deployment shop-demo.",
     ):
         inp_rb = K8sMutateResourceInput(
@@ -170,7 +170,7 @@ async def test_k8s_platform_adapter_verify_health_rejects_crashing_replica():
     dep_describe_output = "Deployment shop-demo: replicas=1, ready=1, available=1, unavailable=0, updated=1 [shop-demo-76d-xyz:CrashLoopBackOff, shop-demo-76d-xyz:LastState:OOMKilled(exit 137)]"
 
     with patch(
-        "nexus.tools.k8s.observe_tools.describe_resource",
+        "nexus.engine.tools.k8s.observe_tools.describe_resource",
         return_value=dep_describe_output,
     ):
         check = await adapter.verify_health(target, plan_step={})
@@ -181,7 +181,7 @@ async def test_k8s_platform_adapter_verify_health_rejects_crashing_replica():
     # Clean healthy deployment
     healthy_describe = "Deployment shop-demo: replicas=1, ready=1, available=1, unavailable=0, updated=1"
     with patch(
-        "nexus.tools.k8s.observe_tools.describe_resource",
+        "nexus.engine.tools.k8s.observe_tools.describe_resource",
         return_value=healthy_describe,
     ):
         check_ok = await adapter.verify_health(target, plan_step={})
@@ -194,7 +194,7 @@ async def test_k8s_platform_adapter_verify_health_rejects_crashing_replica():
 
 @pytest.mark.asyncio
 async def test_async_workflow_resume_executes_and_notifies_response_url():
-    from nexus.observability.status_slack import _async_workflow_resume
+    from nexus.services.api.status_slack import _async_workflow_resume
 
     mock_wf = MagicMock()
     mock_wf.resume_incident = AsyncMock(

@@ -1,4 +1,4 @@
-"""Unit tests for nexus.governance.audit_trail.AuditTrail.
+"""Unit tests for nexus.governance.audit.audit_trail.AuditTrail.
 
 Covers the write and query paths:
   - update_outcome()
@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from nexus.governance.audit_trail import AuditTrail
+from nexus.governance.audit.audit_trail import AuditTrail
 from tests.unit.nexus.test_db_helpers import MockPostgresClient
 
 
@@ -173,7 +173,7 @@ async def test_status_api_audit_tail_endpoint():
     """GET /audit/tail?n=20 returns 200 OK with list of recent records."""
     from httpx import ASGITransport, AsyncClient
 
-    from nexus.observability.status_api import app, context
+    from nexus.services.api.status_api import app, context
 
     mock_client = MockPostgresClient()
     audit = AuditTrail(db_client=mock_client)

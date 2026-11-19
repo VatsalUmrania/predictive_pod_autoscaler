@@ -1,8 +1,8 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from nexus.integration.dashboard import _read_incidents, _write_incident
-from nexus.observability.status_api import app
+from nexus.services.api.status_api import app
+from nexus.services.observability.dashboard import _read_incidents, _write_incident
 
 
 @pytest.mark.asyncio
@@ -78,7 +78,9 @@ async def test_developer_post_incident_and_accept_endpoints(monkeypatch):
     async def _mock_get_db():
         return mock_client
 
-    monkeypatch.setattr("nexus.integration.dashboard.get_database_client", _mock_get_db)
+    monkeypatch.setattr(
+        "nexus.services.observability.dashboard.get_database_client", _mock_get_db
+    )
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -137,7 +139,9 @@ async def test_developer_post_incident_offline_fallback(monkeypatch):
     async def _failing_db():
         raise RuntimeError("No PostgreSQL DSN configured")
 
-    monkeypatch.setattr("nexus.integration.dashboard.get_database_client", _failing_db)
+    monkeypatch.setattr(
+        "nexus.services.observability.dashboard.get_database_client", _failing_db
+    )
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:

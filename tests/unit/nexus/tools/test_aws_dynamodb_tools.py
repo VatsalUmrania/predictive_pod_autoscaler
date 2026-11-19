@@ -6,9 +6,12 @@ from __future__ import annotations
 
 import pytest
 
-from nexus.tools.aws.mutate_tools import DynamoDBUpdateTableTool, RDSDeleteInstanceTool
-from nexus.tools.aws.observe_tools import DynamoDBDescribeTableTool
-from nexus.tools.base import ToolRiskLevel
+from nexus.engine.tools.aws.mutate_tools import (
+    DynamoDBUpdateTableTool,
+    RDSDeleteInstanceTool,
+)
+from nexus.engine.tools.aws.observe_tools import DynamoDBDescribeTableTool
+from nexus.engine.tools.base import ToolRiskLevel
 
 
 @pytest.fixture
@@ -86,7 +89,7 @@ def fake_rds():
 @pytest.mark.asyncio
 async def test_dynamodb_describe_table_success(fake_dynamodb, monkeypatch):
     """Test successful describe_table observation."""
-    import nexus.tools.aws.observe_tools as obs_module
+    import nexus.engine.tools.aws.observe_tools as obs_module
 
     monkeypatch.setattr(obs_module, "_client", lambda s, r=None: fake_dynamodb)
 
@@ -105,7 +108,7 @@ async def test_dynamodb_describe_table_success(fake_dynamodb, monkeypatch):
 @pytest.mark.asyncio
 async def test_dynamodb_describe_table_not_found(fake_dynamodb, monkeypatch):
     """Test describe_table failure when table does not exist."""
-    import nexus.tools.aws.observe_tools as obs_module
+    import nexus.engine.tools.aws.observe_tools as obs_module
 
     monkeypatch.setattr(obs_module, "_client", lambda s, r=None: fake_dynamodb)
 
@@ -118,7 +121,7 @@ async def test_dynamodb_describe_table_not_found(fake_dynamodb, monkeypatch):
 @pytest.mark.asyncio
 async def test_dynamodb_update_table_provisioned_capacity(fake_dynamodb, monkeypatch):
     """Test updating DynamoDB write capacity units (WCU scaling)."""
-    import nexus.tools.aws.mutate_tools as mut_module
+    import nexus.engine.tools.aws.mutate_tools as mut_module
 
     monkeypatch.setattr(mut_module, "_client", lambda s, r=None: fake_dynamodb)
 
@@ -143,7 +146,7 @@ async def test_dynamodb_update_table_provisioned_capacity(fake_dynamodb, monkeyp
 @pytest.mark.asyncio
 async def test_dynamodb_update_table_billing_mode_on_demand(fake_dynamodb, monkeypatch):
     """Test updating DynamoDB billing mode to PAY_PER_REQUEST."""
-    import nexus.tools.aws.mutate_tools as mut_module
+    import nexus.engine.tools.aws.mutate_tools as mut_module
 
     monkeypatch.setattr(mut_module, "_client", lambda s, r=None: fake_dynamodb)
 
@@ -176,7 +179,7 @@ def test_dynamodb_update_table_rollback_action():
 @pytest.mark.asyncio
 async def test_rds_delete_instance_success(fake_rds, monkeypatch):
     """Test deleting an RDS DB instance (destructive)."""
-    import nexus.tools.aws.mutate_tools as mut_module
+    import nexus.engine.tools.aws.mutate_tools as mut_module
 
     monkeypatch.setattr(mut_module, "_client", lambda s, r=None: fake_rds)
 
@@ -200,7 +203,7 @@ async def test_rds_delete_instance_success(fake_rds, monkeypatch):
 @pytest.mark.asyncio
 async def test_rds_delete_instance_with_snapshot(fake_rds, monkeypatch):
     """Test deleting an RDS instance creating a final snapshot."""
-    import nexus.tools.aws.mutate_tools as mut_module
+    import nexus.engine.tools.aws.mutate_tools as mut_module
 
     monkeypatch.setattr(mut_module, "_client", lambda s, r=None: fake_rds)
 
@@ -217,7 +220,7 @@ async def test_rds_delete_instance_with_snapshot(fake_rds, monkeypatch):
 @pytest.mark.asyncio
 async def test_rds_delete_instance_not_found(fake_rds, monkeypatch):
     """Test error handling when RDS instance does not exist."""
-    import nexus.tools.aws.mutate_tools as mut_module
+    import nexus.engine.tools.aws.mutate_tools as mut_module
 
     monkeypatch.setattr(mut_module, "_client", lambda s, r=None: fake_rds)
 

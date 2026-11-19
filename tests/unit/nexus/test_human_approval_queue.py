@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from nexus.governance.approval_queue import HumanApprovalQueue
+from nexus.governance.safeguards.approval_queue import HumanApprovalQueue
 
 
 def test_enqueue_without_nats_returns_id_and_stages():
