@@ -1,9 +1,12 @@
 # Stage 1: Builder
 # Installs all dependencies into a virtual env so only that venv is copied
 # to the final slim runtime image.
-FROM python:3.11-slim AS builder
+FROM python:3.12-slim AS builder
 
 WORKDIR /build
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # System deps needed only at build time
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -15,13 +18,12 @@ COPY pyproject.toml ./
 COPY src ./src
 
 # Create isolated venv and install the nexus package + all extras
-RUN python -m venv /venv && \
-    /venv/bin/pip install --upgrade pip wheel && \
-    /venv/bin/pip install ".[nexus]" --no-cache-dir
+RUN uv venv /venv && \
+    uv pip install --no-cache ".[nexus]" --python /venv
 
 # Stage 2: Runtime
 # Slim image — only the venv + app source, no build tools
-FROM python:3.11-slim AS runtime
+FROM python:3.12-slim AS runtime
 
 LABEL org.opencontainers.image.title="NEXUS Self-Healing API"
 LABEL org.opencontainers.image.description="Autonomous infrastructure healing system"
@@ -33,7 +35,10 @@ RUN groupadd -r nexus && useradd -r -g nexus nexus
 
 # Runtime deps only
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget curl git \
+    wget curl git ca-certificates \
+    && ARCH=$(dpkg --print-architecture) \
+    && curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/${ARCH}/kubectl" \
+    && chmod +x /usr/local/bin/kubectl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -45,10 +50,7 @@ COPY --from=builder /venv /venv
 COPY --from=builder /build/src ./src
 
 # Create data directory with correct permissions
-RUN mkdir -p /data /app/logs /runbooks && chown -R nexus:nexus /data /app /runbooks
-
-# Copy runbooks into image (will be overlay-mounted at runtime via ConfigMap)
-COPY deploy/nexus/runbooks/*.yaml /runbooks/
+RUN mkdir -p /data /app/logs && chown -R nexus:nexus /data /app
 
 USER nexus
 
@@ -68,5 +70,4 @@ ENTRYPOINT ["nexus"]
 CMD ["server", "start", \
     "--nats-url=nats://nats.nexus.svc.cluster.local:4222", \
     "--port=8080", \
-    "--runbook-dir=/runbooks", \
     "--log-level=INFO"]

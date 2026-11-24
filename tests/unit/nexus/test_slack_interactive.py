@@ -31,9 +31,12 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from nexus.governance.action_ladder import HumanApprovalQueue, PendingApproval
-from nexus.integration import notifier as notifier_module
-from nexus.observability import status_api as status_api_module
+from nexus.governance.safeguards.approval_queue import (
+    HumanApprovalQueue,
+    PendingApproval,
+)
+from nexus.services.api.status import status_api as status_api_module
+from nexus.services.notifications.dispatcher import notifier as notifier_module
 
 _SECRET = "test-signing-secret"
 
@@ -114,8 +117,15 @@ def _make_app():
     return app
 
 
-async def _post(client, action_id: str, approval_id: str, *, ts: str | None = None,
-                sig: str | None = "$sentinel$", bad_sig: bool = False) -> httpx.Response:
+async def _post(
+    client,
+    action_id: str,
+    approval_id: str,
+    *,
+    ts: str | None = None,
+    sig: str | None = "$sentinel$",
+    bad_sig: bool = False,
+) -> httpx.Response:
     import json
     from urllib.parse import urlencode
 
@@ -128,7 +138,9 @@ async def _post(client, action_id: str, approval_id: str, *, ts: str | None = No
     )
     body = urlencode({"payload": payload}).encode()
     ts = str(ts if ts is not None else int(time.time()))
-    signature = "v0=invalid" if bad_sig else (sig if sig != "$sentinel$" else _sign(body, ts))
+    signature = (
+        "v0=invalid" if bad_sig else (sig if sig != "$sentinel$" else _sign(body, ts))
+    )
     return await client.post(
         "/slack/interactive",
         content=body,
@@ -203,7 +215,7 @@ async def test_approve_routes_through_governance_and_records_slack_user(
     # vanish immediately so Slack's ~3s interactive window is never breached by
     # the governance dispatch, which runs in the background task below.
     assert body["replace_original"] is True
-    assert body["text"].startswith("⏸")
+    assert body["text"].startswith("Approved")
     assert "ABC12345" in body["text"]
     assert "vatsal" in body["text"]
     assert queue.is_approved("ABC12345")
@@ -229,7 +241,7 @@ async def test_approve_idempotent_when_already_approved(fresh_context, signed_se
         resp = await _post(client, "nexus_approve", "OK000001")
 
     assert resp.status_code == 200
-    assert resp.json()["text"].lower().startswith("✅")  # already-approved message
+    assert "already approved" in resp.json()["text"].lower()
     executor.execute_approved.assert_not_awaited()
     audit.record_approval.assert_not_awaited()
 
@@ -342,6 +354,7 @@ def test_signature_scheme_matches_slack_doc():
     headers.get = lambda k, default=None: (
         {"X-Slack-Request-Timestamp": ts, "X-Slack-Signature": sig}.get(k, default)
     )
-    assert notifier_module.verify_slack_request(
-        raw, headers, signing_secret=_SECRET
-    ) is True
+    assert (
+        notifier_module.verify_slack_request(raw, headers, signing_secret=_SECRET)
+        is True
+    )

@@ -26,11 +26,16 @@ kubectl apply -f deploy/crd.yaml
 kubectl apply -f deploy/rbac.yaml
 kubectl apply -f deploy/ppa-models-pvc.yaml
 
-# NEXUS (NATS + nexus-api)
+# NEXUS Core & Plane 1 Edge Collection (PostgreSQL + NATS + OPA + nexus-api + OTel Collector)
 kubectl apply -f deploy/nexus/nats-statefulset.yaml
 kubectl apply -f deploy/nexus/nexus-api-deployment.yaml
-kubectl get pods -n nexus   # Wait for: nats-0 Running + nexus-api-xxxx Running
+kubectl apply -f deploy/nexus/opa-deployment.yaml
+kubectl apply -f deploy/nexus/postgres-statefulset.yaml
+kubectl apply -f deploy/nexus/observability-deployments.yaml
+kubectl get pods -n nexus   # Wait for: postgres-0, nats-0, opa-xxxx, nexus-api-xxxx, otel-collector-xxxx Running
 ```
+
+> **Plane 1 (Edge Ingestion)**: `deploy/nexus/observability-deployments.yaml` deploys the OpenTelemetry Collector Contrib with the `k8sobjects` receiver watching Kubernetes `Warning` events. The collector forwards them natively via OTLP HTTP to `http://nexus-api:8080/api/v1/ingest/otlp/events`, feeding them directly into NEXUS's deterministic NATS JetStream workqueue without background polling daemons.
 
 ---
 
@@ -193,6 +198,12 @@ sleep 3 && curl -s "http://localhost:8222/jsz?streams=true" | python -m json.too
 
 # Watch operator logs for published events
 kubectl logs -f deployment/ppa-operator | grep "PPA-NATS"
+
+# Watch Plane 1 OTel Collector streaming K8s Warning events to NEXUS
+kubectl logs -n nexus deployment/otel-collector -f | grep -i "k8sobjects\|otlphttp/nexus"
+
+# Watch NEXUS API ingesting reactive OTLP events and publishing to JetStream
+kubectl logs -n nexus deployment/nexus-api -f | grep -i "otlp\|ingest\|symptomsignal"
 ```
 
 ---
@@ -422,4 +433,4 @@ configured): `curl -XPOST $NEXUS/approve/<id>`, `curl -XPOST $NEXUS/reject/<id>`
 
 ---
 
-**TL;DR order:** Phase 1 (NEXUS K8s) → Phase 2 (minikube+helm+shop-demo) → Phase 3 (apply PredictiveAutoscaler CRs) → Phase 4 (`ppa model push`) → Phase 5 (build + deploy operator) → verify logs. Use the **synthetic inject script** in the Fast Verification step for instant testing, and run **Phase 9** to test the Gemini LLM diagnosis path + the interactive Slack **Approve/Reject** approval workflow (setup details in [nexus_slack_approval_workflow.md](nexus_slack_approval_workflow.md)).
+**TL;DR order:** Phase 1 (NEXUS K8s Core & Plane 1 OTel Collector) → Phase 2 (minikube+helm+shop-demo) → Phase 3 (apply PredictiveAutoscaler CRs) → Phase 4 (`ppa model push`) → Phase 5 (build + deploy operator) → verify logs. Use the **synthetic inject script** in the Fast Verification step for instant testing, and run **Phase 9** to test the Gemini LLM diagnosis path + the interactive Slack **Approve/Reject** approval workflow (setup details in [nexus_slack_approval_workflow.md](nexus_slack_approval_workflow.md)).

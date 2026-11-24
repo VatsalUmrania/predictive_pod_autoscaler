@@ -21,6 +21,8 @@ metadata:
   namespace: default
   labels:
     app: shop-demo
+    app.kubernetes.io/name: shop-demo
+    nexus.sre/enabled: "true"
 spec:
   replicas: 2
   selector:
@@ -30,6 +32,11 @@ spec:
     metadata:
       labels:
         app: shop-demo
+        app.kubernetes.io/name: shop-demo
+        nexus.sre/enabled: "true"
+      annotations:
+        nexus.sre/tier: "critical"
+        nexus.sre/selfheal-policy: "auto"
     spec:
       containers:
         - name: shop-demo

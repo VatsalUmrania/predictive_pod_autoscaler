@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from nexus.integration.notifier import Notifier
+from nexus.services.notifications.dispatcher.notifier import Notifier
 
 
 def _policy(app_name: str, webhook: str | None) -> dict:
@@ -27,7 +27,9 @@ async def test_notify_approval_required_sends_slack_payload():
     notifier._send = AsyncMock()
 
     policy = _policy("payments", "https://hooks.slack.test/ABC")
-    with patch("nexus.integration.dashboard._policy_cache", policy):
+    with patch(
+        "nexus.services.observability.dashboard.dashboard._policy_cache", policy
+    ):
         await notifier.notify_approval_required(
             app_name="payments",
             approval_id="ABCD1234",
@@ -58,7 +60,10 @@ async def test_notify_approval_required_skips_when_no_webhook():
     notifier = Notifier()
     notifier._send = AsyncMock()
 
-    with patch("nexus.integration.dashboard._policy_cache", _policy("payments", None)):
+    with patch(
+        "nexus.services.observability.dashboard.dashboard._policy_cache",
+        _policy("payments", None),
+    ):
         await notifier.notify_approval_required(
             app_name="payments",
             approval_id="ABCD1234",

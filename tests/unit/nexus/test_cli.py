@@ -1,15 +1,15 @@
-"""Unit tests for nexus.cli.main."""
+"""Unit tests for nexus.services.cli.main."""
 
 
 def test_cli_has_server_group():
-    from nexus.cli.main import cli
+    from nexus.services.cli.main import cli
 
     assert cli is not None
     assert "server" in {c.name for c in cli.commands.values()}
 
 
 def test_server_start_command_exists():
-    from nexus.cli.main import cli
+    from nexus.services.cli.main import cli
 
     server = cli.commands["server"]
     assert "start" in {c.name for c in server.commands.values()}
@@ -18,7 +18,7 @@ def test_server_start_command_exists():
 def test_approve_and_reject_commands_exist():
     """The HumanApprovalQueue docstring advertises `nexus approve <id>` /
     `nexus reject <id>` — both must exist as top-level commands."""
-    from nexus.cli.main import cli
+    from nexus.services.cli.main import cli
 
     names = {c.name for c in cli.commands.values()}
     assert "approve" in names
@@ -30,16 +30,19 @@ def test_approve_invokes_api_post(monkeypatch):
     the resulting status. We stub httpx.post so no network is touched."""
     import importlib
 
-    # ``import nexus.cli.main as x`` binds to ``main`` the *function* (the
+    # ``import nexus.services.cli.main as x`` binds to ``main`` the *function* (the
     # package __init__ re-exports it), so load the module explicitly.
-    cli_main = importlib.import_module("nexus.cli.main")
+    cli_main = importlib.import_module("nexus.services.cli.main")
 
     captured = {}
 
     class _FakeResp:
         status_code = 200
-        _body = {"status": "approved", "action_id": "ABC12345",
-                 "outcome": {"status": "success", "action_id": "audit-1"}}
+        _body = {
+            "status": "approved",
+            "action_id": "ABC12345",
+            "outcome": {"status": "success", "action_id": "audit-1"},
+        }
 
         def json(self):
             return self._body
@@ -63,7 +66,9 @@ def test_approve_invokes_api_post(monkeypatch):
     from click.testing import CliRunner
 
     runner = CliRunner()
-    result = runner.invoke(cli_main.cli, ["approve", "ABC12345", "--api-url", "http://api.example"])
+    result = runner.invoke(
+        cli_main.cli, ["approve", "ABC12345", "--api-url", "http://api.example"]
+    )
 
     assert result.exit_code == 0, result.output
     assert captured["url"] == "http://api.example/approve/ABC12345"

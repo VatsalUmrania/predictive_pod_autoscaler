@@ -1,4 +1,4 @@
-"""Unit tests for nexus.governance.policy_engine — OPA-only, fail-closed.
+"""Unit tests for nexus.governance.policies.policy_engine — OPA-only, fail-closed.
 
 OPA is a hard dependency: any failure talking to it (unreachable, HTTP error,
 malformed body) must DENY with source="error" — never allow, never fall back
@@ -16,8 +16,8 @@ import httpx
 import pytest
 import yaml
 
-from nexus.governance import policy_engine as pe_module
-from nexus.governance.policy_engine import PolicyEngine
+from nexus.governance.policies import policy_engine as pe_module
+from nexus.governance.policies.policy_engine import PolicyEngine
 
 
 def _patch_opa(monkeypatch, handler) -> list[httpx.Request]:

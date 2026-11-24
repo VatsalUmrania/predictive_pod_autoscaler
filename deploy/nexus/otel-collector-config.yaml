@@ -1,24 +1,10 @@
 # OpenTelemetry Collector Configuration for NEXUS
 # ================================================
-# Routes all telemetry signals from domain agents to their storage backends.
-#
-# Receivers:
-#   otlp          — All NEXUS agents push metrics/logs/traces here
-#   prometheus    — Scrape existing PPA operator metrics + test-app
-#
-# Processors:
-#   memory_limiter — Prevent OOM if agents burst
-#   batch          — Buffer before sending to storage (reduces write pressure)
-#   resource       — Inject service.namespace=nexus on all signals
-#
-# Exporters:
-#   prometheusremotewrite  — Push metrics to Prometheus
-#   loki                   — Push logs to Loki
-#   otlp/tempo             — Push traces to Tempo
-#   logging                — Stdout (debug, disable in prod)
+# Routes all telemetry signals from domain agents and Kubernetes cluster events
+# to their storage backends and NEXUS Plane 2 ingestion webhook.
 
 receivers:
-  # Accept OTLP from all NEXUS agents (Python SDK default ports)
+  # Accept OTLP from all NEXUS agents (Python/JS SDK default ports)
   otlp:
     protocols:
       grpc:
@@ -27,6 +13,16 @@ receivers:
         endpoint: 0.0.0.0:4318
         cors:
           allowed_origins: ["*"]
+
+  # Plane 1: Native Kubernetes Event Watcher
+  k8sobjects:
+    auth_type: serviceAccount
+    objects:
+      - name: events
+        mode: watch
+        group: ""
+        exclude_watch_type:
+          - DELETED
 
   # Scrape existing PPA operator + test-app + NATS self-metrics
   prometheus:
@@ -39,8 +35,6 @@ receivers:
               labels:
                 component: "ppa-operator"
 
-        # Target the actual shop-demo/test app Service in-cluster (e.g.
-        # shop-demo.default.svc.cluster.local:<metrics-port>).
         - job_name: "test-app"
           scrape_interval: 15s
           static_configs:
@@ -71,11 +65,11 @@ processors:
 
   # Batch signals before writing to reduce I/O pressure
   batch:
-    timeout: 5s
-    send_batch_size: 1024
+    timeout: 2s
+    send_batch_size: 256
     send_batch_max_size: 2048
 
-  # Inject consistent resource attributes on all signals
+  # Inject consistent resource attributes on metrics/loki/traces signals
   resource:
     attributes:
       - action: upsert
@@ -85,8 +79,77 @@ processors:
         key: deployment.environment
         value: development
 
+  # Hoist involvedObject identity from K8s Events before k8sattributes enrichment
+  transform/k8s_events:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          # Extract involvedObject fields from wrapped watch events (body.object.involvedObject)
+          - set(resource.attributes["k8s.namespace.name"], body["object"]["involvedObject"]["namespace"]) where IsMap(body) and body["object"] != nil and body["object"]["involvedObject"]["namespace"] != nil
+          - set(resource.attributes["k8s.involved.kind"], body["object"]["involvedObject"]["kind"]) where IsMap(body) and body["object"] != nil and body["object"]["involvedObject"]["kind"] != nil
+          - set(resource.attributes["k8s.involved.name"], body["object"]["involvedObject"]["name"]) where IsMap(body) and body["object"] != nil and body["object"]["involvedObject"]["name"] != nil
+          - set(resource.attributes["k8s.pod.name"], body["object"]["involvedObject"]["name"]) where IsMap(body) and body["object"] != nil and body["object"]["involvedObject"]["kind"] == "Pod"
+          # Extract involvedObject fields from direct event objects (body.involvedObject)
+          - set(resource.attributes["k8s.namespace.name"], body["involvedObject"]["namespace"]) where IsMap(body) and body["involvedObject"] != nil and body["involvedObject"]["namespace"] != nil
+          - set(resource.attributes["k8s.involved.kind"], body["involvedObject"]["kind"]) where IsMap(body) and body["involvedObject"] != nil and body["involvedObject"]["kind"] != nil
+          - set(resource.attributes["k8s.involved.name"], body["involvedObject"]["name"]) where IsMap(body) and body["involvedObject"] != nil and body["involvedObject"]["name"] != nil
+          - set(resource.attributes["k8s.pod.name"], body["involvedObject"]["name"]) where IsMap(body) and body["involvedObject"] != nil and body["involvedObject"]["kind"] == "Pod"
+
+  # Enrich logs & events with K8s Deployment, Namespace, and NEXUS registration labels
+  k8sattributes:
+    auth_type: "serviceAccount"
+    passthrough: false
+    extract:
+      metadata:
+        - k8s.namespace.name
+        - k8s.deployment.name
+        - k8s.replicaset.name
+        - k8s.statefulset.name
+        - k8s.daemonset.name
+        - k8s.pod.name
+        - k8s.pod.uid
+        - k8s.node.name
+      labels:
+        - tag_name: service.name
+          key: app.kubernetes.io/name
+          from: pod
+        - tag_name: service.name
+          key: app
+          from: pod
+        - tag_name: nexus.enabled
+          key: nexus.sre/enabled
+          from: pod
+      annotations:
+        - tag_name: nexus.tier
+          key: nexus.sre/tier
+          from: pod
+    pod_association:
+      - sources:
+          - from: resource_attribute
+            name: k8s.pod.name
+          - from: resource_attribute
+            name: k8s.namespace.name
+      - sources:
+          - from: resource_attribute
+            name: k8s.pod.uid
+      - sources:
+          - from: resource_attribute
+            name: k8s.pod.ip
+      - sources:
+          - from: connection
+
+  # Only forward signals to NEXUS for Warning/Error K8s events or WARN/ERROR logs
+  filter/nexus_registered:
+    error_mode: ignore
+    logs:
+      log_record:
+        - 'IsMap(body) and body["object"] != nil and body["object"]["type"] == "Normal"'
+        - 'IsMap(body) and body["type"] == "Normal"'
+        - 'not IsMap(body) and severity_number > 0 and severity_number < 13'
+
 exporters:
-  # Metrics → Prometheus (via remote write receiver)
+  # Metrics -> Prometheus (via remote write receiver)
   prometheusremotewrite:
     endpoint: "http://prometheus:9090/api/v1/write"
     tls:
@@ -96,14 +159,21 @@ exporters:
       initial_interval: 5s
       max_elapsed_time: 60s
 
-  # Logs → Loki (native OTLP endpoint — Loki 3.0+ supports OTLP natively)
-  # The legacy `loki` exporter was removed in otelcol-contrib ≥0.81; use otlphttp instead.
+  # Logs -> Loki (native OTLP endpoint — Loki 3.0+ supports OTLP natively)
   otlphttp/loki:
     endpoint: "http://loki:3100/otlp"
     tls:
       insecure: true
 
-  # Traces → Tempo
+  # Plane 1 -> Plane 2 Ingestion Webhook (nexus-api on port 8080)
+  otlphttp/nexus:
+    endpoint: "http://nexus-api:8080/api/v1/ingest/otlp"
+    encoding: json
+    compression: none
+    tls:
+      insecure: true
+
+  # Traces -> Tempo
   otlp/tempo:
     endpoint: "tempo:4317"
     tls:
@@ -127,18 +197,24 @@ service:
   pipelines:
     # ── Metrics pipeline ────────────────────────────────────────────────────
     metrics:
-      receivers:  [otlp, prometheus]
+      receivers: [otlp, prometheus]
       processors: [memory_limiter, batch, resource]
-      exporters:  [prometheusremotewrite, debug]
+      exporters: [prometheusremotewrite, debug]
 
-    # ── Logs pipeline ────────────────────────────────────────────────────────
+    # ── Logs pipeline (Loki storage) ────────────────────────────────────────
     logs:
-      receivers:  [otlp]
+      receivers: [otlp]
       processors: [memory_limiter, batch, resource]
-      exporters:  [otlphttp/loki, debug]
+      exporters: [otlphttp/loki, debug]
 
-    # ── Traces pipeline ──────────────────────────────────────────────────────
+    # ── Kubernetes Events & Anomaly Logs pipeline (Plane 1 -> Plane 2) ──────
+    logs/events:
+      receivers: [otlp, k8sobjects]
+      processors: [transform/k8s_events, k8sattributes, filter/nexus_registered, batch]
+      exporters: [otlphttp/nexus]
+
+    # ── Traces pipeline ─────────────────────────────────────────────────────
     traces:
-      receivers:  [otlp]
+      receivers: [otlp]
       processors: [memory_limiter, batch, resource]
-      exporters:  [otlp/tempo, debug]
+      exporters: [otlp/tempo, debug]
