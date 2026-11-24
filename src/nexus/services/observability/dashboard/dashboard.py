@@ -96,6 +96,29 @@ async def developer_incidents(
     )
 
 
+@router.get("/developer/incidents/{incident_id}", tags=["developer"])
+async def developer_incident(
+    incident_id: str,
+    app: str | None = None,
+) -> dict[str, Any]:
+    """Single incident detail, merged from the DB, in-memory buffer and LangGraph checkpoint."""
+    records = await fetch_developer_incidents(
+        n=1,
+        app=app,
+        ctx=_context(),
+        read_incidents_fn=read_incidents,
+        in_memory_incidents=_in_memory_incidents,
+        make_plain_english_fn=_make_plain_english,
+        incident_id=incident_id,
+    )
+    if not records:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No incident found with id '{incident_id}'.",
+        )
+    return records[0]
+
+
 @router.post("/developer/incidents", tags=["developer"])
 async def developer_post_incident(payload: dict[str, Any]) -> dict[str, str]:
     """Accept an incident directly from demo orchestrator or external caller."""

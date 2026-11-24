@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Incident } from "@/types/incident"
+import { NexusIncident } from "@/lib/nexus/types"
 import { cn } from "@/lib/utils"
 import {
   Trace,
@@ -25,7 +25,7 @@ import {
 } from "@hugeicons/core-free-icons"
 
 interface ThinkingTraceProps {
-  incident: Incident
+  incident: NexusIncident
   className?: string
 }
 
@@ -94,8 +94,8 @@ export function ThinkingTrace({ incident, className }: ThinkingTraceProps) {
 
         {/* Synthesized Root Cause */}
         <div className="space-y-1.5">
-          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Synthesized Root Cause
+          <span className="text-[11px] font-medium text-muted-foreground">
+            Synthesized root cause
           </span>
           <p className="rounded-md border border-border bg-background p-3 text-sm leading-relaxed text-foreground">
             {incident.suspected_cause}
@@ -105,8 +105,8 @@ export function ThinkingTrace({ incident, className }: ThinkingTraceProps) {
         {/* Recommended Strategy */}
         {incident.recommended_strategy && (
           <div className="space-y-1.5">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Recommended Strategy
+            <span className="text-[11px] font-medium text-muted-foreground">
+              Recommended strategy
             </span>
             <p className="rounded-md border border-border bg-muted/30 p-3 text-xs leading-relaxed text-foreground">
               {incident.recommended_strategy}
@@ -118,11 +118,11 @@ export function ThinkingTrace({ incident, className }: ThinkingTraceProps) {
         {incident.evidence && incident.evidence.length > 0 && (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Investigative Tool Evidence ({incident.evidence.length})
+              <span className="text-[11px] font-medium text-muted-foreground">
+                Investigative tool evidence ({incident.evidence.length})
               </span>
               <span className="text-[11px] text-muted-foreground">
-                Click trace line to expand details
+                Click a trace line to expand it
               </span>
             </div>
 

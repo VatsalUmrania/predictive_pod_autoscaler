@@ -190,16 +190,27 @@ async def record_incident_resolution(
 
 
 async def read_incidents(
-    n: int, app: str | None = None, client: PostgresClient | None = None
+    n: int,
+    app: str | None = None,
+    client: PostgresClient | None = None,
+    incident_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Read recent incidents from PostgreSQL developer_incidents table."""
     import nexus.services.observability.dashboard.dashboard as dash_mod
 
     try:
         db = client or await dash_mod.get_database_client()
-        sql = "SELECT * FROM developer_incidents ORDER BY id DESC LIMIT $1"
+        if incident_id:
+            sql = (
+                "SELECT * FROM developer_incidents WHERE incident_id = $1 "
+                "ORDER BY id DESC LIMIT $2"
+            )
+            params: tuple[Any, ...] = (incident_id, max(n, 1))
+        else:
+            sql = "SELECT * FROM developer_incidents ORDER BY id DESC LIMIT $1"
+            params = (max(n, 200),)
         async with db.acquire() as conn:
-            rows = await conn.fetch(sql, max(n, 200))
+            rows = await conn.fetch(sql, *params)
         results = []
         for r in rows:
             d = dict(r)

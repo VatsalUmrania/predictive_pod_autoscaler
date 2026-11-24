@@ -1,222 +1,125 @@
-"use client"
-
-import * as React from "react"
-import { useIncidents } from "@/context/incident-context"
-import { cn } from "@/lib/utils"
 import {
   Table,
-  TableHeader,
   TableBody,
-  TableRow,
-  TableHead,
   TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
 } from "@/components/ui/table"
-import { HugeiconsIcon } from "@hugeicons/react"
-import { ChartLineData02Icon } from "@hugeicons/core-free-icons"
+import { EmptyState } from "@/components/empty-state"
+import { formatNumber, formatPercent, formatTimestamp } from "@/lib/format"
+import type { NexusPrediction } from "@/lib/nexus/types"
+import { cn } from "@/lib/utils"
 
-interface PredictionsTableProps {
-  className?: string
-  limit?: number
-  compact?: boolean
+const MODE_CLASS: Record<string, string> = {
+  autonomous: "border-primary/30 bg-primary/10 text-primary",
+  advisory: "border-chart-2/30 bg-chart-2/10 text-chart-2",
+  shadow: "border-border bg-muted text-muted-foreground",
 }
 
-export function PredictionsTable({ className, limit, compact }: PredictionsTableProps) {
-  const { predictions } = useIncidents()
-  const isCompact = compact ?? Boolean(limit)
+const OUTCOME_CLASS: Record<string, string> = {
+  success: "border-primary/30 bg-primary/10 text-primary",
+  pending: "border-border bg-muted text-muted-foreground",
+  failed: "border-destructive/30 bg-destructive/10 text-destructive",
+}
 
-  const displayedPredictions = limit
-    ? predictions.slice(0, limit)
-    : predictions
+function pill(value: string, className: string) {
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center rounded border px-2 py-0.5 font-mono text-[11px] font-semibold",
+        className
+      )}
+    >
+      {value.toLowerCase()}
+    </span>
+  )
+}
 
-  const getModeBadge = (mode: string) => {
-    const m = (mode || "advisory").toLowerCase()
-    if (m === "autonomous") {
-      return (
-        <span className="rounded border border-primary/30 bg-primary/10 px-2 py-0.5 font-mono text-[11px] font-semibold text-primary">
-          autonomous
-        </span>
-      )
-    }
-    if (m === "advisory") {
-      return (
-        <span className="rounded border border-chart-2/30 bg-chart-2/10 px-2 py-0.5 font-mono text-[11px] font-semibold text-chart-2">
-          advisory
-        </span>
-      )
-    }
-    return (
-      <span className="rounded border border-border bg-muted px-2 py-0.5 font-mono text-[11px] font-medium text-muted-foreground">
-        shadow
-      </span>
-    )
-  }
-
+/**
+ * Predictive autoscaler decisions, rendered from the fields the API actually returns:
+ * `deployment`, `multiplier`, `confidence`, `outcome`, `decided_at` and `description`.
+ */
+export function PredictionsTable({
+  predictions,
+  className,
+}: {
+  predictions: NexusPrediction[]
+  className?: string
+}) {
   if (predictions.length === 0) {
     return (
-      <div
-        className={cn(
-          "rounded-lg border border-dashed border-border bg-card p-8 text-center text-xs text-muted-foreground",
-          className
-        )}
-      >
-        No predictive scaling decisions recorded yet.
-      </div>
+      <EmptyState
+        title="No scaling decisions recorded"
+        description="The predictive autoscaler has not published a decision yet."
+        className={className}
+      />
     )
   }
 
   return (
-    <div
-      className={cn(
-        "overflow-hidden rounded-lg border border-border bg-card",
-        className
-      )}
-    >
-      <div className="flex items-center justify-between border-b border-border bg-muted/20 px-4 py-3">
-        <div className="flex items-center gap-2">
-          <HugeiconsIcon
-            icon={ChartLineData02Icon}
-            className="size-4 text-primary"
-          />
-          <h3 className="font-semibold text-sm text-foreground">
-            Predictive Pod Autoscaler Decisions
-          </h3>
-        </div>
-        <span className="font-mono text-xs text-muted-foreground">
-          {predictions.length} decision{predictions.length === 1 ? "" : "s"} recorded
-        </span>
-      </div>
-
-      {isCompact ? (
-        /* Compact 4-column layout engineered to fit dashboard splits without overflow */
-        <Table className="w-full">
-          <TableHeader>
-            <TableRow className="border-border hover:bg-transparent">
-              <TableHead className="w-[34%] font-mono text-xs font-semibold text-foreground">
-                Workload
-              </TableHead>
-              <TableHead className="w-[26%] text-right font-mono text-xs font-semibold text-foreground">
-                Traffic (RPS)
-              </TableHead>
-              <TableHead className="w-[20%] text-right font-mono text-xs font-semibold text-foreground">
-                Scale
-              </TableHead>
-              <TableHead className="w-[20%] text-right font-mono text-xs font-semibold text-foreground pr-4">
-                Mode
-              </TableHead>
+    <div className={cn("overflow-x-auto rounded-lg border border-border", className)}>
+      <Table className="w-full min-w-[880px]">
+        <TableHeader>
+          <TableRow>
+            <TableHead className="font-mono text-xs">Deployment</TableHead>
+            <TableHead className="font-mono text-xs">Namespace</TableHead>
+            <TableHead className="text-right font-mono text-xs">Current RPS</TableHead>
+            <TableHead className="text-right font-mono text-xs">Predicted RPS</TableHead>
+            <TableHead className="text-right font-mono text-xs">Multiplier</TableHead>
+            <TableHead className="text-right font-mono text-xs">Confidence</TableHead>
+            <TableHead className="font-mono text-xs">Mode</TableHead>
+            <TableHead className="font-mono text-xs">Outcome</TableHead>
+            <TableHead className="text-right font-mono text-xs">Decided at</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {predictions.map((prediction, index) => (
+            <TableRow key={`${prediction.deployment}-${prediction.decided_at}-${index}`}>
+              <TableCell className="max-w-[220px]">
+                <span className="block truncate font-mono text-xs font-semibold">
+                  {prediction.deployment}
+                </span>
+                <span className="mt-0.5 block max-w-[220px] truncate text-[11px] text-muted-foreground">
+                  {prediction.description}
+                </span>
+              </TableCell>
+              <TableCell className="font-mono text-xs text-muted-foreground">
+                {prediction.namespace}
+              </TableCell>
+              <TableCell className="text-right font-mono text-xs tabular-nums text-muted-foreground">
+                {formatNumber(prediction.current_rps, 1)}
+              </TableCell>
+              <TableCell className="text-right font-mono text-xs font-semibold tabular-nums">
+                {formatNumber(prediction.predicted_rps, 1)}
+              </TableCell>
+              <TableCell className="text-right font-mono text-xs font-semibold tabular-nums text-primary">
+                {formatNumber(prediction.multiplier, 2)}x
+              </TableCell>
+              <TableCell className="text-right font-mono text-xs tabular-nums">
+                {formatPercent(prediction.confidence)}
+              </TableCell>
+              <TableCell>
+                {pill(
+                  prediction.mode,
+                  MODE_CLASS[prediction.mode?.toLowerCase()] ??
+                    MODE_CLASS.shadow
+                )}
+              </TableCell>
+              <TableCell>
+                {pill(
+                  prediction.outcome,
+                  OUTCOME_CLASS[prediction.outcome?.toLowerCase()] ??
+                    OUTCOME_CLASS.pending
+                )}
+              </TableCell>
+              <TableCell className="text-right font-mono text-xs tabular-nums text-muted-foreground">
+                {formatTimestamp(prediction.decided_at)}
+              </TableCell>
             </TableRow>
-          </TableHeader>
-          <TableBody>
-            {displayedPredictions.map((p, idx) => {
-              const scaleStr = p.scale_factor
-                ? `${Number(p.scale_factor).toFixed(2)}x`
-                : "—"
-              return (
-                <TableRow key={idx} className="border-border">
-                  {/* Workload: Target + Namespace */}
-                  <TableCell className="py-2.5">
-                    <div className="font-mono font-bold text-xs text-foreground truncate max-w-[140px]" title={p.target}>
-                      {p.target}
-                    </div>
-                    <div className="font-mono text-[11px] text-muted-foreground truncate max-w-[140px]" title={p.namespace}>
-                      {p.namespace}
-                    </div>
-                  </TableCell>
-
-                  {/* Traffic: Current -> Predicted */}
-                  <TableCell className="text-right py-2.5 font-mono tabular-nums">
-                    <div className="flex items-center justify-end gap-1 text-xs">
-                      <span className="text-muted-foreground">{p.current_rps ?? "—"}</span>
-                      <span className="text-muted-foreground/60 text-[10px]">→</span>
-                      <span className="font-bold text-foreground">{p.predicted_rps ?? "—"}</span>
-                    </div>
-                    <div className="text-[10px] text-muted-foreground">req/sec</div>
-                  </TableCell>
-
-                  {/* Scale Factor: Factor + Desired Replicas */}
-                  <TableCell className="text-right py-2.5 font-mono tabular-nums">
-                    <div className="font-bold text-xs text-primary">
-                      {scaleStr}
-                    </div>
-                    <div className="text-[10px] text-muted-foreground">
-                      {p.desired_replicas ? `${p.desired_replicas} pods` : "—"}
-                    </div>
-                  </TableCell>
-
-                  {/* Autonomy Mode Badge */}
-                  <TableCell className="text-right py-2.5 pr-4">
-                    <div className="flex justify-end">
-                      {getModeBadge(p.mode)}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )
-            })}
-          </TableBody>
-        </Table>
-      ) : (
-        /* Full multi-column view for dedicated pages */
-        <Table className="w-full">
-          <TableHeader>
-            <TableRow className="border-border hover:bg-transparent">
-              <TableHead className="font-mono text-xs font-semibold text-foreground">
-                Workload Target
-              </TableHead>
-              <TableHead className="font-mono text-xs font-semibold text-foreground">
-                Namespace
-              </TableHead>
-              <TableHead className="text-right font-mono text-xs font-semibold text-foreground">
-                Current RPS
-              </TableHead>
-              <TableHead className="text-right font-mono text-xs font-semibold text-foreground">
-                Predicted RPS
-              </TableHead>
-              <TableHead className="text-right font-mono text-xs font-semibold text-foreground">
-                Scale Factor
-              </TableHead>
-              <TableHead className="text-right font-mono text-xs font-semibold text-foreground">
-                Desired Replicas
-              </TableHead>
-              <TableHead className="text-right font-mono text-xs font-semibold text-foreground pr-4">
-                Autonomy Mode
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {displayedPredictions.map((p, idx) => {
-              const scaleStr = p.scale_factor
-                ? `${Number(p.scale_factor).toFixed(2)}x`
-                : "—"
-              return (
-                <TableRow key={idx} className="border-border">
-                  <TableCell className="font-mono font-bold text-foreground">
-                    {p.target}
-                  </TableCell>
-                  <TableCell className="font-mono text-muted-foreground">
-                    {p.namespace}
-                  </TableCell>
-                  <TableCell className="text-right font-mono tabular-nums text-foreground">
-                    {p.current_rps ?? "—"}
-                  </TableCell>
-                  <TableCell className="text-right font-mono tabular-nums font-semibold text-foreground">
-                    {p.predicted_rps ?? "—"}
-                  </TableCell>
-                  <TableCell className="text-right font-mono tabular-nums text-primary font-semibold">
-                    {scaleStr}
-                  </TableCell>
-                  <TableCell className="text-right font-mono tabular-nums font-bold text-foreground">
-                    {p.desired_replicas ?? "—"}
-                  </TableCell>
-                  <TableCell className="text-right pr-4">
-                    <div className="flex justify-end">
-                      {getModeBadge(p.mode)}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )
-            })}
-          </TableBody>
-        </Table>
-      )}
+          ))}
+        </TableBody>
+      </Table>
     </div>
   )
 }

@@ -1,9 +1,11 @@
 import type { NextConfig } from "next";
 
-const nexusApiUrl = process.env.NEXUS_API_URL;
-
+/**
+ * All NEXUS API traffic is issued server-side (Server Components and Server
+ * Actions), so the browser never calls the API and no rewrite proxy is needed.
+ * The base URL is read in `src/lib/nexus/client.ts` from `NEXUS_API_BASE_URL`.
+ */
 const nextConfig: NextConfig = {
-  /* config options here */
   cacheComponents: true,
   partialPrefetching: true,
   turbopack: {
@@ -13,18 +15,6 @@ const nextConfig: NextConfig = {
         as: "*.css",
       },
     },
-  },
-  async rewrites() {
-    return [
-      {
-        source: "/developer/:path*",
-        destination: `${nexusApiUrl}/developer/:path*`,
-      },
-      {
-        source: "/api/v1/:path*",
-        destination: `${nexusApiUrl}/api/v1/:path*`,
-      },
-    ];
   },
 };
 

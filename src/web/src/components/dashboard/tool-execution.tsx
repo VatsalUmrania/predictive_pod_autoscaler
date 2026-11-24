@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Incident } from "@/types/incident"
+import { NexusIncident } from "@/lib/nexus/types"
 import { cn } from "@/lib/utils"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -15,7 +15,7 @@ import {
 } from "@hugeicons/core-free-icons"
 
 interface ToolExecutionProps {
-  incident: Incident
+  incident: NexusIncident
   className?: string
 }
 
@@ -93,8 +93,8 @@ export function ToolExecution({ incident, className }: ToolExecutionProps) {
 
         {/* Executed Tools List */}
         <div className="space-y-3">
-          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Executed Mutation Calls ({execution.results.length})
+          <span className="text-[11px] font-medium text-muted-foreground">
+            Executed mutation calls ({execution.results.length})
           </span>
 
           {execution.results.length === 0 ? (
@@ -116,7 +116,7 @@ export function ToolExecution({ incident, className }: ToolExecutionProps) {
                           Step {res.step ?? idx + 1}:
                         </span>
                         <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-foreground">
-                          {res.tool_name}
+                          {res.tool_name ?? "unnamed_tool"}
                         </code>
                       </div>
                       <div className="flex items-center gap-2 font-mono text-[11px]">
@@ -137,13 +137,13 @@ export function ToolExecution({ incident, className }: ToolExecutionProps) {
                               : "border border-destructive/30 bg-destructive/10 text-destructive"
                           )}
                         >
-                          {res.status}
+                          {res.status ?? "UNKNOWN"}
                         </span>
                       </div>
                     </div>
                     <div className="p-3">
                       <pre className="overflow-x-auto rounded border border-border bg-muted/40 p-2 font-mono text-xs text-foreground whitespace-pre-wrap">
-                        {res.output}
+                        {res.output ?? ""}
                       </pre>
                     </div>
                   </div>
@@ -154,33 +154,33 @@ export function ToolExecution({ incident, className }: ToolExecutionProps) {
         </div>
 
         {/* Deterministic Rollback Results */}
-        {rollback.results.length > 0 && (
+        {rollback.rollback_results.length > 0 && (
           <div className="space-y-3 border-t border-border pt-4">
-            <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-destructive">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium text-destructive">
               <HugeiconsIcon
                 icon={ArrowTurnBackwardIcon}
                 className="size-4 text-destructive"
               />
-              <span>Deterministic Rollback Results ({rollback.results.length})</span>
+              <span>Deterministic Rollback Results ({rollback.rollback_results.length})</span>
             </div>
 
             <div className="space-y-3">
-              {rollback.results.map((rb, idx) => (
+              {rollback.rollback_results.map((rb, idx) => (
                 <div
                   key={idx}
                   className="overflow-hidden rounded-md border border-destructive/30 bg-destructive/10"
                 >
                   <div className="flex items-center justify-between border-b border-destructive/20 bg-destructive/20 px-3 py-2 text-xs font-mono">
                     <span className="font-semibold text-destructive">
-                      Rollback Step {idx + 1}: {rb.tool_name}
+                      Rollback Step {idx + 1}: {rb.tool_name ?? "unnamed_tool"}
                     </span>
                     <span className="text-destructive font-semibold">
-                      {rb.status}
+                      {rb.status ?? "UNKNOWN"}
                     </span>
                   </div>
                   <div className="p-3">
                     <pre className="overflow-x-auto rounded border border-border bg-background p-2 font-mono text-xs text-foreground whitespace-pre-wrap">
-                      {rb.output}
+                      {rb.output ?? ""}
                     </pre>
                   </div>
                 </div>

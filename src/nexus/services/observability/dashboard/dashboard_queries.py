@@ -93,11 +93,20 @@ async def fetch_developer_incidents(
     read_incidents_fn: Any,
     in_memory_incidents: list[dict[str, Any]],
     make_plain_english_fn: Any,
+    incident_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch, merge live LangGraph checkpoints with DB records, and serialize incidents."""
+    """Fetch, merge live LangGraph checkpoints with DB records, and serialize incidents.
+
+    When ``incident_id`` is supplied only that incident is fetched and serialized.
+    """
     # Map incident_id -> {"legacy": dict, "fallback_state": dict, "thread_id": str}
     merged_records: dict[str, dict[str, Any]] = {}
     anonymous_records: list[dict[str, Any]] = []
+
+    def _wanted(inc_id: str | None) -> bool:
+        if incident_id is None:
+            return True
+        return str(inc_id) == incident_id
 
     def _upsert(
         inc_id: str | None,
@@ -110,6 +119,8 @@ async def fetch_developer_incidents(
         if not inc_id:
             if legacy:
                 anonymous_records.append(dict(legacy))
+            return
+        if not _wanted(str(inc_id)):
             return
         bucket = merged_records.setdefault(
             inc_id,
@@ -132,7 +143,12 @@ async def fetch_developer_incidents(
             )
 
     # 1. PostgreSQL developer_incidents table
-    raw_results = await read_incidents_fn(n=max(n, 50), app=app)
+    try:
+        raw_results = await read_incidents_fn(
+            n=max(n, 50), app=app, incident_id=incident_id
+        )
+    except TypeError:
+        raw_results = await read_incidents_fn(n=max(n, 50), app=app)
     for row in raw_results if isinstance(raw_results, (list, tuple)) else []:
         if isinstance(row, Mapping):
             _upsert(row.get("incident_id"), legacy=row)

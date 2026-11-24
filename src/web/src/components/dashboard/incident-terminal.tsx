@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Incident } from "@/types/incident"
+import { NexusIncident } from "@/lib/nexus/types"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/trace"
 
 interface IncidentTerminalProps {
-  incident: Incident
+  incident: NexusIncident
   className?: string
 }
 
@@ -37,9 +37,9 @@ export function IncidentTerminal({ incident, className }: IncidentTerminalProps)
   const executionOutput = incident.execution.results
     .map(
       (r, i) =>
-        `[STEP ${r.step ?? i + 1}] ${r.tool_name} (duration: ${
+        `[STEP ${r.step ?? i + 1}] ${r.tool_name ?? "unnamed_tool"} (duration: ${
           r.duration_ms ?? "N/A"
-        }ms)\nSTATUS: ${r.status}\nOUTPUT:\n${r.output}\n`
+        }ms)\nSTATUS: ${r.status ?? "UNKNOWN"}\nOUTPUT:\n${r.output ?? ""}\n`
     )
     .join("\n--------------------------------------------------\n\n")
 
@@ -47,8 +47,8 @@ export function IncidentTerminal({ incident, className }: IncidentTerminalProps)
     .map((e, i) => `[EVIDENCE #${i + 1}]\n${typeof e === "string" ? e : JSON.stringify(e, null, 2)}`)
     .join("\n\n")
 
-  const rollbackOutput = incident.rollback.results
-    .map((r, i) => `[ROLLBACK #${i + 1}] ${r.tool_name}\nSTATUS: ${r.status}\nOUTPUT:\n${r.output}`)
+  const rollbackOutput = incident.rollback.rollback_results
+    .map((r, i) => `[ROLLBACK #${i + 1}] ${r.tool_name ?? "unnamed_tool"}\nSTATUS: ${r.status ?? "UNKNOWN"}\nOUTPUT:\n${r.output ?? ""}`)
     .join("\n\n")
 
   const currentContent =
@@ -121,7 +121,7 @@ export function IncidentTerminal({ incident, className }: IncidentTerminalProps)
                   : "text-muted-foreground hover:text-foreground"
               )}
             >
-              Rollback ({incident.rollback.results.length})
+              Rollback ({incident.rollback.rollback_results.length})
             </button>
           </div>
 
@@ -161,7 +161,7 @@ export function IncidentTerminal({ incident, className }: IncidentTerminalProps)
                           className={cn("size-3.5 shrink-0", isSuccess ? "text-primary" : "text-destructive")}
                         />
                         <TraceTitle className="font-mono font-semibold text-foreground">
-                          Step {res.step ?? idx + 1}: {res.tool_name}
+                          Step {res.step ?? idx + 1}: {res.tool_name ?? "unnamed_tool"}
                         </TraceTitle>
                       </TraceLine>
                       <div className="flex items-center gap-2">
@@ -179,13 +179,13 @@ export function IncidentTerminal({ incident, className }: IncidentTerminalProps)
                               : "border border-destructive/30 bg-destructive/10 text-destructive"
                           )}
                         >
-                          {res.status}
+                          {res.status ?? "UNKNOWN"}
                         </span>
                       </div>
                     </TraceCollapsibleTrigger>
                     <TraceCollapsibleContent className="border-l-primary/40">
                       <pre className="overflow-x-auto rounded border border-border bg-background p-2.5 font-mono text-xs whitespace-pre-wrap text-foreground">
-                        {res.output}
+                        {res.output ?? ""}
                       </pre>
                     </TraceCollapsibleContent>
                   </TraceCollapsible>
@@ -227,27 +227,27 @@ export function IncidentTerminal({ incident, className }: IncidentTerminalProps)
           )}
 
           {activeTab === "rollback" && (
-            incident.rollback.results.length === 0 ? (
+            incident.rollback.rollback_results.length === 0 ? (
               <TraceLine className="text-muted-foreground">
                 {"// No rollback executed for this thread."}
               </TraceLine>
             ) : (
-              incident.rollback.results.map((rb, idx) => (
+              incident.rollback.rollback_results.map((rb, idx) => (
                 <TraceCollapsible key={idx} defaultOpen>
                   <TraceCollapsibleTrigger className="w-full justify-between rounded border border-destructive/30 bg-destructive/10 p-2 hover:bg-destructive/15">
                     <TraceLine status="error">
                       <HugeiconsIcon icon={ArrowTurnBackwardIcon} className="size-3.5 text-destructive shrink-0" />
                       <TraceTitle className="font-mono font-semibold text-destructive">
-                        Rollback #{idx + 1}: {rb.tool_name}
+                        Rollback #{idx + 1}: {rb.tool_name ?? "unnamed_tool"}
                       </TraceTitle>
                     </TraceLine>
                     <span className="rounded border border-destructive/30 bg-destructive/20 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-destructive">
-                      {rb.status}
+                      {rb.status ?? "UNKNOWN"}
                     </span>
                   </TraceCollapsibleTrigger>
                   <TraceCollapsibleContent className="border-l-destructive/40">
                     <pre className="overflow-x-auto rounded border border-border bg-background p-2.5 font-mono text-xs whitespace-pre-wrap text-foreground">
-                      {rb.output}
+                      {rb.output ?? ""}
                     </pre>
                   </TraceCollapsibleContent>
                 </TraceCollapsible>

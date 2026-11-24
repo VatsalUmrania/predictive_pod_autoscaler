@@ -2,17 +2,10 @@ import type { Metadata } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import "./globals.css"
 import { cn } from "@/lib/utils"
-import { IncidentProvider } from "@/context/incident-context"
+import { ThemeScript } from "@/components/theme-script"
 
-const geistSans = Geist({
-  variable: "--font-sans",
-  subsets: ["latin"],
-})
-
-const geistMono = Geist_Mono({
-  variable: "--font-mono",
-  subsets: ["latin"],
-})
+const geistSans = Geist({ variable: "--font-sans", subsets: ["latin"] })
+const geistMono = Geist_Mono({ variable: "--font-mono", subsets: ["latin"] })
 
 export const metadata: Metadata = {
   title: "NEXUS Autonomous SRE Control Plane",
@@ -26,11 +19,7 @@ export const metadata: Metadata = {
   },
 }
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html
       lang="en"
@@ -41,9 +30,13 @@ export default function RootLayout({
         geistMono.variable,
         "font-sans"
       )}
+      suppressHydrationWarning
     >
+      <head>
+        <ThemeScript />
+      </head>
       <body className="min-h-full flex flex-col bg-background text-foreground antialiased selection:bg-primary/20 selection:text-primary">
-        <IncidentProvider>{children}</IncidentProvider>
+        {children}
       </body>
     </html>
   )

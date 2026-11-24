@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { cn } from "@/lib/utils"
-import { Incident, GRAPH_NODES, GraphNodeId } from "@/types/incident"
+import { GRAPH_NODES, type NexusIncident } from "@/lib/nexus/types"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   CheckmarkCircle02Icon,
@@ -11,30 +11,47 @@ import {
   PauseIcon,
 } from "@hugeicons/core-free-icons"
 
+const NODE_LABELS: Record<string, string> = {
+  TRIAGE: "Triage",
+  DIAGNOSE: "Diagnose",
+  PLAN: "Plan",
+  GOVERN: "Govern",
+  APPROVAL: "Approval",
+  EXECUTE: "Execute",
+  VERIFY: "Verify",
+  LEARN: "Learn",
+  ROLLBACK: "Rollback",
+  ESCALATE: "Escalate",
+}
+
 interface PipelineStepperProps {
-  incident: Incident
+  incident: NexusIncident
   className?: string
 }
 
-type NodeStatus = "visited" | "active" | "interrupted" | "skipped" | "failed" | "pending"
+type NodeStatus =
+  | "visited"
+  | "active"
+  | "interrupted"
+  | "skipped"
+  | "failed"
+  | "pending"
 
 export function PipelineStepper({ incident, className }: PipelineStepperProps) {
-  const nodeIds = GRAPH_NODES.map((n) => n.id)
-  const activeIdx = nodeIds.indexOf(incident.active_node as GraphNodeId)
+  const nodeIds = GRAPH_NODES as readonly string[]
+  const activeIdx = nodeIds.indexOf(incident.active_node)
 
-  const getNodeStatus = (nodeId: GraphNodeId): NodeStatus => {
+  const getNodeStatus = (nodeId: string): NodeStatus => {
     const idx = nodeIds.indexOf(nodeId)
 
     if (nodeId === "APPROVAL") {
-      if (incident.approval.is_interrupted) return "interrupted"
-      if (incident.approval.approval_status === "REJECTED") return "failed"
-      if (incident.approval.approval_status === "AUTO_APPROVED") return "skipped"
-      if (incident.approval.approval_status === "APPROVED") return "visited"
+      if (incident.is_interrupted) return "interrupted"
+      if (incident.approval_status === "REJECTED") return "failed"
+      if (incident.approval_status === "AUTO_APPROVED") return "skipped"
+      if (incident.approval_status === "APPROVED") return "visited"
     }
 
-    if (incident.status === "RESOLVED") {
-      return "visited"
-    }
+    if (incident.status === "RESOLVED") return "visited"
 
     if (incident.active_node === "ROLLBACK" || incident.active_node === "ESCALATE") {
       if (nodeId === "TRIAGE") return "visited"
@@ -47,9 +64,9 @@ export function PipelineStepper({ incident, className }: PipelineStepperProps) {
       if (nodeId === "GOVERN")
         return incident.policy_decision.allowed === false ? "failed" : "visited"
       if (nodeId === "APPROVAL") {
-        if (incident.approval.approval_status === "APPROVED") return "visited"
-        if (incident.approval.approval_status === "AUTO_APPROVED") return "skipped"
-        if (incident.approval.approval_status === "REJECTED") return "failed"
+        if (incident.approval_status === "APPROVED") return "visited"
+        if (incident.approval_status === "AUTO_APPROVED") return "skipped"
+        if (incident.approval_status === "REJECTED") return "failed"
         return "pending"
       }
       if (nodeId === "EXECUTE") {
@@ -81,11 +98,11 @@ export function PipelineStepper({ incident, className }: PipelineStepperProps) {
   }
 
   const branchNote =
-    incident.active_node === "ROLLBACK" || incident.rollback.results.length > 0
+    incident.active_node === "ROLLBACK" || incident.rollback.rollback_results.length > 0
       ? " · Branch: Rollback"
       : incident.active_node === "ESCALATE"
-      ? " · Branch: Escalated"
-      : ""
+        ? " · Branch: Escalated"
+        : ""
 
   return (
     <div
@@ -95,31 +112,27 @@ export function PipelineStepper({ incident, className }: PipelineStepperProps) {
       )}
     >
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3 text-xs">
-        <span className="font-medium text-foreground">
-          StateGraph Execution Pipeline
-        </span>
+        <span className="font-medium text-foreground">StateGraph execution pipeline</span>
         <span className="font-mono text-muted-foreground">
-          Attempt {incident.execution.remediation_attempts} of{" "}
-          {incident.execution.max_remediation_attempts}
+          Attempt {incident.remediation_attempts} of {incident.max_remediation_attempts}
           {branchNote}
         </span>
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
-        {GRAPH_NODES.map((node) => {
-          const status = getNodeStatus(node.id)
+        {nodeIds.map((nodeId) => {
+          const status = getNodeStatus(nodeId)
 
           return (
             <div
-              key={node.id}
+              key={nodeId}
               className={cn(
                 "group relative flex flex-col items-center justify-center rounded-md border p-2 text-center text-xs transition-all",
-                status === "visited" &&
-                  "border-primary/30 bg-primary/10 text-primary",
+                status === "visited" && "border-primary/30 bg-primary/10 text-primary",
                 status === "active" &&
                   "border-primary bg-primary/10 font-semibold text-primary shadow-xs ring-1 ring-ring/30",
                 status === "interrupted" &&
-                  "border-chart-2/40 bg-chart-2/10 font-semibold text-chart-2 animate-pulse",
+                  "border-chart-2/40 bg-chart-2/10 font-semibold text-chart-2",
                 status === "failed" &&
                   "border-destructive/30 bg-destructive/10 font-semibold text-destructive",
                 status === "skipped" &&
@@ -154,7 +167,7 @@ export function PipelineStepper({ incident, className }: PipelineStepperProps) {
                   />
                 )}
                 {status === "skipped" && (
-                  <span className="text-[10px] uppercase font-mono text-muted-foreground">
+                  <span className="font-mono text-[10px] uppercase text-muted-foreground">
                     Skip
                   </span>
                 )}
@@ -162,7 +175,7 @@ export function PipelineStepper({ incident, className }: PipelineStepperProps) {
                   <span className="size-1.5 rounded-full bg-muted-foreground/40" />
                 )}
               </div>
-              <span className="truncate">{node.label}</span>
+              <span className="truncate">{NODE_LABELS[nodeId] ?? nodeId}</span>
             </div>
           )
         })}

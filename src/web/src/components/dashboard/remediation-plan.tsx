@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Incident } from "@/types/incident"
+import { NexusIncident } from "@/lib/nexus/types"
 import { cn } from "@/lib/utils"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -11,7 +11,7 @@ import {
 } from "@hugeicons/core-free-icons"
 
 interface RemediationPlanProps {
-  incident: Incident
+  incident: NexusIncident
   className?: string
 }
 
@@ -83,8 +83,8 @@ export function RemediationPlan({ incident, className }: RemediationPlanProps) {
 
         {/* Plan Rationale */}
         <div className="space-y-1.5">
-          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Remediation Rationale
+          <span className="text-[11px] font-medium text-muted-foreground">
+            Remediation rationale
           </span>
           <p className="rounded-md border border-border bg-background p-3 text-sm text-foreground">
             {remediation_plan.rationale}
@@ -94,8 +94,8 @@ export function RemediationPlan({ incident, className }: RemediationPlanProps) {
         {/* Remediation Steps */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Planned Steps ({remediation_plan.steps.length})
+            <span className="text-[11px] font-medium text-muted-foreground">
+              Planned steps ({remediation_plan.steps.length})
             </span>
           </div>
 
@@ -107,7 +107,8 @@ export function RemediationPlan({ incident, className }: RemediationPlanProps) {
             <div className="space-y-3">
               {remediation_plan.steps.map((step, idx) => {
                 const isReversible = step.reversible !== false
-                const blastRadius = step.blast_radius || "service_wide"
+                const blastRadius = step.blast_radius ?? "unspecified"
+                const toolName = step.tool_name ?? "unnamed_tool"
 
                 return (
                   <div
@@ -120,7 +121,7 @@ export function RemediationPlan({ incident, className }: RemediationPlanProps) {
                           {step.step ?? idx + 1}
                         </span>
                         <code className="rounded bg-muted px-1.5 py-0.5 font-mono font-medium text-foreground">
-                          {step.tool_name}
+                          {toolName}
                         </code>
                       </div>
                       <div className="flex items-center gap-2 font-mono text-[11px]">
