@@ -14,7 +14,6 @@ model/artifacts/
 .agents/
 .vscode/
 *.png
-*.json
 *.pkl
 *.tflite
 *.keras
@@ -270,3 +269,6 @@ override.tf.json
 terraform.rc
 
 lambda_package
+# The Python-layout `lib/` rule above must not swallow the web app's data layer
+# (src/web/src/lib holds the API client, types, and formatters).
+!src/web/src/lib/

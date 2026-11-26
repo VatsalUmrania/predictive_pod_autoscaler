@@ -1,5 +1,7 @@
 import * as React from "react"
 import { Suspense } from "react"
+import Image from "next/image"
+import Link from "next/link"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { EngineStatus, SidebarPendingBadge } from "@/components/engine-status"
@@ -53,10 +55,31 @@ export function ControlShell({
       />
       <SidebarInset className="min-h-[100dvh]">
         <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3 sm:px-4">
-          <SidebarTrigger className="size-7" />
-          <span className="font-heading text-xs font-semibold tracking-tight lg:hidden">
-            NEXUS
-          </span>
+          <SidebarTrigger className="size-7 md:hidden" />
+          <Link
+            href="/"
+            className="flex items-center gap-2.5 rounded-md py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Image
+              src="/logo-dark.svg"
+              alt="NEXUS"
+              width={34}
+              height={24}
+              className="block h-6 w-auto object-contain dark:hidden"
+              priority
+            />
+            <Image
+              src="/logo-light.svg"
+              alt="NEXUS"
+              width={34}
+              height={24}
+              className="hidden h-6 w-auto object-contain dark:block"
+              priority
+            />
+            <span className="font-heading text-sm font-bold tracking-tight text-foreground">
+              NEXUS
+            </span>
+          </Link>
         </div>
         <div className="flex-1 px-4 py-5 sm:px-6 sm:py-6">
           <div className="mx-auto w-full max-w-7xl">{children}</div>

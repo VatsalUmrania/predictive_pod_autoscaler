@@ -8,6 +8,7 @@ RCA decisions, prescaler mode, audit trail, approvals, and Slack interactivity.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from fastapi import FastAPI
@@ -66,11 +67,25 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
+
+def _cors_origins() -> list[str]:
+    """Browser origins allowed to call the API.
+
+    The dashboard talks to NEXUS server-side, so it never needs a CORS grant.
+    Only origins listed in ``NEXUS_CORS_ORIGINS`` are allowed.
+    """
+    raw = os.getenv("NEXUS_CORS_ORIGINS", "").strip()
+    if not raw:
+        return ["http://localhost:3000"]
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins(),
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
+    allow_credentials=False,
 )
 
 app.include_router(core_router)

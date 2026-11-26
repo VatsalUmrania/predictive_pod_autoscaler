@@ -18,6 +18,7 @@ import { StatusBadge, SeverityBadge } from "@/components/dashboard/status-badge"
 import { EmptyState } from "@/components/empty-state"
 import { formatPercent, formatTimestamp } from "@/lib/format"
 import type { NexusIncident } from "@/lib/nexus/types"
+import { FAILURE_STATUSES, IGNORED_STATUSES } from "@/lib/nexus/types"
 import { cn } from "@/lib/utils"
 
 type FilterKey = "ALL" | "ACTIVE" | "APPROVAL" | "RESOLVED" | "FAILED"
@@ -28,15 +29,6 @@ const FILTERS: Array<{ id: FilterKey; label: string }> = [
   { id: "APPROVAL", label: "Awaiting approval" },
   { id: "RESOLVED", label: "Resolved" },
   { id: "FAILED", label: "Failed" },
-]
-
-const FAILURE_STATUSES = [
-  "ESCALATED",
-  "ROLLED_BACK",
-  "EXECUTION_FAILED",
-  "POLICY_DENIED",
-  "VERIFICATION_FAILED",
-  "UNPLANNABLE",
 ]
 
 function matchesFilter(incident: NexusIncident, filter: FilterKey): boolean {
@@ -51,7 +43,8 @@ function matchesFilter(incident: NexusIncident, filter: FilterKey): boolean {
       return (
         !incident.is_interrupted &&
         incident.status !== "RESOLVED" &&
-        !FAILURE_STATUSES.includes(incident.status)
+        !FAILURE_STATUSES.includes(incident.status) &&
+        !IGNORED_STATUSES.includes(incident.status)
       )
     default:
       return true

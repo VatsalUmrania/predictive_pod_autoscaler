@@ -12,6 +12,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import Any, cast
 
 from nexus.engine.workflow.graph.builder import build_incident_graph
@@ -44,6 +45,7 @@ from nexus.engine.workflow.lifecycle.workflow_events import (
     setup_event_subscriptions,
 )
 from nexus.engine.workflow.state.workflow_state import (
+    ensure_incident_record,
     sync_discovered_target_identity,
 )
 from nexus.services.notifications.dispatcher.notifier import (
@@ -221,6 +223,10 @@ class IncidentWorkflow:
             tid,
         )
 
+        # agent_runs.incident_id is a foreign key into `incidents`, so the parent
+        # row must exist before the reasoning nodes can record their runs.
+        await ensure_incident_record(inc_id, incident_data)
+
         # When NATS is configured, _record_pending_approval -> publish_pending_approval
         # dispatches the single canonical Slack approval card via Notifier.
         has_nats_publisher = bool(self.nats and hasattr(self.nats, "publish_raw"))
@@ -230,7 +236,10 @@ class IncidentWorkflow:
             notify_on_pause=not has_nats_publisher,
         )
         if result.get("rca_result"):
-            self._rca_results.append(result["rca_result"])
+            rca = dict(result["rca_result"])
+            # The dashboard's RCA feed shows when each analysis was produced.
+            rca.setdefault("decided_at", datetime.now(timezone.utc).isoformat())
+            self._rca_results.append(rca)
             self._rca_results = self._rca_results[-100:]
 
         config = {"configurable": {"thread_id": tid}}

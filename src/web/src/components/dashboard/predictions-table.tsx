@@ -18,9 +18,13 @@ const MODE_CLASS: Record<string, string> = {
 }
 
 const OUTCOME_CLASS: Record<string, string> = {
+  // The engine reports "correct" / "false_positive"; success/failed are kept
+  // for older records.
+  correct: "border-primary/30 bg-primary/10 text-primary",
   success: "border-primary/30 bg-primary/10 text-primary",
-  pending: "border-border bg-muted text-muted-foreground",
+  false_positive: "border-destructive/30 bg-destructive/10 text-destructive",
   failed: "border-destructive/30 bg-destructive/10 text-destructive",
+  pending: "border-border bg-muted text-muted-foreground",
 }
 
 function pill(value: string, className: string) {

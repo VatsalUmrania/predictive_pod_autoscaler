@@ -31,11 +31,25 @@ npm run start      # serve the production build
 | Variable | Default | Purpose |
 |---|---|---|
 | `NEXUS_API_BASE_URL` | `http://127.0.0.1:8080` | Base URL of the NEXUS FastAPI server |
+| `NEXUS_API_TOKEN` | _unset_ | Operator bearer token sent to the NEXUS API |
 
-Copy `.env.example` to `.env.local` to override it. The variable is read on the
+Copy `.env.example` to `.env.local` to override them. The variables are read on the
 server only, in `src/lib/nexus/client.ts`. All API traffic originates in a React
 Server Component or a Server Action, so the browser never calls the API and no
 rewrite proxy is configured.
+
+### Operator authentication
+
+The NEXUS operator routes — the dashboard feed, the audit trail, and the
+approve/reject endpoints that execute remediation — require an
+`Authorization: Bearer <token>` header. The server's token comes from its
+`NEXUS_ADMIN_TOKEN` environment variable; this app must present the same value
+in `NEXUS_API_TOKEN`. Operator routes fail closed: when the server has no token
+configured it answers `503`, and an incorrect token answers `401`.
+
+`src/lib/nexus/client.ts` must not be imported from a `"use client"` file — the
+token is read from the server environment and would be inlined into the browser
+bundle if it were.
 
 If the container's base URL is only known at runtime rather than at build time, add
 `await connection()` from `next/server` at the top of `nexusBaseUrl()`.

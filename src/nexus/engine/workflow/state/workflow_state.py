@@ -79,6 +79,68 @@ def build_initial_state(incident_data: dict[str, Any], inc_id: str) -> IncidentS
     return state
 
 
+async def ensure_incident_record(
+    incident_id: str, incident_data: Mapping[str, Any]
+) -> None:
+    """
+    Create the ``incidents`` row that ``agent_runs`` references.
+
+    ``agent_runs.incident_id`` is a foreign key into ``incidents``, so the parent
+    row has to exist before any agent run can be recorded. ``create_incident``
+    is idempotent, so this is safe to call on every incident.
+
+    The identity fields are best-effort here: the authoritative namespace and
+    workload are discovered later by the diagnose node and corrected by
+    ``sync_discovered_target_identity``.
+    """
+    from nexus.core.database.connection.client import get_optional_database_client
+
+    try:
+        db_client = await get_optional_database_client()
+        if db_client is None or not hasattr(db_client, "create_incident"):
+            return
+
+        raw_events = list(
+            incident_data.get("raw_events") or incident_data.get("events") or []
+        )
+        namespace = incident_data.get("namespace")
+        service_name = incident_data.get("service_name")
+        resource_kind = incident_data.get("resource_kind")
+        target_resource = incident_data.get("target_resource")
+
+        primary = service_name or target_resource or resource_kind
+        fingerprint = f"{namespace or 'unscoped'}:{primary or incident_id}"
+
+        trigger_source = "workflow"
+        for event in raw_events:
+            if isinstance(event, Mapping):
+                trigger_source = str(
+                    event.get("agent") or event.get("signal_type") or trigger_source
+                )
+                break
+
+        platform = str(incident_data.get("platform") or "k8s").lower()
+        environment = {"k8s": "kubernetes", "kubernetes": "kubernetes"}.get(
+            platform, platform
+        )
+
+        await db_client.create_incident(
+            incident_id=incident_id,
+            fingerprint=fingerprint[:255],
+            environment=environment,
+            target_resource=str(target_resource or primary or incident_id)[:255],
+            severity=str(incident_data.get("severity") or "warning").lower(),
+            trigger_source=trigger_source[:100],
+            trigger_payload={"raw_events": raw_events},
+        )
+    except Exception as exc:
+        logger.debug(
+            "[WorkflowState] Non-fatal incident record creation skipped for %s: %s",
+            incident_id,
+            exc,
+        )
+
+
 async def sync_discovered_target_identity(
     incident_id: str, state: Mapping[str, Any]
 ) -> None:
@@ -101,18 +163,9 @@ async def sync_discovered_target_identity(
         return
 
     try:
-        db_client = None
-        try:
-            from nexus.services.api.status.status_api import context
+        from nexus.core.database.connection.client import get_optional_database_client
 
-            db_client = getattr(context, "db_client", None)
-        except Exception:
-            pass
-
-        if db_client is None:
-            from nexus.core.database.connection.client import _global_db_client
-
-            db_client = _global_db_client
+        db_client = await get_optional_database_client()
 
         if db_client is not None and hasattr(db_client, "update_discovered_target"):
             await db_client.update_discovered_target(

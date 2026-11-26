@@ -65,6 +65,8 @@ services:
       NEXUS_KNOWLEDGE_DB_PATH: /data/nexus_knowledge.db
       NATS_URL: nats://nats:4222
       NEXUS_LLM_API_KEY: ${NEXUS_LLM_API_KEY:-}
+      NEXUS_ADMIN_TOKEN: ${NEXUS_ADMIN_TOKEN:-}
+      NEXUS_CORS_ORIGINS: ${NEXUS_CORS_ORIGINS:-http://localhost:3000,http://localhost:8001}
     volumes:
       - nexus_data:/data
       - ./selfheal.yaml:/app/selfheal.yaml:ro
@@ -87,6 +89,7 @@ services:
     ports: ["8001:8001"]
     environment:
       NEXUS_API_URL: http://nexus-api:8080
+      NEXUS_ADMIN_TOKEN: ${NEXUS_ADMIN_TOKEN:-}
       DEMO_DB_PATH: /data/shop.db
       NATS_URL: nats://nats:4222
       SELFHEAL_TOKEN: ${SELFHEAL_TOKEN:-}
@@ -107,6 +110,7 @@ services:
     environment:
       NATS_URL: nats://nats:4222
       NEXUS_API_URL: http://nexus-api:8080
+      NEXUS_ADMIN_TOKEN: ${NEXUS_ADMIN_TOKEN:-}
       DEMO_API_URL: http://shop-backend:8001
       NEXUS_AUDIT_DB_PATH: /data/nexus_audit.db
       NEXUS_LLM_API_KEY: ${NEXUS_LLM_API_KEY:-}

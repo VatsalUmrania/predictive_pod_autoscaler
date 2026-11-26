@@ -16,7 +16,9 @@ const STATUS_CLASS: Record<string, string> = {
   success: "border-primary/30 bg-primary/10 text-primary",
   running: "border-chart-2/30 bg-chart-2/10 text-chart-2",
   pending: "border-border bg-muted text-muted-foreground",
+  cancelled: "border-border bg-muted text-muted-foreground",
   failed: "border-destructive/30 bg-destructive/10 text-destructive",
+  timed_out: "border-destructive/30 bg-destructive/10 text-destructive",
   error: "border-destructive/30 bg-destructive/10 text-destructive",
 }
 

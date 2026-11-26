@@ -8,11 +8,12 @@ import asyncio
 import logging
 from typing import Any, cast
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel
 
 from nexus.engine.workflow.lifecycle.workflow_approval import handle_incident_approval
 from nexus.services.api.status.status_context import _require, context
+from nexus.services.gateway.auth.operator_auth import require_operator
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["governance"])
@@ -106,7 +107,7 @@ async def _record_audit_decision(
         )
 
 
-@router.get("/audit/tail")
+@router.get("/audit/tail", dependencies=[Depends(require_operator)])
 async def audit_tail(n: int = 20) -> list[dict[str, Any]]:
     """Return the N most recent audit trail records."""
     at = _require(context.audit_trail, "AuditTrail")
@@ -115,14 +116,14 @@ async def audit_tail(n: int = 20) -> list[dict[str, Any]]:
     return cast(list[dict[str, Any]], await at.query_recent(limit=n))
 
 
-@router.get("/audit/incident/{incident_id}")
+@router.get("/audit/incident/{incident_id}", dependencies=[Depends(require_operator)])
 async def audit_by_incident(incident_id: str) -> list[dict[str, Any]]:
     """Return all audit records for a specific incident/correlation ID."""
     at = _require(context.audit_trail, "AuditTrail")
     return cast(list[dict[str, Any]], await at.query_by_incident(incident_id))
 
 
-@router.post("/approve/{action_id}")
+@router.post("/approve/{action_id}", dependencies=[Depends(require_operator)])
 async def approve_action(
     action_id: str,
     payload: ApprovalDecisionRequest | None = _OPTIONAL_APPROVAL_BODY,
@@ -173,7 +174,7 @@ async def approve_action(
     return {"status": "approved", "action_id": action_id}
 
 
-@router.post("/reject/{action_id}")
+@router.post("/reject/{action_id}", dependencies=[Depends(require_operator)])
 async def reject_action(
     action_id: str,
     payload: ApprovalDecisionRequest | None = _OPTIONAL_APPROVAL_BODY,
@@ -288,7 +289,11 @@ async def _dashboard_incident_decision(
     }
 
 
-@router.post("/developer/incidents/{incident_id}/approve", tags=["developer"])
+@router.post(
+    "/developer/incidents/{incident_id}/approve",
+    tags=["developer"],
+    dependencies=[Depends(require_operator)],
+)
 @router.post("/api/v1/governance/approvals/{incident_id}/approve")
 async def approve_incident_from_dashboard(
     incident_id: str,
@@ -300,7 +305,11 @@ async def approve_incident_from_dashboard(
     )
 
 
-@router.post("/developer/incidents/{incident_id}/reject", tags=["developer"])
+@router.post(
+    "/developer/incidents/{incident_id}/reject",
+    tags=["developer"],
+    dependencies=[Depends(require_operator)],
+)
 @router.post("/api/v1/governance/approvals/{incident_id}/reject")
 async def reject_incident_from_dashboard(
     incident_id: str,
@@ -312,7 +321,7 @@ async def reject_incident_from_dashboard(
     )
 
 
-@router.get("/approvals/pending")
+@router.get("/approvals/pending", dependencies=[Depends(require_operator)])
 async def pending_approvals() -> list[dict[str, Any]]:
     """List all actions currently waiting in HumanApprovalQueue or LangGraph workflow."""
     results: list[dict[str, Any]] = []

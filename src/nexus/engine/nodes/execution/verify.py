@@ -4,6 +4,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
+from nexus.core.telemetry.agent_recorder import AgentRecorder, resolve_model_name
 from nexus.engine.nodes.analysis.diagnose_builders import truncate_observation
 from nexus.engine.reasoning.rca.result import VerificationResult
 from nexus.engine.tools.registry import get_tool_registry
@@ -11,6 +12,14 @@ from nexus.engine.workflow.llm.llm import get_chat_model
 from nexus.engine.workflow.state.state import IncidentState
 
 logger = logging.getLogger(__name__)
+
+
+async def _optional_db_client() -> Any:
+    """Return the live Postgres client, or None when Postgres is unavailable."""
+    from nexus.core.database.connection.client import get_optional_database_client
+
+    return await get_optional_database_client()
+
 
 VERIFY_SYSTEM_PROMPT = """You are the NEXUS Post-Remediation Verification Agent.
 Remediation tool calls have just been executed on the target workload.
@@ -48,67 +57,93 @@ async def verify_node(state: IncidentState) -> dict[str, Any]:
     collected_observations: list[dict[str, Any]] = []
     verifier_notes = ""
 
-    for step_idx in range(1, 5):
-        ai_msg = await llm_with_tools.ainvoke(messages)
-        messages.append(ai_msg)
-
-        if getattr(ai_msg, "content", None):
-            verifier_notes = str(ai_msg.content)
-
-        if not getattr(ai_msg, "tool_calls", None):
-            break
-
-        for tc in ai_msg.tool_calls:
-            tool_fn = tool_map.get(tc["name"])
-            if tool_fn is None:
-                obs: Any = f"Error: Observation tool '{tc['name']}' not found."
-            else:
-                try:
-                    obs = await tool_fn.ainvoke(tc.get("args") or {})
-                except Exception as exc:
-                    obs = f"Tool error: {exc}"
-            compact_obs = truncate_observation(obs, max_lines=80, max_bytes=4096)
-            collected_observations.append(
-                {
-                    "step": step_idx,
-                    "tool": tc["name"],
-                    "args": tc.get("args") or {},
-                    "output": compact_obs,
-                }
-            )
-            messages.append(
-                ToolMessage(
-                    content=str(compact_obs), tool_call_id=tc["id"], name=tc["name"]
-                )
-            )
-
-    synthesis_payload = {
-        "verify_context": verify_context,
-        "tool_observations": collected_observations,
-        "verifier_notes": truncate_observation(
-            verifier_notes, max_lines=40, max_bytes=2048
-        ),
-    }
-    synthesis_messages = [
-        SystemMessage(content=VERIFY_SYSTEM_PROMPT),
-        HumanMessage(
-            content=(
-                "Synthesize the final structured VerificationResult using only the "
-                "context and live tool observations below:\n"
-                + json.dumps(synthesis_payload, default=str)
-            )
-        ),
-    ]
-
-    structured_llm = llm.with_structured_output(VerificationResult)
-    verification: VerificationResult = await structured_llm.ainvoke(synthesis_messages)
-
-    logger.info(
-        "Incident %s verification_passed=%s summary=%s",
+    recorder = AgentRecorder(
+        await _optional_db_client(),
         incident_id,
-        verification.verification_passed,
-        verification.observed_state_summary,
+        node_name="verify",
+        model_name=resolve_model_name(llm),
     )
+    await recorder.start()
+
+    try:
+        for step_idx in range(1, 5):
+            ai_msg = await llm_with_tools.ainvoke(messages)
+            messages.append(ai_msg)
+            await recorder.log_assistant(ai_msg)
+
+            if getattr(ai_msg, "content", None):
+                verifier_notes = str(ai_msg.content)
+
+            if not getattr(ai_msg, "tool_calls", None):
+                break
+
+            for tc in ai_msg.tool_calls:
+                tool_fn = tool_map.get(tc["name"])
+                if tool_fn is None:
+                    obs: Any = f"Error: Observation tool '{tc['name']}' not found."
+                else:
+                    try:
+                        obs = await tool_fn.ainvoke(tc.get("args") or {})
+                    except Exception as exc:
+                        obs = f"Tool error: {exc}"
+                compact_obs = truncate_observation(obs, max_lines=80, max_bytes=4096)
+                collected_observations.append(
+                    {
+                        "step": step_idx,
+                        "tool": tc["name"],
+                        "args": tc.get("args") or {},
+                        "output": compact_obs,
+                    }
+                )
+                messages.append(
+                    ToolMessage(
+                        content=str(compact_obs), tool_call_id=tc["id"], name=tc["name"]
+                    )
+                )
+                await recorder.log(
+                    "tool",
+                    f"{tc['name']}({json.dumps(tc.get('args') or {}, default=str)[:500]})",
+                    str(compact_obs),
+                )
+
+        synthesis_payload = {
+            "verify_context": verify_context,
+            "tool_observations": collected_observations,
+            "verifier_notes": truncate_observation(
+                verifier_notes, max_lines=40, max_bytes=2048
+            ),
+        }
+        synthesis_messages = [
+            SystemMessage(content=VERIFY_SYSTEM_PROMPT),
+            HumanMessage(
+                content=(
+                    "Synthesize the final structured VerificationResult using only the "
+                    "context and live tool observations below:\n"
+                    + json.dumps(synthesis_payload, default=str)
+                )
+            ),
+        ]
+
+        structured_llm = llm.with_structured_output(VerificationResult)
+        verification: VerificationResult = await structured_llm.ainvoke(
+            synthesis_messages
+        )
+        await recorder.log(
+            "assistant",
+            f"Verification synthesized: {verification.observed_state_summary}",
+        )
+
+        logger.info(
+            "Incident %s verification_passed=%s summary=%s",
+            incident_id,
+            verification.verification_passed,
+            verification.observed_state_summary,
+        )
+    except Exception as exc:
+        await recorder.finish("failed", error_message=str(exc))
+        raise
+
+    await recorder.finish("completed")
 
     return {
         "verification_passed": verification.verification_passed,

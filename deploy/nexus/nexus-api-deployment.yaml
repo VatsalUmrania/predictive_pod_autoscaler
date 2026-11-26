@@ -138,6 +138,18 @@ spec:
                   name: nexus-secrets
                   key: NEXUS_LLM_API_KEY
                   optional: true
+            # Operator bearer token for the dashboard and the governance
+            # (approve/reject) endpoints. Operator routes fail closed when this
+            # is unset.
+            - name: NEXUS_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secrets
+                  key: NEXUS_ADMIN_TOKEN
+                  optional: true
+            # Browser origins allowed to call the API (comma-separated).
+            - name: NEXUS_CORS_ORIGINS
+              value: "http://localhost:3000"
           volumeMounts:
             - name: shop-demo-policy
               mountPath: /app/selfheal.yaml

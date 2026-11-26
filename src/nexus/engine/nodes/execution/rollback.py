@@ -57,6 +57,7 @@ async def rollback_node(state: IncidentState) -> dict[str, Any]:
                 {
                     "step": step_num,
                     "original_tool": tool_name,
+                    "tool_name": tool_name,
                     "status": "SKIPPED",
                     "output": f"No inverse rollback tool declared for '{tool_name}'.",
                 }
@@ -70,6 +71,7 @@ async def rollback_node(state: IncidentState) -> dict[str, Any]:
                     "step": step_num,
                     "original_tool": tool_name,
                     "rollback_tool": rb_tool_name,
+                    "tool_name": rb_tool_name,
                     "status": "FAILED",
                     "output": f"Rollback tool '{rb_tool_name}' not found in registry.",
                 }
@@ -83,6 +85,7 @@ async def rollback_node(state: IncidentState) -> dict[str, Any]:
                     "step": step_num,
                     "original_tool": tool_name,
                     "rollback_tool": rb_tool_name,
+                    "tool_name": rb_tool_name,
                     "rollback_args": rb_args,
                     "status": "SUCCESS",
                     "output": str(output),
@@ -100,6 +103,7 @@ async def rollback_node(state: IncidentState) -> dict[str, Any]:
                     "step": step_num,
                     "original_tool": tool_name,
                     "rollback_tool": rb_tool_name,
+                    "tool_name": rb_tool_name,
                     "status": "FAILED",
                     "output": str(exc),
                 }

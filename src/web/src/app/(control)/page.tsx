@@ -356,12 +356,23 @@ async function RcaSection() {
       ) : (
         <ul className="divide-y divide-border">
           {results.map((result, index) => {
+            const nestedTarget = result.target as
+              | { resource_name?: string; namespace_or_region?: string; resource_kind?: string }
+              | undefined
             const target =
               typeof result.target === "string"
                 ? result.target
                 : typeof result.target_resource === "string"
                   ? result.target_resource
-                  : null
+                  : nestedTarget && typeof nestedTarget === "object"
+                    ? [
+                        nestedTarget.namespace_or_region,
+                        nestedTarget.resource_kind,
+                        nestedTarget.resource_name,
+                      ]
+                        .filter(Boolean)
+                        .join("/") || null
+                    : null
             const summary =
               typeof result.root_cause_summary === "string"
                 ? result.root_cause_summary
@@ -375,7 +386,9 @@ async function RcaSection() {
                 ? result.updated_at
                 : typeof result.timestamp === "string"
                   ? result.timestamp
-                  : null
+                  : typeof result.decided_at === "string"
+                    ? result.decided_at
+                    : null
 
             return (
               <li key={index} className="px-4 py-3">

@@ -42,6 +42,12 @@ from nexus.sdk.python.middleware import SelfHealMiddleware
 # ── Config ────────────────────────────────────────────────────────────────────
 DB_PATH        = os.getenv("DEMO_DB_PATH", "shop.db")
 NEXUS_URL      = os.getenv("NEXUS_API_URL", "http://localhost:8080")
+NEXUS_ADMIN_TOKEN = os.getenv("NEXUS_ADMIN_TOKEN", "")
+
+
+def _nexus_headers() -> dict:
+    """Auth headers for NEXUS operator endpoints."""
+    return {"Authorization": f"Bearer {NEXUS_ADMIN_TOKEN}"} if NEXUS_ADMIN_TOKEN else {}
 APP_NAME       = os.getenv("APP_NAME", "shop-demo")
 _TOKEN         = os.getenv("SELFHEAL_TOKEN", "")
 
@@ -199,6 +205,7 @@ async def lifespan(app):
                 _r = await _c.post(
                     f"{NEXUS_URL}/developer/policy/{_app_key}",
                     json=_policy,
+                    headers=_nexus_headers(),
                 )
             if _r.status_code == 200:
                 print(f"[ShopDemo] 📋 selfheal.yaml uploaded to NEXUS for app='{_app_key}'")
@@ -606,7 +613,7 @@ async def proxy_incidents(n: int = 20, app: Optional[str] = None) -> Any:
             url = f"{NEXUS_URL}/developer/incidents?n={n}"
             if app:
                 url += f"&app={app}"
-            r = await client.get(url)
+            r = await client.get(url, headers=_nexus_headers())
             return r.json()
     except Exception:
         return []
@@ -636,7 +643,7 @@ async def proxy_apps() -> Any:
 async def proxy_audit(n: int = 10) -> Any:
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.get(f"{NEXUS_URL}/audit/tail?n={n}")
+            r = await client.get(f"{NEXUS_URL}/audit/tail?n={n}", headers=_nexus_headers())
             return r.json()
     except Exception:
         return []

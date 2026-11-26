@@ -50,18 +50,51 @@ def _api_url(ctx_api_url: str | None) -> str:
     return raw.rstrip("/")
 
 
-def _post_approval(path: str, action_id: str, api_url: str) -> None:
+def _admin_token(ctx_admin_token: str | None) -> str:
+    raw = ctx_admin_token or os.environ.get("NEXUS_ADMIN_TOKEN", "")
+    return raw.strip()
+
+
+def _post_approval(
+    path: str, action_id: str, api_url: str, admin_token: str | None = None
+) -> None:
     import httpx
 
     url = f"{api_url}{path.format(action_id=action_id)}"
+    headers = {"Authorization": f"Bearer {admin_token}"} if admin_token else {}
     try:
-        resp = httpx.post(url, timeout=10.0)
+        resp = httpx.post(url, timeout=10.0, headers=headers)
     except httpx.HTTPError as exc:
         if _RICH:
             console.print(f"[red]Could not reach NEXUS API at {api_url}: {exc}[/red]")
         else:
             print(f"Could not reach NEXUS API at {api_url}: {exc}")
         sys.exit(2)
+
+    if resp.status_code == 401:
+        if _RICH:
+            console.print(
+                "[red]NEXUS rejected the request (401). "
+                "Pass --admin-token or set NEXUS_ADMIN_TOKEN.[/red]"
+            )
+        else:
+            print(
+                "NEXUS rejected the request (401). "
+                "Pass --admin-token or set NEXUS_ADMIN_TOKEN."
+            )
+        sys.exit(1)
+    if resp.status_code == 503:
+        if _RICH:
+            console.print(
+                "[red]NEXUS operator authentication is not configured "
+                "(503). Set NEXUS_ADMIN_TOKEN on the server.[/red]"
+            )
+        else:
+            print(
+                "NEXUS operator authentication is not configured (503). "
+                "Set NEXUS_ADMIN_TOKEN on the server."
+            )
+        sys.exit(1)
 
     if resp.status_code == 404:
         if _RICH:
@@ -102,9 +135,16 @@ def _post_approval(path: str, action_id: str, api_url: str) -> None:
     default=None,
     help="NEXUS status API base URL (env: NEXUS_API_URL, default http://localhost:8080)",
 )
-def approve(action_id: str, api_url: str | None) -> None:
+@click.option(
+    "--admin-token",
+    default=None,
+    help="Operator bearer token (env: NEXUS_ADMIN_TOKEN)",
+)
+def approve(action_id: str, api_url: str | None, admin_token: str | None) -> None:
     """Approve a pending human-review action and dispatch it through governance."""
-    _post_approval("/approve/{action_id}", action_id, _api_url(api_url))
+    _post_approval(
+        "/approve/{action_id}", action_id, _api_url(api_url), _admin_token(admin_token)
+    )
 
 
 @cli.command()
@@ -114,9 +154,16 @@ def approve(action_id: str, api_url: str | None) -> None:
     default=None,
     help="NEXUS status API base URL (env: NEXUS_API_URL, default http://localhost:8080)",
 )
-def reject(action_id: str, api_url: str | None) -> None:
+@click.option(
+    "--admin-token",
+    default=None,
+    help="Operator bearer token (env: NEXUS_ADMIN_TOKEN)",
+)
+def reject(action_id: str, api_url: str | None, admin_token: str | None) -> None:
     """Reject a pending human-review action."""
-    _post_approval("/reject/{action_id}", action_id, _api_url(api_url))
+    _post_approval(
+        "/reject/{action_id}", action_id, _api_url(api_url), _admin_token(admin_token)
+    )
 
 
 def main() -> int:

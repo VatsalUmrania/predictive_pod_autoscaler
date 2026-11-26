@@ -239,6 +239,53 @@ def _to_iso_timestamp(value: Any) -> str | None:
     return text or None
 
 
+async def read_agent_runs(
+    incident_id: str, client: PostgresClient | None = None
+) -> list[dict[str, Any]]:
+    """Read the agent runs recorded for one incident.
+
+    Postgres is optional at runtime, so a missing or unreachable database
+    degrades to an empty list rather than an error.
+    """
+    try:
+        db = client or await _optional_db_client()
+        if db is None or not hasattr(db, "list_agent_runs"):
+            return []
+        return await db.list_agent_runs(incident_id)
+    except Exception as _e:
+        logger.warning(f"[Dashboard] agent run read failed: {_e}")
+        return []
+
+
+async def read_agent_messages(
+    incident_id: str, client: PostgresClient | None = None
+) -> list[dict[str, Any]]:
+    """Read the agent messages recorded for one incident.
+
+    Postgres is optional at runtime, so a missing or unreachable database
+    degrades to an empty list rather than an error.
+    """
+    try:
+        db = client or await _optional_db_client()
+        if db is None or not hasattr(db, "list_agent_messages"):
+            return []
+        return await db.list_agent_messages(incident_id)
+    except Exception as _e:
+        logger.warning(f"[Dashboard] agent message read failed: {_e}")
+        return []
+
+
+async def _optional_db_client() -> PostgresClient | None:
+    """Return the connected Postgres client, or None.
+
+    Unlike ``get_database_client()`` this never opens a connection, so a
+    request never pays the reconnect retry ladder while the database is down.
+    """
+    from nexus.core.database.connection.client import get_optional_database_client
+
+    return await get_optional_database_client()
+
+
 def _extract_event_hint(raw_events: Sequence[Any], *keys: str) -> str | None:
     for ev in raw_events:
         if not isinstance(ev, Mapping):
@@ -505,10 +552,12 @@ def serialize_incident_for_dashboard(
     verification_feedback = str(state.get("verification_feedback") or "")
     rollback_available = bool(state.get("rollback_available", False))
     rollback_results: list[dict[str, Any]] = list(state.get("rollback_results") or [])
-    post_incident_report_ready = len(exec_results) > 0 and normalized_status in (
-        "RESOLVED",
-        "ROLLED_BACK",
-    )
+    # A Post-Incident Report is published for every terminal workflow run that
+    # executed at least one remediation step (see finalize_workflow_run in
+    # nexus/engine/workflow/lifecycle/workflow_completion.py). Inferring this
+    # from a status allowlist hides reports for escalated, policy-denied and
+    # execution-failed incidents, which do have one.
+    post_incident_report_ready = len(exec_results) > 0 and not is_awaiting_approval
 
     platform = (
         state.get("platform")

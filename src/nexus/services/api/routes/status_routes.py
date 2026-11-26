@@ -9,9 +9,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from nexus.services.api.status.status_context import _require, context
+from nexus.services.gateway.auth.operator_auth import require_operator
 from nexus.services.observability.metrics.metrics import get_metrics
 
 router = APIRouter()
@@ -75,17 +76,45 @@ def prometheus_metrics() -> Response:
     return Response(content=m.generate_latest(), media_type=m.content_type)
 
 
+def _flatten_rca_target(entry: dict[str, Any]) -> dict[str, Any]:
+    """Add a flat ``target_resource`` to an RCAResult dump.
+
+    ``RCAResult.target`` is a nested ``DiscoveredTarget`` object, so consumers
+    that expect a string target (the dashboard's RCA feed) cannot read it
+    directly.
+    """
+    target = entry.get("target")
+    if not isinstance(target, dict):
+        return entry
+    parts = (
+        target.get("namespace_or_region"),
+        target.get("resource_kind"),
+        target.get("resource_name"),
+    )
+    flattened = "/".join(str(p) for p in parts if p)
+    if flattened:
+        entry.setdefault("target_resource", flattened)
+    elif target.get("resource_name"):
+        entry.setdefault("target_resource", str(target["resource_name"]))
+    return entry
+
+
 @router.get("/rca/last", tags=["reasoning"])
 def last_rca(n: int = 10) -> list[dict[str, Any]]:
     """Return the N most recent RCA decisions from the LangGraph workflow."""
+    results: list[dict[str, Any]] = []
     if context.workflow and hasattr(context.workflow, "last_rca_results"):
-        return cast(list[dict[str, Any]], context.workflow.last_rca_results(n))
-    if context.orchestrator and hasattr(context.orchestrator, "last_rca_results"):
-        return cast(list[dict[str, Any]], context.orchestrator.last_rca_results(n))
-    return []
+        results = cast(list[dict[str, Any]], context.workflow.last_rca_results(n))
+    elif context.orchestrator and hasattr(context.orchestrator, "last_rca_results"):
+        results = cast(list[dict[str, Any]], context.orchestrator.last_rca_results(n))
+    return [_flatten_rca_target(r) for r in results if isinstance(r, dict)]
 
 
-@router.post("/prescaler/mode/{mode}", tags=["predictive"])
+@router.post(
+    "/prescaler/mode/{mode}",
+    tags=["predictive"],
+    dependencies=[Depends(require_operator)],
+)
 def prescaler_set_mode(mode: str) -> dict[str, str]:
     """Change prescaler autonomy mode: shadow | advisory | autonomous."""
     from nexus.intelligence.predictive.scaling.prescaler import PrescaleMode
@@ -100,7 +129,7 @@ def prescaler_set_mode(mode: str) -> dict[str, str]:
     return {"status": "ok", "result": result}
 
 
-@router.get("/learning", tags=["learning"])
+@router.get("/learning", tags=["learning"], dependencies=[Depends(require_operator)])
 def learning_status() -> dict[str, Any]:
     """FeedbackLoop status and latest system KPIs."""
     fl = _require(context.feedback_loop, "FeedbackLoop")

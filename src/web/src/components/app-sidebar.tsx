@@ -2,7 +2,6 @@
 
 import * as React from "react"
 import { Suspense } from "react"
-import Image from "next/image"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -28,6 +27,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { Skeleton } from "@/components/ui/skeleton"
 
@@ -167,30 +167,7 @@ export function AppSidebar({
   return (
     <Sidebar collapsible="icon" variant="inset">
       <SidebarHeader>
-        <Link
-          href="/"
-          className="flex items-center gap-2.5 rounded-md px-1 py-1 outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
-        >
-          <Image
-            src="/logo-dark.svg"
-            alt="NEXUS"
-            width={34}
-            height={24}
-            className="block h-6 w-auto object-contain dark:hidden"
-            priority
-          />
-          <Image
-            src="/logo-light.svg"
-            alt="NEXUS"
-            width={34}
-            height={24}
-            className="hidden h-6 w-auto object-contain dark:block"
-            priority
-          />
-          <span className="font-heading text-sm font-bold tracking-tight text-sidebar-foreground group-data-[collapsible=icon]:hidden">
-            NEXUS
-          </span>
-        </Link>
+        <SidebarTrigger className="hidden size-7 md:inline-flex" />
       </SidebarHeader>
 
       <SidebarContent>

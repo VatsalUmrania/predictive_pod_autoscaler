@@ -4,11 +4,20 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from nexus.core.telemetry.agent_recorder import AgentRecorder, resolve_model_name
 from nexus.engine.tools.registry import get_tool_registry
 from nexus.engine.workflow.llm.llm import get_chat_model
 from nexus.engine.workflow.state.state import IncidentState
 
 logger = logging.getLogger(__name__)
+
+
+async def _optional_db_client() -> Any:
+    """Return the live Postgres client, or None when Postgres is unavailable."""
+    from nexus.core.database.connection.client import get_optional_database_client
+
+    return await get_optional_database_client()
+
 
 PLAN_SYSTEM_PROMPT = """You are the NEXUS Autonomous Remediation Planner.
 Based on the verified Root Cause Analysis (RCA) and the discovered target workload identity:
@@ -61,6 +70,19 @@ async def plan_node(state: IncidentState) -> dict[str, Any]:
             HumanMessage(content=json.dumps(planning_input, default=str)),
         ]
     )
+
+    recorder = AgentRecorder(
+        await _optional_db_client(),
+        incident_id,
+        node_name="plan",
+        model_name=resolve_model_name(llm),
+    )
+    await recorder.start()
+    try:
+        await recorder.log_assistant(ai_msg)
+    except Exception:
+        pass
+    await recorder.finish("completed")
 
     steps: list[dict[str, Any]] = []
     for idx, tc in enumerate(getattr(ai_msg, "tool_calls", None) or [], start=1):

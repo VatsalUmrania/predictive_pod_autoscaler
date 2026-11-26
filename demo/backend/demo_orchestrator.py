@@ -50,6 +50,7 @@ logger = logging.getLogger("nexus.demo_orchestrator")
 # Config
 NATS_URL      = os.getenv("NATS_URL",        "nats://localhost:4222")
 NEXUS_API_URL = os.getenv("NEXUS_API_URL",   "http://localhost:8080")
+NEXUS_ADMIN_TOKEN = os.getenv("NEXUS_ADMIN_TOKEN", "")
 DEMO_API_URL  = os.getenv("DEMO_API_URL",    "http://localhost:8001")
 AUDIT_DB_PATH = os.getenv("NEXUS_AUDIT_DB_PATH", "data/nexus_audit.db")
 GEMINI_KEY    = os.getenv("NEXUS_LLM_API_KEY", "")
@@ -261,15 +262,24 @@ async def _execute_healing(rule: Dict, incident_id: str, gemini_result: Optional
     # immediately (independent of shared DB path or AuditTrail context)
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
-            await client.post(f"{NEXUS_API_URL}/developer/incidents", json={
-                "incident_id": incident_id,
-                "runbook_id":  rule["runbook"],
-                "target":      "shop-demo",
-                "level":       rule["level"],
-                "outcome":     outcome,
-                "description": description,
-                "confidence":  rule["confidence"],
-            })
+            headers = (
+                {"Authorization": f"Bearer {NEXUS_ADMIN_TOKEN}"}
+                if NEXUS_ADMIN_TOKEN
+                else {}
+            )
+            await client.post(
+                f"{NEXUS_API_URL}/developer/incidents",
+                headers=headers,
+                json={
+                    "incident_id": incident_id,
+                    "runbook_id":  rule["runbook"],
+                    "target":      "shop-demo",
+                    "level":       rule["level"],
+                    "outcome":     outcome,
+                    "description": description,
+                    "confidence":  rule["confidence"],
+                },
+            )
     except Exception:
         pass
 

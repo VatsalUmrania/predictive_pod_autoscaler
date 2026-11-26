@@ -4,6 +4,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
+from nexus.core.telemetry.agent_recorder import AgentRecorder, resolve_model_name
 from nexus.engine.nodes.analysis.diagnose_builders import truncate_observation
 from nexus.engine.reasoning.rca.result import RCAResult
 from nexus.engine.tools.registry import get_tool_registry
@@ -16,6 +17,14 @@ from nexus.engine.workflow.state.workflow_state import (
 get_llm = get_chat_model
 
 logger = logging.getLogger(__name__)
+
+
+async def _optional_db_client() -> Any:
+    """Return the live Postgres client, or None when Postgres is unavailable."""
+    from nexus.core.database.connection.client import get_optional_database_client
+
+    return await get_optional_database_client()
+
 
 DIAGNOSE_SYSTEM_PROMPT = """You are the NEXUS Autonomous SRE Investigator.
 You receive raw telemetry and symptom events where the namespace or owning service may be missing (None) or only a Pod/instance name is mentioned.
@@ -49,128 +58,152 @@ async def diagnose_node(state: IncidentState) -> dict[str, Any]:
     llm = get_chat_model(temperature=0.0)
     llm_with_tools = llm.bind_tools(observe_tools) if observe_tools else llm
 
-    context_payload = {
-        "incident_id": incident_id,
-        "known_platform": state.get("platform"),
-        "known_namespace": state.get("namespace"),
-        "known_service": state.get("service_name"),
-        "raw_events": truncate_observation(
-            state.get("raw_events", []), max_lines=40, max_bytes=3072
-        ),
-        "previous_execution_results": state.get("execution_results", []),
-        "previous_verification_feedback": state.get("verification_feedback"),
-    }
-
-    messages: list[Any] = [
-        SystemMessage(content=DIAGNOSE_SYSTEM_PROMPT),
-        HumanMessage(content=json.dumps(context_payload, default=str)),
-    ]
-    collected_observations: list[dict[str, Any]] = []
-    investigator_notes = ""
-
-    max_steps = state.get("max_diagnose_steps", 6)
-    for step_idx in range(1, max_steps + 1):
-        ai_msg = await llm_with_tools.ainvoke(messages)
-        messages.append(ai_msg)
-
-        if getattr(ai_msg, "content", None):
-            investigator_notes = str(ai_msg.content)
-
-        if not getattr(ai_msg, "tool_calls", None):
-            break
-
-        for tc in ai_msg.tool_calls:
-            tool_name = tc["name"]
-            tool_args = tc.get("args") or {}
-            tool_fn = tool_map.get(tool_name)
-
-            if tool_fn is None:
-                observation: Any = (
-                    f"Error: Observation tool '{tool_name}' is not registered."
-                )
-            else:
-                try:
-                    logger.info(
-                        "Incident %s [diagnose step %d] calling %s(%s)",
-                        incident_id,
-                        step_idx,
-                        tool_name,
-                        tool_args,
-                    )
-                    observation = await tool_fn.ainvoke(tool_args)
-                except Exception as exc:
-                    logger.warning(
-                        "Incident %s observation tool %s error: %s",
-                        incident_id,
-                        tool_name,
-                        exc,
-                    )
-                    observation = f"Tool error: {exc}"
-
-            compact_obs = truncate_observation(
-                observation, max_lines=80, max_bytes=4096
-            )
-            collected_observations.append(
-                {
-                    "step": step_idx,
-                    "tool": tool_name,
-                    "args": tool_args,
-                    "output": compact_obs,
-                }
-            )
-            messages.append(
-                ToolMessage(
-                    content=str(compact_obs),
-                    tool_call_id=tc["id"],
-                    name=tool_name,
-                )
-            )
-
-    # Synthesize RCAResult using a clean, bounded [SystemMessage, HumanMessage] prompt
-    # so providers like Gemini never receive dangling model turns or mismatched tool history.
-    synthesis_payload = {
-        "incident_context": context_payload,
-        "available_mutation_tools": available_mutation_tools,
-        "tool_observations": collected_observations,
-        "investigator_notes": truncate_observation(
-            investigator_notes, max_lines=40, max_bytes=2048
-        ),
-    }
-    synthesis_messages = [
-        SystemMessage(content=DIAGNOSE_SYSTEM_PROMPT),
-        HumanMessage(
-            content=(
-                "Synthesize the final structured RCAResult using only the verified "
-                "incident context and tool observations below:\n"
-                + json.dumps(synthesis_payload, default=str)
-            )
-        ),
-    ]
-
-    structured_llm = llm.with_structured_output(RCAResult)
-    rca: RCAResult = await structured_llm.ainvoke(synthesis_messages)
-
-    target_uri = f"{rca.target.namespace_or_region}/{rca.target.resource_kind}/{rca.target.resource_name}"
-    logger.info(
-        "Incident %s diagnosed target=%s failure_type=%s confidence=%.2f",
+    recorder = AgentRecorder(
+        await _optional_db_client(),
         incident_id,
-        target_uri,
-        rca.failure_type,
-        rca.confidence,
+        node_name="diagnose",
+        model_name=resolve_model_name(llm),
     )
+    await recorder.start()
 
-    update: dict[str, Any] = {
-        "platform": rca.target.platform,
-        "namespace": rca.target.namespace_or_region,
-        "resource_kind": rca.target.resource_kind,
-        "service_name": rca.target.resource_name,
-        "target_resource": target_uri,
-        "failure_class": rca.failure_type,
-        "suspected_cause": rca.root_cause_summary,
-        "confidence": rca.confidence,
-        "rca_result": rca.model_dump(),
-        "status": "DIAGNOSED",
-    }
+    try:
+        context_payload = {
+            "incident_id": incident_id,
+            "known_platform": state.get("platform"),
+            "known_namespace": state.get("namespace"),
+            "known_service": state.get("service_name"),
+            "raw_events": truncate_observation(
+                state.get("raw_events", []), max_lines=40, max_bytes=3072
+            ),
+            "previous_execution_results": state.get("execution_results", []),
+            "previous_verification_feedback": state.get("verification_feedback"),
+        }
 
-    await sync_discovered_target_identity(incident_id, update)
+        messages: list[Any] = [
+            SystemMessage(content=DIAGNOSE_SYSTEM_PROMPT),
+            HumanMessage(content=json.dumps(context_payload, default=str)),
+        ]
+        collected_observations: list[dict[str, Any]] = []
+        investigator_notes = ""
+
+        max_steps = state.get("max_diagnose_steps", 6)
+        for step_idx in range(1, max_steps + 1):
+            ai_msg = await llm_with_tools.ainvoke(messages)
+            messages.append(ai_msg)
+            await recorder.log_assistant(ai_msg)
+
+            if getattr(ai_msg, "content", None):
+                investigator_notes = str(ai_msg.content)
+
+            if not getattr(ai_msg, "tool_calls", None):
+                break
+
+            for tc in ai_msg.tool_calls:
+                tool_name = tc["name"]
+                tool_args = tc.get("args") or {}
+                tool_fn = tool_map.get(tool_name)
+
+                if tool_fn is None:
+                    observation: Any = (
+                        f"Error: Observation tool '{tool_name}' is not registered."
+                    )
+                else:
+                    try:
+                        logger.info(
+                            "Incident %s [diagnose step %d] calling %s(%s)",
+                            incident_id,
+                            step_idx,
+                            tool_name,
+                            tool_args,
+                        )
+                        observation = await tool_fn.ainvoke(tool_args)
+                    except Exception as exc:
+                        logger.warning(
+                            "Incident %s observation tool %s error: %s",
+                            incident_id,
+                            tool_name,
+                            exc,
+                        )
+                        observation = f"Tool error: {exc}"
+
+                compact_obs = truncate_observation(
+                    observation, max_lines=80, max_bytes=4096
+                )
+                collected_observations.append(
+                    {
+                        "step": step_idx,
+                        "tool": tool_name,
+                        "args": tool_args,
+                        "output": compact_obs,
+                    }
+                )
+                messages.append(
+                    ToolMessage(
+                        content=str(compact_obs),
+                        tool_call_id=tc["id"],
+                        name=tool_name,
+                    )
+                )
+                await recorder.log(
+                    "tool",
+                    f"{tool_name}({json.dumps(tool_args, default=str)[:500]})",
+                    str(compact_obs),
+                )
+
+        # Synthesize RCAResult using a clean, bounded [SystemMessage, HumanMessage] prompt
+        # so providers like Gemini never receive dangling model turns or mismatched tool history.
+        synthesis_payload = {
+            "incident_context": context_payload,
+            "available_mutation_tools": available_mutation_tools,
+            "tool_observations": collected_observations,
+            "investigator_notes": truncate_observation(
+                investigator_notes, max_lines=40, max_bytes=2048
+            ),
+        }
+        synthesis_messages = [
+            SystemMessage(content=DIAGNOSE_SYSTEM_PROMPT),
+            HumanMessage(
+                content=(
+                    "Synthesize the final structured RCAResult using only the verified "
+                    "incident context and tool observations below:\n"
+                    + json.dumps(synthesis_payload, default=str)
+                )
+            ),
+        ]
+
+        structured_llm = llm.with_structured_output(RCAResult)
+        rca: RCAResult = await structured_llm.ainvoke(synthesis_messages)
+        await recorder.log(
+            "assistant",
+            f"RCA synthesized: {rca.root_cause_summary}",
+        )
+
+        target_uri = f"{rca.target.namespace_or_region}/{rca.target.resource_kind}/{rca.target.resource_name}"
+        logger.info(
+            "Incident %s diagnosed target=%s failure_type=%s confidence=%.2f",
+            incident_id,
+            target_uri,
+            rca.failure_type,
+            rca.confidence,
+        )
+
+        update: dict[str, Any] = {
+            "platform": rca.target.platform,
+            "namespace": rca.target.namespace_or_region,
+            "resource_kind": rca.target.resource_kind,
+            "service_name": rca.target.resource_name,
+            "target_resource": target_uri,
+            "failure_class": rca.failure_type,
+            "suspected_cause": rca.root_cause_summary,
+            "confidence": rca.confidence,
+            "rca_result": rca.model_dump(),
+            "status": "DIAGNOSED",
+        }
+
+        await sync_discovered_target_identity(incident_id, update)
+    except Exception as exc:
+        await recorder.finish("failed", error_message=str(exc))
+        raise
+
+    await recorder.finish("completed")
     return update

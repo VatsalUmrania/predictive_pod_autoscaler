@@ -116,6 +116,12 @@ class PostgresClient:
     async def update_tool_call(self, call_id: str, status: str, **kwargs) -> None:
         await self._agents.update_tool_call(call_id, status, **kwargs)
 
+    async def list_agent_runs(self, incident_id: str) -> list[dict[str, Any]]:
+        return await self._agents.list_agent_runs(incident_id)
+
+    async def list_agent_messages(self, incident_id: str) -> list[dict[str, Any]]:
+        return await self._agents.list_agent_messages(incident_id)
+
     # Remediation delegation
     async def create_remediation_action(self, **kwargs) -> str:
         return await self._remediation.create_remediation_action(**kwargs)
@@ -151,3 +157,23 @@ async def get_database_client(dsn: str | None = None) -> PostgresClient:
     await client.initialize()
     _global_db_client = client
     return client
+
+
+async def get_optional_database_client() -> PostgresClient | None:
+    """Return the live Postgres client, or None when Postgres is unavailable.
+
+    Postgres is an optional dependency at runtime: the server boots and serves
+    every route when the database is missing or unreachable. Callers that can
+    degrade should use this instead of ``get_database_client()``, which raises
+    and re-runs its connection retry ladder on every attempt.
+    """
+    try:
+        from nexus.services.api.status.status_context import context
+
+        client: PostgresClient | None = getattr(context, "db_client", None)
+        if client is not None:
+            return client
+    except Exception:
+        pass
+
+    return _global_db_client

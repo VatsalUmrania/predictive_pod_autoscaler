@@ -50,9 +50,10 @@ def test_approve_invokes_api_post(monkeypatch):
         def raise_for_status(self):
             pass
 
-    def _fake_post(url, timeout=None):
+    def _fake_post(url, timeout=None, headers=None):
         captured["url"] = url
         captured["timeout"] = timeout
+        captured["headers"] = headers or {}
         return _FakeResp()
 
     monkeypatch.setattr(cli_main, "_RICH", False)
@@ -62,6 +63,7 @@ def test_approve_invokes_api_post(monkeypatch):
 
     monkeypatch.setattr(httpx, "post", _fake_post)
     monkeypatch.setenv("NEXUS_API_URL", "http://api.example")
+    monkeypatch.setenv("NEXUS_ADMIN_TOKEN", "operator-token")
 
     from click.testing import CliRunner
 
@@ -72,4 +74,6 @@ def test_approve_invokes_api_post(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert captured["url"] == "http://api.example/approve/ABC12345"
+    # The operator routes require a bearer token.
+    assert captured["headers"]["Authorization"] == "Bearer operator-token"
     assert "approved" in result.output

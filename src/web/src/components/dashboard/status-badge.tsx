@@ -7,17 +7,13 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import { cn } from "@/lib/utils"
+import {
+  ATTENTION_STATUSES,
+  FAILURE_STATUSES,
+  IGNORED_STATUSES,
+} from "@/lib/nexus/types"
 
-const ATTENTION_STATUSES = ["AWAITING_APPROVAL", "PENDING_APPROVAL"]
 const SUCCESS_STATUSES = ["RESOLVED"]
-const FAILURE_STATUSES = [
-  "ESCALATED",
-  "ROLLED_BACK",
-  "EXECUTION_FAILED",
-  "POLICY_DENIED",
-  "VERIFICATION_FAILED",
-  "UNPLANNABLE",
-]
 
 type Tone = "attention" | "success" | "failure" | "neutral"
 
@@ -33,6 +29,8 @@ function toneFor(status: string, isInterrupted?: boolean): Tone {
   if (isInterrupted || ATTENTION_STATUSES.includes(normalized)) return "attention"
   if (SUCCESS_STATUSES.includes(normalized)) return "success"
   if (FAILURE_STATUSES.includes(normalized)) return "failure"
+  // Deliberately triaged out: terminal, but not a failure.
+  if (IGNORED_STATUSES.includes(normalized)) return "neutral"
   return "neutral"
 }
 

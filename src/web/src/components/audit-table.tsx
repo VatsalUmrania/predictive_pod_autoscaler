@@ -14,7 +14,10 @@ import { cn } from "@/lib/utils"
 
 const OUTCOME_CLASS: Record<string, string> = {
   success: "border-primary/30 bg-primary/10 text-primary",
+  // Approve/reject decisions are recorded in the audit trail with these outcomes.
+  approved: "border-primary/30 bg-primary/10 text-primary",
   failed: "border-destructive/30 bg-destructive/10 text-destructive",
+  rejected: "border-destructive/30 bg-destructive/10 text-destructive",
   rolled_back: "border-destructive/30 bg-destructive/10 text-destructive",
   pending: "border-border bg-muted text-muted-foreground",
 }
